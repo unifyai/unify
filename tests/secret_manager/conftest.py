@@ -5,8 +5,8 @@ import uuid
 import pytest
 import unisdk
 
-from unity.common.context_registry import ContextRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.session_details import SESSION_DETAILS
 
 
 @pytest.fixture(scope="function")

@@ -16,7 +16,7 @@ except Exception:
     pass
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Early Environment Setup (MUST be before any unity/unify imports)
+# Early Environment Setup (MUST be before any unify/unify imports)
 # ─────────────────────────────────────────────────────────────────────────────
 # Set UNILLM_CACHE_DIR to use the MAIN repo's cache, not the worktree's.
 # This ensures all worktrees share the same LLM cache (.cache.ndjson) for
@@ -40,7 +40,7 @@ if "UNILLM_CACHE_DIR" not in os.environ:
             pass  # Fall back to current repo root
     os.environ["UNILLM_CACHE_DIR"] = str(repo_root)
 
-from unity.settings import SETTINGS
+from unify.settings import SETTINGS
 
 _TEE_FILE_HANDLE: Optional[object] = None
 _TEE_ORIG_STREAM: Optional[object] = None
@@ -468,7 +468,7 @@ def pytest_sessionstart(session):
     # Initialize OpenTelemetry tracing early (before any test imports)
     # This ensures httpx/aiohttp clients are instrumented before creation
     try:
-        from unity.common.test_tracing import _initialize_tracer
+        from unify.common.test_tracing import _initialize_tracer
 
         _initialize_tracer()
     except ImportError:
@@ -657,7 +657,7 @@ def _trace_test(request):
     Enable/disable via UNITY_TEST_TRACING env var (default: true).
     """
     try:
-        from unity.common.test_tracing import trace_test
+        from unify.common.test_tracing import trace_test
 
         test_name = request.node.name
         with trace_test(test_name) as (trace_id, span):

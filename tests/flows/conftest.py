@@ -17,7 +17,7 @@ if _is_local_orchestra_url(os.environ.get("ORCHESTRA_URL", "")):
     os.environ.setdefault("SELF_HOST", "1")
 
 # The CM-backed flow sessions (flow_session) run unassigned (agent_id unset)
-# BEFORE importing the harness (which imports unity.conversation_manager.main
+# BEFORE importing the harness (which imports unify.conversation_manager.main
 # -> load_dotenv()). Keeping agent_id unset means the local scheduler, Orchestra
 # contact-membership sync, and offline runs (all keyed by agent_id, not by the
 # per-test context path) cannot cross-fire between parallel sessions sharing one
@@ -59,7 +59,7 @@ os.environ["UNITY_FILE_ENABLED"] = "true"
 # Route inbound through the real CommsManager + in-memory ingress transport and
 # capture outbound on the in-memory outbound transport, so flow turns exercise
 # the same envelope -> dispatch_inbound_envelope normalization as production
-# without standing up Pub/Sub. See unity/gateway/factory.py.
+# without standing up Pub/Sub. See unify/gateway/factory.py.
 os.environ.setdefault("UNITY_CONVERSATION_INGRESS_TRANSPORT", "inmemory")
 os.environ.setdefault("UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
 # Parallel flow sessions must not share cached LLM completions; otherwise
@@ -78,7 +78,7 @@ import pytest
 import pytest_asyncio
 from unillm.cost_tracker import capture_costs
 
-from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 from tests.flows.harness import FlowHarness, build_flow_harness
 from tests.helpers import scenario_file_lock
 from tests.settings import SETTINGS

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
-from unity.image_manager.utils import make_solid_png_base64
+from unify.image_manager.utils import make_solid_png_base64
 
 import pytest
 
-from unity.image_manager.image_manager import ImageManager
+from unify.image_manager.image_manager import ImageManager
 from tests.helpers import _handle_project
 
 PNG_RED_B64 = make_solid_png_base64(32, 32, (255, 0, 0))
@@ -451,7 +451,7 @@ def test_resolve_filepath_missing_file():
 @_handle_project
 def test_raw_ref_resolve_image_id():
     """RawImageRef.resolve_image_id populates image_id via ImageManager."""
-    from unity.image_manager.types import RawImageRef
+    from unify.image_manager.types import RawImageRef
 
     im = ImageManager()
     [stored_id] = im.add_images(
@@ -477,7 +477,7 @@ def test_raw_ref_resolve_image_id():
 @_handle_project
 def test_annotated_ref_resolve_image_id():
     """AnnotatedImageRef.resolve_image_id delegates to inner RawImageRef."""
-    from unity.image_manager.types import RawImageRef, AnnotatedImageRef
+    from unify.image_manager.types import RawImageRef, AnnotatedImageRef
 
     im = ImageManager()
     [stored_id] = im.add_images(
@@ -504,7 +504,7 @@ def test_annotated_ref_resolve_image_id():
 @_handle_project
 def test_raw_ref_resolve_image_id_already_set():
     """When image_id is already present, resolve returns it without querying."""
-    from unity.image_manager.types import RawImageRef
+    from unify.image_manager.types import RawImageRef
 
     ref = RawImageRef(image_id=42)
     result = ref.resolve_image_id(None)  # type: ignore[arg-type]

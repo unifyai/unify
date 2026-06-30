@@ -15,15 +15,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains.contact_index import (
+from unify.conversation_manager.domains.contact_index import (
     ContactIndex,
     EmailMessage,
     GuidanceMessage,
     Message,
     UnifyMessage,
 )
-from unity.conversation_manager.domains.managers_utils import hydrate_global_thread
-from unity.conversation_manager.events import (
+from unify.conversation_manager.domains.managers_utils import hydrate_global_thread
+from unify.conversation_manager.events import (
     FastBrainNotification,
     EmailReceived,
     EmailSent,
@@ -38,7 +38,7 @@ from unity.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
 )
-from unity.conversation_manager.cm_types import Medium
+from unify.conversation_manager.cm_types import Medium
 
 # =============================================================================
 # Helpers
@@ -99,7 +99,7 @@ class TestSMSHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -119,7 +119,7 @@ class TestSMSHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -154,7 +154,7 @@ class TestEmailHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -181,7 +181,7 @@ class TestEmailHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -217,7 +217,7 @@ class TestVoiceHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -242,7 +242,7 @@ class TestVoiceHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -277,7 +277,7 @@ class TestVoiceHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -308,7 +308,7 @@ class TestVoiceHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -346,7 +346,7 @@ class TestUnifyMessageHydration:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -385,7 +385,7 @@ class TestHydrationCrossCutting:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -414,7 +414,7 @@ class TestHydrationCrossCutting:
         ]
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
             await hydrate_global_thread(cm)
@@ -436,7 +436,7 @@ class TestHydrationCrossCutting:
     @pytest.mark.asyncio
     async def test_non_message_events_skipped(self):
         """Events that don't produce messages (e.g. ActorResult) are skipped."""
-        from unity.events.event_bus import Event as BusEvent
+        from unify.events.event_bus import Event as BusEvent
 
         cm = _make_mock_cm()
         # Simulate a mix: one real message + one non-message event
@@ -453,7 +453,7 @@ class TestHydrationCrossCutting:
         bus_events.insert(0, non_msg)
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=bus_events)
             await hydrate_global_thread(cm)
@@ -467,7 +467,7 @@ class TestHydrationCrossCutting:
         cm = _make_mock_cm()
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=[])
             await hydrate_global_thread(cm)
@@ -482,7 +482,7 @@ class TestHydrationCrossCutting:
         bus_events = _make_bus_events([event])
 
         with patch(
-            "unity.conversation_manager.domains.managers_utils.EVENT_BUS",
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
         ) as mock_bus:
             mock_bus.search = AsyncMock(return_value=bus_events)
             await hydrate_global_thread(cm)

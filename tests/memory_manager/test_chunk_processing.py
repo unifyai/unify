@@ -20,20 +20,20 @@ import pytest
 from tests.helpers import _handle_project
 
 # Core classes under test ----------------------------------------------------
-from unity.memory_manager.memory_manager import MemoryManager
-from unity.events.event_bus import EVENT_BUS, Event
+from unify.memory_manager.memory_manager import MemoryManager
+from unify.events.event_bus import EVENT_BUS, Event
 
 # This test publishes events to verify MemoryManager chunk processing
 pytestmark = pytest.mark.enable_eventbus
 
 # Simulated manager test-doubles (no external I/O) ---------------------------
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.transcript_manager.simulated import SimulatedTranscriptManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.transcript_manager.simulated import SimulatedTranscriptManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import Medium
+from unify.transcript_manager.types.message import Message
+from unify.conversation_manager.cm_types import Medium
 
 # ---------------------------------------------------------------------------
 #                             TEST CASE                                      #

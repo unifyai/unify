@@ -20,13 +20,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.comms.primitives import CommsPrimitives
-from unity.conversation_manager.conversation_manager import ConversationManager
-from unity.conversation_manager.domains import brain_action_tools as bat_mod
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.comms.primitives import CommsPrimitives
+from unify.conversation_manager.conversation_manager import ConversationManager
+from unify.conversation_manager.domains import brain_action_tools as bat_mod
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from unity.conversation_manager.prompt_builders import build_system_prompt
+from unify.conversation_manager.prompt_builders import build_system_prompt
 
 pytestmark = pytest.mark.no_unify_context
 

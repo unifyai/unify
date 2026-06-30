@@ -12,8 +12,8 @@ import asyncio
 import json
 
 import pytest
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.llm_client import new_llm_client
+from unify.common.async_tool_loop import start_async_tool_loop
+from unify.common.llm_client import new_llm_client
 from tests.helpers import _handle_project
 from tests.async_helpers import first_assistant_tool_call
 

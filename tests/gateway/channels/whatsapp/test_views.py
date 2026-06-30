@@ -1,4 +1,4 @@
-"""Behavioural tests for ``unity.gateway.channels.whatsapp``.
+"""Behavioural tests for ``unify.gateway.channels.whatsapp``.
 
 No existing tests in ``communication/tests/whatsapp/`` to port (this
 channel was tested through integration only); all greenfield in the
@@ -16,8 +16,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.channels.whatsapp import auth_router, unauth_router
-from unity.gateway.channels.whatsapp.views import render_greeting_template_text
+from unify.gateway.channels.whatsapp import auth_router, unauth_router
+from unify.gateway.channels.whatsapp.views import render_greeting_template_text
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -42,7 +42,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
     property; we wrap our stub value in the same shape so call sites
     that do `.get_secret_value()` keep working.
     """
-    from unity.gateway.channels.whatsapp import views as wa_views
+    from unify.gateway.channels.whatsapp import views as wa_views
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: "test-admin-key")
     monkeypatch.setattr(
@@ -90,13 +90,13 @@ def test_send_closed_window_returns_template_delivered_body(client: TestClient):
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views._resolve_route",
+            "unify.gateway.channels.whatsapp.views._resolve_route",
             new=AsyncMock(
                 return_value={"pool_number": "+15550000001", "window_open": False},
             ),
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
             return_value=twilio_client,
         ),
     ):
@@ -124,7 +124,7 @@ def test_send_closed_window_returns_template_delivered_body(client: TestClient):
 
 def test_window_endpoint_reports_open(client: TestClient):
     with patch(
-        "unity.gateway.channels.whatsapp.views._resolve_route",
+        "unify.gateway.channels.whatsapp.views._resolve_route",
         new=AsyncMock(
             return_value={"pool_number": "+15550000001", "window_open": True},
         ),
@@ -140,7 +140,7 @@ def test_window_endpoint_reports_open(client: TestClient):
 
 def test_window_endpoint_reports_closed(client: TestClient):
     with patch(
-        "unity.gateway.channels.whatsapp.views._resolve_route",
+        "unify.gateway.channels.whatsapp.views._resolve_route",
         new=AsyncMock(
             return_value={"pool_number": "+15550000001", "window_open": False},
         ),
@@ -160,13 +160,13 @@ def test_send_open_window_returns_freeform_delivered_body(client: TestClient):
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views._resolve_route",
+            "unify.gateway.channels.whatsapp.views._resolve_route",
             new=AsyncMock(
                 return_value={"pool_number": "+15550000001", "window_open": True},
             ),
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
             return_value=twilio_client,
         ),
     ):
@@ -236,7 +236,7 @@ def test_unauth_router_exposes_expected_paths() -> None:
 
 
 def test_routers_importable_from_package_root() -> None:
-    from unity.gateway.channels.whatsapp import auth_router as a, unauth_router as u
+    from unify.gateway.channels.whatsapp import auth_router as a, unauth_router as u
 
     assert a is auth_router
     assert u is unauth_router
@@ -274,7 +274,7 @@ class TestStatus:
         client_mock.post = orchestra_post
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=client_mock,
         ):
             resp = client.post(
@@ -302,7 +302,7 @@ class TestStatus:
     ) -> None:
         """No callback_id -> no Orchestra POST (forward is opt-in)."""
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
         ) as MockClient:
             resp = client.post(
                 "/whatsapp/status",
@@ -336,11 +336,11 @@ class TestSend:
         )
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -372,7 +372,7 @@ class TestSend:
         _settings: None,
     ) -> None:
         """Closed window -> GREETING template; freeform body is dropped."""
-        from unity.gateway.channels.whatsapp.views import GREETING_TEMPLATE_SID
+        from unify.gateway.channels.whatsapp.views import GREETING_TEMPLATE_SID
 
         twilio_client = MagicMock()
         route_response = _async_httpx_response(
@@ -381,11 +381,11 @@ class TestSend:
         )
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -426,11 +426,11 @@ class TestSend:
         )
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=_async_client_returning(route_response),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -459,7 +459,7 @@ class TestSend:
             json_body={"detail": "Orchestra unavailable"},
         )
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=_async_client_returning(route_response),
         ):
             resp = client.post(
@@ -511,19 +511,19 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
                 new=AsyncMock(),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.make_sip_uri",
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
                 return_value="sip:+15555550111@test.sip.livekit.cloud",
             ),
         ):
@@ -563,7 +563,7 @@ class TestSendCall:
         _settings: None,
     ) -> None:
         """Not permitted -> VOICE_CALL_REQUEST template message."""
-        from unity.gateway.channels.whatsapp.views import (
+        from unify.gateway.channels.whatsapp.views import (
             VOICE_CALL_REQUEST_TEMPLATE_SID,
         )
 
@@ -584,11 +584,11 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -636,11 +636,11 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -683,11 +683,11 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -731,11 +731,11 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -783,11 +783,11 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
         ):
@@ -859,19 +859,19 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
                 new=AsyncMock(),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.make_sip_uri",
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
                 return_value="sip:+15555550111@test.sip.livekit.cloud",
             ),
         ):
@@ -957,19 +957,19 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
                 new=AsyncMock(),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.make_sip_uri",
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
                 return_value="sip:+15555550111@test.sip.livekit.cloud",
             ),
         ):
@@ -1037,19 +1037,19 @@ class TestSendCall:
 
         with (
             patch(
-                "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
                 return_value=httpx_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
                 new=AsyncMock(),
             ),
             patch(
-                "unity.gateway.channels.whatsapp.views.make_sip_uri",
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
                 return_value="sip:+15555550111@test.sip.livekit.cloud",
             ),
         ):
@@ -1084,7 +1084,7 @@ class TestNotify:
         _wa_credentials: None,
         _settings: None,
     ) -> None:
-        from unity.gateway.channels.whatsapp.views import NUMBER_CHANGE_TEMPLATE_SID
+        from unify.gateway.channels.whatsapp.views import NUMBER_CHANGE_TEMPLATE_SID
 
         twilio_client = MagicMock()
         m1 = MagicMock(sid="SM_one")
@@ -1092,7 +1092,7 @@ class TestNotify:
         twilio_client.messages.create.side_effect = [m1, m2]
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.build_twilio_wa_client",
+            "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
             return_value=twilio_client,
         ):
             resp = client.post(
@@ -1143,7 +1143,7 @@ class TestDelete:
         httpx_client.delete.return_value = delete_resp
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.request(
@@ -1172,7 +1172,7 @@ class TestDelete:
         httpx_client.delete.return_value = delete_resp
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.request(
@@ -1200,7 +1200,7 @@ class TestAssign:
         httpx_client.post.return_value = assign_resp
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post("/whatsapp/assign", json={"assistant_id": 42})
@@ -1226,7 +1226,7 @@ class TestAssign:
         httpx_client.post.return_value = assign_resp
 
         with patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ):
             resp = client.post("/whatsapp/assign", json={"assistant_id": 42})
@@ -1245,8 +1245,8 @@ class TestVoiceAppSid:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from unity.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
-        from unity.gateway.credentials import EnvCredentialStore
+        from unify.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
+        from unify.gateway.credentials import EnvCredentialStore
 
         monkeypatch.setenv("DEPLOY_ENV", "staging")
         sid = _whatsapp_voice_app_sid(EnvCredentialStore())
@@ -1256,8 +1256,8 @@ class TestVoiceAppSid:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from unity.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
-        from unity.gateway.credentials import EnvCredentialStore
+        from unify.gateway.channels.whatsapp.views import _whatsapp_voice_app_sid
+        from unify.gateway.credentials import EnvCredentialStore
 
         monkeypatch.delenv("DEPLOY_ENV", raising=False)
         sid = _whatsapp_voice_app_sid(EnvCredentialStore())

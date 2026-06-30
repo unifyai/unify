@@ -1,4 +1,4 @@
-"""Unit tests for ``unity.integration_status`` enablement read.
+"""Unit tests for ``unify.integration_status`` enablement read.
 
 Exercises the pure read API (``get_enabled_integrations``,
 ``get_setup_completeness``, ``enabled_summary_for_prompt``,
@@ -8,9 +8,9 @@ and synthetic secret keysets.
 Synthetic state is injected by stubbing two helpers:
 
 * ``discover_available_packages`` from
-  ``unity.integration_status.discovery`` — returns the list of
+  ``unify.integration_status.discovery`` — returns the list of
   package-metadata dicts the assistant has on disk.
-* ``_read_local_secret_keyset`` on the ``unity.integration_status``
+* ``_read_local_secret_keyset`` on the ``unify.integration_status``
   module — returns the set of currently-present secret names in the
   assistant's local Secrets context.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from unity import integration_status as IS
+from unify import integration_status as IS
 
 # ---------------------------------------------------------------------------
 # Test fixtures
@@ -67,7 +67,7 @@ def _stub_packages_and_keyset(
     keyset: set[str] | None = None,
 ) -> None:
     """Stub disk discovery + local keyset reads for an enablement test."""
-    from unity.integration_status import discovery as D
+    from unify.integration_status import discovery as D
 
     monkeypatch.setattr(D, "discover_available_packages", lambda: packages)
     monkeypatch.setattr(IS, "_read_local_secret_keyset", lambda: set(keyset or set()))

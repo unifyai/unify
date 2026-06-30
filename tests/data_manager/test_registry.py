@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from unity.manager_registry import ManagerRegistry
-from unity.data_manager.base import BaseDataManager
-from unity.data_manager.data_manager import DataManager
-from unity.data_manager.simulated import SimulatedDataManager
+from unify.manager_registry import ManagerRegistry
+from unify.data_manager.base import BaseDataManager
+from unify.data_manager.data_manager import DataManager
+from unify.data_manager.simulated import SimulatedDataManager
 
 
 @pytest.fixture(autouse=True)

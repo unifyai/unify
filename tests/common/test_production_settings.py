@@ -1,13 +1,13 @@
 """
 Tests for ProductionSettings LLM provider validation.
 
-Verifies that unity.init() hard-fails when LLM provider credentials are missing
+Verifies that unify.init() hard-fails when LLM provider credentials are missing
 and UNITY_VALIDATE_LLM_PROVIDERS is enabled (the default).
 """
 
 import pytest
 
-from unity.settings import ProductionSettings
+from unify.settings import ProductionSettings
 
 
 class TestLLMProviderValidation:

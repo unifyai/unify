@@ -2,13 +2,13 @@
 
 import json
 
-from unity.dashboard_manager.types.tile import (
+from unify.dashboard_manager.types.tile import (
     FilterBinding,
     JoinBinding,
     JoinReduceBinding,
     ReduceBinding,
 )
-from unity.dashboard_manager.types.dashboard import TilePosition
+from unify.dashboard_manager.types.dashboard import TilePosition
 
 
 class TestSimulatedTileCRUD:

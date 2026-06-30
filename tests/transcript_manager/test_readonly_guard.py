@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 pytestmark = pytest.mark.llm_call
 

@@ -49,7 +49,7 @@ class TestDebouncerCancelRunning:
         - When cancel_running=False, the currently running task must complete
         - New submissions replace the pending task, not the running one
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -119,7 +119,7 @@ class TestDebouncerCancelRunning:
         This is useful for text mode where we want to cancel stale work
         and start fresh with new context.
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -171,7 +171,7 @@ class TestDebouncerCancelRunning:
     async def test_cancel_tasks_running_cancels_inflight_run(self):
         """``_cancel_tasks(running=True)`` drops the in-flight run (the low-level
         primitive; the fast brain uses ``cancel_run_by_turn`` on top of it)."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         execution_log = []
@@ -200,7 +200,7 @@ class TestDebouncerCancelRunning:
         """
         Once a running slow-brain task enters tool commit, replacements wait.
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer(name="TestCM")
         execution_log = []
@@ -277,7 +277,7 @@ class TestDebouncerCancellationPropagation:
         Before fix: Task A would be cancelled when Task B was cancelled
         After fix: Task A completes normally, Task C runs after
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         results = []
@@ -342,7 +342,7 @@ class TestDebouncerCancellationPropagation:
         Simulates the voice mode scenario where rapid user utterances
         trigger many submissions in quick succession.
         """
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         results = []
@@ -407,7 +407,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_non_user_cannot_replace_pending_user(self):
         """A non-user submission is skipped when a user utterance is pending."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer(name="TestCM")
 
@@ -465,7 +465,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_user_can_replace_pending_non_user(self):
         """A user submission replaces a pending non-user submission normally."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -517,7 +517,7 @@ class TestDebouncerUserOriginProtection:
     @pytest.mark.asyncio
     async def test_user_can_replace_pending_user(self):
         """A newer user submission replaces an older pending user submission."""
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
 
@@ -578,7 +578,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_cancels_matching_running(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         log = []
@@ -602,7 +602,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_unknown_turn_is_noop(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         log = []
@@ -624,7 +624,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_none_turn_is_noop(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         started = asyncio.Event()
@@ -639,7 +639,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_tool_committed_running_is_spared(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         log = []
@@ -664,7 +664,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_cancels_matching_pending_leaving_running(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         log = []
@@ -692,7 +692,7 @@ class TestDebouncerCancelByTurn:
 
     @pytest.mark.asyncio
     async def test_cancels_matching_running_promotes_pending(self):
-        from unity.conversation_manager.domains.utils import Debouncer
+        from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
         log = []

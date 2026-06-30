@@ -29,16 +29,16 @@ from tests.destination_routing_helpers import (
     assert_tool_destination,
     run_direct_routing_loop,
 )
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.common.context_registry import ContextRegistry
-from unity.common.llm_helpers import methods_to_tool_dict
-from unity.coordinator_manager.coordinator_manager import CoordinatorManager
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import PrimitiveScope, Primitives
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.common.context_registry import ContextRegistry
+from unify.common.llm_helpers import methods_to_tool_dict
+from unify.coordinator_manager.coordinator_manager import CoordinatorManager
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import PrimitiveScope, Primitives
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
 pytestmark = [
     pytest.mark.integration,

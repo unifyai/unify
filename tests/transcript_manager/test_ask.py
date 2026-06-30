@@ -25,10 +25,10 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 import pytest
 import asyncio
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.common.llm_helpers import _dumps
-from unity.common.llm_client import new_llm_client
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
+from unify.common.llm_helpers import _dumps
+from unify.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_next_assistant_response_event

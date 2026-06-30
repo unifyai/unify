@@ -3,13 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.contact_manager.types.contact import UNASSIGNED
-from unity.conversation_manager.cm_types import Medium
-from unity.conversation_manager.domains import managers_utils
-from unity.conversation_manager.domains.whatsapp_history import (
+from unify.contact_manager.types.contact import UNASSIGNED
+from unify.conversation_manager.cm_types import Medium
+from unify.conversation_manager.domains import managers_utils
+from unify.conversation_manager.domains.whatsapp_history import (
     whatsapp_sent_history_content,
 )
-from unity.conversation_manager.events import WhatsAppSent
+from unify.conversation_manager.events import WhatsAppSent
 
 
 def test_whatsapp_template_history_renders_delivered_template_and_original():

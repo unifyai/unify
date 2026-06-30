@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from unity.conversation_manager import (
+from unify.conversation_manager import (
     assistant_session_k8s as assistant_session_k8s_module,
 )
 

@@ -29,7 +29,7 @@ from tests.conversation_manager.cm_helpers import (
     assert_efficient,
 )
 from tests.conversation_manager.conftest import BOSS
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     SMSReceived,
     UnifyMessageReceived,
 )
@@ -44,8 +44,8 @@ pytestmark = pytest.mark.eval
 
 def _ensure_mock_computer_primitives():
     """Create the mock ComputerPrimitives singleton if it doesn't exist yet."""
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
 
     if ManagerRegistry.get_instance(ComputerPrimitives) is None:
         ComputerPrimitives(computer_mode="mock")

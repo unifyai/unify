@@ -8,11 +8,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.app import create_app
-from unity.gateway.context import GatewayContext
-from unity.gateway.public_url import StaticPublicUrlProvider
-from unity.gateway.runtime import LocalRuntimeActivator
-from unity.gateway.scheduler import LocalScheduler
+from unify.gateway.app import create_app
+from unify.gateway.context import GatewayContext
+from unify.gateway.public_url import StaticPublicUrlProvider
+from unify.gateway.runtime import LocalRuntimeActivator
+from unify.gateway.scheduler import LocalScheduler
 
 
 class FakeCredentials:
@@ -78,8 +78,8 @@ def gateway_context() -> GatewayContext:
 
 @pytest.fixture
 def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    from unity.gateway.adapters import common
-    from unity.gateway.common import auth
+    from unify.gateway.adapters import common
+    from unify.gateway.common import auth
 
     monkeypatch.setattr(
         auth,

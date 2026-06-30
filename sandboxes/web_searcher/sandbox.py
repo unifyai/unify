@@ -27,8 +27,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # unity imports
-from unity.web_searcher.web_searcher import WebSearcher
-from unity.common.async_tool_loop import SteerableToolHandle
+from unify.web_searcher.web_searcher import WebSearcher
+from unify.common.async_tool_loop import SteerableToolHandle
 from sandboxes.utils import (
     record_until_enter as _record_until_enter,
     transcribe_deepgram as _transcribe_deepgram,

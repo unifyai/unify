@@ -19,7 +19,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     verify_contact_in_db,
 )
-from unity.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import SMSReceived
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

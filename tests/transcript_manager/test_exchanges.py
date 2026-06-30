@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, UTC
 import unisdk
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.exchange import Exchange
-from unity.transcript_manager.types.message import Message
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.exchange import Exchange
+from unify.transcript_manager.types.message import Message
 from tests.helpers import _handle_project
 
 

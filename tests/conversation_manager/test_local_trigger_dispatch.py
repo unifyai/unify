@@ -2,7 +2,7 @@
 
 When ``SETTINGS.task.LOCAL_SCHEDULER_ENABLED`` is True, inbound-event
 trigger matches that need offline (background) execution should spawn
-``unity.task_scheduler.offline_runner`` as a child subprocess instead of
+``unify.task_scheduler.offline_runner`` as a child subprocess instead of
 POSTing to Communication for a K8s job.
 """
 
@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.conversation_manager.cm_types import Medium
-from unity.conversation_manager.domains import task_activation
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from unify.conversation_manager.cm_types import Medium
+from unify.conversation_manager.domains import task_activation
+from unify.task_scheduler.machine_state import TaskActivationSnapshot
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #
@@ -101,7 +101,7 @@ class TestLocalOfflineTriggerDispatch:
         )
 
         # Subprocess invoked with the offline runner module.
-        assert captured["args"][-2:] == ("-m", "unity.task_scheduler.offline_runner")
+        assert captured["args"][-2:] == ("-m", "unify.task_scheduler.offline_runner")
         env = captured["env"]
         # Triggered source semantics propagate.
         assert env["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"

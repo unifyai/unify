@@ -190,7 +190,7 @@ async def ask_coords(
     Takes a screenshot, sends it to Claude asking for coordinates,
     draws a red dot at the predicted location, and saves the image.
     """
-    from unity.common.llm_client import new_llm_client
+    from unify.common.llm_client import new_llm_client
 
     img = await _get_screenshot_logged(session, "ask_coords")
     w, h = img.size
@@ -743,7 +743,7 @@ class AsyncREPL:
 
 
 def main() -> None:
-    from unity.function_manager.primitives import ComputerPrimitives
+    from unify.function_manager.primitives import ComputerPrimitives
 
     parser = build_cli_parser("Computer Use Test Sandbox")
     parser.add_argument(

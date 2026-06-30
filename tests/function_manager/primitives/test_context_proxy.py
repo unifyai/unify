@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.function_manager.primitives.context_proxy import ContextForwardingProxy
+from unify.function_manager.primitives.context_proxy import ContextForwardingProxy
 
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers: mock manager + primitives-like object

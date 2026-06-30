@@ -18,14 +18,14 @@ from tests.actor.state_managers.utils import (
     make_code_act_actor,
     wait_for_recorded_primitives_call,
 )
-from unity.manager_registry import ManagerRegistry
+from unify.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 def _force_simulated_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch ContactManager to simulated mode for deterministic comms routing."""
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     monkeypatch.setenv("UNITY_CONTACT_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.contact, "IMPL", "simulated", raising=False)
@@ -60,11 +60,11 @@ async def test_natural_unify_message_request_routes_to_comms_primitive(
     handle = None
     with (
         patch(
-            "unity.comms.primitives.get_event_broker",
+            "unify.comms.primitives.get_event_broker",
             return_value=mock_broker,
         ),
         patch(
-            "unity.comms.primitives.comms_utils.send_unify_message",
+            "unify.comms.primitives.comms_utils.send_unify_message",
             new=AsyncMock(return_value={"success": True}),
         ),
     ):

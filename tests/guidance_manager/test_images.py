@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
-from unity.image_manager.utils import make_solid_png_base64
+from unify.image_manager.utils import make_solid_png_base64
 
 import pytest
 import unisdk
 
-from unity.image_manager.image_manager import ImageManager
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.common.llm_client import new_llm_client
-from unity.common.llm_helpers import methods_to_tool_dict
-from unity.common.async_tool_loop import start_async_tool_loop
+from unify.image_manager.image_manager import ImageManager
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.common.llm_client import new_llm_client
+from unify.common.llm_helpers import methods_to_tool_dict
+from unify.common.async_tool_loop import start_async_tool_loop
 from tests.helpers import _handle_project
 
 PNG_RED_B64 = make_solid_png_base64(32, 32, (255, 0, 0))

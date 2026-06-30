@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import unity.gateway.adapters.twilio as twilio
+import unify.gateway.adapters.twilio as twilio
 
 
 def _response(status_code: int, payload: dict | None = None) -> MagicMock:

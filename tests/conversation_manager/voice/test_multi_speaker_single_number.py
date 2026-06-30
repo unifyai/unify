@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     PhoneCallStarted,
     InboundPhoneUtterance,
 )
-from unity.conversation_manager.cm_types import Mode
+from unify.conversation_manager.cm_types import Mode
 
 from tests.conversation_manager.conftest import BOSS
 

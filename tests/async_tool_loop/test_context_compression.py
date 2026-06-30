@@ -8,8 +8,8 @@ import pytest
 import json
 
 from tests.helpers import _handle_project
-import unity.common._async_tool.context_compression as _cc_mod
-from unity.common._async_tool.context_compression import (
+import unify.common._async_tool.context_compression as _cc_mod
+from unify.common._async_tool.context_compression import (
     CompressedMessage,
     CompressedMessages,
     CompressionState,

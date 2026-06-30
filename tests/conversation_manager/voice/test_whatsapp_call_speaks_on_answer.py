@@ -40,7 +40,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
     """
     from livekit.agents import llm
 
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
     boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}

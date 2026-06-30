@@ -7,13 +7,13 @@ import unisdk
 from typing import Dict, Any
 from unisdk.utils.http import RequestError
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.contact_manager.types.contact import Contact
-from unity.blacklist_manager.blacklist_manager import BlackListManager
-from unity.conversation_manager.cm_types import Medium
-from unity.common.context_registry import ContextRegistry
-from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, TeamSummary
+from unify.contact_manager.contact_manager import ContactManager
+from unify.contact_manager.types.contact import Contact
+from unify.blacklist_manager.blacklist_manager import BlackListManager
+from unify.conversation_manager.cm_types import Medium
+from unify.common.context_registry import ContextRegistry
+from unify.memory_manager import broader_context
+from unify.session_details import SESSION_DETAILS, TeamSummary
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_next_assistant_response_event
 

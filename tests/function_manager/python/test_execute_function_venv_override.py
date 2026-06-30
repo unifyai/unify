@@ -18,10 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.file_manager.managers.local import LocalFileManager
-from unity.common.context_registry import ContextRegistry
-from unity.manager_registry import ManagerRegistry
+from unify.function_manager.function_manager import FunctionManager
+from unify.file_manager.managers.local import LocalFileManager
+from unify.common.context_registry import ContextRegistry
+from unify.manager_registry import ManagerRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Functions

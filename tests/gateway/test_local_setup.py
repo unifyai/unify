@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from unity.gateway.app import create_app
-from unity.gateway.local_setup import (
+from unify.gateway.app import create_app
+from unify.gateway.local_setup import (
     all_channel_setups,
     callback_urls,
     channel_names,

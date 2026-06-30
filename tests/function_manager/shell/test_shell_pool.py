@@ -12,7 +12,7 @@ import os
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.shell_pool import ShellPool
+from unify.function_manager.shell_pool import ShellPool
 
 # ────────────────────────────────────────────────────────────────────────────
 # Basic Pool Operations

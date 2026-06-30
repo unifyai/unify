@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import unisdk
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.image_manager.image_manager import ImageManager
+from unify.function_manager.function_manager import FunctionManager
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.image_manager.image_manager import ImageManager
 
 
 def _make_test_image_b64(
@@ -29,7 +29,7 @@ def _make_test_image_b64(
     color: tuple[int, int, int] = (255, 0, 0),
 ) -> str:
     """Create a minimal valid base64-encoded PNG for testing."""
-    from unity.image_manager.utils import make_solid_png_base64
+    from unify.image_manager.utils import make_solid_png_base64
 
     return make_solid_png_base64(size, size, color)
 

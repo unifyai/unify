@@ -10,9 +10,9 @@ import asyncio
 
 import pytest
 
-from unity.task_scheduler.local_scheduler import LocalOfflineDispatcher
-from unity.task_scheduler.local_scheduler import offline_dispatcher as od
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from unify.task_scheduler.local_scheduler import LocalOfflineDispatcher
+from unify.task_scheduler.local_scheduler import offline_dispatcher as od
+from unify.task_scheduler.machine_state import TaskActivationSnapshot
 
 _DEFAULT_DUE = "2030-04-10T09:00:00+00:00"
 
@@ -234,7 +234,7 @@ class TestDispatch:
 
             assert captured["args"][-2:] == (
                 "-m",
-                "unity.task_scheduler.offline_runner",
+                "unify.task_scheduler.offline_runner",
             )
             assert captured["env"]["UNITY_OFFLINE_TASK_MODE"] == "actor"
             assert captured["env"]["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "scheduled"

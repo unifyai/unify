@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
-from unity.file_manager.sync.rclone import SyncResult
+from unify.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unify.file_manager.sync.rclone import SyncResult
 
 
 class TestLocalFileSystemAdapterSync:
@@ -88,7 +88,7 @@ class TestLocalFileSystemAdapterAsyncSync:
         mock_manager.enabled = False  # No desktop_url configured
 
         with patch(
-            "unity.file_manager.sync.SyncManager",
+            "unify.file_manager.sync.SyncManager",
             return_value=mock_manager,
         ):
             result = await adapter.start_sync()
@@ -108,7 +108,7 @@ class TestLocalFileSystemAdapterAsyncSync:
         mock_manager.start = AsyncMock(return_value=True)
 
         with patch(
-            "unity.file_manager.sync.SyncManager",
+            "unify.file_manager.sync.SyncManager",
             return_value=mock_manager,
         ):
             result = await adapter.start_sync()

@@ -12,8 +12,8 @@ from typing import Any, Dict, Optional
 import pytest
 
 from tests.helpers import _handle_project
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution import (
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.execution import (
     PythonExecutionSession,
     _CURRENT_SANDBOX,
     parts_to_text,

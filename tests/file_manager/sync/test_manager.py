@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.file_manager.sync.config import SyncConfig
-from unity.file_manager.sync.manager import SyncManager
-from unity.file_manager.sync.rclone import SyncResult
+from unify.file_manager.sync.config import SyncConfig
+from unify.file_manager.sync.manager import SyncManager
+from unify.file_manager.sync.rclone import SyncResult
 
 
 @pytest.fixture
@@ -91,7 +91,7 @@ class TestSyncManagerStart:
             mock_rclone.bisync = mock_bisync
 
             with patch(
-                "unity.file_manager.sync.manager.RcloneSync",
+                "unify.file_manager.sync.manager.RcloneSync",
                 return_value=mock_rclone,
             ):
                 result = await manager.start()
@@ -217,10 +217,10 @@ class TestSyncManagerSSHKeyRetrieval:
 
         with (
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "unify.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.settings.SETTINGS",
+                "unify.settings.SETTINGS",
             ) as mock_settings,
             patch(
                 "unisdk.utils.http.get",
@@ -257,10 +257,10 @@ class TestSyncManagerSSHKeyRetrieval:
 
         with (
             patch(
-                "unity.session_details.SESSION_DETAILS",
+                "unify.session_details.SESSION_DETAILS",
             ) as mock_sd,
             patch(
-                "unity.settings.SETTINGS",
+                "unify.settings.SETTINGS",
             ) as mock_settings,
             patch(
                 "unisdk.utils.http.get",

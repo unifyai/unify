@@ -6,7 +6,7 @@ load_dotenv(override=True)
 
 import pytest
 
-from unity.web_searcher.simulated import (
+from unify.web_searcher.simulated import (
     SimulatedWebSearcher,
 )
 
@@ -24,8 +24,8 @@ def test_docstrings_match_base():
     Public methods in SimulatedWebSearcher should copy the real
     BaseWebSearcher doc-strings one-for-one (via functools.wraps).
     """
-    from unity.web_searcher.base import BaseWebSearcher
-    from unity.web_searcher.simulated import SimulatedWebSearcher
+    from unify.web_searcher.base import BaseWebSearcher
+    from unify.web_searcher.simulated import SimulatedWebSearcher
 
     assert (
         BaseWebSearcher.ask.__doc__.strip() in SimulatedWebSearcher.ask.__doc__.strip()
@@ -76,7 +76,7 @@ def test_clear_reinitialises():
     Ensure SimulatedWebSearcher.clear re-runs the constructor (fresh stateful LLM
     and tools mapping stays provisioned).
     """
-    from unity.web_searcher.simulated import SimulatedWebSearcher
+    from unify.web_searcher.simulated import SimulatedWebSearcher
 
     sim = SimulatedWebSearcher()
     old_llm = getattr(sim, "_llm", None)

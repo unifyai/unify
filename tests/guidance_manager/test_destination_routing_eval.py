@@ -12,8 +12,8 @@ from tests.destination_routing_helpers import (
     rows_containing,
     run_direct_routing_loop,
 )
-from unity.common.llm_helpers import methods_to_tool_dict
-from unity.guidance_manager.guidance_manager import GuidanceManager
+from unify.common.llm_helpers import methods_to_tool_dict
+from unify.guidance_manager.guidance_manager import GuidanceManager
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

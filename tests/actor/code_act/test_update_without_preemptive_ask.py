@@ -17,17 +17,17 @@ import pytest
 from tests.actor.state_managers.utils import (
     instrument_basic_primitives_calls,
 )
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives, PrimitiveScope
-from unity.manager_registry import ManagerRegistry
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.function_manager.primitives import Primitives, PrimitiveScope
+from unify.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 def _force_simulated_contacts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch contact manager to simulated impl (minimal scope)."""
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     monkeypatch.setenv("UNITY_CONTACT_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.contact, "IMPL", "simulated", raising=False)

@@ -18,8 +18,8 @@ import json
 import functools
 import pytest
 
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.memory_manager import prompt_builders as pb
+from unify.memory_manager.simulated import SimulatedMemoryManager
+from unify.memory_manager import prompt_builders as pb
 
 # shared fixture from the existing test-suite
 from tests.helpers import _handle_project

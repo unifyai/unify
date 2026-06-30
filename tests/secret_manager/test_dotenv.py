@@ -5,8 +5,8 @@ import pathlib
 
 import unisdk
 
-from unity.settings import SETTINGS
-from unity.secret_manager.secret_manager import SecretManager
+from unify.settings import SETTINGS
+from unify.secret_manager.secret_manager import SecretManager
 
 
 def _read(path: str) -> str:

@@ -6,11 +6,11 @@ from unittest.mock import patch
 import pytest
 
 from tests.helpers import _handle_project
-from unity.common.single_shot import SingleShotResult
-from unity.common.context_registry import ContextRegistry
-from unity.coordinator_manager.coordinator_manager import CoordinatorManager
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.single_shot import SingleShotResult
+from unify.common.context_registry import ContextRegistry
+from unify.coordinator_manager.coordinator_manager import CoordinatorManager
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.skipif(
     os.getenv("SKIP_UNITY_TEST_INIT") == "1",
@@ -57,7 +57,7 @@ async def test_run_llm_registers_workspace_tools_only_for_coordinator(
 
     coordinator_tool_names = set(CoordinatorManager._PRIMITIVE_METHODS)
     with patch(
-        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         fake_single_shot_tool_decision,
     ):
         try:

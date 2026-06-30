@@ -5,12 +5,12 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from unity.conversation_manager.cm_types import ScreenshotEntry
-from unity.conversation_manager.cm_types.screenshot import (
+from unify.conversation_manager.cm_types import ScreenshotEntry
+from unify.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from unity.file_manager.settings import get_local_root
+from unify.file_manager.settings import get_local_root
 
 
 class TestWorkspaceBootstrap:

@@ -20,15 +20,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.comms import offline_support
-from unity.comms.primitives import CommsPrimitives
-from unity.conversation_manager.domains import comms_utils
+from unify.comms import offline_support
+from unify.comms.primitives import CommsPrimitives
+from unify.conversation_manager.domains import comms_utils
 
 
 def _make_comms_with_teams(monkeypatch) -> CommsPrimitives:
     """Build a CommsPrimitives instance wired up with Teams enabled."""
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.self_contact_id",
+        "unify.comms.primitives.SESSION_DETAILS.self_contact_id",
         0,
     )
     comms = CommsPrimitives()
@@ -39,7 +39,7 @@ def _make_comms_with_teams(monkeypatch) -> CommsPrimitives:
         lambda: {"contact_id": 0, "first_name": "A", "surname": "B"},
     )
     monkeypatch.setattr(
-        "unity.comms.primitives.reserve_outbound_operation",
+        "unify.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: offline_support.OfflineOutboundDecision(
             reservation=None,
             response=None,

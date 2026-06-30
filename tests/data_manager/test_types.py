@@ -5,7 +5,7 @@ Tests for DataManager types (Pydantic models).
 from __future__ import annotations
 
 
-from unity.data_manager.types import (
+from unify.data_manager.types import (
     TableDescription,
     TableSchema,
     ColumnInfo,

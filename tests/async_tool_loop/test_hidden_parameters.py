@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-import unity.common.llm_helpers as llmh
+import unify.common.llm_helpers as llmh
 
 
 # --------------------------------------------------------------------------- #
@@ -124,10 +124,10 @@ async def test_dynamic_factory_adopts_custom_interject_args() -> None:
     """
     from contextlib import suppress
 
-    from unity.common.async_tool_loop import SteerableToolHandle
-    from unity.common._async_tool.tools_data import ToolsData
-    from unity.common._async_tool.tools_utils import ToolCallMetadata
-    from unity.common._async_tool.dynamic_tools_factory import DynamicToolFactory
+    from unify.common.async_tool_loop import SteerableToolHandle
+    from unify.common._async_tool.tools_data import ToolsData
+    from unify.common._async_tool.tools_utils import ToolCallMetadata
+    from unify.common._async_tool.dynamic_tools_factory import DynamicToolFactory
 
     class CustomInterjectHandle(SteerableToolHandle):
         """Handle with custom interject parameters."""

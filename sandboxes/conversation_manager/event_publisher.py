@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     Event,
     SMSReceived,
     UnifyMeetEnded,

@@ -8,9 +8,9 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.image_manager.image_manager import ImageManager
-from unity.image_manager.utils import make_solid_png_base64
-from unity.session_details import SESSION_DETAILS
+from unify.image_manager.image_manager import ImageManager
+from unify.image_manager.utils import make_solid_png_base64
+from unify.session_details import SESSION_DETAILS
 
 
 def _team_id() -> int:

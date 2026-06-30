@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.domains import managers_utils
-from unity.conversation_manager.events import ActorResult, Event
+from unify.conversation_manager.domains import managers_utils
+from unify.conversation_manager.events import ActorResult, Event
 
 
 class _FakeHandle:

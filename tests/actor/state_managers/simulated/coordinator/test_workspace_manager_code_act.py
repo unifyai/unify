@@ -12,13 +12,13 @@ from tests.actor.state_managers.utils import (
     instrument_basic_primitives_calls,
     wait_for_recorded_primitives_call,
 )
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.common.context_registry import ContextRegistry
-from unity.events import manager_event_logging
-from unity.function_manager.primitives import PrimitiveScope, Primitives
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS, AssistantDetails
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.common.context_registry import ContextRegistry
+from unify.events import manager_event_logging
+from unify.function_manager.primitives import PrimitiveScope, Primitives
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS, AssistantDetails
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -89,7 +89,7 @@ async def test_code_act_routes_to_coordinator_list_assistants(monkeypatch) -> No
         return expected_assistants
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
+        "unify.coordinator_manager.coordinator_manager.unisdk.list_assistants",
         _fake_list_assistants,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))
@@ -128,7 +128,7 @@ async def test_code_act_enforces_coordinator_permission_gate(monkeypatch) -> Non
         raise AssertionError(f"Unexpected upstream call: {kwargs}")
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
+        "unify.coordinator_manager.coordinator_manager.unisdk.list_assistants",
         _should_not_call_upstream,
     )
     primitives = Primitives(primitive_scope=PrimitiveScope.single("coordinator"))

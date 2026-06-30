@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.simulated import SimulatedFunctionManager
+from unify.function_manager.simulated import SimulatedFunctionManager
 
 # --------------------------------------------------------------------------- #
 #  Doc-string inheritance                                                     #
@@ -15,8 +15,8 @@ def test_docstrings_match_base():
     Public methods in SimulatedFunctionManager should copy the real
     BaseFunctionManager doc-strings one-for-one (via functools.wraps).
     """
-    from unity.function_manager.base import BaseFunctionManager
-    from unity.function_manager.simulated import SimulatedFunctionManager
+    from unify.function_manager.base import BaseFunctionManager
+    from unify.function_manager.simulated import SimulatedFunctionManager
 
     assert (
         BaseFunctionManager.add_functions.__doc__.strip()
@@ -273,8 +273,8 @@ def test_setters_do_not_crash_when_called_from_code_act_actor():
     CodeActActor.__init__ collects function_ids from environments and sets
     them on the FM via setters. This must not crash for SimulatedFunctionManager.
     """
-    from unity.actor.code_act_actor import CodeActActor
-    from unity.actor.environments.state_managers import StateManagerEnvironment
+    from unify.actor.code_act_actor import CodeActActor
+    from unify.actor.environments.state_managers import StateManagerEnvironment
 
     fm = SimulatedFunctionManager(description="test")
 

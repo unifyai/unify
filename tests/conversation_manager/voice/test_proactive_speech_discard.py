@@ -57,7 +57,7 @@ async def _boot_entrypoint(monkeypatch):
     """
     from livekit.agents import llm
 
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     contact = {
         "contact_id": 2,
@@ -239,7 +239,7 @@ async def _boot_entrypoint(monkeypatch):
     monkeypatch.setattr(call_script, "STT", object())
     monkeypatch.setattr(call_script, "VAD", object())
 
-    import unity.common.llm_client as _llm_mod
+    import unify.common.llm_client as _llm_mod
 
     class _FakeGreetingClient:
         async def generate(self, **kwargs):

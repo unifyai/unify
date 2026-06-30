@@ -6,12 +6,12 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.common.context_registry import ContextRegistry
-from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
-from unity.file_manager.managers.file_manager import FileManager
-from unity.file_manager.types.config import FilePipelineConfig
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unify.file_manager.managers.file_manager import FileManager
+from unify.file_manager.types.config import FilePipelineConfig
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 
 
 def _configure_teams() -> tuple[int, int]:

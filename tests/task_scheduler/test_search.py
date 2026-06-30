@@ -1,7 +1,7 @@
 import pytest
 import unisdk
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import TaskScheduler
 from tests.helpers import _handle_project
 
 

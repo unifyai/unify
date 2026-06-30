@@ -64,11 +64,11 @@ def _preserve_global_logging_state():
     """
     import logging
 
-    from unity.logger import LOGGER
+    from unify.logger import LOGGER
 
     _logger_names = ("livekit", "livekit.agents", "livekit.plugins")
     saved = {
-        "unity": (LOGGER.propagate, list(LOGGER.handlers)),
+        "unify": (LOGGER.propagate, list(LOGGER.handlers)),
         **{
             name: (
                 logging.getLogger(name).propagate,
@@ -80,7 +80,7 @@ def _preserve_global_logging_state():
     try:
         yield
     finally:
-        LOGGER.propagate, LOGGER.handlers = saved["unity"]
+        LOGGER.propagate, LOGGER.handlers = saved["unify"]
         for name in _logger_names:
             lg = logging.getLogger(name)
             lg.propagate, lg.handlers = saved[name]
@@ -89,7 +89,7 @@ def _preserve_global_logging_state():
 @pytest_asyncio.fixture
 async def event_broker():
     """Local in-memory broker for testing."""
-    from unity.conversation_manager.event_broker import create_event_broker
+    from unify.conversation_manager.event_broker import create_event_broker
 
     broker = create_event_broker()
     yield broker
@@ -130,7 +130,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_initialization_phone_channel(self, boss_contact):
         """Assistant initializes correctly for phone channel."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -147,7 +147,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_initialization_unify_meet_channel(self, boss_contact):
         """Assistant initializes correctly for unify_meet channel."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -162,7 +162,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_call_not_received_initially(self, boss_contact):
         """Outbound calls start with call_received=False."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -176,7 +176,7 @@ class TestTTSAssistantClass:
 
     def test_assistant_set_call_received(self, boss_contact):
         """set_call_received() updates state correctly."""
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -192,8 +192,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_utterance_event_type_phone(self, boss_contact):
         """Phone channel uses InboundPhoneUtterance."""
-        from unity.conversation_manager.events import InboundPhoneUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.events import InboundPhoneUtterance
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -206,8 +206,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_utterance_event_type_meet(self, boss_contact):
         """Meet channel uses InboundUnifyMeetUtterance."""
-        from unity.conversation_manager.events import InboundUnifyMeetUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.events import InboundUnifyMeetUtterance
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -220,8 +220,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_utterance_event_type_phone(self, boss_contact):
         """Phone channel uses OutboundPhoneUtterance for assistant."""
-        from unity.conversation_manager.events import OutboundPhoneUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.events import OutboundPhoneUtterance
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -234,8 +234,8 @@ class TestTTSAssistantClass:
 
     def test_assistant_outbound_utterance_event_type_meet(self, boss_contact):
         """Meet channel uses OutboundUnifyMeetUtterance for assistant."""
-        from unity.conversation_manager.events import OutboundUnifyMeetUtterance
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.events import OutboundUnifyMeetUtterance
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         assistant = Assistant(
             contact=boss_contact,
@@ -266,7 +266,7 @@ class TestElevenLabsTwinPronunciation:
         chunks,
         expected,
     ):
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _normalize_elevenlabs_twin_pronunciation_stream,
         )
 
@@ -294,7 +294,7 @@ class TestCommonHelpers:
 
     def test_should_dispatch_livekit_agent_with_dev_command(self, monkeypatch):
         """should_dispatch_livekit_agent returns True for 'dev' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         # Patch sys.argv in the common module's namespace
         monkeypatch.setattr(common.sys, "argv", ["call.py", "dev"])
@@ -302,21 +302,21 @@ class TestCommonHelpers:
 
     def test_should_dispatch_livekit_agent_with_connect_command(self, monkeypatch):
         """should_dispatch_livekit_agent returns True for 'connect' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py", "connect"])
         assert common.should_dispatch_livekit_agent() is True
 
     def test_should_not_dispatch_livekit_agent_for_download_files(self, monkeypatch):
         """should_dispatch_livekit_agent returns False for 'download-files' command."""
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py", "download-files"])
         assert common.should_dispatch_livekit_agent() is False
 
     def test_should_not_dispatch_livekit_agent_with_no_args(self, monkeypatch):
         """should_dispatch_livekit_agent returns False when no args provided."""
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common.sys, "argv", ["call.py"])
         assert common.should_dispatch_livekit_agent() is False
@@ -342,8 +342,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_started publishes PhoneCallStarted for phone channel."""
-        from unity.conversation_manager.events import Event, PhoneCallStarted
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.events import Event, PhoneCallStarted
+        from unify.conversation_manager.medium_scripts import common
 
         # Patch the event_broker in common module to use our test fixture
         monkeypatch.setattr(common, "event_broker", event_broker)
@@ -369,8 +369,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_started publishes UnifyMeetStarted for meet channel."""
-        from unity.conversation_manager.events import Event, UnifyMeetStarted
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.events import Event, UnifyMeetStarted
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -395,8 +395,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_ended publishes PhoneCallEnded for phone channel."""
-        from unity.conversation_manager.events import Event, PhoneCallEnded
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.events import Event, PhoneCallEnded
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -421,8 +421,8 @@ class TestEventPublishingHelpers:
         monkeypatch,
     ):
         """publish_call_ended publishes UnifyMeetEnded for meet channel."""
-        from unity.conversation_manager.events import Event, UnifyMeetEnded
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.events import Event, UnifyMeetEnded
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -461,8 +461,8 @@ class TestEndCallHelper:
         monkeypatch,
     ):
         """create_end_call returns function that publishes ended event."""
-        from unity.conversation_manager.events import Event, PhoneCallEnded
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.events import Event, PhoneCallEnded
+        from unify.conversation_manager.medium_scripts import common
 
         # Patch the event_broker in common module to use our test fixture
         monkeypatch.setattr(common, "event_broker", event_broker)
@@ -489,7 +489,7 @@ class TestEndCallHelper:
         monkeypatch,
     ):
         """create_end_call runs pre_shutdown_callback before shutdown."""
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -518,7 +518,7 @@ class TestEndCallHelper:
         """create_end_call continues even if callback raises."""
         import logging
 
-        from unity.conversation_manager.medium_scripts import common
+        from unify.conversation_manager.medium_scripts import common
 
         monkeypatch.setattr(common, "event_broker", event_broker)
 
@@ -531,7 +531,7 @@ class TestEndCallHelper:
             pre_shutdown_callback=failing_callback,
         )
 
-        unity_logger = logging.getLogger("unity")
+        unity_logger = logging.getLogger("unify")
         unity_logger.addHandler(caplog.handler)
         caplog.handler.setLevel(logging.DEBUG)
         try:
@@ -556,8 +556,8 @@ class TestCLIArgumentParsing:
 
     def test_configure_from_cli_with_full_args(self, monkeypatch):
         """configure_from_cli parses all arguments correctly."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.medium_scripts import common
+        from unify.session_details import SESSION_DETAILS
 
         # Reset SESSION_DETAILS before test
         SESSION_DETAILS.reset()
@@ -615,8 +615,8 @@ class TestCLIArgumentParsing:
 
     def test_configure_from_cli_meet_room_name(self, monkeypatch):
         """configure_from_cli returns the canonical room name for UnifyMeet calls."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.medium_scripts import common
+        from unify.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
 
@@ -658,8 +658,8 @@ class TestCLIArgumentParsing:
 
     def test_configure_from_cli_defaults_none_voice_provider(self, monkeypatch):
         """configure_from_cli defaults 'None' voice provider to cartesia."""
-        from unity.conversation_manager.medium_scripts import common
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.medium_scripts import common
+        from unify.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
 
@@ -710,7 +710,7 @@ class TestGuidanceChannelSubscription:
 
     async def test_guidance_channel_receives_call_guidance(self, event_broker):
         """Guidance channel receives FastBrainNotification events."""
-        from unity.conversation_manager.events import FastBrainNotification, Event
+        from unify.conversation_manager.events import FastBrainNotification, Event
 
         contact = {"contact_id": 1, "first_name": "Test"}
 
@@ -781,7 +781,7 @@ class TestUtteranceEventPublishing:
         boss_contact,
     ):
         """Phone utterances are published to app:comms:phone_utterance."""
-        from unity.conversation_manager.events import (
+        from unify.conversation_manager.events import (
             Event,
             InboundPhoneUtterance,
         )
@@ -807,7 +807,7 @@ class TestUtteranceEventPublishing:
         boss_contact,
     ):
         """Meet utterances are published to app:comms:meet_utterance."""
-        from unity.conversation_manager.events import (
+        from unify.conversation_manager.events import (
             Event,
             InboundUnifyMeetUtterance,
         )
@@ -836,7 +836,7 @@ class TestUtteranceEventPublishing:
 @pytest.mark.asyncio
 async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
     from livekit.agents import llm
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     sequence = []
     contact = {"contact_id": 1, "first_name": "User", "surname": "Example"}
@@ -878,7 +878,7 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
                         "assistant_name": "Coordinator Unity",
                         "opening_config": {
                             "mode": "simulated",
-                            "simulated_utterance": "Hi, I'm your coordinator unity.",
+                            "simulated_utterance": "Hi, I'm your coordinator unify.",
                             "source": "coordinator_onboarding_intro",
                         },
                     },
@@ -1027,7 +1027,7 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
 @pytest.mark.asyncio
 async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     from livekit.agents import llm
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     sequence = []
     audio_sources = []
@@ -1072,7 +1072,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
                         "is_coordinator": False,
                         "opening_config": {
                             "mode": "recorded",
-                            "transcript": "Hi, I'm your coordinator unity.",
+                            "transcript": "Hi, I'm your coordinator unify.",
                             "recording_path": "/tmp/recorded-opener.wav",
                             "source": "coordinator_onboarding_intro",
                         },
@@ -1247,7 +1247,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     assert len(session.say_calls) == 1
 
     text, kwargs = session.say_calls[0]
-    assert text == "Hi, I'm your coordinator unity."
+    assert text == "Hi, I'm your coordinator unify."
     assert kwargs["audio"] is fake_audio
     assert kwargs["allow_interruptions"] is True
     assert kwargs["add_to_chat_ctx"] is True
@@ -1268,7 +1268,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     interrupt_walkie,
 ):
     from livekit.agents import llm
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     sequence = []
     audio_sources = []
@@ -1515,7 +1515,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
 
 
 def test_recorded_opening_builtin_asset_validates_without_single_transcript():
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     # The builtin onboarding opener is segmented, so it must validate without a
     # single inline transcript or recording source.
@@ -1530,7 +1530,7 @@ def test_recorded_opening_builtin_asset_validates_without_single_transcript():
 
 
 def test_walkie_opener_segments_split_at_static_removal_transition():
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     spec = call_script._RECORDED_OPENINGS["coordinator_onboarding_intro"]
     segments = spec["segments"]
@@ -1573,7 +1573,7 @@ def test_walkie_opener_segments_split_at_static_removal_transition():
 async def test_on_user_turn_completed_schedules_pending_opening_bridge():
     from types import SimpleNamespace
 
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     scheduled: list[bool] = []
 
@@ -1610,7 +1610,7 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
 async def test_on_user_turn_completed_without_bridge_is_normal():
     from types import SimpleNamespace
 
-    from unity.conversation_manager.medium_scripts import call as call_script
+    from unify.conversation_manager.medium_scripts import call as call_script
 
     self = SimpleNamespace(
         _pending_opening_bridge=None,
@@ -1643,7 +1643,7 @@ class TestFastBrainGuidanceFlow:
         silent awareness context, without calling session.say() directly (only
         should_speak=True guidance is spoken)."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from unify.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -1824,7 +1824,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import unify.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -1866,7 +1866,7 @@ class TestFastBrainGuidanceFlow:
             len(session.say_calls) == 0
         ), "Notify-only guidance must NOT trigger session.say() directly."
 
-        from unity.conversation_manager.events import AssistantTurnInjected
+        from unify.conversation_manager.events import AssistantTurnInjected
 
         injected = AssistantTurnInjected(
             contact={"contact_id": 2},
@@ -1899,7 +1899,7 @@ class TestFastBrainGuidanceFlow:
 
         if not hasattr(llm, "Tool"):
             llm.Tool = object  # type: ignore[attr-defined]
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from unify.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2085,7 +2085,7 @@ class TestFastBrainGuidanceFlow:
 
         captured = {}
 
-        import unity.common.llm_client as _llm_mod
+        import unify.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2109,7 +2109,7 @@ class TestFastBrainGuidanceFlow:
     ):
         """System instructions and notifications should both survive conversion."""
         from livekit.agents import llm
-        from unity.conversation_manager import livekit_unify_adapter as adapter_module
+        from unify.conversation_manager import livekit_unify_adapter as adapter_module
 
         captured = {}
 
@@ -2145,7 +2145,7 @@ class TestFastBrainGuidanceFlow:
         )
         chat_ctx.add_message(role="assistant", content="Let me check on that.")
 
-        from unity.settings import SETTINGS
+        from unify.settings import SETTINGS
 
         stream = adapter_module.UnifyLLM(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
@@ -2166,7 +2166,7 @@ class TestFastBrainGuidanceFlow:
     ):
         """Guidance arriving mid-speech should be surfaced once speech ends."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from unify.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2344,7 +2344,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import unify.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2403,7 +2403,7 @@ class TestFastBrainGuidanceFlow:
         """Guidance arriving while the agent is thinking/speaking should wait
         for the full cycle to complete before session.say() fires."""
         from livekit.agents import llm
-        from unity.conversation_manager.medium_scripts import call as call_script
+        from unify.conversation_manager.medium_scripts import call as call_script
 
         contact = {
             "contact_id": 2,
@@ -2581,7 +2581,7 @@ class TestFastBrainGuidanceFlow:
         monkeypatch.setattr(call_script, "STT", object())
         monkeypatch.setattr(call_script, "VAD", object())
 
-        import unity.common.llm_client as _llm_mod
+        import unify.common.llm_client as _llm_mod
 
         class _FakeGreetingClient:
             async def generate(self, **kwargs):
@@ -2642,9 +2642,9 @@ async def test_fastbrain_notification_records_only_silent_guidance():
     recorded once via the actually-spoken Outbound utterance); silent
     (should_speak=False) guidance is still recorded exactly once."""
     from unittest.mock import AsyncMock, MagicMock
-    from unity.conversation_manager.cm_types import Mode
-    from unity.conversation_manager.domains.event_handlers import EventHandler
-    from unity.conversation_manager.events import FastBrainNotification
+    from unify.conversation_manager.cm_types import Mode
+    from unify.conversation_manager.domains.event_handlers import EventHandler
+    from unify.conversation_manager.events import FastBrainNotification
 
     handler = EventHandler._registry[FastBrainNotification]
     contact = {"contact_id": 1, "first_name": "Dan", "surname": "Lenton"}
@@ -2706,13 +2706,13 @@ class TestSayMetaTextMatching:
 
     def test_match_say_meta_exists(self):
         """The match_say_meta helper must exist in common.py."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from unify.conversation_manager.medium_scripts.common import match_say_meta
 
         assert callable(match_say_meta)
 
     def test_matching_text_consumes_meta(self):
         """When utterance text matches the session.say text, return the meta."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from unify.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {
             "guidance_id": "guid-abc",
@@ -2730,7 +2730,7 @@ class TestSayMetaTextMatching:
         'One moment - I am pulling that up.' should NOT consume meta
         set by session.say('Sure, go ahead - what is the task?').
         """
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from unify.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {
             "guidance_id": "guid-abc",
@@ -2742,14 +2742,14 @@ class TestSayMetaTextMatching:
 
     def test_none_meta_returns_none(self):
         """When no meta is set, return None regardless of text."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from unify.conversation_manager.medium_scripts.common import match_say_meta
 
         assert match_say_meta(None, "anything") is None
 
     def test_meta_without_text_key_always_matches(self):
         """Legacy meta dicts without a text key match any utterance
         (backward compatible with pre-fix code)."""
-        from unity.conversation_manager.medium_scripts.common import match_say_meta
+        from unify.conversation_manager.medium_scripts.common import match_say_meta
 
         meta = {"guidance_id": "guid-abc", "source": "slow_brain"}
         result = match_say_meta(meta, "Some text")
@@ -2778,8 +2778,8 @@ class TestParticipantCommsRendering:
         live voice conversation with no verbal indication from the
         assistant that anything was sent.
         """
-        from unity.conversation_manager.events import UnifyMessageSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.events import UnifyMessageSent
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -2798,8 +2798,8 @@ class TestParticipantCommsRendering:
     def test_outbound_sms_to_participant_rendered(self):
         """Outbound SMS to a call participant should be visible to the fast
         brain for verbal acknowledgement."""
-        from unity.conversation_manager.events import SMSSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.events import SMSSent
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -2819,8 +2819,8 @@ class TestParticipantCommsRendering:
         """Outbound messages to contacts NOT on the call should still be
         invisible to the fast brain — only participant-targeted messages
         matter."""
-        from unity.conversation_manager.events import UnifyMessageSent
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.events import UnifyMessageSent
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
 
@@ -2834,10 +2834,10 @@ class TestParticipantCommsRendering:
     # ── Inbound (participant → assistant) ───────────────────────────────
 
     def test_sms_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from unify.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 5, "first_name": "Marcus", "surname": "Rivera"},
@@ -2849,10 +2849,10 @@ class TestParticipantCommsRendering:
         assert "Running late" in result
 
     def test_email_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import EmailReceived
+        from unify.conversation_manager.events import EmailReceived
 
         event = EmailReceived(
             contact={"contact_id": 3, "first_name": "Sarah", "surname": "Chen"},
@@ -2865,10 +2865,10 @@ class TestParticipantCommsRendering:
         assert "Updated agenda" in result
 
     def test_unify_message_from_participant_rendered_with_tag(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import UnifyMessageReceived
+        from unify.conversation_manager.events import UnifyMessageReceived
 
         event = UnifyMessageReceived(
             contact={"contact_id": 7, "first_name": "Priya", "surname": "Sharma"},
@@ -2880,10 +2880,10 @@ class TestParticipantCommsRendering:
         assert "shared doc" in result
 
     def test_sms_from_non_participant_returns_none(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from unify.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 99, "first_name": "Stranger", "surname": "Person"},
@@ -2893,20 +2893,20 @@ class TestParticipantCommsRendering:
         assert result is None
 
     def test_non_comms_event_returns_none(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import ActorNotification
+        from unify.conversation_manager.events import ActorNotification
 
         event = ActorNotification(handle_id=1, response="Searching...")
         result = render_participant_comms(event.to_json(), {1, 5})
         assert result is None
 
     def test_multiple_participants_matched(self):
-        from unity.conversation_manager.medium_scripts.common import (
+        from unify.conversation_manager.medium_scripts.common import (
             render_participant_comms,
         )
-        from unity.conversation_manager.events import SMSReceived
+        from unify.conversation_manager.events import SMSReceived
 
         event = SMSReceived(
             contact={"contact_id": 3, "first_name": "Sarah", "surname": "Chen"},
@@ -2936,9 +2936,9 @@ class TestChildProcessLogging:
     def test_propagation_enabled_and_handlers_cleared(self):
         import logging
 
-        from unity.logger import LOGGER
+        from unify.logger import LOGGER
 
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _configure_child_logging,
         )
 
@@ -2965,9 +2965,9 @@ class TestChildProcessLogging:
     def test_records_reach_root_logger_after_configure(self):
         import logging
 
-        from unity.logger import LOGGER
+        from unify.logger import LOGGER
 
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _configure_child_logging,
         )
 
@@ -3008,7 +3008,7 @@ class TestFastBrainContinuation:
     """``Assistant._claim_interrupted_continuation`` exactly-once semantics."""
 
     def _assistant(self, boss_contact):
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         return Assistant(
             contact=boss_contact,
@@ -3033,7 +3033,7 @@ class TestFastBrainContinuation:
         boss_contact,
         monkeypatch,
     ):
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
@@ -3051,7 +3051,7 @@ class TestFastBrainContinuation:
 
     @pytest.mark.asyncio
     async def test_defer_hands_off_to_slow_brain(self, boss_contact, monkeypatch):
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
@@ -3084,7 +3084,7 @@ class TestFastBrainContinuation:
 
     @pytest.mark.asyncio
     async def test_already_consumed_returns_none(self, boss_contact, monkeypatch):
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         pending = self._pending()
@@ -3103,7 +3103,7 @@ class TestFastBrainContinuation:
     async def test_speechless_barge_in_auto_continues(self, boss_contact, monkeypatch):
         """A barge-in with no transcript (noise/echo) resumes the remainder
         verbatim WITHOUT consulting the classifier - the only sensible action."""
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
@@ -3153,7 +3153,7 @@ class TestFastBrainSmalltalk:
     turn and cancels the slow brain; otherwise it defers with a filler."""
 
     def _assistant(self, boss_contact):
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         return Assistant(
             contact=boss_contact,
@@ -3173,7 +3173,7 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
@@ -3205,7 +3205,7 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
@@ -3238,7 +3238,7 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
-        from unity.conversation_manager.medium_scripts import call as call_mod
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
@@ -3270,7 +3270,7 @@ class TestOutboundOpenerTrigger:
     consumed by the opener (no competing fast-brain filler)."""
 
     def _assistant(self, boss_contact, *, outbound: bool):
-        from unity.conversation_manager.medium_scripts.call import Assistant
+        from unify.conversation_manager.medium_scripts.call import Assistant
 
         return Assistant(
             contact=boss_contact,

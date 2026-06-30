@@ -1,7 +1,7 @@
 import pytest
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.contact_manager.types.contact import Contact
+from unify.contact_manager.contact_manager import ContactManager
+from unify.contact_manager.types.contact import Contact
 from tests.helpers import _handle_project
 
 
