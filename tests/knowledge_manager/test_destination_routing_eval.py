@@ -13,10 +13,10 @@ from tests.destination_routing_helpers import (
     llm_config as llm_config,  # noqa: F401
     rows_containing,
 )
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.llm_client import new_llm_client
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
-from unity.knowledge_manager.prompt_builders import build_update_prompt
+from unify.common.async_tool_loop import start_async_tool_loop
+from unify.common.llm_client import new_llm_client
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.knowledge_manager.prompt_builders import build_update_prompt
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

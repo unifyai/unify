@@ -10,8 +10,8 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.prompt_builders import build_code_act_prompt
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.prompt_builders import build_code_act_prompt
 
 # ---------------------------------------------------------------------------
 # Prompt builder unit tests (symbolic)
@@ -238,7 +238,7 @@ async def test_single_function_actor_accepts_guidelines():
     SingleFunctionActor.act should accept the ``guidelines`` parameter
     without raising TypeError.
     """
-    from unity.actor.single_function_actor import SingleFunctionActor
+    from unify.actor.single_function_actor import SingleFunctionActor
 
     fm = MagicMock()
     fm.search_functions = MagicMock(

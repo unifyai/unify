@@ -10,12 +10,12 @@ Verifies:
 import pytest
 from types import SimpleNamespace
 
-from unity.actor.environments.base import ToolMetadata
-from unity.actor.environments.state_managers import StateManagerEnvironment
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import Primitives
-from unity.function_manager.primitives.scope import PrimitiveScope
-from unity.function_manager.primitives.registry import get_registry, _get_stable_id
+from unify.actor.environments.base import ToolMetadata
+from unify.actor.environments.state_managers import StateManagerEnvironment
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import Primitives
+from unify.function_manager.primitives.scope import PrimitiveScope
+from unify.function_manager.primitives.registry import get_registry, _get_stable_id
 
 # ────────────────────────────────────────────────────────────────────────────
 # ToolMetadata function_id + function_context fields
@@ -294,8 +294,8 @@ def test_scoped_primitive_filter_no_exclusion():
 
 def test_computer_env_get_tools_has_function_ids():
     """Every tool from ComputerEnvironment has function_id and function_context."""
-    from unity.actor.environments.computer import ComputerEnvironment
-    from unity.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
+    from unify.function_manager.primitives import ComputerPrimitives
 
     cp = ComputerPrimitives(computer_mode="mock")
     env = ComputerEnvironment(cp)
@@ -311,8 +311,8 @@ def test_computer_env_get_tools_has_function_ids():
 
 def test_computer_env_function_ids_match_registry():
     """function_ids from ComputerEnvironment.get_tools() match registry.get_function_id()."""
-    from unity.actor.environments.computer import ComputerEnvironment
-    from unity.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
+    from unify.function_manager.primitives import ComputerPrimitives
 
     registry = get_registry()
     cp = ComputerPrimitives(computer_mode="mock")
@@ -329,8 +329,8 @@ def test_computer_env_function_ids_match_registry():
 
 def test_computer_env_function_ids_match_collect_primitives():
     """function_ids from ComputerEnvironment match those in collect_primitives."""
-    from unity.actor.environments.computer import ComputerEnvironment
-    from unity.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
+    from unify.function_manager.primitives import ComputerPrimitives
 
     registry = get_registry()
     scope = PrimitiveScope.single("computer")

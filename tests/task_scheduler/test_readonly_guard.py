@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 pytestmark = pytest.mark.llm_call
 

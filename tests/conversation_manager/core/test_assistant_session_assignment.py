@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from unity.deploy_runtime import (
+from unify.deploy_runtime import (
     BootstrapSecretRecord,
     JobAssignmentRecord,
 )
-from unity.conversation_manager.comms_manager import CommsManager
+from unify.conversation_manager.comms_manager import CommsManager
 
 
 def _session_record(
@@ -69,28 +69,28 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("unify.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "unify.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "unify.conversation_manager.comms_manager.read_job_assignment_record",
             return_value=JobAssignmentRecord(
                 session_name="assistant-session-42",
                 binding_id="binding-42",
             ),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "unify.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "unify.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             return_value=_secret_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "unify.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
     ):
         session.assistant.agent_id = None
@@ -104,7 +104,7 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "unify.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
             settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""
@@ -126,13 +126,13 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("unify.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "unify.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "unify.conversation_manager.comms_manager.read_job_assignment_record",
             side_effect=[
                 JobAssignmentRecord(
                     session_name="assistant-session-42",
@@ -145,18 +145,18 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
             ],
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "unify.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "unify.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             return_value=_secret_record(),
         ) as read_secret_record,
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "unify.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
         patch(
-            "unity.conversation_manager.comms_manager.asyncio.sleep",
+            "unify.conversation_manager.comms_manager.asyncio.sleep",
             new_callable=AsyncMock,
         ) as sleep_mock,
     ):
@@ -166,7 +166,7 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "unify.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
             settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""
@@ -184,34 +184,34 @@ async def test_poll_for_assignment_waits_for_secret_owned_by_current_activation(
     event_broker.publish = AsyncMock()
 
     with (
-        patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as session,
+        patch("unify.conversation_manager.comms_manager.SESSION_DETAILS") as session,
         patch(
-            "unity.conversation_manager.comms_manager.wait_for_assistant_session_name",
+            "unify.conversation_manager.comms_manager.wait_for_assistant_session_name",
             return_value="assistant-session-42",
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_job_assignment_record",
+            "unify.conversation_manager.comms_manager.read_job_assignment_record",
             return_value=JobAssignmentRecord(
                 session_name="assistant-session-42",
                 binding_id="binding-42",
             ),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_assistant_session",
+            "unify.conversation_manager.comms_manager.read_assistant_session",
             return_value=_session_record(),
         ),
         patch(
-            "unity.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
+            "unify.conversation_manager.comms_manager.read_session_bootstrap_secret_record",
             side_effect=[
                 _secret_record(owner_activation_id="activation-old"),
                 _secret_record(),
             ],
         ) as read_secret_record,
         patch(
-            "unity.conversation_manager.comms_manager.mark_job_container_ready",
+            "unify.conversation_manager.comms_manager.mark_job_container_ready",
         ) as mark_ready,
         patch(
-            "unity.conversation_manager.comms_manager.asyncio.sleep",
+            "unify.conversation_manager.comms_manager.asyncio.sleep",
             new_callable=AsyncMock,
         ) as sleep_mock,
     ):
@@ -221,7 +221,7 @@ async def test_poll_for_assignment_waits_for_secret_owned_by_current_activation(
         cm.subscribe_to_topic = MagicMock()
 
         with patch(
-            "unity.conversation_manager.comms_manager.SETTINGS",
+            "unify.conversation_manager.comms_manager.SETTINGS",
         ) as settings:
             settings.conversation.JOB_NAME = "unity-2026-03-30-u1234"
             settings.ENV_SUFFIX = ""

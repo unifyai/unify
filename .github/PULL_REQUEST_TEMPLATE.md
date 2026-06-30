@@ -1,5 +1,5 @@
 <!--
-Thanks for contributing to Unity! Please fill out the sections below.
+Thanks for contributing to Unify! Please fill out the sections below.
 For trivial changes (typo fixes, comment-only edits) you can shorten this template — just keep the Summary.
 
 PRs land on `staging`, not `main`. See CONTRIBUTING.md.
@@ -18,7 +18,7 @@ PRs land on `staging`, not `main`. See CONTRIBUTING.md.
 - [ ] Bug fix (non-breaking change that fixes incorrect behavior)
 - [ ] Feature (non-breaking change that adds functionality)
 - [ ] Refactor (no behavior change)
-- [ ] Breaking change (API or data-model change — Unity has zero-backward-compat policy, but please call it out)
+- [ ] Breaking change (API or data-model change — Unify has zero-backward-compat policy, but please call it out)
 - [ ] Test-only (no source changes)
 - [ ] Docs / chore / CI
 
@@ -29,7 +29,7 @@ PRs land on `staging`, not `main`. See CONTRIBUTING.md.
 - [ ] Actor / CodeAct
 - [ ] ConversationManager / slow brain
 - [ ] A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data / Memory)
-- [ ] Async tool loop (`unity/common/_async_tool/`)
+- [ ] Async tool loop (`unify/common/_async_tool/`)
 - [ ] Event bus / observability
 - [ ] Gateway / external comms
 - [ ] Tests / test infra (`tests/`, `conftest.py`, `parallel_run.sh`)

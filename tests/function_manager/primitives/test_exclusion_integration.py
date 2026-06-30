@@ -8,10 +8,10 @@ filter_functions, or list_primitives results -- using real backend queries.
 
 import pytest
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import Primitives, PrimitiveScope, get_registry
-from unity.actor.environments.state_managers import StateManagerEnvironment
-from unity.common.context_registry import ContextRegistry
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import Primitives, PrimitiveScope, get_registry
+from unify.actor.environments.state_managers import StateManagerEnvironment
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────

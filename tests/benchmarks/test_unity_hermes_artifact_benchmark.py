@@ -311,17 +311,17 @@ def test_reference_benchmark_collects_measurements_and_analysis():
 
     unity = next(result for result in results if result.arm_id == "unity")
     hermes = next(result for result in results if result.arm_id == "hermes")
-    assert len(unity.measurements) == 3
+    assert len(unify.measurements) == 3
     assert len(hermes.measurements) == 3
     assert (
-        unity.measurements[0].repeat_orchestration_tokens
+        unify.measurements[0].repeat_orchestration_tokens
         < hermes.measurements[0].repeat_orchestration_tokens
     )
-    assert unity.measurements[0].estimated_cost_usd > 0
+    assert unify.measurements[0].estimated_cost_usd > 0
     assert hermes.measurements[0].estimated_cost_usd > 0
-    assert unity.measurements[0].artifact_internal_llm_calls == 3
+    assert unify.measurements[0].artifact_internal_llm_calls == 3
     assert hermes.measurements[0].artifact_internal_llm_calls == 3
-    assert unity.measurements[0].first_execution_action == "execute_function"
+    assert unify.measurements[0].first_execution_action == "execute_function"
     assert hermes.measurements[0].first_execution_action == "terminal_run_script"
 
 

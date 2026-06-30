@@ -15,8 +15,8 @@ import logging
 import pytest
 from unittest import mock
 
-from unity.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
-from unity.function_manager.computer_backends import (
+from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
+from unify.function_manager.computer_backends import (
     _get_current_lineage,
     _handle_magnitude_debug_payload,
     ComputerSession,
@@ -129,7 +129,7 @@ class TestLogConsumerUsesUnityLogger:
         backend._log_buffer = {}
 
         captured: list[str] = []
-        unity_logger = logging.getLogger("unity")
+        unity_logger = logging.getLogger("unify")
         original_level = unity_logger.level
 
         class _Capture(logging.Handler):
@@ -217,7 +217,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_text_payload_appends_to_log(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps({"line": "debug coordinate transform x=100 y=200"})
@@ -230,7 +230,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_text_payload_appends_multiple_lines(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             _handle_magnitude_debug_payload(
@@ -248,7 +248,7 @@ class TestHandleMagnitudeDebugPayload:
     def test_img_payload_ignored_by_unity_consumer(self, tmp_path):
         """IMG payloads are saved locally by agent-service, not handled here."""
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps(
@@ -264,7 +264,7 @@ class TestHandleMagnitudeDebugPayload:
     def test_trace_payload_ignored_by_unity_consumer(self, tmp_path):
         """TRACE payloads are saved locally by agent-service, not handled here."""
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             payload = json.dumps({"actId": "act456", "task": "click"})
@@ -273,7 +273,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_noop_when_log_dir_unset(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             "",
         ):
             _handle_magnitude_debug_payload(
@@ -283,7 +283,7 @@ class TestHandleMagnitudeDebugPayload:
 
     def test_malformed_json_ignored(self, tmp_path):
         with mock.patch(
-            "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+            "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
             str(tmp_path),
         ):
             _handle_magnitude_debug_payload("TEXT {not valid json}")
@@ -302,7 +302,7 @@ class TestLogConsumerDebugRouting:
         backend._log_buffer = {}
 
         captured_by_logger: list[str] = []
-        unity_logger = logging.getLogger("unity")
+        unity_logger = logging.getLogger("unify")
         original_level = unity_logger.level
 
         class _Capture(logging.Handler):
@@ -315,7 +315,7 @@ class TestLogConsumerDebugRouting:
 
         try:
             with mock.patch(
-                "unity.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
+                "unify.function_manager.computer_backends._MAGNITUDE_LOG_DIR",
                 str(tmp_path),
             ):
                 debug_line = "__MAG_DEBUG__ TEXT " + json.dumps({"line": "debug info"})

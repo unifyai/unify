@@ -43,7 +43,7 @@ if not _root_logger_early.handlers:
 
 from tests.helpers import PRECREATED_CONTEXTS, set_session_tags
 from tests.settings import SETTINGS
-from unity.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
+from unify.session_details import UNASSIGNED_ASSISTANT_CONTEXT, UNASSIGNED_USER_CONTEXT
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +62,7 @@ def _check_orchestra_available() -> bool:
     # (added in e47d5c648) so we hit `/v0/projects` exactly once. Before
     # this fix, a `/v0`-suffixed ORCHESTRA_URL would resolve to
     # `/v0/v0/projects` → 404 → returns False → pytest_sessionstart
-    # silently skipped unity.init() → eval tests crashed downstream with
+    # silently skipped unify.init() → eval tests crashed downstream with
     # "EVENT_BUS has not been initialised yet".
     if base.endswith("/v0"):
         url = f"{base}/projects"
@@ -136,9 +136,9 @@ def _set_unify_context_for_test(item: pytest.Item) -> None:
     # Ensure singleton registries don't leak across tests and that fixtures see
     # the correct context for any context-derived subcontexts (e.g. FunctionManager).
     try:
-        from unity.common.context_registry import ContextRegistry
-        from unity.manager_registry import ManagerRegistry
-        from unity.events.event_bus import EVENT_BUS
+        from unify.common.context_registry import ContextRegistry
+        from unify.manager_registry import ManagerRegistry
+        from unify.events.event_bus import EVENT_BUS
 
         ManagerRegistry.clear()
         ContextRegistry.clear()
@@ -227,23 +227,23 @@ def stub_external_deps(monkeypatch):
         return _FIXED_DATETIME.strftime("%A, %B %d, %Y at %I:%M %p ") + label
 
     # Patch prompt_helpers.now everywhere it's imported
-    monkeypatch.setattr("unity.common.prompt_helpers.now", _static_now)
-    monkeypatch.setattr("unity.secret_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unity.image_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unity.memory_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unity.file_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unity.conversation_manager.prompt_builders.now", _static_now)
-    monkeypatch.setattr("unity.conversation_manager.events.prompt_now", _static_now)
+    monkeypatch.setattr("unify.common.prompt_helpers.now", _static_now)
+    monkeypatch.setattr("unify.secret_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unify.image_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unify.memory_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unify.file_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unify.conversation_manager.prompt_builders.now", _static_now)
+    monkeypatch.setattr("unify.conversation_manager.events.prompt_now", _static_now)
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.contact_index.prompt_now",
+        "unify.conversation_manager.domains.contact_index.prompt_now",
         _static_now,
     )
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.managers_utils.prompt_now",
+        "unify.conversation_manager.domains.managers_utils.prompt_now",
         _static_now,
     )
     monkeypatch.setattr(
-        "unity.conversation_manager.conversation_manager.prompt_now",
+        "unify.conversation_manager.conversation_manager.prompt_now",
         _static_now,
     )
 
@@ -272,7 +272,7 @@ def stub_external_deps(monkeypatch):
             return _FIXED_DATETIME.astimezone(tz)
 
     monkeypatch.setattr(
-        "unity.task_scheduler.task_scheduler.datetime",
+        "unify.task_scheduler.task_scheduler.datetime",
         _StubbedDatetime,
     )
 
@@ -280,7 +280,7 @@ def stub_external_deps(monkeypatch):
         return 1000.0
 
     monkeypatch.setattr(
-        "unity.common._async_tool.time_context.perf_counter",
+        "unify.common._async_tool.time_context.perf_counter",
         _static_perf_counter,
     )
 
@@ -289,8 +289,8 @@ def stub_external_deps(monkeypatch):
 # 3. Singleton isolation                                                      #
 # --------------------------------------------------------------------------- #
 
-from unity.common.context_registry import ContextRegistry
-from unity.manager_registry import ManagerRegistry
+from unify.common.context_registry import ContextRegistry
+from unify.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -308,7 +308,7 @@ def _enable_eventbus_for_marked_tests(request):
     By default, EventBus publishing is disabled during tests (via SETTINGS).
     Tests that need to verify event publishing behavior opt-in via the marker.
     """
-    from unity.events.event_bus import EventBus
+    from unify.events.event_bus import EventBus
 
     if request.node.get_closest_marker("enable_eventbus"):
         EventBus._publishing_enabled = True
@@ -432,7 +432,7 @@ def pytest_sessionstart(session):
     #  This ensures Unity owns the provider (service: "unity") before
     #  any library (unify, unillm) makes traced calls.
     # ------------------------------------------------------------------
-    from unity.logger import get_tracer
+    from unify.logger import get_tracer
 
     get_tracer()  # Creates TracerProvider with service="unity" if OTEL enabled
 
@@ -503,13 +503,13 @@ def pytest_sessionstart(session):
     #  Ensure the unity runtime is fully initialised for the test suite
     # ------------------------------------------------------------------
 
-    import unity  # local import to avoid affecting stub installation order
+    import unify  # local import to avoid affecting stub installation order
 
     try:
-        unity.init(project_name)
+        unify.init(project_name)
     except Exception:
         # Fallback to default project if UnityTests not available yet
-        unity.init()
+        unify.init()
 
     # ------------------------------------------------------------------
     #  Ensure the global builtins catalogues (primitives + guidance)
@@ -518,14 +518,14 @@ def pytest_sessionstart(session):
     #  cross-process lock serialises the rare cold-start race between
     #  parallel sessions.
     # ------------------------------------------------------------------
-    from unity.common.builtins import (
+    from unify.common.builtins import (
         builtins_project,
         builtins_seed_key_override,
     )
-    from unity.common.embed_utils import _cross_process_column_lock
-    from unity.function_manager.builtins_catalog import seed_builtin_primitives
-    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from unify.common.embed_utils import _cross_process_column_lock
+    from unify.function_manager.builtins_catalog import seed_builtin_primitives
+    from unify.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unify.integrations.builtins_catalog import seed_builtin_integrations
 
     with _cross_process_column_lock(builtins_project(), "builtins_seed"):
         with builtins_seed_key_override():
@@ -536,7 +536,7 @@ def pytest_sessionstart(session):
     # ------------------------------------------------------------------
     #  Configure EventBus publishing (disabled by default in tests)
     # ------------------------------------------------------------------
-    from unity.events.event_bus import EventBus
+    from unify.events.event_bus import EventBus
 
     EventBus._publishing_enabled = SETTINGS.EVENTBUS_PUBLISHING_ENABLED
 

@@ -4,14 +4,14 @@ from tests.helpers import _handle_project
 import pytest
 import unisdk
 
-from unity.common.context_registry import ContextRegistry
-from unity.common.tool_outcome import ToolErrorException
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.priority import Priority
-from unity.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.status import Status
+from unify.common.context_registry import ContextRegistry
+from unify.common.tool_outcome import ToolErrorException
+from unify.session_details import SESSION_DETAILS
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.priority import Priority
+from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
+from unify.task_scheduler.types.schedule import Schedule
+from unify.task_scheduler.types.status import Status
 
 
 @_handle_project

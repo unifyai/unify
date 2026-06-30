@@ -1,4 +1,4 @@
-"""Tests for ``unity.gateway.common.callbacks``.
+"""Tests for ``unify.gateway.common.callbacks``.
 
 Pin the environment-aware resolution of Twilio-facing callback URLs:
 hosted deployments keep their public ``COMMS_URL``/``ADAPTERS_URL`` base,
@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.gateway.common import callbacks
+from unify.gateway.common import callbacks
 
 
 def _patch_conversation(monkeypatch: pytest.MonkeyPatch, **fields: object) -> None:

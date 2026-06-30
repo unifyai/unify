@@ -26,7 +26,7 @@ from tests.conversation_manager.demo.conftest import (
 @_handle_project
 async def test_act_is_masked_in_demo_mode(initialized_cm):
     """In demo mode, 'act' should not be in the tool surface."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -52,7 +52,7 @@ async def test_act_is_masked_in_demo_mode(initialized_cm):
 @_handle_project
 async def test_communication_tools_still_available(initialized_cm):
     """Communication tools (send_sms, send_email, make_call) should remain available."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -109,7 +109,7 @@ async def test_boss_always_in_active_conversations(initialized_cm):
 @_handle_project
 async def test_set_boss_details_updates_name(initialized_cm):
     """set_boss_details should update the boss contact's name."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -132,7 +132,7 @@ async def test_set_boss_details_updates_name(initialized_cm):
 @_handle_project
 async def test_set_boss_details_updates_email(initialized_cm):
     """set_boss_details should update the boss contact's email address."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -151,7 +151,7 @@ async def test_set_boss_details_updates_email(initialized_cm):
 @_handle_project
 async def test_set_boss_details_updates_phone(initialized_cm):
     """set_boss_details should update the boss contact's phone number."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -170,7 +170,7 @@ async def test_set_boss_details_updates_phone(initialized_cm):
 @_handle_project
 async def test_set_boss_details_no_fields_returns_error(initialized_cm):
     """set_boss_details with no fields should return an error."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -184,7 +184,7 @@ async def test_set_boss_details_no_fields_returns_error(initialized_cm):
 @_handle_project
 async def test_set_boss_details_partial_update(initialized_cm):
     """set_boss_details should only update provided fields, leaving others unchanged."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 

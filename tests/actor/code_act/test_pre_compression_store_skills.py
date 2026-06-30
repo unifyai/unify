@@ -18,9 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.common.async_tool_loop import AsyncToolLoopHandle
-from unity.function_manager.function_manager import FunctionManager
+from unify.actor.code_act_actor import CodeActActor
+from unify.common.async_tool_loop import AsyncToolLoopHandle
+from unify.function_manager.function_manager import FunctionManager
 
 pytestmark = pytest.mark.llm_call
 
@@ -105,15 +105,15 @@ async def test_compress_threshold_exposes_extra_tools_and_compress_is_called():
 
     with (
         patch(
-            "unity.common._async_tool.loop.context_over_threshold",
+            "unify.common._async_tool.loop.context_over_threshold",
             _make_delayed_threshold(trigger_after=2),
         ),
         patch(
-            "unity.actor.code_act_actor._start_proactive_storage_loop",
+            "unify.actor.code_act_actor._start_proactive_storage_loop",
             return_value=mock_proactive_handle,
         ),
         patch(
-            "unity.actor.code_act_actor._start_storage_check_loop",
+            "unify.actor.code_act_actor._start_storage_check_loop",
             return_value=None,
         ),
         patch.object(
@@ -122,7 +122,7 @@ async def test_compress_threshold_exposes_extra_tools_and_compress_is_called():
             _mock_restart,
         ),
         patch(
-            "unity.actor.code_act_actor.publish_manager_method_event",
+            "unify.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ),
     ):

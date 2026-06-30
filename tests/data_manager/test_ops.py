@@ -11,7 +11,7 @@ import pytest
 import requests
 from unisdk.utils.http import RequestError
 
-from unity.data_manager.ops import ingest_ops, mutation_ops
+from unify.data_manager.ops import ingest_ops, mutation_ops
 
 
 def _duplicate_key_error() -> RequestError:

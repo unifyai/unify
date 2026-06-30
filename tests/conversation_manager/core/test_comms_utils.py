@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains import comms_utils
+from unify.conversation_manager.domains import comms_utils
 
 pytestmark = pytest.mark.real_comms_functions
 
@@ -73,10 +73,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -109,10 +109,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -136,7 +136,7 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.conversation.ADAPTERS_URL = ADAPTERS_URL
@@ -163,10 +163,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -201,10 +201,10 @@ class TestUploadUnifyAttachment:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.agent_id = 42
@@ -238,10 +238,10 @@ class TestSendSms:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -266,7 +266,7 @@ class TestSendSms:
     async def test_send_sms_no_from_number(self):
         """Returns failure when assistant has no phone number."""
         with patch(
-            "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
         ) as mock_session_details:
             mock_session_details.assistant.number = None
 
@@ -291,10 +291,10 @@ class TestStartCall:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -315,7 +315,7 @@ class TestStartCall:
     async def test_start_call_no_from_number(self):
         """Returns failure when assistant has no phone number."""
         with patch(
-            "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
         ) as mock_session_details:
             mock_session_details.assistant.number = None
 
@@ -332,13 +332,13 @@ class TestSendUnifyMessage:
         """Sends message without attachment via Pub/Sub."""
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.DEPLOY_ENV = "production"
@@ -368,13 +368,13 @@ class TestSendUnifyMessage:
         """Sends message with attachment included in Pub/Sub event."""
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.DEPLOY_ENV = "production"
@@ -422,10 +422,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@test.com"
@@ -459,10 +459,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@test.com"
@@ -498,10 +498,10 @@ class TestSendEmailViaAddress:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_session_details.assistant.email = "assistant@outlook.unify.ai"
@@ -524,15 +524,15 @@ class TestLocalCommsBackends:
     async def test_send_sms_uses_local_twilio_backend(self):
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_providers.twilio.send_sms_message",
+                "unify.conversation_manager.local_providers.twilio.send_sms_message",
                 new=AsyncMock(return_value={"success": True, "sid": "SM123"}),
             ) as mock_send_sms,
             patch(
-                "unity.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
         ):
             mock_session_details.assistant.number = "+15551234567"
@@ -564,15 +564,15 @@ class TestLocalCommsBackends:
 
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils._publish_local_outbox_async",
+                "unify.conversation_manager.domains.comms_utils._publish_local_outbox_async",
                 new=AsyncMock(return_value=True),
             ) as mock_outbox,
             patch(
-                "unity.conversation_manager.domains.comms_utils._get_publisher",
+                "unify.conversation_manager.domains.comms_utils._get_publisher",
                 return_value=mock_publisher,
             ),
         ):
@@ -602,7 +602,7 @@ class TestLocalCommsBackends:
         mock_publisher.publish.return_value = mock_future
 
         with patch(
-            "unity.conversation_manager.domains.comms_utils._get_publisher",
+            "unify.conversation_manager.domains.comms_utils._get_publisher",
             return_value=mock_publisher,
         ):
             result = await comms_utils.send_unify_meet_ring(
@@ -626,11 +626,11 @@ class TestLocalCommsBackends:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
             mock_settings.conversation.LOCAL_COMMS_PUBLIC_URL = ""
@@ -653,11 +653,11 @@ class TestLocalCommsBackends:
     async def test_send_email_uses_local_email_backend(self):
         with (
             patch(
-                "unity.conversation_manager.domains.comms_utils._use_local_comms",
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_providers.email.send_email",
+                "unify.conversation_manager.local_providers.email.send_email",
                 new=AsyncMock(return_value={"success": True, "id": "email-123"}),
             ) as mock_send_email,
         ):
@@ -685,7 +685,7 @@ class TestLocalCommsBackends:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.manager_registry.ManagerRegistry.get_file_manager",
+                "unify.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):
@@ -733,10 +733,10 @@ class TestAddEmailAttachmentsRouting:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
-                "unity.conversation_manager.domains.comms_utils.SETTINGS",
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
             patch(
-                "unity.manager_registry.ManagerRegistry.get_file_manager",
+                "unify.manager_registry.ManagerRegistry.get_file_manager",
                 return_value=mock_file_manager,
             ),
         ):

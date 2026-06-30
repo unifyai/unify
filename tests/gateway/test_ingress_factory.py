@@ -18,11 +18,11 @@ from unittest.mock import patch
 
 import pytest
 
-from unity.conversation_manager.comms_manager import CommsManager
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.conversation_manager.comms_manager import CommsManager
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
 )
-from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from unify.gateway.ingress_inmemory import InMemoryIngressTransport
 
 # ---------------------------------------------------------------------------
 # Construction
@@ -177,7 +177,7 @@ async def test_factory_can_inspect_session_details_at_resolution_time() -> None:
     _start_inbound_subscription runs has been set by
     _poll_for_assignment.
     """
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
 
     broker = create_in_memory_event_broker()
     seen_agent_ids: list[Any] = []

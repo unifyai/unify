@@ -14,14 +14,14 @@ from pydantic import BaseModel, Field
 from unisdk.utils.http import RequestError
 
 from tests.async_tool_loop.conftest import LLM_CONFIGS
-from unity.blacklist_manager.base import BaseBlackListManager
-from unity.common.accessible_teams_block import build_accessible_teams_block
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.context_registry import ContextRegistry
-from unity.common.llm_client import new_llm_client
-from unity.data_manager.base import BaseDataManager
-from unity.file_manager.managers.base import BaseFileManager
-from unity.session_details import SESSION_DETAILS, TeamSummary
+from unify.blacklist_manager.base import BaseBlackListManager
+from unify.common.accessible_teams_block import build_accessible_teams_block
+from unify.common.async_tool_loop import start_async_tool_loop
+from unify.common.context_registry import ContextRegistry
+from unify.common.llm_client import new_llm_client
+from unify.data_manager.base import BaseDataManager
+from unify.file_manager.managers.base import BaseFileManager
+from unify.session_details import SESSION_DETAILS, TeamSummary
 
 PATCH_TEAM_DESTINATION = "team:41001"
 FAMILY_TEAM_DESTINATION = "team:41002"

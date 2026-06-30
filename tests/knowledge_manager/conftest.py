@@ -6,9 +6,9 @@ from typing import List, Dict, Tuple, Any
 import os
 
 import unisdk
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.manager_registry import ManagerRegistry
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import mutation_test_lock, restore_scenario_context
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
@@ -254,7 +254,7 @@ def _serial_tool_calls(monkeypatch):
     small per-turn latency cost on uncached runs but pays for itself through
     reliable cache reuse on every future run.
     """
-    import unity.knowledge_manager.knowledge_manager as km_mod
+    import unify.knowledge_manager.knowledge_manager as km_mod
 
     _original = km_mod.start_async_tool_loop
 

@@ -6,9 +6,9 @@ import json
 import re
 from typing import List, Dict, Any, Optional
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.contact_manager.types.contact import Contact
-from unity.common.llm_client import new_llm_client
+from unify.contact_manager.contact_manager import ContactManager
+from unify.contact_manager.types.contact import Contact
+from unify.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed, find_tool_calls_and_results
 from tests.helpers import _handle_project
 from tests.async_helpers import _wait_for_next_assistant_response_event

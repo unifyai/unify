@@ -14,17 +14,17 @@ import asyncio
 
 import pytest
 
-from unity.common.async_tool_loop import (
+from unify.common.async_tool_loop import (
     SteerableToolHandle,
     start_async_tool_loop,
 )
-from unity.common._async_tool.tools_data import (
+from unify.common._async_tool.tools_data import (
     _extract_nested_handle,
     _HANDLE_SENTINEL,
     _handle_label_sentinel,
 )
-from unity.common.tool_spec import ToolSpec
-from unity.common.llm_client import new_llm_client
+from unify.common.tool_spec import ToolSpec
+from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _wait_for_tool_result,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.actor.simulated import SimulatedActor
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from unify.actor.simulated import SimulatedActor
+from unify.task_scheduler.task_scheduler import TaskScheduler
 from tests.helpers import _handle_project, capture_events
 
 # All tests in this file require EventBus publishing to verify event behavior

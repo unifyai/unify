@@ -3,8 +3,8 @@ import asyncio
 import datetime as dt
 from collections import deque
 
-from unity.events.event_bus import EventBus, Event
-from unity.transcript_manager.types.message import Message
+from unify.events.event_bus import EventBus, Event
+from unify.transcript_manager.types.message import Message
 from tests.helpers import _handle_project
 
 

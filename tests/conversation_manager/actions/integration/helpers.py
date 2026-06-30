@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable, TypeVar
 import unisdk
 
 from tests.conversation_manager.cm_helpers import filter_events_by_type
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     ActorHandleStarted,
     ActorNotification,
     ActorResult,
@@ -83,7 +83,7 @@ def _get_steering_tool(
         AssertionError: If no matching tool is found (e.g. asking for
             ``pause`` when the action is already paused).
     """
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -237,7 +237,7 @@ async def inject_actor_clarification_request(
     call_id: str | None = None,
 ) -> None:
     """Deterministically apply an ActorClarificationRequest to CM state."""
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_driver.cm
     evt = ActorClarificationRequest(handle_id=handle_id, query=query, call_id=call_id)
@@ -254,7 +254,7 @@ async def inject_actor_notification(
     response: str,
 ) -> None:
     """Deterministically apply an ActorNotification to CM state."""
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_driver.cm
     evt = ActorNotification(handle_id=handle_id, response=response)
@@ -301,7 +301,7 @@ async def inject_actor_result(
     - Some smoke flows need the CM brain to observe the actor's completion result
       before it can take the next step (e.g., "find phone → send SMS").
     """
-    from unity.conversation_manager.domains.event_handlers import EventHandler
+    from unify.conversation_manager.domains.event_handlers import EventHandler
 
     cm = cm_driver.cm
     evt = ActorResult(handle_id=handle_id, success=success, result=result)
@@ -353,7 +353,7 @@ async def run_cm_until_wait(
             output_events.append(evt)
         # Handle locally for deterministic state updates.
         if evt is not None:
-            from unity.conversation_manager.domains.event_handlers import EventHandler
+            from unify.conversation_manager.domains.event_handlers import EventHandler
 
             await EventHandler.handle_event(
                 evt,
@@ -572,7 +572,7 @@ def verify_task_in_db(
     """
     # TaskScheduler is not a direct field on ConversationManager; access it via
     # ManagerRegistry (the canonical owner), which is what `primitives.tasks` uses.
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     scheduler = ManagerRegistry.get_task_scheduler()
     assert scheduler is not None, "TaskScheduler is not available"
@@ -603,7 +603,7 @@ def find_task_id_by_exact_name(*, name: str) -> int:
 
     Prefer this in tests that control the exact task name they created.
     """
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     scheduler = ManagerRegistry.get_task_scheduler()
     assert scheduler is not None, "TaskScheduler is not available"
@@ -629,7 +629,7 @@ def find_task_id_by_name_contains(*, name: str, limit: int = 25) -> int:
 
     Use this when the LLM may introduce minor formatting differences (quotes/punctuation).
     """
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     scheduler = ManagerRegistry.get_task_scheduler()
     assert scheduler is not None, "TaskScheduler is not available"

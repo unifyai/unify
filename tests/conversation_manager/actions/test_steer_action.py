@@ -28,7 +28,7 @@ from tests.conversation_manager.cm_helpers import (
 )
 from tests.assertion_helpers import assertion_failed
 from tests.conversation_manager.conftest import BOSS
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     SMSReceived,
     ActorHandleStarted,
 )
@@ -999,7 +999,7 @@ async def test_ask_response_triggers_llm_followup(initialized_cm):
 
     # The LLM should have sent an SMS after receiving the ask response
     # (indicating it got another turn to process the result)
-    from unity.conversation_manager.events import SMSSent
+    from unify.conversation_manager.events import SMSSent
 
     sms_sent_events = [e for e in result2.output_events if isinstance(e, SMSSent)]
     assert len(sms_sent_events) >= 1, assertion_failed(

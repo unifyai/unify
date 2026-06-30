@@ -5,10 +5,10 @@ through normalise_tools, methods_to_tool_dict, LoopConfig, and
 ToolLoopPayload without touching any EventBus, Pub/Sub, or project setup.
 """
 
-from unity.common.tool_spec import ToolSpec, normalise_tools
-from unity.common.llm_helpers import methods_to_tool_dict
-from unity.common._async_tool.loop_config import LoopConfig
-from unity.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
+from unify.common.tool_spec import ToolSpec, normalise_tools
+from unify.common.llm_helpers import methods_to_tool_dict
+from unify.common._async_tool.loop_config import LoopConfig
+from unify.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
 
 # ============================================================================
 #  ToolSpec.display_label basics

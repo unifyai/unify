@@ -24,8 +24,8 @@ from tests.conversation_manager.actions.integration.helpers import (
     run_cm_until_wait,
     wait_for_actor_completion,
 )
-from unity.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
-from unity.file_manager.settings import get_local_root
+from unify.conversation_manager.events import UnifyMessageReceived, UnifyMessageSent
+from unify.file_manager.settings import get_local_root
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval, pytest.mark.llm_call]
 
@@ -98,7 +98,7 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     )
 
     with patch(
-        "unity.comms.primitives.comms_utils.upload_unify_attachment",
+        "unify.comms.primitives.comms_utils.upload_unify_attachment",
         fake_upload,
     ):
         await inject_actor_result(
@@ -131,7 +131,7 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     # ------------------------------------------------------------------
     import base64
 
-    from unity.common.llm_client import new_llm_client
+    from unify.common.llm_client import new_llm_client
 
     image_bytes = generated_image_path.read_bytes()
     b64 = base64.b64encode(image_bytes).decode()

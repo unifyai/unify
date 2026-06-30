@@ -3,11 +3,11 @@ import re
 import pytest
 
 from tests.helpers import _handle_project, capture_events
-from unity.events.event_bus import EVENT_BUS
-from unity.events.manager_event_logging import (
+from unify.events.event_bus import EVENT_BUS
+from unify.events.manager_event_logging import (
     log_manager_result,
 )
-from unity.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
+from unify.common._async_tool.loop_config import TOOL_LOOP_LINEAGE
 
 _SUFFIX_RE = re.compile(r"\(([0-9a-f]{4})\)$")
 

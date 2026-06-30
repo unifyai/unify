@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     SMSSent,
     EmailSent,
     UnifyMessageSent,
     WhatsAppSent,
 )
-from unity.conversation_manager.medium_scripts.common import (
+from unify.conversation_manager.medium_scripts.common import (
     render_participant_comms,
 )
 
@@ -192,7 +192,7 @@ class TestInvalidationWiringExists:
         from pathlib import Path
 
         return Path(
-            "unity/conversation_manager/medium_scripts/call.py",
+            "unify/conversation_manager/medium_scripts/call.py",
         ).read_text()
 
     def test_invalidation_helper_defined(self, call_source):
@@ -255,7 +255,7 @@ class TestQueuedSpeechGateWiring:
         from pathlib import Path
 
         return Path(
-            "unity/conversation_manager/medium_scripts/call.py",
+            "unify/conversation_manager/medium_scripts/call.py",
         ).read_text()
 
     def test_floor_free_predicate_defined(self, call_source):

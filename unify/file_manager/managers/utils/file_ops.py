@@ -1,0 +1,252 @@
+from __future__ import annotations
+
+from typing import List
+
+from unify.file_manager.file_parsers import ContentType
+from unify.file_manager.types.config import FilePipelineConfig as _FilePipelineConfig
+from unify.file_manager.types.ingest import (
+    BaseIngestedFile as _IngestedBase,
+    IngestedPDF as _IngestedPDF,
+    IngestedDocx as _IngestedDocx,
+    IngestedDoc as _IngestedDoc,
+    IngestedXlsx as _IngestedXlsx,
+    IngestedCsv as _IngestedCsv,
+    ContentRef as _ContentRef,
+    TableRef as _TableRef,
+    FileMetrics as _FileMetrics,
+    IngestedFileUnion,
+)
+from unify.file_manager.file_parsers.types.formats import FileFormat as _FileFormat
+from unify.file_manager.file_parsers.types.contracts import FileParseResult
+from unify.file_manager.types.file import FileContentRow
+from unify.file_manager.managers.file_manager import FileManager
+
+
+def build_compact_ingest_model(
+    file_manager: FileManager,
+    *,
+    file_path: str,
+    parse_result: FileParseResult,
+    config: _FilePipelineConfig,
+) -> IngestedFileUnion:
+    """Build a typed, reference-first ingest model without heavy fields.
+
+    This function builds the appropriate Ingested* Pydantic model based on
+    the file format, populating it with compact metadata and context references.
+
+    Parameters
+    ----------
+    file_manager : FileManager
+        The FileManager instance for context/helper methods.
+    file_path : str
+        The file path.
+    parse_result : FileParseResult
+        The FileParseResult from the file parser.
+    config : FilePipelineConfig
+        Pipeline configuration.
+
+    Returns
+    -------
+    IngestedFileUnion
+        A typed Pydantic model (IngestedPDF, IngestedXlsx, etc.) with compact
+        reference-first data. Heavy artifacts (full_text, records) are NOT included.
+    """
+
+    def _ctype(r: FileContentRow) -> ContentType:
+        return getattr(r, "content_type", None)
+
+    # Get identity and metadata from adapter
+    source_uri = file_manager._resolve_to_uri(file_path)
+    display_path = file_path  # Use file_path as display_path
+
+    # Get file metadata (created_at, modified_at, file_size) from adapter
+    created_at = None
+    modified_at = None
+    file_size = None
+    try:
+        adapter = getattr(file_manager, "_adapter", None)
+        if adapter:
+            # Try to get file stats from adapter
+            ref = file_manager._adapter_get(file_id_or_path=file_path)
+            if ref:
+                created_at = ref.get("created_at")
+                modified_at = ref.get("modified_at")
+                file_size = ref.get("file_size") or ref.get("size")
+    except Exception:
+        pass
+
+    # Resolve storage_id from file record
+    from .ingest_ops import get_file_id_from_path, get_storage_id_from_path
+
+    dm = file_manager._data_manager
+    file_id = get_file_id_from_path(
+        data_manager=dm,
+        index_context=file_manager._ctx,
+        file_path=file_path,
+    )
+    storage_id = get_storage_id_from_path(
+        data_manager=dm,
+        index_context=file_manager._ctx,
+        file_path=file_path,
+    )
+    # Fallback: use str(file_id) if no storage_id found
+    if not storage_id and file_id is not None:
+        storage_id = str(file_id)
+    # Ultimate fallback: use config storage_id or file_path
+    if not storage_id:
+        storage_id = config.ingest.storage_id or file_path
+
+    # Content reference using storage_id
+    content_ctx = file_manager._ctx_for_file_content(storage_id)
+    from unify.file_manager.parse_adapter import adapt_parse_result_for_file_manager
+
+    ingest_payload = adapt_parse_result_for_file_manager(parse_result, config=config)
+    record_count = len(list(ingest_payload.content_rows or []))
+    try:
+        text_chars = len(parse_result.full_text)
+    except Exception:
+        text_chars = 0
+    content_ref = _ContentRef(
+        context=content_ctx,
+        record_count=record_count,
+        text_chars=text_chars,
+    )
+
+    # Tables preview
+    tables_meta: List[_TableRef] = []
+    try:
+        tables = list(getattr(parse_result, "tables", []) or [])
+        for idx, tbl in enumerate(tables, start=1):
+            label = str(getattr(tbl, "label", None) or f"{idx:02d}")
+            label_safe = file_manager.safe(label)
+            columns = list(getattr(tbl, "columns", []) or [])[:16]
+            row_count = getattr(tbl, "num_rows", None)
+            if row_count is None:
+                row_count = len(getattr(tbl, "rows", []) or [])
+            # Use storage_id-based context
+            table_ctx = file_manager._ctx_for_file_table(storage_id, label_safe)
+            tables_meta.append(
+                _TableRef(
+                    name=label_safe,
+                    context=table_ctx,
+                    row_count=row_count,
+                    columns=columns,
+                ),
+            )
+    except Exception:
+        tables_meta = []
+
+    # Metrics (prefer adapter/FS info when available)
+    metrics = _FileMetrics(
+        file_size=file_size,
+        processing_time=(
+            (getattr(getattr(parse_result, "trace", None), "duration_ms", None) or 0.0)
+            / 1000.0
+            if getattr(parse_result, "trace", None) is not None
+            else None
+        ),
+        confidence_score=(
+            getattr(getattr(parse_result, "metadata", None), "confidence_score", None)
+            if getattr(parse_result, "metadata", None) is not None
+            else None
+        ),
+    )
+
+    # Summary excerpt (trim)
+    summary_excerpt = (parse_result.summary or "")[:512]
+
+    # Determine canonical file format/mime (handle enum or string)
+    ffmt = parse_result.file_format or getattr(
+        getattr(parse_result, "file_format", None),
+        "value",
+        None,
+    )
+    mime = getattr(parse_result, "mime_type", None)
+
+    if isinstance(ffmt, _FileFormat):
+        fmt_key = ffmt.value.lower()
+    elif isinstance(ffmt, str):
+        fmt_key = ffmt.lower()
+    else:
+        fmt_key = str(ffmt or "").lower()
+
+    Model = {
+        _FileFormat.PDF.value: _IngestedPDF,
+        _FileFormat.DOCX.value: _IngestedDocx,
+        _FileFormat.DOC.value: _IngestedDoc,
+        _FileFormat.XLSX.value: _IngestedXlsx,
+        _FileFormat.CSV.value: _IngestedCsv,
+    }.get(fmt_key, _IngestedBase)
+
+    base_kwargs = dict(
+        file_path=file_path,
+        source_uri=source_uri,
+        display_path=display_path,
+        file_format=ffmt,
+        mime_type=mime,
+        status=parse_result.status,
+        error=parse_result.error,
+        created_at=created_at,
+        modified_at=modified_at,
+        summary_excerpt=summary_excerpt,
+        content_ref=content_ref,
+        tables_ref=tables_meta,
+        metrics=metrics,
+    )
+
+    if Model is _IngestedPDF:
+        # Derive counts from lowered content rows and tables
+        rows = list(ingest_payload.content_rows or [])
+
+        return Model(
+            **base_kwargs,
+            page_count=None,
+            total_sections=sum(1 for r in rows if _ctype(r) == ContentType.SECTION)
+            or None,
+            image_count=sum(1 for r in rows if _ctype(r) == ContentType.IMAGE) or None,
+            table_count=len(list(getattr(parse_result, "tables", []) or [])) or None,
+            total_records=len(rows),
+        )
+    if Model in (_IngestedDocx, _IngestedDoc):
+        rows = list(ingest_payload.content_rows or [])
+        return Model(
+            **base_kwargs,
+            total_sections=sum(1 for r in rows if _ctype(r) == ContentType.SECTION)
+            or None,
+            image_count=sum(1 for r in rows if _ctype(r) == ContentType.IMAGE) or None,
+            table_count=len(list(getattr(parse_result, "tables", []) or [])) or None,
+            total_records=len(rows),
+        )
+    if Model is _IngestedXlsx:
+        rows = list(ingest_payload.content_rows or [])
+        sheet_names: List[str] = []
+        for r in rows:
+            try:
+                ctype = _ctype(r)
+                if ctype != ContentType.SHEET:
+                    continue
+                title = getattr(r, "title", None) or None
+                if title and title not in sheet_names:
+                    sheet_names.append(str(title))
+            except Exception:
+                continue
+        tables = list(getattr(parse_result, "tables", []) or [])
+        if not sheet_names:
+            for table in tables:
+                sheet_name = str(getattr(table, "sheet_name", "") or "").strip()
+                if sheet_name and sheet_name not in sheet_names:
+                    sheet_names.append(sheet_name)
+        return Model(
+            **base_kwargs,
+            sheet_count=len(sheet_names) if sheet_names else (len(tables) or None),
+            sheet_names=sheet_names,
+            table_count=len(tables) or None,
+        )
+    if Model is _IngestedCsv:
+        tables = list(getattr(parse_result, "tables", []) or [])
+        return Model(
+            **base_kwargs,
+            table_count=len(tables) or 1,
+        )
+
+    return Model(**base_kwargs)

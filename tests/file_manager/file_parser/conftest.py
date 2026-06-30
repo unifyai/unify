@@ -22,13 +22,13 @@ from typing import Optional, Sequence
 
 import pytest
 
-from unity.file_manager.file_parsers.types.backend import BaseFileParserBackend
-from unity.file_manager.file_parsers.types.contracts import (
+from unify.file_manager.file_parsers.types.backend import BaseFileParserBackend
+from unify.file_manager.file_parsers.types.contracts import (
     FileParseMetadata,
     FileParseRequest,
     FileParseResult,
 )
-from unity.file_manager.file_parsers.types.formats import FileFormat, MimeType
+from unify.file_manager.file_parsers.types.formats import FileFormat, MimeType
 
 # ---------------------------------------------------------------------------
 # Sample file helpers

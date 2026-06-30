@@ -2,13 +2,13 @@
 
 import pytest
 
-from unity.function_manager.primitives.scope import (
+from unify.function_manager.primitives.scope import (
     PrimitiveScope,
     VALID_MANAGER_ALIASES,
     default_runtime_scope,
     scoped_managers_for_role,
 )
-from unity.session_details import SESSION_DETAILS
+from unify.session_details import SESSION_DETAILS
 
 # ────────────────────────────────────────────────────────────────────────────
 # PrimitiveScope validation tests

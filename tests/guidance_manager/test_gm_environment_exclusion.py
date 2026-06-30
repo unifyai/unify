@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 
-from unity.guidance_manager.guidance_manager import GuidanceManager
+from unify.guidance_manager.guidance_manager import GuidanceManager
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ def test_scoped_filter_all_none_returns_none():
 
 
 def test_resolve_prompt_guidance_none_input():
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     text, ids = _resolve_prompt_guidance(None)
     assert text is None
@@ -99,7 +99,7 @@ def test_resolve_prompt_guidance_none_input():
 
 
 def test_resolve_prompt_guidance_empty_list():
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     text, ids = _resolve_prompt_guidance([])
     assert text is None
@@ -125,7 +125,7 @@ def _seed(gm: GuidanceManager) -> dict[str, int]:
 
 @_handle_project
 def test_resolve_prompt_guidance_by_title():
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     gm = GuidanceManager()
     ids = _seed(gm)
@@ -140,7 +140,7 @@ def test_resolve_prompt_guidance_by_title():
 
 @_handle_project
 def test_resolve_prompt_guidance_by_id():
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     gm = GuidanceManager()
     ids = _seed(gm)
@@ -154,7 +154,7 @@ def test_resolve_prompt_guidance_by_id():
 
 @_handle_project
 def test_resolve_prompt_guidance_mixed():
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     gm = GuidanceManager()
     ids = _seed(gm)
@@ -171,7 +171,7 @@ def test_resolve_prompt_guidance_mixed():
 @_handle_project
 def test_resolve_prompt_guidance_renders_function_ids():
     """function_ids cross-references appear in the rendered guidance text."""
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     gm = GuidanceManager()
     gm.add_guidance(
@@ -190,7 +190,7 @@ def test_resolve_prompt_guidance_renders_function_ids():
 @_handle_project
 def test_resolve_prompt_guidance_unmatched_returns_empty():
     """Identifiers that don't match any guidance produce no text and no IDs."""
-    from unity.actor.environments.actor import _resolve_prompt_guidance
+    from unify.actor.environments.actor import _resolve_prompt_guidance
 
     GuidanceManager()
 
@@ -209,7 +209,7 @@ def test_build_scoped_gm_receives_exclude_ids():
     """Simulates the wiring in ActorEnvironment.act(): resolved guidance IDs
     are set on the inner GuidanceManager via exclude_ids, masking those
     entries from subsequent discovery queries."""
-    from unity.actor.environments.actor import (
+    from unify.actor.environments.actor import (
         _build_scoped_gm,
         _resolve_prompt_guidance,
     )

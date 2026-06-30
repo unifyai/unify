@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.conversation_manager.conversation_manager import ConversationManager
+from unify.conversation_manager.conversation_manager import ConversationManager
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_meet_ring_answered_skips_fallback():
 @pytest.mark.asyncio
 async def test_start_unify_meet_tool_offered_when_idle(initialized_cm):
     """``start_unify_meet`` is in the tool set when no voice session is active."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 

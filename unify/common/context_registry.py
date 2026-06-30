@@ -1,0 +1,563 @@
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, Final, List, Optional, Type, Union
+
+import unisdk
+from pydantic import BaseModel
+from unisdk import create_fields
+
+from unify.common.authorship import SHARED_SCOPED_TABLES, fields_with_authoring
+from unify.common.context_store import _create_context_with_retry
+from unify.common.state_managers import BaseStateManager
+from unify.common.tool_outcome import ToolError, ToolErrorException
+from unify.session_details import SESSION_DETAILS
+
+_log = logging.getLogger(__name__)
+
+TEAM_CONTEXT_PREFIX: Final[str] = "Teams/"
+PERSONAL_ROOT_IDENTITY: Final[str] = "Personal"
+PERSONAL_DESTINATION: Final[str] = "personal"
+TEAM_DESTINATION_PREFIX: Final[str] = "team:"
+INVALID_DESTINATION_ERROR: Final[str] = "invalid_destination"
+
+_SHARED_SCOPED_TABLES: Final[frozenset[str]] = SHARED_SCOPED_TABLES
+
+
+class TableContext(BaseModel):
+    # TODO: Ideally should exist in Unify itself
+    name: str
+    description: str
+    fields: Optional[Any] = None
+    unique_keys: Optional[Dict[str, str]] = None
+    auto_counting: Optional[Dict[str, Optional[str]]] = None
+    foreign_keys: Optional[List[Dict[str, Any]]] = None
+
+
+class ContextRegistry:
+    _setup_complete = False
+    _registry: Dict[tuple[str, str, str], str] = {}
+    _base_context: Optional[str] = None
+
+    @staticmethod
+    def _get_active_context() -> str:
+        active_context = unisdk.get_active_context()
+        assert (
+            active_context["read"] == active_context["write"]
+        ), "Read and write contexts must be the same"
+        return active_context["read"]
+
+    @staticmethod
+    def _get_manager_name(
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+    ) -> str:
+        try:
+            return manager.__name__
+        except AttributeError:
+            return type(manager).__name__
+
+    @staticmethod
+    def _team_root_identity(team_id: int) -> str:
+        return f"{TEAM_CONTEXT_PREFIX}{team_id}"
+
+    @staticmethod
+    def _owner_for_root(root_identity: str) -> tuple[Optional[str], Optional[int]]:
+        """Map a root identity to the explicit ownership of contexts under it.
+
+        ``Teams/{team_id}`` roots are team-owned; the personal root is owned by
+        the active assistant. Returns ``(None, None)`` when the owner cannot be
+        stated confidently (e.g. an unassigned container with no agent_id), so
+        the backend falls back to inferring it from the context name.
+        """
+        if root_identity.startswith(TEAM_CONTEXT_PREFIX):
+            return "team", int(root_identity[len(TEAM_CONTEXT_PREFIX) :])
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return None, None
+        return "assistant", int(agent_id)
+
+    @classmethod
+    def _is_shared_scoped(cls, table_name: str) -> bool:
+        """Return whether a table participates in shared-team routing."""
+        if table_name in _SHARED_SCOPED_TABLES:
+            return True
+        parent = table_name
+        while "/" in parent:
+            parent = parent.rsplit("/", 1)[0]
+            if parent in _SHARED_SCOPED_TABLES:
+                return True
+        return False
+
+    @classmethod
+    def _personal_root(cls, manager_name: str, table_name: str) -> str:
+        base = cls._base_context
+        if not base:
+            try:
+                base = cls._get_active_context()
+            except Exception:
+                base = None
+        if not base:
+            raise RuntimeError(
+                f"Cannot resolve context for {manager_name}.{table_name}: "
+                "no base context available (ContextRegistry.setup() has not "
+                "run or the active Unify context is empty)",
+            )
+        cls._base_context = base
+        return base
+
+    @staticmethod
+    def is_missing_base_context_error(exc: BaseException) -> bool:
+        """Return whether *exc* indicates missing root-context setup."""
+        return isinstance(exc, RuntimeError) and (
+            "no base context available" in str(exc)
+        )
+
+    @classmethod
+    def set_base_context(cls, base_context: str) -> None:
+        """Cache an already-resolved base context root for worker tasks."""
+        if not base_context:
+            return
+        cls._base_context = base_context
+
+    @classmethod
+    def _invalid_destination(
+        cls,
+        table_name: str,
+        destination: str | None,
+        message: str,
+    ) -> ToolErrorException:
+        payload: ToolError = {
+            "error_kind": INVALID_DESTINATION_ERROR,
+            "message": message,
+            "details": {
+                "destination": destination,
+                "team_ids": sorted(SESSION_DETAILS.team_ids),
+                "table_name": table_name,
+            },
+        }
+        return ToolErrorException(payload)
+
+    @classmethod
+    def canonical_destination(cls, destination: object) -> str | None:
+        """Normalize one public destination label.
+
+        Returns ``None`` for personal destinations and the canonical
+        ``team:<id>`` form for shared destinations.
+        """
+        if destination is None:
+            return None
+        if not isinstance(destination, str):
+            raise ValueError("Destination must be 'personal' or 'team:<id>'.")
+        normalized = destination.strip()
+        if not normalized or normalized == PERSONAL_DESTINATION:
+            return None
+        if not normalized.startswith(TEAM_DESTINATION_PREFIX):
+            raise ValueError("Destination must be 'personal' or 'team:<id>'.")
+        raw_team_id = normalized[len(TEAM_DESTINATION_PREFIX) :]
+        try:
+            team_id = int(raw_team_id)
+        except (TypeError, ValueError):
+            raise ValueError("Team destination must include an integer team id.")
+        if team_id < 0:
+            raise ValueError("Team destination must include a non-negative id.")
+        return f"{TEAM_DESTINATION_PREFIX}{team_id}"
+
+    @classmethod
+    def implicit_shared_destinations(cls) -> list[str | None]:
+        """Return implicit write destinations for transcript/image fanout."""
+        team_ids = sorted({int(team_id) for team_id in SESSION_DETAILS.team_ids})
+        if not team_ids:
+            return [None]
+        return [f"{TEAM_DESTINATION_PREFIX}{team_id}" for team_id in team_ids]
+
+    @classmethod
+    def _parse_destination(
+        cls,
+        manager_name: str,
+        table_name: str,
+        destination: str | None,
+    ) -> tuple[str, str]:
+        """Resolve a public destination string to a cache identity and root path."""
+        try:
+            canonical_destination = cls.canonical_destination(destination)
+        except ValueError as exc:
+            raise cls._invalid_destination(
+                table_name,
+                destination if isinstance(destination, str) else None,
+                str(exc),
+            )
+        if canonical_destination is None:
+            return PERSONAL_ROOT_IDENTITY, cls._personal_root(manager_name, table_name)
+
+        if not cls._is_shared_scoped(table_name):
+            raise cls._invalid_destination(
+                table_name,
+                canonical_destination,
+                f"Table {table_name!r} does not support team destinations.",
+            )
+
+        team_id = int(canonical_destination[len(TEAM_DESTINATION_PREFIX) :])
+        if team_id not in SESSION_DETAILS.team_ids:
+            raise cls._invalid_destination(
+                table_name,
+                canonical_destination,
+                f"Assistant is not a member of team {team_id}.",
+            )
+
+        root_identity = cls._team_root_identity(team_id)
+        return root_identity, root_identity
+
+    @classmethod
+    def _get_contexts_for_manager(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        current_context: str,
+        root_identity: str,
+    ) -> Dict[str, Dict]:
+        """Extract the contexts for a manager, resolving context names to fully qualified names."""
+        assert hasattr(
+            manager,
+            "Config",
+        ), f"Manager {cls._get_manager_name(manager)} must have a Config class attribute"
+        assert hasattr(
+            manager.Config,
+            "required_contexts",
+        ), "Config must have a required_contexts class attribute"
+
+        out = {}
+
+        for context in manager.Config.required_contexts:
+            # Create copies of foreign_keys to avoid mutating class-level config.
+            # Without copying, the references get double-prefixed on subsequent
+            # calls (e.g., across test runs), corrupting FK resolution.
+            resolved_foreign_keys = None
+            if context.foreign_keys:
+                resolved_foreign_keys = []
+                for foreign_key in context.foreign_keys:
+                    fk_copy = foreign_key.copy()
+                    fk_copy["references"] = (
+                        f"{current_context}/{foreign_key['references']}"
+                    )
+                    resolved_foreign_keys.append(fk_copy)
+            context_fields = context.fields
+            if cls._is_shared_scoped(context.name):
+                context_fields = fields_with_authoring(context_fields)
+                context = context.model_copy(update={"fields": context_fields})
+
+            data = {
+                "resolved_name": f"{current_context}/{context.name}",
+                "table_context": context,
+                "resolved_foreign_keys": resolved_foreign_keys,
+                "root_identity": root_identity,
+                "root_context": current_context,
+            }
+            out[context.name] = data
+        return out
+
+    @classmethod
+    def _get_managers(cls) -> List[Union[BaseStateManager, Type[BaseStateManager]]]:
+        """Get the list of managers that have required contexts."""
+        # TODO: Use dynamic discovery of managers, dynamic discover is slow atm
+        # which defeats the purpose of having a context handler
+
+        from unify.contact_manager.contact_manager import ContactManager
+        from unify.dashboard_manager.dashboard_manager import DashboardManager
+        from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+        from unify.transcript_manager.transcript_manager import TranscriptManager
+        from unify.task_scheduler.task_scheduler import TaskScheduler
+        from unify.guidance_manager.guidance_manager import GuidanceManager
+        from unify.secret_manager.secret_manager import SecretManager
+        from unify.web_searcher.web_searcher import WebSearcher
+        from unify.image_manager.image_manager import ImageManager
+        from unify.function_manager.function_manager import FunctionManager
+        from unify.blacklist_manager.blacklist_manager import BlackListManager
+        from unify.data_manager.data_manager import DataManager
+        from unify.file_manager.managers.file_manager import FileManager
+
+        managers = [
+            ContactManager,
+            DashboardManager,
+            KnowledgeManager,
+            TranscriptManager,
+            TaskScheduler,
+            ImageManager,
+            GuidanceManager,
+            SecretManager,
+            WebSearcher,
+            FunctionManager,
+            BlackListManager,
+            DataManager,
+            FileManager,
+        ]
+
+        return managers
+
+    @classmethod
+    def _create_context_wrapper(
+        cls,
+        manager_name: str,
+        entry: Dict,
+    ) -> str:
+        """Create unify context and ensure fields are created, store in registry.
+
+        Idempotent: tolerates pre-existing contexts and concurrent creation.
+        """
+        table = entry["table_context"]
+        target_name = entry["resolved_name"]
+        # Use resolved_foreign_keys (with prefixed references) instead of
+        # table.foreign_keys to avoid using mutated class-level config.
+        resolved_foreign_keys = entry.get("resolved_foreign_keys")
+        owner_scope, owner_id = cls._owner_for_root(entry["root_identity"])
+        _create_context_with_retry(
+            target_name,
+            unique_keys=table.unique_keys,
+            auto_counting=table.auto_counting,
+            description=table.description,
+            foreign_keys=resolved_foreign_keys,
+            owner_scope=owner_scope,
+            owner_id=owner_id,
+        )
+        # Idempotent field creation
+        if table.fields:
+            try:
+                create_fields(table.fields, context=target_name)
+            except Exception:
+                pass  # Fields already exist or transient failure
+
+        cls._registry[(manager_name, table.name, entry["root_identity"])] = target_name
+
+        return target_name
+
+    @classmethod
+    def refresh(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        ctx_name: str,
+    ) -> Optional[str]:
+        """Refresh the context by forgetting it and then getting it again."""
+        cls.forget(manager, ctx_name)
+        return cls.get_context(manager, ctx_name)
+
+    @classmethod
+    def forget(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        ctx_name: str,
+    ) -> None:
+        """Remove the context from the registry."""
+        manager_name = cls._get_manager_name(manager)
+        for key in list(cls._registry):
+            if key[0] == manager_name and key[1] == ctx_name:
+                cls._registry.pop(key, None)
+
+    @classmethod
+    def forget_departed_team_roots(cls, team_ids: list[int]) -> None:
+        """Drop cached entries for shared roots the assistant can no longer reach."""
+        reachable_roots = {cls._team_root_identity(team_id) for team_id in team_ids}
+        for key in list(cls._registry):
+            root_identity = key[2]
+            if root_identity.startswith(TEAM_CONTEXT_PREFIX) and (
+                root_identity not in reachable_roots
+            ):
+                cls._registry.pop(key, None)
+
+    @classmethod
+    def clear(cls) -> None:
+        """Remove all cached contexts from the registry, primarily for test isolation."""
+        cls._registry.clear()
+        cls._setup_complete = False
+        cls._base_context = None
+
+    @classmethod
+    def _ensure_context(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        table_name: str,
+        root_identity: str,
+        root_context: str,
+    ) -> str:
+        manager_name = cls._get_manager_name(manager)
+        key = (manager_name, table_name, root_identity)
+        target_name = cls._registry.get(key)
+        if target_name is not None:
+            return target_name
+
+        contexts = cls._get_contexts_for_manager(manager, root_context, root_identity)
+        return cls._create_context_wrapper(manager_name, contexts[table_name])
+
+    @classmethod
+    def write_root(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        table_name: str,
+        *,
+        destination: str | None,
+    ) -> str:
+        """Resolve and provision the root a write should target."""
+        manager_name, root_identity, root_context = cls.resolve_root(
+            manager,
+            table_name,
+            destination=destination,
+        )
+        cls._ensure_context(manager, table_name, root_identity, root_context)
+        return root_context
+
+    @classmethod
+    def resolve_root(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        table_name: str,
+        *,
+        destination: str | None,
+    ) -> tuple[str, str, str]:
+        """Resolve a public destination string without provisioning contexts."""
+        manager_name = cls._get_manager_name(manager)
+        root_identity, root_context = cls._parse_destination(
+            manager_name,
+            table_name,
+            destination,
+        )
+        return manager_name, root_identity, root_context
+
+    @classmethod
+    def read_roots(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        table_name: str,
+    ) -> list[str]:
+        """Resolve and provision the ordered roots a read should fan out across."""
+        manager_name = cls._get_manager_name(manager)
+        personal_root = cls._personal_root(manager_name, table_name)
+        roots = [(PERSONAL_ROOT_IDENTITY, personal_root)]
+        if cls._is_shared_scoped(table_name):
+            roots.extend(
+                (cls._team_root_identity(team_id), cls._team_root_identity(team_id))
+                for team_id in sorted(set(SESSION_DETAILS.team_ids))
+            )
+
+        for root_identity, root_context in roots:
+            cls._ensure_context(manager, table_name, root_identity, root_context)
+        return [root_context for _, root_context in roots]
+
+    @classmethod
+    def get_context(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+        ctx_name: str,
+    ) -> Optional[str]:
+        """Get the context from the registry, creating it if it doesn't exist."""
+        manager_name = cls._get_manager_name(manager)
+        root_context = cls._personal_root(manager_name, ctx_name)
+        return cls._ensure_context(
+            manager,
+            ctx_name,
+            PERSONAL_ROOT_IDENTITY,
+            root_context,
+        )
+
+    @classmethod
+    def _provision_managers(
+        cls,
+        managers: List[Union[Type[BaseStateManager], BaseStateManager]],
+        base: str,
+    ) -> None:
+        """Provision contexts for the given managers against *base*.
+
+        Shared implementation behind :meth:`setup` and
+        :meth:`setup_for_managers`.  Sets ``_base_context`` and
+        concurrently creates every required context (+ aggregation
+        contexts) via :meth:`_create_context_wrapper`.
+        """
+        cls._base_context = base
+
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for manager in managers:
+                manager_name = cls._get_manager_name(manager)
+                for _, entry in cls._get_contexts_for_manager(
+                    manager,
+                    base,
+                    PERSONAL_ROOT_IDENTITY,
+                ).items():
+                    futures.append(
+                        executor.submit(
+                            cls._create_context_wrapper,
+                            manager_name,
+                            entry,
+                        ),
+                    )
+
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    _log.warning("Context creation failed (will retry lazily): %s", e)
+
+    @classmethod
+    def setup(cls):
+        """Setup the context handler by creating the contexts for all managers."""
+        if cls._setup_complete:
+            return
+
+        cls._provision_managers(cls._get_managers(), cls._get_active_context())
+        cls._setup_complete = True
+
+    @classmethod
+    def setup_for_managers(
+        cls,
+        managers: List[Union[Type[BaseStateManager], BaseStateManager]],
+        *,
+        base_context: Optional[str] = None,
+    ) -> None:
+        """Provision contexts for a specific subset of managers.
+
+        Unlike :meth:`setup` which provisions **all** registered managers
+        and sets ``_setup_complete``, this is designed for worker processes
+        that only need a few managers (e.g. ``FileManager`` +
+        ``DataManager`` for the ingest worker).
+
+        It does **not** set ``_setup_complete`` so that a later full
+        ``setup()`` call (if ever needed) still runs normally.
+
+        Parameters
+        ----------
+        managers :
+            Manager classes whose ``Config.required_contexts`` should be
+            provisioned.
+        base_context :
+            Explicit base context string.  When *None* (the default),
+            reads the current Unify active context via the SDK.
+        """
+        cls._provision_managers(
+            managers,
+            base_context or cls._get_active_context(),
+        )
+
+    @classmethod
+    def get_known_base_contexts(cls) -> List[str]:
+        """
+        Return all registered base context names across all managers.
+
+        This returns the unresolved context names (e.g., "Contacts", "Knowledge",
+        "Tasks") from each manager's Config.required_contexts, not the fully
+        qualified paths.
+
+        Returns
+        -------
+        list[str]
+            Sorted list of unique base context names.
+
+        Usage Examples
+        --------------
+        >>> base_contexts = ContextRegistry.get_known_base_contexts()
+        >>> print(base_contexts)
+        ['Blacklist', 'Contacts', 'Data', 'Functions', 'Guidance', ...]
+        """
+        base_contexts = set()
+        for manager in cls._get_managers():
+            if hasattr(manager, "Config") and hasattr(
+                manager.Config,
+                "required_contexts",
+            ):
+                for table_ctx in manager.Config.required_contexts:
+                    base_contexts.add(table_ctx.name)
+        return sorted(base_contexts)

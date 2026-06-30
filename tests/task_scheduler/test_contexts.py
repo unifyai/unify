@@ -1,11 +1,11 @@
 from __future__ import annotations
 import asyncio, pytest, re, json
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import TaskScheduler
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.priority import Priority
+from unify.task_scheduler.types.status import Status
+from unify.task_scheduler.types.priority import Priority
 
 pytestmark = pytest.mark.llm_call
 

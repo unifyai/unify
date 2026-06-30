@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.common.act_llm_profiles import (
+from unify.common.act_llm_profiles import (
     ACT_LLM_PROFILES,
     CURRENT_ACT_LLM_PROFILE,
     DEFAULT_ACT_LLM_PROFILE,

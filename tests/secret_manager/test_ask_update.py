@@ -6,7 +6,7 @@ import unisdk
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
-from unity.secret_manager.secret_manager import SecretManager
+from unify.secret_manager.secret_manager import SecretManager
 
 
 @pytest.mark.asyncio

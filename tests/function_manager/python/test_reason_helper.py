@@ -6,9 +6,9 @@ import pytest
 import unillm
 from pydantic import BaseModel
 
-from unity.common.reasoning import list_llms, query_llm
-from unity.function_manager import venv_runner
-from unity.function_manager.execution_env import (
+from unify.common.reasoning import list_llms, query_llm
+from unify.function_manager import venv_runner
+from unify.function_manager.execution_env import (
     ENVIRONMENT_MODULES,
     create_execution_globals,
 )

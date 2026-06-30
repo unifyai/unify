@@ -135,14 +135,14 @@ def _spawn_quiet(log_path: Path):
     Redirect all output during voice-agent subprocess spawn to *log_path*.
 
     Patches both the *module-level* binding of ``run_script`` in
-    ``call_manager`` (``from unity.helpers import run_script`` creates a
+    ``call_manager`` (``from unify.helpers import run_script`` creates a
     local copy) and ``sys.stdout``/``sys.stderr`` so parent-process prints
     don't leak into the terminal either.
 
     Returns ``(log_fh, restore_fn)``.
     """
-    import unity.conversation_manager.domains.call_manager as _cm_mod
-    import unity.helpers as _helpers
+    import unify.conversation_manager.domains.call_manager as _cm_mod
+    import unify.helpers as _helpers
 
     log_fh = open(log_path, "w")
     orig_helpers, orig_cm = _helpers.run_script, _cm_mod.run_script
@@ -494,7 +494,7 @@ async def _wait_for_readiness(
 
 def _restore_call_manager_methods(cm) -> None:
     """Undo test mocks on call_manager so live voice can use the real methods."""
-    from unity.conversation_manager.domains.call_manager import LivekitCallManager
+    from unify.conversation_manager.domains.call_manager import LivekitCallManager
 
     mgr = cm.call_manager
     for name in ("start_call", "start_unify_meet"):
@@ -539,7 +539,7 @@ async def start_session(
     # LiveKit API.  When UNITY_COMMS_URL IS set, call.py already dispatched
     # via the comms service — a second dispatch here would create a duplicate
     # agent process (LiveKit does not deduplicate CreateAgentDispatch calls).
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     if not SETTINGS.conversation.COMMS_URL:
         await asyncio.sleep(8)

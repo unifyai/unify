@@ -5,9 +5,9 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from unity.memory_manager.memory_manager import MemoryManager
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.memory_manager.memory_manager import MemoryManager
+from unify.memory_manager.simulated import SimulatedMemoryManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
 
 pytestmark = pytest.mark.llm_call
 

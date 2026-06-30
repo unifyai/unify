@@ -4,10 +4,10 @@ import pytest
 import time
 import unisdk
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.common.context_registry import ContextRegistry
-from unity.common.data_store import DataStore
-from unity.session_details import SESSION_DETAILS
+from unify.contact_manager.contact_manager import ContactManager
+from unify.common.context_registry import ContextRegistry
+from unify.common.data_store import DataStore
+from unify.session_details import SESSION_DETAILS
 from tests.helpers import _handle_project
 
 

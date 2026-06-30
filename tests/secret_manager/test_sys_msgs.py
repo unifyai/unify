@@ -15,12 +15,12 @@ from tests.assertion_helpers import (
 from tests.helpers import _handle_project
 
 
-from unity.secret_manager.prompt_builders import (
+from unify.secret_manager.prompt_builders import (
     build_ask_prompt,
     build_update_prompt,
 )
-from unity.secret_manager.secret_manager import SecretManager
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unify.secret_manager.secret_manager import SecretManager
+from unify.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 
 
 def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
@@ -65,7 +65,7 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
                 unisdk.set_context(test_ctx, relative=False)
             # Install the same static timestamp override used by pytest's autouse fixture,
             # but inside this fresh process so the time footer is deterministic.
-            import unity.common.prompt_helpers as _ph
+            import unify.common.prompt_helpers as _ph
             from datetime import datetime, timezone
             def _static_now(time_only: bool = False):
                 dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -74,8 +74,8 @@ def _build_prompt_in_subprocess(method: str, test_context: str) -> str:
                     return dt.strftime("%I:%M %p ") + label
                 return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
             _ph.now = _static_now
-            from unity.secret_manager.secret_manager import SecretManager
-            from unity.secret_manager.prompt_builders import build_ask_prompt, build_update_prompt
+            from unify.secret_manager.secret_manager import SecretManager
+            from unify.secret_manager.prompt_builders import build_ask_prompt, build_update_prompt
 
             sm = SecretManager()
             if "{method}" == "ask":

@@ -138,7 +138,7 @@ def run_cli(
             load_dotenv()
         except Exception:
             pass
-        from unity.guidance_manager.guidance_manager import GuidanceManager
+        from unify.guidance_manager.guidance_manager import GuidanceManager
 
         gm = GuidanceManager()
 

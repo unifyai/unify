@@ -29,10 +29,10 @@ import datetime as dt
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
-from unity.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
-from unity.events.types.manager_method import ManagerMethodPayload
+from unify.events.event_bus import EventBus, Event
+from unify.events.types.comms import CommsPayload
+from unify.events.types.tool_loop import ToolLoopPayload, ToolLoopKind
+from unify.events.types.manager_method import ManagerMethodPayload
 
 
 def _get_seq(payload) -> int:

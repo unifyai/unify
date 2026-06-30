@@ -8,11 +8,11 @@ import aiohttp
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
-from unity.settings import SETTINGS
+from unify.settings import SETTINGS
 
 
 async def _get_message_on_channel(pubsub, expected_channel: str, timeout: float = 2.0):
@@ -42,10 +42,10 @@ async def broker():
 def patched_local_session():
     with (
         patch(
-            "unity.conversation_manager.comms_manager.SESSION_DETAILS",
+            "unify.conversation_manager.comms_manager.SESSION_DETAILS",
         ) as comms_session,
         patch(
-            "unity.conversation_manager.local_ingress.SESSION_DETAILS",
+            "unify.conversation_manager.local_ingress.SESSION_DETAILS",
         ) as ingress_session,
     ):
         comms_session.assistant.agent_id = 42
@@ -71,14 +71,14 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.local_ingress import LocalCommsIngress
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unify.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
         ):
@@ -132,14 +132,14 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.local_ingress import LocalCommsIngress
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unify.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
         ):
@@ -176,37 +176,37 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.local_ingress import LocalCommsIngress
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unify.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                "unify.conversation_manager.local_ingress.local_twilio.validate_signature",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
+                "unify.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
                 return_value=(
                     "sip:16892256176-CA123@example.sip.livekit.cloud",
                     "16892256176-CA123",
                 ),
             ) as make_call_scoped_sip_uri,
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
+                "unify.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
                 new=AsyncMock(return_value="dispatch-rule-1"),
             ) as ensure_call_scoped_dispatch_rule,
             patch(
-                "unity.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
+                "unify.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
                 new=AsyncMock(return_value="sip-leg-1"),
             ) as add_sip_leg,
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.start_room_egress",
+                "unify.conversation_manager.local_ingress.local_livekit.start_room_egress",
                 new=AsyncMock(),
             ),
         ):
@@ -271,37 +271,37 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.local_ingress import LocalCommsIngress
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unify.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                "unify.conversation_manager.local_ingress.local_twilio.validate_signature",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
+                "unify.conversation_manager.local_ingress.local_livekit.make_call_scoped_sip_uri",
                 return_value=(
                     "sip:447414266034-CAWA123@example.sip.livekit.cloud",
                     "447414266034-CAWA123",
                 ),
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
+                "unify.conversation_manager.local_ingress.local_livekit.ensure_call_scoped_dispatch_rule",
                 new=AsyncMock(return_value="dispatch-rule-wa"),
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
+                "unify.conversation_manager.local_ingress.local_twilio.add_sip_leg_to_conference",
                 new=AsyncMock(return_value="sip-leg-wa"),
             ) as add_sip_leg,
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.start_room_egress",
+                "unify.conversation_manager.local_ingress.local_livekit.start_room_egress",
                 new=AsyncMock(),
             ),
         ):
@@ -368,22 +368,22 @@ class TestLocalIngress:
         broker,
         patched_local_session,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.local_ingress import LocalCommsIngress
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.local_ingress import LocalCommsIngress
 
         with (
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_HOST", "127.0.0.1"),
             patch.object(SETTINGS.conversation, "LOCAL_COMMS_PORT", 0),
             patch(
-                "unity.conversation_manager.local_ingress.local_email.is_email_configured",
+                "unify.conversation_manager.local_ingress.local_email.is_email_configured",
                 return_value=False,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_twilio.validate_signature",
+                "unify.conversation_manager.local_ingress.local_twilio.validate_signature",
                 return_value=True,
             ),
             patch(
-                "unity.conversation_manager.local_ingress.local_livekit.delete_sip_dispatch_rule",
+                "unify.conversation_manager.local_ingress.local_livekit.delete_sip_dispatch_rule",
                 new=AsyncMock(),
             ) as delete_dispatch_rule,
         ):

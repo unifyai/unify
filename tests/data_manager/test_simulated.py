@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.data_manager.base import BaseDataManager
-from unity.data_manager.types import (
+from unify.data_manager.simulated import SimulatedDataManager
+from unify.data_manager.base import BaseDataManager
+from unify.data_manager.types import (
     TableDescription,
     IngestResult,
 )
@@ -843,7 +843,7 @@ def test_ingest_chunk_counting(simulated_dm):
 
 def test_ingest_docstring_inherited(simulated_dm):
     """SimulatedDataManager.ingest should inherit docstring from base."""
-    from unity.data_manager.base import BaseDataManager
+    from unify.data_manager.base import BaseDataManager
 
     assert (
         BaseDataManager.ingest.__doc__.strip()

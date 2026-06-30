@@ -4,9 +4,9 @@ import inspect
 
 import pytest
 
-from unity.coordinator_manager.coordinator_manager import CoordinatorManager
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.coordinator_manager.coordinator_manager import CoordinatorManager
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +34,7 @@ def test_coordinator_manager_delegates_reads_for_coordinator(monkeypatch):
     SESSION_DETAILS.org_id = 7
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unisdk.list_assistants",
+        "unify.coordinator_manager.coordinator_manager.unisdk.list_assistants",
         lambda **_: [{"agent_id": 42, "first_name": "Ops", "organization_id": 7}],
     )
 
@@ -53,7 +53,7 @@ def test_coordinator_manager_blocks_mutations_when_role_is_not_coordinator(monke
         return {"team_id": 99}
 
     monkeypatch.setattr(
-        "unity.coordinator_manager.coordinator_manager.unisdk.create_team",
+        "unify.coordinator_manager.coordinator_manager.unisdk.create_team",
         _fake_create_team,
     )
 

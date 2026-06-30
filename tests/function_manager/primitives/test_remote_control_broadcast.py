@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from unity.manager_registry import ManagerRegistry
+from unify.manager_registry import ManagerRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +16,7 @@ def _clear_singleton():
 
 
 def _make_cp():
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
 
     return ComputerPrimitives(computer_mode="mock")
 

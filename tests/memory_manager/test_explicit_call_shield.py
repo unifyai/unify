@@ -6,20 +6,20 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from unity.events.event_bus import EVENT_BUS, Event
+from unify.events.event_bus import EVENT_BUS, Event
 
 # This test publishes events to verify MemoryManager behavior
 pytestmark = pytest.mark.enable_eventbus
-from unity.events.manager_event_logging import publish_manager_method_event, new_call_id
-from unity.memory_manager.memory_manager import MemoryManager
+from unify.events.manager_event_logging import publish_manager_method_event, new_call_id
+from unify.memory_manager.memory_manager import MemoryManager
 
 # Simulated manager stand-ins (no external I/O)
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.transcript_manager.simulated import SimulatedTranscriptManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import Medium
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.transcript_manager.simulated import SimulatedTranscriptManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.task_scheduler.simulated import SimulatedTaskScheduler
+from unify.transcript_manager.types.message import Message
+from unify.conversation_manager.cm_types import Medium
 
 
 @pytest.mark.asyncio

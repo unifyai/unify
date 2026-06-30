@@ -27,7 +27,7 @@ async def _wait_for_condition(predicate, *, timeout: float = 5.0, poll: float = 
     return False
 
 
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
     make_room_name,
@@ -113,7 +113,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_start_persistent_worker_spawns_process(self, call_manager):
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -131,7 +131,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_start_persistent_worker_idempotent(self, call_manager):
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -145,7 +145,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_start_persistent_worker_restarts_if_dead(self, call_manager):
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             dead_proc = MagicMock()
             dead_proc.poll.return_value = 1
@@ -163,7 +163,7 @@ class TestPersistentWorkerStartup:
     @pytest.mark.asyncio
     async def test_refresh_restarts_worker_when_unify_key_changes(self, call_manager):
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
@@ -190,7 +190,7 @@ class TestPersistentWorkerStartup:
     async def test_refresh_skips_restart_when_key_unchanged(self, call_manager):
         with (
             patch(
-                "unity.conversation_manager.domains.call_manager.run_script",
+                "unify.conversation_manager.domains.call_manager.run_script",
             ) as mock_run,
             patch.object(
                 call_manager,
@@ -216,7 +216,7 @@ class TestPersistentWorkerStartup:
         call_manager._active_job = True
         with (
             patch(
-                "unity.conversation_manager.domains.call_manager.run_script",
+                "unify.conversation_manager.domains.call_manager.run_script",
             ) as mock_run,
             patch.object(
                 call_manager,
@@ -241,7 +241,7 @@ class TestPersistentWorkerStartup:
 class TestPersistentWorkerOptions:
     def test_worker_registers_for_publisher_jobs(self, monkeypatch):
         from livekit import agents
-        from unity.conversation_manager.medium_scripts import worker
+        from unify.conversation_manager.medium_scripts import worker
 
         captured = {}
 
@@ -287,13 +287,13 @@ class TestJobDispatch:
         mock_lk.agent_dispatch.create_dispatch = AsyncMock(return_value=mock_dispatch)
         mock_lk.aclose = AsyncMock()
 
-        from unity.conversation_manager.medium_scripts.worker import (
+        from unify.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
         )
 
         with (
             patch(
-                "unity.conversation_manager.domains.call_manager.LiveKitAPI",
+                "unify.conversation_manager.domains.call_manager.LiveKitAPI",
                 return_value=mock_lk,
             ),
             patch.object(
@@ -403,7 +403,7 @@ class TestLegacyFallback:
         assert call_manager._worker_proc is None
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_run.return_value = mock_proc
@@ -425,7 +425,7 @@ class TestLegacyFallback:
         call_manager._worker_proc = dead_worker
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             mock_proc = MagicMock()
             mock_run.return_value = mock_proc
@@ -469,7 +469,7 @@ class TestActiveCallGuard:
         call_manager._call_proc = MagicMock()
 
         with patch(
-            "unity.conversation_manager.domains.call_manager.run_script",
+            "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run:
             await call_manager.start_call(sample_contact, boss_contact)
             mock_run.assert_not_called()
@@ -487,7 +487,7 @@ class TestWorkerReadiness:
         call_manager,
         tmp_path,
     ):
-        from unity.conversation_manager.medium_scripts import worker as worker_mod
+        from unify.conversation_manager.medium_scripts import worker as worker_mod
 
         registered_path = tmp_path / "unity_worker_registered"
         mock_worker = MagicMock()
@@ -522,11 +522,11 @@ class TestStaleDispatchClearing:
         sample_contact,
         boss_contact,
     ):
-        from unity.conversation_manager.medium_scripts.worker import (
+        from unify.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
         )
 
-        from unity.conversation_manager.in_memory_event_broker import (
+        from unify.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -544,7 +544,7 @@ class TestStaleDispatchClearing:
 
         with (
             patch(
-                "unity.conversation_manager.domains.call_manager.LiveKitAPI",
+                "unify.conversation_manager.domains.call_manager.LiveKitAPI",
                 return_value=mock_lk,
             ),
             patch.object(
@@ -566,7 +566,7 @@ class TestStaleDispatchClearing:
         self,
         call_manager,
     ):
-        from unity.conversation_manager.in_memory_event_broker import (
+        from unify.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -578,7 +578,7 @@ class TestStaleDispatchClearing:
         socket_path = call_manager._socket_server.socket_path
         assert socket_path is not None
 
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketClient,
         )
 
@@ -630,7 +630,7 @@ class TestCleanup:
 
 class TestEntrypointMetadata:
     def test_load_config_from_metadata_valid(self):
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -656,7 +656,7 @@ class TestEntrypointMetadata:
         assert result["ipc_socket_path"] == "/tmp/sock.sock"
 
     def test_load_config_from_metadata_empty(self):
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -665,7 +665,7 @@ class TestEntrypointMetadata:
         assert _load_config_from_metadata(ctx) is None
 
     def test_load_config_from_metadata_invalid_json(self):
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _load_config_from_metadata,
         )
 
@@ -674,10 +674,10 @@ class TestEntrypointMetadata:
         assert _load_config_from_metadata(ctx) is None
 
     def test_hydrate_session_details_from_metadata_sets_coordinator_flag(self):
-        from unity.conversation_manager.medium_scripts.call import (
+        from unify.conversation_manager.medium_scripts.call import (
             _hydrate_session_details_from_metadata,
         )
-        from unity.session_details import SESSION_DETAILS
+        from unify.session_details import SESSION_DETAILS
 
         SESSION_DETAILS.reset()
         try:
@@ -707,7 +707,7 @@ class TestEntrypointMetadata:
 
 class TestIPCSocketInit:
     def test_init_socket_for_job_sets_env_and_singleton(self):
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CM_EVENT_SOCKET_ENV,
             init_socket_for_job,
         )

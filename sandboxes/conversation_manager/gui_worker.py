@@ -55,8 +55,8 @@ from sandboxes.conversation_manager.ipc_protocol import (
     create_message,
     parse_message,
 )
-from unity.common.tool_spec import ToolSpec
-from unity.events.types.manager_method import ManagerMethodPayload
+from unify.common.tool_spec import ToolSpec
+from unify.events.types.manager_method import ManagerMethodPayload
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -810,7 +810,7 @@ async def _run_worker(*, ui_to_worker, worker_to_ui, config: dict) -> None:
     desktop_container_id: Optional[str] = None
     try:
         if actor_cfg.actor_type == "codeact_real":
-            from unity.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
+            from unify.function_manager.primitives import DEFAULT_AGENT_SERVER_URL
 
             container_url = (
                 getattr(args, "agent_server_url", None) or DEFAULT_AGENT_SERVER_URL

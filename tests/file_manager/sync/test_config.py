@@ -1,7 +1,7 @@
 """Tests for SyncConfig."""
 
 import pytest
-from unity.file_manager.sync.config import SyncConfig
+from unify.file_manager.sync.config import SyncConfig
 
 
 class TestSyncConfig:
@@ -23,7 +23,7 @@ class TestSyncConfig:
 
     def test_local_root_default(self):
         """Test local_root defaults to get_local_root()."""
-        from unity.file_manager.settings import get_local_root
+        from unify.file_manager.settings import get_local_root
 
         config = SyncConfig()
         assert config.local_root == get_local_root()

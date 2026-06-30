@@ -30,7 +30,7 @@ from tests.helpers import _handle_project
 @_handle_project
 async def test_web_act_absent_when_screen_share_inactive(initialized_cm):
     """web_act must NOT appear when screen share is off."""
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -73,12 +73,12 @@ async def test_close_web_session_present_when_screen_share_active(initialized_cm
 async def test_web_act_creates_session_when_no_id(initialized_cm):
     """web_act without session_id creates a new visible session and registers
     an in-flight action."""
-    from unity.function_manager.primitives.runtime import (
+    from unify.function_manager.primitives.runtime import (
         ComputerPrimitives,
         WebSessionHandle,
     )
-    from unity.manager_registry import ManagerRegistry
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.manager_registry import ManagerRegistry
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -121,9 +121,9 @@ async def test_web_act_creates_session_when_no_id(initialized_cm):
 @_handle_project
 async def test_web_act_reuses_session_when_id_provided(initialized_cm):
     """web_act with session_id reuses an existing handle instead of creating new."""
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -173,9 +173,9 @@ async def test_web_act_reuses_session_when_id_provided(initialized_cm):
 @_handle_project
 async def test_close_web_session_stops_handle(initialized_cm):
     """close_web_session stops the handle and returns confirmation."""
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -208,9 +208,9 @@ async def test_close_web_session_stops_handle(initialized_cm):
 @_handle_project
 async def test_close_web_session_not_found(initialized_cm):
     """close_web_session returns not_found for an invalid session_id."""
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -242,9 +242,9 @@ async def test_close_web_session_not_found(initialized_cm):
 @_handle_project
 async def test_active_web_sessions_in_snapshot(initialized_cm):
     """<active_web_sessions> appears in the rendered state when sessions exist."""
-    from unity.conversation_manager.domains.renderer import Renderer
-    from unity.function_manager.primitives.runtime import ComputerPrimitives
-    from unity.manager_registry import ManagerRegistry
+    from unify.conversation_manager.domains.renderer import Renderer
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
 
     ManagerRegistry.clear()
     cp = ComputerPrimitives(computer_mode="mock")
@@ -266,6 +266,6 @@ async def test_active_web_sessions_in_snapshot(initialized_cm):
 
 def test_render_active_web_sessions_empty():
     """No sessions renders empty string."""
-    from unity.conversation_manager.domains.renderer import Renderer
+    from unify.conversation_manager.domains.renderer import Renderer
 
     assert Renderer.render_active_web_sessions([]) == ""

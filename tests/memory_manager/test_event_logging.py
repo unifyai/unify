@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.memory_manager.simulated import SimulatedMemoryManager
+from unify.memory_manager.simulated import SimulatedMemoryManager
 from tests.helpers import _handle_project, capture_events
 
 # All tests in this file require EventBus publishing to verify event behavior

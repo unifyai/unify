@@ -5,8 +5,8 @@ import sys
 import subprocess
 import textwrap
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 from tests.assertion_helpers import first_diff_block
 from tests.helpers import _handle_project
 
@@ -52,10 +52,10 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
 		test_ctx = os.environ.get("_TEST_CONTEXT")
 		if test_ctx:
 			unisdk.set_context(test_ctx, relative=False)
-		from unity.common.llm_helpers import method_to_schema
+		from unify.common.llm_helpers import method_to_schema
 		def _unwrap_callable(tool):
 			return getattr(tool, "fn", tool)
-		from unity.transcript_manager.transcript_manager import TranscriptManager
+		from unify.transcript_manager.transcript_manager import TranscriptManager
 		tm = TranscriptManager()
 		tools = tm.get_tools("{method}")
 		if not tools:

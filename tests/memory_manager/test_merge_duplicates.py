@@ -2,11 +2,11 @@ import pytest
 
 from tests.helpers import _handle_project
 
-from unity.memory_manager.memory_manager import MemoryManager
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.transcript_manager.simulated import SimulatedTranscriptManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
+from unify.memory_manager.memory_manager import MemoryManager
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.transcript_manager.simulated import SimulatedTranscriptManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
 
 @pytest.mark.asyncio
@@ -75,7 +75,7 @@ async def test_update_contacts_merges_duplicates(monkeypatch):
     # ------------------------------------------------------------------
     # 2.  Replace the heavy tool-use loop with a stub that calls merge_contacts
     # ------------------------------------------------------------------
-    import unity.memory_manager.memory_manager as mm_mod
+    import unify.memory_manager.memory_manager as mm_mod
 
     def _fake_tool_loop(client, message, tools, *_, **__):  # noqa: D401 – stub
         class _Handle:

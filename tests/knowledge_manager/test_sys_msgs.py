@@ -14,13 +14,13 @@ from tests.assertion_helpers import (
 from tests.helpers import _handle_project
 
 
-from unity.knowledge_manager.prompt_builders import (
+from unify.knowledge_manager.prompt_builders import (
     build_ask_prompt,
     build_update_prompt,
     build_refactor_prompt,
 )
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 
 
 def _build_prompt_in_subprocess(
@@ -50,7 +50,7 @@ def _build_prompt_in_subprocess(
             unisdk.set_context(test_ctx, relative=False)
         # Install the same static timestamp override used by pytest's autouse fixture,
         # but inside this fresh process so the time footer is deterministic.
-        import unity.common.prompt_helpers as _ph
+        import unify.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -59,8 +59,8 @@ def _build_prompt_in_subprocess(
                 return dt.strftime("%I:%M %p ") + label
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
-        from unity.knowledge_manager.knowledge_manager import KnowledgeManager
-        from unity.knowledge_manager.prompt_builders import (
+        from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+        from unify.knowledge_manager.prompt_builders import (
             build_ask_prompt,
             build_update_prompt,
             build_refactor_prompt,

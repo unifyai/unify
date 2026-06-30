@@ -1,4 +1,4 @@
-"""Behavioural tests for ``unity.gateway.channels.gmail``.
+"""Behavioural tests for ``unify.gateway.channels.gmail``.
 
 Includes all 13 scenarios faithfully ported from
 ``communication/tests/gmail/test_send_with_attachment.py`` (8) and
@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from googleapiclient.errors import HttpError
 
-from unity.gateway.channels.gmail import router
+from unify.gateway.channels.gmail import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -47,7 +47,7 @@ def _http_error(status_code: int) -> HttpError:
 def test_as_message_id_normalizes_brackets(raw, expected):
     """In-Reply-To / References must carry an angle-bracketed Message-ID so the
     recipient threads the reply, regardless of how the caller passed it."""
-    from unity.gateway.channels.gmail.views import _as_message_id
+    from unify.gateway.channels.gmail.views import _as_message_id
 
     assert _as_message_id(raw) == expected
 
@@ -85,7 +85,7 @@ def client(
     _gmail_credentials: None,
 ) -> TestClient:
     with patch(
-        "unity.gateway.channels.gmail.views.get_gmail_service_async",
+        "unify.gateway.channels.gmail.views.get_gmail_service_async",
         new_callable=AsyncMock,
         return_value=mock_gmail_service,
     ):
@@ -112,7 +112,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from unity.gateway.channels.gmail import router as exported
+    from unify.gateway.channels.gmail import router as exported
 
     assert exported is router
 
@@ -385,9 +385,9 @@ class TestDeleteGmailWatch:
 # test_missing_auth_returns_unauthorized was an aggregator-level test
 # (the admin-key dependency lives on the aggregator router mount, not
 # the channel module itself). Per the channel-isolated test shape
-# documented in unity/gateway/channels/README.md, auth integration
+# documented in unify/gateway/channels/README.md, auth integration
 # belongs in tests/gateway/test_app.py once the Phase B aggregator
-# (unity/gateway/app.py) lands. Tagged here so the scenario isn't lost.
+# (unify/gateway/app.py) lands. Tagged here so the scenario isn't lost.
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +485,7 @@ def test_delete_email_user_success(
     fake_admin_service.users().delete().execute.return_value = {}
 
     with patch(
-        "unity.gateway.channels.gmail.views.get_admin_service",
+        "unify.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(
@@ -509,7 +509,7 @@ def test_delete_email_user_404_treated_as_already_absent(
     fake_admin_service.users().delete().execute.side_effect = _http_error(404)
 
     with patch(
-        "unity.gateway.channels.gmail.views.get_admin_service",
+        "unify.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(
@@ -533,7 +533,7 @@ def test_delete_email_user_non_404_bubbles_up_as_500(
     fake_admin_service.users().delete().execute.side_effect = _http_error(500)
 
     with patch(
-        "unity.gateway.channels.gmail.views.get_admin_service",
+        "unify.gateway.channels.gmail.views.get_admin_service",
         return_value=fake_admin_service,
     ):
         response = client.request(

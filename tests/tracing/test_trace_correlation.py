@@ -21,7 +21,7 @@ class TestTraceCorrelation:
 
     def test_trace_id_is_assigned(self):
         """Verify the test gets a trace_id from OpenTelemetry."""
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         # Should have a valid trace_id (32 hex chars)
@@ -31,7 +31,7 @@ class TestTraceCorrelation:
 
     def test_different_tests_get_different_trace_ids(self):
         """Verify each test gets a unique trace_id."""
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         # Store this test's trace_id for comparison
         trace_id = get_current_trace_id()
@@ -41,7 +41,7 @@ class TestTraceCorrelation:
 
     def test_trace_id_differs_from_previous(self):
         """Verify this test has a different trace_id than the previous test."""
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         assert trace_id is not None
@@ -59,7 +59,7 @@ class TestTraceparentHeader:
         """Verify HTTPXClientInstrumentor injects traceparent header."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:
@@ -97,7 +97,7 @@ class TestTraceparentHeader:
         """Verify async HTTPXClientInstrumentor injects traceparent header."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:
@@ -225,7 +225,7 @@ class TestEndToEndTraceCorrelation:
         """
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         # Skip if tracing not enabled
         trace_id = get_current_trace_id()
@@ -298,7 +298,7 @@ class TestEndToEndTraceCorrelation:
         """Verify async HTTP calls also propagate trace_id to Orchestra."""
         import httpx
 
-        from unity.common.test_tracing import get_current_trace_id
+        from unify.common.test_tracing import get_current_trace_id
 
         trace_id = get_current_trace_id()
         if trace_id is None:

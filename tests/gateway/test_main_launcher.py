@@ -1,4 +1,4 @@
-"""Tests for ``python -m unity.gateway`` (the ``__main__`` entrypoint).
+"""Tests for ``python -m unify.gateway`` (the ``__main__`` entrypoint).
 
 We don't actually start uvicorn -- patching it lets us assert that
 the launcher passes the right host / port / log level / reload flags
@@ -30,7 +30,7 @@ class TestArgParsing:
         ):
             monkeypatch.delenv(var, raising=False)
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         parser = launcher._build_parser()
         args = parser.parse_args([])
@@ -48,7 +48,7 @@ class TestArgParsing:
         monkeypatch.setenv("UNITY_GATEWAY_LOG_LEVEL", "debug")
         monkeypatch.setenv("UNITY_GATEWAY_RELOAD", "true")
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         parser = launcher._build_parser()
         args = parser.parse_args([])
@@ -63,7 +63,7 @@ class TestArgParsing:
     ) -> None:
         monkeypatch.setenv("UNITY_GATEWAY_PORT", "9000")
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         parser = launcher._build_parser()
         args = parser.parse_args(["--port", "7777"])
@@ -83,14 +83,14 @@ class TestMain:
         ):
             monkeypatch.delenv(var, raising=False)
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         with patch("uvicorn.run") as mock_run:
             exit_code = launcher.main([])
 
         assert exit_code == 0
         mock_run.assert_called_once_with(
-            "unity.gateway.app:app",
+            "unify.gateway.app:app",
             host="0.0.0.0",
             port=8080,
             log_level="info",
@@ -103,7 +103,7 @@ class TestMain:
     ) -> None:
         monkeypatch.delenv("UNITY_GATEWAY_RELOAD", raising=False)
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         with patch("uvicorn.run") as mock_run:
             launcher.main(
@@ -118,7 +118,7 @@ class TestMain:
                 ],
             )
         mock_run.assert_called_once_with(
-            "unity.gateway.app:app",
+            "unify.gateway.app:app",
             host="127.0.0.1",
             port=9090,
             log_level="warning",
@@ -132,23 +132,23 @@ class TestMain:
         """``--help`` should print + exit before importing uvicorn.
 
         The launcher lazy-imports uvicorn inside main() to keep
-        ``python -m unity.gateway --help`` snappy.
+        ``python -m unify.gateway --help`` snappy.
         """
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         with pytest.raises(SystemExit) as ctx:
             launcher.main(["--help"])
         # argparse exits with code 0 on --help
         assert ctx.value.code == 0
         out = capsys.readouterr().out
-        assert "unity.gateway" in out
+        assert "unify.gateway" in out
         assert "--host" in out
 
     def test_urls_command_prints_callback_urls(
         self,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         exit_code = launcher.main(
             [
@@ -170,7 +170,7 @@ class TestMain:
         capsys: pytest.CaptureFixture,
         tmp_path,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         env_file = tmp_path / ".env"
         exit_code = launcher.main(
@@ -197,7 +197,7 @@ class TestMain:
         capsys: pytest.CaptureFixture,
         tmp_path,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         env_file = tmp_path / ".env"
         exit_code = launcher.main(
@@ -227,7 +227,7 @@ class TestMain:
         monkeypatch.delenv("ORCHESTRA_ADMIN_KEY", raising=False)
         env_file = tmp_path / ".env"
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         exit_code = launcher.main(
             [
@@ -261,7 +261,7 @@ class TestMain:
             encoding="utf-8",
         )
 
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         exit_code = launcher.main(
             [
@@ -284,7 +284,7 @@ class TestMain:
         capsys: pytest.CaptureFixture,
         tmp_path,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         env_file = tmp_path / ".env"
         exit_code = launcher.main(
@@ -309,7 +309,7 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         env_file = tmp_path / ".env"
         answers = iter(["https://callbacks.example.com", "secret", "admin"])
@@ -335,7 +335,7 @@ class TestMain:
         self,
         capsys: pytest.CaptureFixture,
     ) -> None:
-        from unity.gateway import __main__ as launcher
+        from unify.gateway import __main__ as launcher
 
         class _Response:
             status = 200

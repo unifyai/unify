@@ -33,8 +33,8 @@ import json
 from datetime import datetime, timezone
 from typing import Callable, Dict, Any, Optional
 
-from unity.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
-from unity.common.llm_client import new_llm_client, DEFAULT_MODEL
+from unify.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
+from unify.common.llm_client import new_llm_client, DEFAULT_MODEL
 from sandboxes.utils import await_with_interrupt
 
 __all__ = ["ScenarioBuilder"]

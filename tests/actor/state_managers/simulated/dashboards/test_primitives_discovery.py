@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
-from unity.function_manager.primitives import (
+from unify.function_manager.primitives import (
     Primitives,
     _AsyncPrimitiveWrapper,
     _create_async_wrapper,
@@ -60,7 +60,7 @@ def test_dashboard_manager_has_expected_dashboard_methods():
 
 def test_dashboard_manager_metadata_registered():
     """DashboardManager metadata should be in ToolSurfaceRegistry."""
-    from unity.function_manager.primitives import get_registry
+    from unify.function_manager.primitives import get_registry
 
     registry = get_registry()
     spec = registry.get_manager_spec("dashboards")
@@ -75,20 +75,20 @@ def test_dashboard_manager_metadata_registered():
 
 def test_dashboard_manager_in_primitive_registry():
     """DashboardManager should be registered in ToolSurfaceRegistry."""
-    from unity.function_manager.primitives import get_registry
+    from unify.function_manager.primitives import get_registry
 
     registry = get_registry()
     spec = registry.get_manager_spec("dashboards")
     assert spec is not None
     assert (
         spec.primitive_class_path
-        == "unity.dashboard_manager.dashboard_manager.DashboardManager"
+        == "unify.dashboard_manager.dashboard_manager.DashboardManager"
     )
 
 
 def test_dashboard_manager_alias_to_getter():
     """DashboardManager should have entry in _ALIAS_TO_GETTER."""
-    from unity.function_manager.primitives.runtime import _ALIAS_TO_GETTER
+    from unify.function_manager.primitives.runtime import _ALIAS_TO_GETTER
 
     assert "dashboards" in _ALIAS_TO_GETTER
     assert _ALIAS_TO_GETTER["dashboards"] == "get_dashboard_manager"
@@ -96,7 +96,7 @@ def test_dashboard_manager_alias_to_getter():
 
 def test_dashboard_manager_in_sync_managers():
     """DashboardManager should be listed in _SYNC_MANAGERS for async wrapping."""
-    from unity.function_manager.primitives.runtime import _SYNC_MANAGERS
+    from unify.function_manager.primitives.runtime import _SYNC_MANAGERS
 
     assert "dashboards" in _SYNC_MANAGERS
 
@@ -130,7 +130,7 @@ def test_dashboard_manager_sync_methods_patched_to_async():
 
 def test_async_patching_does_not_modify_original():
     """Creating a wrapper should not modify the original manager singleton."""
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_dashboard_manager()
 
@@ -149,7 +149,7 @@ def test_primitives_dashboards_returns_async_wrapper():
     assert isinstance(dm_wrapper, _AsyncPrimitiveWrapper), "Should return wrapper"
     assert asyncio.iscoroutinefunction(dm_wrapper.create_tile)
 
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm_original = ManagerRegistry.get_dashboard_manager()
     assert not asyncio.iscoroutinefunction(
@@ -164,8 +164,8 @@ def test_primitives_dashboards_returns_async_wrapper():
 
 def test_dashboard_not_in_data_routing_guidance():
     """Dashboards and data are orthogonal -- no routing guidance between them."""
-    from unity.function_manager.primitives import get_registry
-    from unity.function_manager.primitives.scope import PrimitiveScope
+    from unify.function_manager.primitives import get_registry
+    from unify.function_manager.primitives.scope import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope(scoped_managers=frozenset({"dashboards", "data"}))
@@ -175,7 +175,7 @@ def test_dashboard_not_in_data_routing_guidance():
 
 def test_dashboard_example_generators_registered():
     """Dashboard example generators should be registered in _EXAMPLE_GENERATORS."""
-    from unity.function_manager.primitives.registry import _EXAMPLE_GENERATORS
+    from unify.function_manager.primitives.registry import _EXAMPLE_GENERATORS
 
     assert "dashboards" in _EXAMPLE_GENERATORS
     generators = _EXAMPLE_GENERATORS["dashboards"]

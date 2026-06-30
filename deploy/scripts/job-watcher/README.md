@@ -36,7 +36,7 @@ tracking automatically.
 ## Code structure
 
 VM release and related operations (disk detach) live in a shared module:
-`unity/conversation_manager/assistant_jobs_api.py`.  This file uses
+`unify/conversation_manager/assistant_jobs_api.py`.  This file uses
 `requests` for comms-service calls, with no Unity-specific dependencies.
 It is used by both:
 

@@ -1,4 +1,4 @@
-"""Tests for ``unity.gateway.common.livekit``.
+"""Tests for ``unify.gateway.common.livekit``.
 
 Direct tests of the shared LiveKit helpers. Pin the credential
 resolution + SIP URI construction + dispatch-rule semantics that
@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.gateway.common.livekit import (
+from unify.gateway.common.livekit import (
     get_livekit_api,
     make_sip_uri,
 )
-from unity.gateway.credentials import EnvCredentialStore
+from unify.gateway.credentials import EnvCredentialStore
 
 # ---------------------------------------------------------------------------
 # get_livekit_api -- credential resolution
@@ -31,7 +31,7 @@ def test_get_livekit_api_uses_supplied_credential_store(
     monkeypatch.setenv("LIVEKIT_API_SECRET", "test_secret")
     credentials = EnvCredentialStore()
 
-    with patch("unity.gateway.common.livekit.LiveKitAPI") as MockAPI:
+    with patch("unify.gateway.common.livekit.LiveKitAPI") as MockAPI:
         get_livekit_api(credentials)
     MockAPI.assert_called_once_with(
         url="wss://test.livekit.cloud",
@@ -131,7 +131,7 @@ def _fake_livekit_api() -> MagicMock:
 async def test_ensure_phone_dispatch_rule_creates_rule_when_no_match(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
-    from unity.gateway.common.livekit import ensure_phone_dispatch_rule
+    from unify.gateway.common.livekit import ensure_phone_dispatch_rule
 
     api = _fake_livekit_api()
     trunk = MagicMock(numbers=["+12526595494"], sip_trunk_id="ST_trunk1")
@@ -139,7 +139,7 @@ async def test_ensure_phone_dispatch_rule_creates_rule_when_no_match(
     api.sip.list_sip_dispatch_rule.return_value = MagicMock(items=[])
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await ensure_phone_dispatch_rule(
@@ -157,7 +157,7 @@ async def test_ensure_phone_dispatch_rule_skips_when_matching_rule_exists(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
     """Idempotent: a matching rule means no action needed."""
-    from unity.gateway.common.livekit import ensure_phone_dispatch_rule
+    from unify.gateway.common.livekit import ensure_phone_dispatch_rule
 
     api = _fake_livekit_api()
     trunk = MagicMock(numbers=["+12526595494"], sip_trunk_id="ST_trunk1")
@@ -169,7 +169,7 @@ async def test_ensure_phone_dispatch_rule_skips_when_matching_rule_exists(
     api.sip.list_sip_dispatch_rule.return_value = MagicMock(items=[existing_rule])
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await ensure_phone_dispatch_rule(
@@ -187,7 +187,7 @@ async def test_ensure_phone_dispatch_rule_replaces_stale_rule(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
     """Stale rule (room name changed) is deleted, then a fresh one is created."""
-    from unity.gateway.common.livekit import ensure_phone_dispatch_rule
+    from unify.gateway.common.livekit import ensure_phone_dispatch_rule
 
     api = _fake_livekit_api()
     trunk = MagicMock(numbers=["+12526595494"], sip_trunk_id="ST_trunk1")
@@ -199,7 +199,7 @@ async def test_ensure_phone_dispatch_rule_replaces_stale_rule(
     api.sip.list_sip_dispatch_rule.return_value = MagicMock(items=[stale_rule])
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await ensure_phone_dispatch_rule(
@@ -217,13 +217,13 @@ async def test_ensure_phone_dispatch_rule_skips_when_no_inbound_trunk(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
     """No inbound trunk -> skip creation entirely (don't 500 the outbound flow)."""
-    from unity.gateway.common.livekit import ensure_phone_dispatch_rule
+    from unify.gateway.common.livekit import ensure_phone_dispatch_rule
 
     api = _fake_livekit_api()
     api.sip.list_sip_inbound_trunk.return_value = MagicMock(items=[])
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await ensure_phone_dispatch_rule(
@@ -240,13 +240,13 @@ async def test_ensure_phone_dispatch_rule_swallows_livekit_errors(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
     """Best-effort: LiveKit failures don't propagate (caller's outbound flow keeps going)."""
-    from unity.gateway.common.livekit import ensure_phone_dispatch_rule
+    from unify.gateway.common.livekit import ensure_phone_dispatch_rule
 
     api = _fake_livekit_api()
     api.sip.list_sip_inbound_trunk.side_effect = RuntimeError("livekit down")
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await ensure_phone_dispatch_rule(
@@ -267,7 +267,7 @@ async def test_ensure_phone_dispatch_rule_swallows_livekit_errors(
 async def test_create_room_and_dispatch_agent_passes_room_and_agent_through(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
-    from unity.gateway.common.livekit import create_room_and_dispatch_agent
+    from unify.gateway.common.livekit import create_room_and_dispatch_agent
 
     api = _fake_livekit_api()
     api.agent_dispatch = MagicMock()
@@ -276,7 +276,7 @@ async def test_create_room_and_dispatch_agent_passes_room_and_agent_through(
     )
 
     with patch(
-        "unity.gateway.common.livekit.get_livekit_api",
+        "unify.gateway.common.livekit.get_livekit_api",
         return_value=api,
     ):
         await create_room_and_dispatch_agent(

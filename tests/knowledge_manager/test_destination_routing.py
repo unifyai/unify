@@ -5,7 +5,7 @@ import unisdk
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
 )
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 
 def test_knowledge_writes_route_to_destination_and_reads_merge_roots(

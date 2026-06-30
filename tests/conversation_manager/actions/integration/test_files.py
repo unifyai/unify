@@ -17,8 +17,8 @@ from tests.conversation_manager.actions.integration.helpers import (
     get_actor_started_event,
     wait_for_actor_completion,
 )
-from unity.conversation_manager.events import SMSReceived
-from unity.manager_registry import ManagerRegistry
+from unify.conversation_manager.events import SMSReceived
+from unify.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 

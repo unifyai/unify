@@ -7,12 +7,12 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.image_manager.image_manager import ImageManager
-from unity.image_manager.utils import make_solid_png_base64
-from unity.session_details import SESSION_DETAILS
-from unity.contact_manager.types.contact import Contact
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
+from unify.image_manager.image_manager import ImageManager
+from unify.image_manager.utils import make_solid_png_base64
+from unify.session_details import SESSION_DETAILS
+from unify.contact_manager.types.contact import Contact
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
 
 
 def _team_id() -> int:

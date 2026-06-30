@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains import call_manager as call_manager_module
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager.domains import call_manager as call_manager_module
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
     make_room_name,

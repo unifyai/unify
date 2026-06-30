@@ -5,29 +5,29 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from unity.blacklist_manager.types.blacklist import BlackList
-from unity.common.authorship import (
+from unify.blacklist_manager.types.blacklist import BlackList
+from unify.common.authorship import (
     AUTHORING_ASSISTANT_ID_FIELD,
     fields_with_authoring,
     is_shared_authored_context,
     stamp_authoring_assistant_id,
     strip_authoring_assistant_id,
 )
-from unity.common.model_to_fields import model_to_fields
-from unity.contact_manager.types.contact import Contact
-from unity.dashboard_manager.types.dashboard import DashboardRecordRow
-from unity.dashboard_manager.types.tile import TileRecordRow
-from unity.file_manager.types.file import Document, FileRecord
-from unity.function_manager.types.function import Function
-from unity.function_manager.types.meta import FunctionsMeta
-from unity.function_manager.types.venv import VirtualEnv
-from unity.guidance_manager.types.guidance import Guidance
-from unity.image_manager.types.image import Image
-from unity.secret_manager.types import Secret
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.types.task import Task
-from unity.transcript_manager.types.exchange import Exchange
-from unity.transcript_manager.types.message import Message
+from unify.common.model_to_fields import model_to_fields
+from unify.contact_manager.types.contact import Contact
+from unify.dashboard_manager.types.dashboard import DashboardRecordRow
+from unify.dashboard_manager.types.tile import TileRecordRow
+from unify.file_manager.types.file import Document, FileRecord
+from unify.function_manager.types.function import Function
+from unify.function_manager.types.meta import FunctionsMeta
+from unify.function_manager.types.venv import VirtualEnv
+from unify.guidance_manager.types.guidance import Guidance
+from unify.image_manager.types.image import Image
+from unify.secret_manager.types import Secret
+from unify.session_details import SESSION_DETAILS
+from unify.task_scheduler.types.task import Task
+from unify.transcript_manager.types.exchange import Exchange
+from unify.transcript_manager.types.message import Message
 
 
 @pytest.fixture(autouse=True)

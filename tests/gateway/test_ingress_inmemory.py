@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from unity.gateway.ingress import IngressTransport
-from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from unify.gateway.ingress import IngressTransport
+from unify.gateway.ingress_inmemory import InMemoryIngressTransport
 
 
 def test_satisfies_ingress_transport_protocol() -> None:

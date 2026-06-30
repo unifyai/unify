@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.gateway.credentials import (
+from unify.gateway.credentials import (
     CredentialNotFoundError,
     CredentialStore,
     EnvCredentialStore,

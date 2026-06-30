@@ -19,7 +19,7 @@ from tests.conversation_manager.cm_helpers import (
     assert_efficient,
 )
 from tests.conversation_manager.conftest import BOSS
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     SMSReceived,
     ActorHandleStarted,
 )

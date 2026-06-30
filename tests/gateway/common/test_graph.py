@@ -1,4 +1,4 @@
-"""Tests for ``unity.gateway.common.graph``."""
+"""Tests for ``unify.gateway.common.graph``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from unity.gateway.common.graph import (
+from unify.gateway.common.graph import (
     GRAPH_SCOPES,
     TokenCredentialFromSecret,
     _get_user_node,
@@ -15,7 +15,7 @@ from unity.gateway.common.graph import (
     get_graph_client,
     graph_client_from_assistant,
 )
-from unity.gateway.credentials import EnvCredentialStore
+from unify.gateway.credentials import EnvCredentialStore
 
 # ---------------------------------------------------------------------------
 # TokenCredentialFromSecret
@@ -55,8 +55,8 @@ def test_get_admin_graph_client_uses_client_secret_credential(
     monkeypatch.setenv("MS365_ADMIN_CLIENT_ID", "client-id")
     monkeypatch.setenv("MS365_ADMIN_CLIENT_SECRET", "client-secret")
     with (
-        patch("unity.gateway.common.graph.ClientSecretCredential") as MockCred,
-        patch("unity.gateway.common.graph.GraphServiceClient") as MockClient,
+        patch("unify.gateway.common.graph.ClientSecretCredential") as MockCred,
+        patch("unify.gateway.common.graph.GraphServiceClient") as MockClient,
     ):
         get_admin_graph_client(EnvCredentialStore())
     MockCred.assert_called_once_with(
@@ -78,8 +78,8 @@ def test_get_admin_graph_client_lazy_credential_store_default(
     monkeypatch.setenv("MS365_ADMIN_CLIENT_ID", "client-id")
     monkeypatch.setenv("MS365_ADMIN_CLIENT_SECRET", "client-secret")
     with (
-        patch("unity.gateway.common.graph.ClientSecretCredential"),
-        patch("unity.gateway.common.graph.GraphServiceClient"),
+        patch("unify.gateway.common.graph.ClientSecretCredential"),
+        patch("unify.gateway.common.graph.GraphServiceClient"),
     ):
         get_admin_graph_client()  # no explicit store
 
@@ -93,7 +93,7 @@ def test_graph_client_from_assistant_uses_byod_token_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assistant = {"secrets": {"MICROSOFT_ACCESS_TOKEN": "user-oauth-token"}}
-    with patch("unity.gateway.common.graph.GraphServiceClient") as MockClient:
+    with patch("unify.gateway.common.graph.GraphServiceClient") as MockClient:
         graph_client_from_assistant(assistant, "user@example.com")
     MockClient.assert_called_once()
     call_kwargs = MockClient.call_args.kwargs
@@ -109,8 +109,8 @@ def test_graph_client_from_assistant_falls_back_to_admin_without_byod_token(
     monkeypatch.setenv("MS365_ADMIN_CLIENT_SECRET", "client-secret")
     assistant = {"secrets": {}}  # no MICROSOFT_ACCESS_TOKEN
     with (
-        patch("unity.gateway.common.graph.ClientSecretCredential") as MockCred,
-        patch("unity.gateway.common.graph.GraphServiceClient") as MockClient,
+        patch("unify.gateway.common.graph.ClientSecretCredential") as MockCred,
+        patch("unify.gateway.common.graph.GraphServiceClient") as MockClient,
     ):
         graph_client_from_assistant(assistant, "user@example.com")
     MockCred.assert_called_once()  # admin path
@@ -129,10 +129,10 @@ async def test_get_graph_client_uses_assistant_when_lookup_succeeds(
     assistant = {"secrets": {"MICROSOFT_ACCESS_TOKEN": "user-token"}}
     with (
         patch(
-            "unity.gateway.common.graph.lookup_assistant",
+            "unify.gateway.common.graph.lookup_assistant",
             new=AsyncMock(return_value=assistant),
         ),
-        patch("unity.gateway.common.graph.GraphServiceClient") as MockClient,
+        patch("unify.gateway.common.graph.GraphServiceClient") as MockClient,
     ):
         await get_graph_client("user@example.com", EnvCredentialStore())
     MockClient.assert_called_once()
@@ -150,9 +150,9 @@ async def test_get_graph_client_resolves_by_assistant_id_when_provided(
     by_id = AsyncMock(return_value=assistant)
     by_email = AsyncMock(return_value=assistant)
     with (
-        patch("unity.gateway.common.graph.lookup_assistant_by_id", new=by_id),
-        patch("unity.gateway.common.graph.lookup_assistant", new=by_email),
-        patch("unity.gateway.common.graph.GraphServiceClient") as MockClient,
+        patch("unify.gateway.common.graph.lookup_assistant_by_id", new=by_id),
+        patch("unify.gateway.common.graph.lookup_assistant", new=by_email),
+        patch("unify.gateway.common.graph.GraphServiceClient") as MockClient,
     ):
         await get_graph_client(assistant_id=123, credentials=EnvCredentialStore())
     by_id.assert_awaited_once()
@@ -173,11 +173,11 @@ async def test_get_graph_client_falls_back_to_admin_when_lookup_fails(
     monkeypatch.setenv("MS365_ADMIN_CLIENT_SECRET", "client-secret")
     with (
         patch(
-            "unity.gateway.common.graph.lookup_assistant",
+            "unify.gateway.common.graph.lookup_assistant",
             new=AsyncMock(side_effect=RuntimeError("orchestra down")),
         ),
-        patch("unity.gateway.common.graph.ClientSecretCredential"),
-        patch("unity.gateway.common.graph.GraphServiceClient") as MockClient,
+        patch("unify.gateway.common.graph.ClientSecretCredential"),
+        patch("unify.gateway.common.graph.GraphServiceClient") as MockClient,
     ):
         await get_graph_client("user@example.com", EnvCredentialStore())
     MockClient.assert_called_once()  # admin client built via the fallback

@@ -22,10 +22,10 @@ from sandboxes.conversation_manager.computer_activity import (
     install_computer_activity_hooks,
 )
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import ComputerEnvironment, StateManagerEnvironment
-from unity.function_manager.primitives import ComputerPrimitives, Primitives
-from unity.manager_registry import ManagerRegistry
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import ComputerEnvironment, StateManagerEnvironment
+from unify.function_manager.primitives import ComputerPrimitives, Primitives
+from unify.manager_registry import ManagerRegistry
 
 LG = logging.getLogger("conversation_manager_sandbox")
 

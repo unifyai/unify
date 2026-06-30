@@ -18,12 +18,12 @@ import unisdk
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
-from unity.common.context_store import TableStore
-from unity.common.model_to_fields import model_to_fields
-from unity.transcript_manager.types.message import Message
+from unify.common.context_store import TableStore
+from unify.common.model_to_fields import model_to_fields
+from unify.transcript_manager.types.message import Message
 
-import unity.common.llm_helpers as llmh
-from unity.common.tool_spec import ToolSpec
+import unify.common.llm_helpers as llmh
+from unify.common.tool_spec import ToolSpec
 
 # --------------------------------------------------------------------------- #
 #  UNIT TESTS: model_to_fields                                                #
@@ -377,8 +377,8 @@ async def test_real_execute_code_schema_keeps_thought_required_and_described():
     Mirrors the loop's schema and dispatch paths, which both resolve the
     registered ``ToolSpec`` to its underlying callable (``spec.fn``).
     """
-    from unity.actor.code_act_actor import CodeActActor
-    from unity.common.tool_spec import LLM_SOFT_REQUIRED_DEFAULTS_ATTR
+    from unify.actor.code_act_actor import CodeActActor
+    from unify.common.tool_spec import LLM_SOFT_REQUIRED_DEFAULTS_ATTR
 
     actor = CodeActActor()
     try:
@@ -413,7 +413,7 @@ def test_schema_hides_private_optionals() -> None:
     49abe0cd70) asserted that *required* private params should stay
     visible, on the grounds that "otherwise the tool would become
     impossible to call". But the production schema generator in
-    unity/common/llm_helpers.py:method_to_schema (50812d1661,
+    unify/common/llm_helpers.py:method_to_schema (50812d1661,
     2025-06-03) has consistently stripped all underscored params
     without any required/optional split, and no real tool in the
     codebase declares a required underscored param — the convention
@@ -1025,8 +1025,8 @@ def test_wrapped_methods_resolve_type_hints() -> None:
     """
     from typing import get_type_hints
 
-    from unity.manager_registry import ManagerRegistry
-    from unity.common.state_managers import BaseStateManager
+    from unify.manager_registry import ManagerRegistry
+    from unify.common.state_managers import BaseStateManager
 
     ManagerRegistry._ensure_populated()
 

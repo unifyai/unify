@@ -32,17 +32,17 @@ from typing import Any
 import pytest
 import unisdk
 
-from unity.common.context_registry import ContextRegistry
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
-from unity.task_scheduler.local_scheduler import LocalActivationScheduler
-from unity.task_scheduler.machine_state import (
+from unify.common.context_registry import ContextRegistry
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
+from unify.task_scheduler.local_scheduler import LocalActivationScheduler
+from unify.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
     list_scheduled_activations,
 )
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.status import Status
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.schedule import Schedule
+from unify.task_scheduler.types.status import Status
 
 # Topic the LocalActivationScheduler publishes a live TaskDue on at fire time;
 # the hosted Cloud Tasks ingress path uses the same topic.

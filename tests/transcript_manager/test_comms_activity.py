@@ -8,7 +8,7 @@ surfaces and must be excluded.
 
 import pytest
 
-from unity.transcript_manager.activity_sync import (
+from unify.transcript_manager.activity_sync import (
     COMMS_ACTIVITY_EXCLUDED_MEDIA,
     comms_activity_payload,
 )

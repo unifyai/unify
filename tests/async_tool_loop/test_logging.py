@@ -5,12 +5,12 @@ import time
 import re
 import pytest
 
-from unity.common.async_tool_loop import (
+from unify.common.async_tool_loop import (
     start_async_tool_loop,
     AsyncToolLoopHandle,
 )
-from unity.events.event_bus import EVENT_BUS
-from unity.common.llm_client import new_llm_client, PendingThinkingLog
+from unify.events.event_bus import EVENT_BUS
+from unify.common.llm_client import new_llm_client, PendingThinkingLog
 
 # All tests in this file require EventBus publishing to verify event behavior
 pytestmark = pytest.mark.enable_eventbus

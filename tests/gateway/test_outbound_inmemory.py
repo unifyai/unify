@@ -6,8 +6,8 @@ import threading
 
 import pytest
 
-from unity.gateway.outbound import OutboundTransport
-from unity.gateway.outbound_inmemory import (
+from unify.gateway.outbound import OutboundTransport
+from unify.gateway.outbound_inmemory import (
     InMemoryOutboundTransport,
     PublishedEnvelope,
 )

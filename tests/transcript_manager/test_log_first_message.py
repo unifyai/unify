@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from datetime import datetime, UTC
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
 from tests.helpers import _handle_project
 import unisdk
 

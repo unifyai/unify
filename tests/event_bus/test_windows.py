@@ -4,9 +4,9 @@ import random
 from collections import deque
 from unittest.mock import patch, MagicMock
 
-from unity.events.event_bus import EventBus, Event
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import Medium
+from unify.events.event_bus import EventBus, Event
+from unify.transcript_manager.types.message import Message
+from unify.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

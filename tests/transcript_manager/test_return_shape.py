@@ -8,7 +8,7 @@ conflict with the scenario's context management.
 
 from __future__ import annotations
 
-from unity.contact_manager.types.contact import Contact
+from unify.contact_manager.types.contact import Contact
 
 _EXPECTED_FWD = {
     "message_id": "mid",

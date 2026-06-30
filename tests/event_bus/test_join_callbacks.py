@@ -4,8 +4,8 @@ import time
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
+from unify.events.event_bus import EventBus, Event
+from unify.events.types.comms import CommsPayload
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_waits_for_cascade() -> None:
     Note: This test uses ManagerMethod for the derived event to have a
     different type for the second-level callback.
     """
-    from unity.events.types.manager_method import ManagerMethodPayload
+    from unify.events.types.manager_method import ManagerMethodPayload
 
     bus = EventBus()
 

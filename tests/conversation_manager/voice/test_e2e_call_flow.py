@@ -68,7 +68,7 @@ def boss_contact():
 @pytest_asyncio.fixture
 async def event_broker():
     """Real in-memory event broker."""
-    from unity.conversation_manager.in_memory_event_broker import (
+    from unify.conversation_manager.in_memory_event_broker import (
         create_in_memory_event_broker,
         reset_in_memory_event_broker,
     )
@@ -112,15 +112,15 @@ class TestEndToEndCallFlow:
 
         If SKIP_LIVEKIT=1, we mock the LiveKit connection but test everything else.
         """
-        from unity.conversation_manager.domains.call_manager import (
+        from unify.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
-        from unity.conversation_manager.events import (
+        from unify.conversation_manager.events import (
             FastBrainNotification,
         )
 
@@ -267,13 +267,13 @@ class TestEndToEndCallFlow:
         - Argument passing errors
         - Mode checking bugs (88e0d678)
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.domains.call_manager import (
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
-        from unity.conversation_manager.events import UnifyMeetReceived
-        from unity.conversation_manager.cm_types import Mode
+        from unify.conversation_manager.events import UnifyMeetReceived
+        from unify.conversation_manager.cm_types import Mode
 
         # Create mock ConversationManager with real CallManager
         mock_cm = MagicMock()
@@ -335,13 +335,13 @@ class TestEndToEndCallFlow:
         This was broken before commit 88e0d678 and would cause duplicate
         subprocess spawns.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.domains.call_manager import (
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
-        from unity.conversation_manager.events import UnifyMeetReceived
-        from unity.conversation_manager.cm_types import Mode
+        from unify.conversation_manager.events import UnifyMeetReceived
+        from unify.conversation_manager.cm_types import Mode
 
         mock_cm = MagicMock()
         mock_cm.mode = Mode.CALL  # ALREADY in voice mode
@@ -405,7 +405,7 @@ class TestContactIndexFallbackDuringInit:
 
         This test would have caught Ved's bug (307b210f).
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         contact_index = ContactIndex()
 
@@ -453,8 +453,8 @@ class TestContactIndexFallbackDuringInit:
         This is the production code path - CommsManager publishes BackupContactsEvent
         when inbound messages arrive, and the handler should cache contacts.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.events import BackupContactsEvent
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import BackupContactsEvent
 
         # Create a minimal mock CM with uninitialized contact_manager
         mock_cm = MagicMock()
@@ -504,13 +504,13 @@ class TestRoomNameHandling:
         Before fix 81596d0e, the room name handling was broken because
         assistant_number was removed from args but still expected.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.domains.call_manager import (
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.domains.call_manager import (
             CallConfig,
             LivekitCallManager,
         )
-        from unity.conversation_manager.events import UnifyMeetReceived
-        from unity.conversation_manager.cm_types import Mode
+        from unify.conversation_manager.events import UnifyMeetReceived
+        from unify.conversation_manager.cm_types import Mode
 
         mock_cm = MagicMock()
         mock_cm.mode = Mode.TEXT  # Not in voice mode
@@ -574,7 +574,7 @@ class TestRapidEventHandling:
         2. Adapter immediately sends inbound message to unity-{assistant_id}
         3. Container must handle both without race conditions
         """
-        from unity.conversation_manager.events import (
+        from unify.conversation_manager.events import (
             StartupEvent,
             SMSReceived,
             Event,
@@ -670,7 +670,7 @@ class TestEventChannelRouting:
         The voice agent subprocess listens on specific channels. Wrong
         channel = guidance never reaches the agent.
         """
-        from unity.conversation_manager.events import FastBrainNotification
+        from unify.conversation_manager.events import FastBrainNotification
 
         guidance = FastBrainNotification(
             contact=sample_contact,
@@ -755,11 +755,11 @@ class TestIPCBidirectionalCommunication:
 
         Before the bidirectional fix, only the first message might work.
         """
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
-        from unity.conversation_manager.events import FastBrainNotification
+        from unify.conversation_manager.events import FastBrainNotification
 
         events_from_subprocess = []
 
@@ -917,7 +917,7 @@ class TestRealLiveKitIntegration:
         This is the most comprehensive integration test - it exercises
         the full call flow with real components.
         """
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )

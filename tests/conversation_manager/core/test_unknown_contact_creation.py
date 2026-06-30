@@ -21,8 +21,8 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -69,7 +69,7 @@ def broker():
 @pytest.fixture
 def mock_session_details():
     """Mock SESSION_DETAILS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
+    with patch("unify.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
         mock.assistant.agent_id = 42
         mock.assistant.email = "assistant@test.com"
         mock.user.name = "Test User"
@@ -93,7 +93,7 @@ def mock_session_details():
 @pytest.fixture
 def mock_settings():
     """Mock SETTINGS for testing."""
-    with patch("unity.conversation_manager.comms_manager.SETTINGS") as mock:
+    with patch("unify.conversation_manager.comms_manager.SETTINGS") as mock:
         mock.DEPLOY_ENV = "production"
         mock.ENV_SUFFIX = ""
         yield mock
@@ -158,7 +158,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that SMS from unknown sender creates a contact with correct settings."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -181,11 +181,11 @@ class TestUnknownSMSContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -215,7 +215,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that UnknownContactCreated event is published for unknown SMS sender."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -237,11 +237,11 @@ class TestUnknownSMSContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -269,7 +269,7 @@ class TestUnknownSMSContactCreation:
         mock_settings,
     ):
         """Test that SMS from known contact doesn't create a new contact."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -296,7 +296,7 @@ class TestUnknownSMSContactCreation:
             )
 
             with patch(
-                "unity.conversation_manager.comms_manager._is_blacklisted",
+                "unify.conversation_manager.comms_manager._is_blacklisted",
                 return_value=False,
             ):
                 cm.handle_message(message)
@@ -334,7 +334,7 @@ class TestUnknownEmailContactCreation:
         mock_settings,
     ):
         """Test that email from unknown sender creates a contact with correct settings."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -358,11 +358,11 @@ class TestUnknownEmailContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -392,7 +392,7 @@ class TestUnknownEmailContactCreation:
         mock_settings,
     ):
         """Test that UnknownContactCreated event is published for unknown email sender."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -416,11 +416,11 @@ class TestUnknownEmailContactCreation:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -466,7 +466,7 @@ class TestDuplicatePrevention:
         mock_settings,
     ):
         """Test that second message from same unknown sender uses existing contact."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -489,11 +489,11 @@ class TestDuplicatePrevention:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -520,11 +520,11 @@ class TestDuplicatePrevention:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
@@ -547,9 +547,9 @@ def test_lookup_known_contact_resolves_call_media():
     """The call branches resolve a sender that lives only in the ContactManager
     (not in the event contacts or the session-snapshot local contact), and
     return None for an unknown sender."""
-    from unity.conversation_manager.cm_types import Medium
-    from unity.conversation_manager.comms_manager import _lookup_known_contact
-    from unity.contact_manager.simulated import SimulatedContactManager
+    from unify.conversation_manager.cm_types import Medium
+    from unify.conversation_manager.comms_manager import _lookup_known_contact
+    from unify.contact_manager.simulated import SimulatedContactManager
 
     contact_manager = SimulatedContactManager()
     contact_manager._create_contact(
@@ -560,7 +560,7 @@ def test_lookup_known_contact_resolves_call_media():
     )
 
     with patch(
-        "unity.manager_registry.ManagerRegistry.get_contact_manager",
+        "unify.manager_registry.ManagerRegistry.get_contact_manager",
         return_value=contact_manager,
     ):
         phone_contact = _lookup_known_contact(Medium.PHONE_CALL, "+15555551234")
@@ -585,7 +585,7 @@ class TestKnownContactResolutionViaContactManager:
         mock_session_details,
         mock_settings,
     ):
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(broker)
         cm.loop = asyncio.get_event_loop()
@@ -614,11 +614,11 @@ class TestKnownContactResolutionViaContactManager:
 
             with (
                 patch(
-                    "unity.conversation_manager.comms_manager._is_blacklisted",
+                    "unify.conversation_manager.comms_manager._is_blacklisted",
                     return_value=False,
                 ),
                 patch(
-                    "unity.manager_registry.ManagerRegistry.get_contact_manager",
+                    "unify.manager_registry.ManagerRegistry.get_contact_manager",
                     return_value=contact_manager,
                 ),
             ):
