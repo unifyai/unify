@@ -77,13 +77,13 @@ DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 NEW_CALL_READINESS_TIMEOUT_S = 30.0
 
 # How long the worker may stay alive-but-unwarmed while the manager is fully
-# idle before the watchdog force-restarts it to recover. The normal post-job
-# re-warm completes in seconds (LiveKit warms the replacement at dispatch time,
-# not job end), so a stall this long means the idle pool is genuinely wedged —
-# e.g. a prewarmed process was consumed by a dispatch that never became a live
-# job (clearing WORKER_READY) and no replacement ever re-signaled. Without this
-# the call-starting tools stay masked forever (the Meet -> WhatsApp-call hang).
-WORKER_REWARM_STALL_S = 20.0
+# idle before the watchdog force-restarts it to recover. Post-job re-warm usually
+# completes in seconds, but a cold container prewarm can take the full LiveKit
+# initialize window (~30-60s). The stall threshold must exceed that window or
+# the watchdog kills the worker before WORKER_READY is written and voice stays
+# wedged forever. Keep this aligned with ``initialize_process_timeout`` in
+# ``medium_scripts/worker.py``.
+WORKER_REWARM_STALL_S = 60.0
 
 # Fallback briefing for an outbound call that somehow reaches dispatch without a
 # mission context. An agent-initiated call must never open "blind", so even
