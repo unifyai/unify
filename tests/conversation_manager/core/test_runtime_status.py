@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.conversation_manager.prompt_builders import build_system_prompt
-from unity.conversation_manager.runtime_status import (
+from unify.conversation_manager.prompt_builders import build_system_prompt
+from unify.conversation_manager.runtime_status import (
     deployment_runtime_reconcile_prompt_note,
 )
 

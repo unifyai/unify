@@ -7,8 +7,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from unity.file_manager.managers.file_manager import FileManager
-from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unify.file_manager.managers.file_manager import FileManager
+from unify.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
 
 from tests.helpers import _handle_project
 from tests.file_manager.helpers import ask_judge

@@ -1,7 +1,7 @@
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import TaskScheduler
 import pytest
-from unity.task_scheduler.types.status import Status
+from unify.task_scheduler.types.status import Status
 
 
 @_handle_project

@@ -20,14 +20,14 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution import ExecutionResult
-from unity.actor.environments import StateManagerEnvironment
-from unity.common.async_tool_loop import SteerableToolHandle
-from unity.common.llm_helpers import method_to_schema
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import Primitives, PrimitiveScope
-from unity.manager_registry import ManagerRegistry
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.execution import ExecutionResult
+from unify.actor.environments import StateManagerEnvironment
+from unify.common.async_tool_loop import SteerableToolHandle
+from unify.common.llm_helpers import method_to_schema
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import Primitives, PrimitiveScope
+from unify.manager_registry import ManagerRegistry
 
 pytestmark = pytest.mark.llm_call
 
@@ -38,7 +38,7 @@ pytestmark = pytest.mark.llm_call
 
 @pytest.fixture
 def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     for name in ("CONTACT", "TASK", "TRANSCRIPT", "KNOWLEDGE", "GUIDANCE", "WEB"):
         monkeypatch.setenv(f"UNITY_{name}_IMPL", "simulated")
@@ -403,8 +403,8 @@ async def test_execute_function_returns_composite_when_side_output_present(
     the execution produces stdout alongside the handle."""
     # A composed function that prints AND returns a handle — the print
     # output is meaningful intermediate content the LLM should observe.
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.common.context_registry import ContextRegistry
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.common.context_registry import ContextRegistry
 
     ContextRegistry.forget(FunctionManager, "Functions/VirtualEnvs")
     ContextRegistry.forget(FunctionManager, "Functions/Compositional")

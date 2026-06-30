@@ -2,8 +2,8 @@
 
 from types import SimpleNamespace
 
-from unity.memory_manager import broader_context
-from unity.session_details import SESSION_DETAILS, TeamSummary
+from unify.memory_manager import broader_context
+from unify.session_details import SESSION_DETAILS, TeamSummary
 
 
 class _ContactManager:
@@ -31,7 +31,7 @@ class _ContactManager:
 def test_broader_context_includes_accessible_teams_and_reset(monkeypatch):
     """The broader-context cache includes shared-team guidance and can reset."""
 
-    from unity.memory_manager.memory_manager import MemoryManager
+    from unify.memory_manager.memory_manager import MemoryManager
 
     monkeypatch.setattr(MemoryManager, "get_rolling_activity", lambda: "Recent work.")
     SESSION_DETAILS.reset()

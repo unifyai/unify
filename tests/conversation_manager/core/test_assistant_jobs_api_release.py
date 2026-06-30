@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 class TestReleasePoolVm:
     """`release_pool_vm()` should respect Comms' async release contract."""
 
-    @patch("unity.conversation_manager.assistant_jobs_api.requests")
+    @patch("unify.conversation_manager.assistant_jobs_api.requests")
     def test_release_pool_vm_treats_releasing_response_as_success(self, mock_requests):
         release_pool_vm = importlib.import_module(
-            "unity.conversation_manager.assistant_jobs_api",
+            "unify.conversation_manager.assistant_jobs_api",
         ).release_pool_vm
 
         mock_resp = MagicMock()
@@ -37,10 +37,10 @@ class TestReleasePoolVm:
             timeout=60,
         )
 
-    @patch("unity.conversation_manager.assistant_jobs_api.requests")
+    @patch("unify.conversation_manager.assistant_jobs_api.requests")
     def test_release_pool_vm_does_not_fallback_to_manual_detach(self, mock_requests):
         release_pool_vm = importlib.import_module(
-            "unity.conversation_manager.assistant_jobs_api",
+            "unify.conversation_manager.assistant_jobs_api",
         ).release_pool_vm
 
         mock_resp = MagicMock()
@@ -61,10 +61,10 @@ class TestReleasePoolVm:
 
         assert mock_requests.post.call_count == 1
 
-    @patch("unity.conversation_manager.assistant_jobs_api.requests")
+    @patch("unify.conversation_manager.assistant_jobs_api.requests")
     def test_release_pool_vm_includes_job_name_target(self, mock_requests):
         release_pool_vm = importlib.import_module(
-            "unity.conversation_manager.assistant_jobs_api",
+            "unify.conversation_manager.assistant_jobs_api",
         ).release_pool_vm
 
         mock_resp = MagicMock()
@@ -99,10 +99,10 @@ class TestReleasePoolVm:
 class TestStopAssistantSession:
     """`stop_assistant_session()` should call the Comms session stop contract."""
 
-    @patch("unity.conversation_manager.assistant_jobs_api.requests")
+    @patch("unify.conversation_manager.assistant_jobs_api.requests")
     def test_stop_assistant_session_posts_to_session_stop_endpoint(self, mock_requests):
         stop_assistant_session = importlib.import_module(
-            "unity.conversation_manager.assistant_jobs_api",
+            "unify.conversation_manager.assistant_jobs_api",
         ).stop_assistant_session
 
         mock_resp = MagicMock()

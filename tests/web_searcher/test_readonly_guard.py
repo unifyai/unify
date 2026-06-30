@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.web_searcher.web_searcher import WebSearcher
-from unity.common.read_only_ask_guard import ReadOnlyAskGuardHandle
+from unify.web_searcher.web_searcher import WebSearcher
+from unify.common.read_only_ask_guard import ReadOnlyAskGuardHandle
 
 
 @pytest.mark.asyncio

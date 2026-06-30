@@ -12,8 +12,8 @@ from tests.destination_routing_helpers import (
     rows_containing,
     run_direct_routing_loop,
 )
-from unity.common.llm_helpers import methods_to_tool_dict
-from unity.function_manager.function_manager import FunctionManager
+from unify.common.llm_helpers import methods_to_tool_dict
+from unify.function_manager.function_manager import FunctionManager
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

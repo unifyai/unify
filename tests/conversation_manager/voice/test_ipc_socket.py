@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from unity.conversation_manager.domains.ipc_socket import (
+from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CallEventSocketClient,
     CM_EVENT_SOCKET_ENV,
@@ -260,7 +260,7 @@ class TestCallEventSocketServer:
         The correct ordering is to finish processing messages already received
         from the client before running the disconnect fallback.
         """
-        from unity.conversation_manager.events import UnifyMeetStarted
+        from unify.conversation_manager.events import UnifyMeetStarted
 
         started_processing = asyncio.Event()
         allow_started_finish = asyncio.Event()
@@ -438,7 +438,7 @@ class TestSendEventToParent:
     async def test_returns_false_when_no_socket(self):
         """send_event_to_parent() returns False when no socket is configured."""
         # Clear any existing client
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
@@ -461,7 +461,7 @@ class TestSendEventToParent:
         socket_path = await server.start()
 
         # Clear singleton and set env var
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
@@ -491,7 +491,7 @@ class TestGetSocketClient:
 
     def test_returns_none_when_env_not_set(self):
         """get_socket_client() returns None when env var is not set."""
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
@@ -505,7 +505,7 @@ class TestGetSocketClient:
 
     def test_returns_singleton_when_set(self):
         """get_socket_client() returns the same instance on multiple calls."""
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
@@ -526,7 +526,7 @@ class TestBidirectionalCommunication:
     @pytest.fixture
     def real_event_broker(self):
         """Create a real in-memory event broker for testing forwarding."""
-        from unity.conversation_manager.in_memory_event_broker import (
+        from unify.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -864,7 +864,7 @@ class TestBidirectionalCommunication:
         await server.start()
 
         # Publish multiple events before any client connects
-        from unity.conversation_manager.events import FastBrainNotification
+        from unify.conversation_manager.events import FastBrainNotification
 
         await real_event_broker.publish(
             "app:call:notification",
@@ -913,12 +913,12 @@ class TestSocketAwareEventBroker:
         socket_path = await server.start()
 
         # Import and test the wrapper
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
         with patch.dict(os.environ, {CM_EVENT_SOCKET_ENV: socket_path}):
-            from unity.conversation_manager.medium_scripts.common import (
+            from unify.conversation_manager.medium_scripts.common import (
                 SocketAwareEventBroker,
             )
 
@@ -936,18 +936,18 @@ class TestSocketAwareEventBroker:
     @pytest.mark.asyncio
     async def test_falls_back_to_in_memory_broker(self):
         """SocketAwareEventBroker falls back to in-memory broker when no socket."""
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
 
         env_backup = os.environ.pop(CM_EVENT_SOCKET_ENV, None)
         try:
-            from unity.conversation_manager.medium_scripts.common import (
+            from unify.conversation_manager.medium_scripts.common import (
                 SocketAwareEventBroker,
             )
 
             with patch(
-                "unity.conversation_manager.medium_scripts.common.get_event_broker",
+                "unify.conversation_manager.medium_scripts.common.get_event_broker",
             ) as mock_get_broker:
                 mock_broker = MagicMock()
                 mock_broker.publish = AsyncMock()
@@ -968,7 +968,7 @@ class TestSocketAwareEventBroker:
     @pytest.mark.asyncio
     async def test_start_receiving_enables_inbound_events(self):
         """SocketAwareEventBroker.start_receiving() enables receiving parent events."""
-        from unity.conversation_manager.in_memory_event_broker import (
+        from unify.conversation_manager.in_memory_event_broker import (
             InMemoryEventBroker,
         )
 
@@ -982,13 +982,13 @@ class TestSocketAwareEventBroker:
         )
         socket_path = await server.start()
 
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
         ipc_module._receive_loop_started = False
 
         with patch.dict(os.environ, {CM_EVENT_SOCKET_ENV: socket_path}):
-            from unity.conversation_manager.medium_scripts.common import (
+            from unify.conversation_manager.medium_scripts.common import (
                 SocketAwareEventBroker,
             )
 
@@ -1011,7 +1011,7 @@ class TestSocketAwareEventBroker:
             await asyncio.sleep(0.1)
 
             # Parent publishes event
-            from unity.conversation_manager.events import FastBrainNotification
+            from unify.conversation_manager.events import FastBrainNotification
 
             await parent_broker.publish(
                 "app:call:notification",
@@ -1039,14 +1039,14 @@ class TestSocketAwareEventBroker:
     @pytest.mark.asyncio
     async def test_start_receiving_returns_false_without_socket(self):
         """start_receiving() returns False when no socket is available."""
-        import unity.conversation_manager.domains.ipc_socket as ipc_module
+        import unify.conversation_manager.domains.ipc_socket as ipc_module
 
         ipc_module._socket_client = None
         ipc_module._receive_loop_started = False
 
         env_backup = os.environ.pop(CM_EVENT_SOCKET_ENV, None)
         try:
-            from unity.conversation_manager.medium_scripts.common import (
+            from unify.conversation_manager.medium_scripts.common import (
                 SocketAwareEventBroker,
             )
 

@@ -12,7 +12,7 @@ from dataclasses import fields
 
 import pytest
 
-from unity.session_details import (
+from unify.session_details import (
     SESSION_DETAILS,
     AssistantDetails,
     SessionDetails,

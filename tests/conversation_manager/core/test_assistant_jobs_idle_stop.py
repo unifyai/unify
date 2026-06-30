@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from unity.conversation_manager import assistant_jobs
-from unity.deploy_runtime import register_deploy_runtime, reset_deploy_runtime
+from unify.conversation_manager import assistant_jobs
+from unify.deploy_runtime import register_deploy_runtime, reset_deploy_runtime
 
 
 class _RecordingJobsBackend:

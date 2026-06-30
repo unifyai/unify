@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import pytest
 
-from unity.secret_manager.simulated import (
+from unify.secret_manager.simulated import (
     SimulatedSecretManager,
 )
 
@@ -17,8 +17,8 @@ from tests.helpers import (
 # ─────────────────────────────────────────────────────────────────────────────
 def test_docstrings_match_base():
     """Public methods in SimulatedSecretManager should copy BaseSecretManager doc-strings."""
-    from unity.secret_manager.base import BaseSecretManager
-    from unity.secret_manager.simulated import SimulatedSecretManager
+    from unify.secret_manager.base import BaseSecretManager
+    from unify.secret_manager.simulated import SimulatedSecretManager
 
     assert (
         BaseSecretManager.ask.__doc__.strip()

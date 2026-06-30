@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from unity.integrations import ops as ops_module
-from unity.integrations.primitives import IntegrationPrimitives
+from unify.integrations import ops as ops_module
+from unify.integrations.primitives import IntegrationPrimitives
 
 
 class FakeIntegrationClient:
@@ -162,7 +162,7 @@ def stub_materialized_app(monkeypatch, *, app_slug: str, names: list[str]) -> No
                     entries={
                         "name": name,
                         "docstring": f"Execute {name}.",
-                        "primitive_class": "unity.integrations.primitives.IntegrationPrimitives",
+                        "primitive_class": "unify.integrations.primitives.IntegrationPrimitives",
                         "metadata": {
                             "source": "provider_backed",
                             "integration": {
@@ -229,37 +229,37 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         return _fake
 
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.list_integration_connections",
+        "unify.integrations.ops.unisdk.list_integration_connections",
         helper("list_connections"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.run_integration_tool",
+        "unify.integrations.ops.unisdk.run_integration_tool",
         helper("run_tool"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.get_integration_tool_policy",
+        "unify.integrations.ops.unisdk.get_integration_tool_policy",
         helper("get_tool_policy"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.patch_integration_tool_policy",
+        "unify.integrations.ops.unisdk.patch_integration_tool_policy",
         helper("patch_tool_policy"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.approve_integration_tool_execution",
+        "unify.integrations.ops.unisdk.approve_integration_tool_execution",
         helper("approve_tool_execution"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.deny_integration_tool_execution",
+        "unify.integrations.ops.unisdk.deny_integration_tool_execution",
         helper("deny_tool_execution"),
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.test_integration_connection",
+        "unify.integrations.ops.unisdk.test_integration_connection",
         helper("test_connection"),
         raising=False,
     )
@@ -379,7 +379,7 @@ def test_ops_functions_re_raise_unify_keyerror_like_unify_logging(monkeypatch) -
         raise KeyError("UNIFY_KEY is missing. Please make sure it is set correctly!")
 
     monkeypatch.setattr(
-        "unity.integrations.ops.unisdk.list_integration_connections",
+        "unify.integrations.ops.unisdk.list_integration_connections",
         raise_missing_key,
         raising=False,
     )
@@ -429,7 +429,7 @@ async def test_helper_methods_delegate_to_client_with_scope_payloads(
         },
     ]
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_tools",
+        "unify.integrations.primitives.list_catalog_tools",
         lambda **_kwargs: catalog_rows,
     )
     primitives = IntegrationPrimitives(owner_scope={})
@@ -605,7 +605,7 @@ async def test_search_integrations_reports_connection_and_materialization_status
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_apps",
+        "unify.integrations.primitives.list_catalog_apps",
         lambda **_kwargs: list(client.app_results),
     )
     stub_materialized_app(
@@ -694,7 +694,7 @@ async def test_search_integrations_enriches_native_app_activation(monkeypatch) -
         },
     ]
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_apps",
+        "unify.integrations.primitives.list_catalog_apps",
         lambda **_kwargs: list(client.app_results),
     )
     stub_native_app(
@@ -724,7 +724,7 @@ async def test_search_integrations_returns_supported_empty_result_without_tool_s
     patch_ops_from_client(monkeypatch, client)
     client.app_results = []
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_apps",
+        "unify.integrations.primitives.list_catalog_apps",
         lambda **_kwargs: list(client.app_results),
     )
     primitives = IntegrationPrimitives(owner_scope={})
@@ -751,7 +751,7 @@ async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
     client = FakeIntegrationClient()
     patch_ops_from_client(monkeypatch, client)
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_apps",
+        "unify.integrations.primitives.list_catalog_apps",
         lambda **_kwargs: list(client.app_results),
     )
     primitives = IntegrationPrimitives(owner_scope={})
@@ -790,7 +790,7 @@ async def test_dynamic_app_tool_namespace_resolves_from_materialized_row(
         tool_id="composio:hubspot:search_contacts",
     )
     monkeypatch.setattr(
-        "unity.integrations.primitives.list_catalog_tools",
+        "unify.integrations.primitives.list_catalog_tools",
         lambda **_kwargs: [
             {
                 "name": "primitives.integrations.hubspot.search_contacts",
@@ -999,7 +999,7 @@ async def test_namespace_execution_uses_function_manager_provider_row(
             return dict(row)
 
     monkeypatch.setattr(
-        "unity.manager_registry.ManagerRegistry.get_function_manager",
+        "unify.manager_registry.ManagerRegistry.get_function_manager",
         lambda: FakeFunctionManager(),
     )
     monkeypatch.setattr("unisdk.get_active_context", lambda: {})

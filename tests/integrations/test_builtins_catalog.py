@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from unity.integrations import builtins_catalog
+from unify.integrations import builtins_catalog
 
 
 def _seed_script_module():

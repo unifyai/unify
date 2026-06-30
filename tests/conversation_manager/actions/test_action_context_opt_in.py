@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.helpers import _handle_project
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
 
@@ -133,7 +133,7 @@ class TestSteeringRespectsOptOut:
     @_handle_project
     async def test_interject_skips_context_when_opted_out(self, initialized_cm):
         """Interject on an opted-out action sends no context diff."""
-        from unity.conversation_manager.domains.renderer import (
+        from unify.conversation_manager.domains.renderer import (
             SnapshotState,
             MessageElement,
         )
@@ -217,7 +217,7 @@ class TestSteeringRespectsOptOut:
     @_handle_project
     async def test_interject_sends_context_when_opted_in(self, initialized_cm):
         """Interject on an opted-in action sends the context diff."""
-        from unity.conversation_manager.domains.renderer import (
+        from unify.conversation_manager.domains.renderer import (
             SnapshotState,
             MessageElement,
         )

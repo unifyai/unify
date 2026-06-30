@@ -1,7 +1,7 @@
 """Tile data-source scope coverage for DashboardManager."""
 
-from unity.dashboard_manager.types.tile import FilterBinding
-from unity.session_details import SESSION_DETAILS
+from unify.dashboard_manager.types.tile import FilterBinding
+from unify.session_details import SESSION_DETAILS
 from tests.dashboard_manager.helpers import (
     active_read_root,
     create_context_if_missing,

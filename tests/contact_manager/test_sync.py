@@ -1,7 +1,7 @@
 import pytest
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.session_details import SESSION_DETAILS
+from unify.contact_manager.contact_manager import ContactManager
+from unify.session_details import SESSION_DETAILS
 from tests.helpers import _handle_project
 
 # ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ def _clear_cached_assistant(monkeypatch):
     The fixture is *autouse* and therefore applies to every test in this
     module without having to be listed explicitly.
     """
-    from unity.session_details import AssistantDetails
+    from unify.session_details import AssistantDetails
 
     monkeypatch.setattr(SESSION_DETAILS, "assistant", AssistantDetails())
 
@@ -37,7 +37,7 @@ def _configure_real_assistant(
     timezone: str,
 ) -> None:
     """Configure SESSION_DETAILS with a populated assistant profile for sync tests."""
-    from unity.session_details import AssistantDetails
+    from unify.session_details import AssistantDetails
 
     monkeypatch.setattr(SESSION_DETAILS, "_initialized", True)
     monkeypatch.setattr(
@@ -54,7 +54,7 @@ def _configure_real_assistant(
         ),
     )
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._upsert_personal_contact_membership",
+        "unify.contact_manager.system_contacts._upsert_personal_contact_membership",
         lambda **_: None,
     )
 
@@ -62,7 +62,7 @@ def _configure_real_assistant(
 @_handle_project
 def test_dummy_assistant(monkeypatch):
     """When the account has no assistants, default system contacts are created."""
-    from unity.session_details import (
+    from unify.session_details import (
         PLACEHOLDER_ASSISTANT_EMAIL,
         PLACEHOLDER_ASSISTANT_FIRST_NAME,
         PLACEHOLDER_ASSISTANT_PHONE,
@@ -187,7 +187,7 @@ def test_org_members_provisioned_as_system_contacts(monkeypatch):
         {"email": "bob@org.com", "name": "Bob"},  # Single name (no surname)
     ]
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._fetch_org_members",
+        "unify.contact_manager.system_contacts._fetch_org_members",
         lambda: fake_org_members,
     )
 
@@ -219,7 +219,7 @@ def test_org_members_provisioned_as_system_contacts(monkeypatch):
 @_handle_project
 def test_org_member_skips_primary_user_email(monkeypatch):
     """Org member with same email as the primary user should be skipped."""
-    from unity.session_details import PLACEHOLDER_USER_EMAIL
+    from unify.session_details import PLACEHOLDER_USER_EMAIL
 
     # Include the primary user's email in org members list
     fake_org_members = [
@@ -227,7 +227,7 @@ def test_org_member_skips_primary_user_email(monkeypatch):
         {"email": "other@org.com", "name": "Other Member"},
     ]
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._fetch_org_members",
+        "unify.contact_manager.system_contacts._fetch_org_members",
         lambda: fake_org_members,
     )
 
@@ -252,7 +252,7 @@ def test_existing_contact_updated_to_system_for_org_member(monkeypatch):
     """If contact with org member email exists, it should be marked is_system=True."""
     # First create ContactManager with no org members to create a regular contact
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._fetch_org_members",
+        "unify.contact_manager.system_contacts._fetch_org_members",
         lambda: [],
     )
     cm = ContactManager()
@@ -270,12 +270,12 @@ def test_existing_contact_updated_to_system_for_org_member(monkeypatch):
 
     # Now simulate org members API returning this email
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._fetch_org_members",
+        "unify.contact_manager.system_contacts._fetch_org_members",
         lambda: [{"email": "preexisting@org.com", "name": "Pre Existing"}],
     )
 
     # Re-sync by calling provision directly
-    from unity.contact_manager.system_contacts import provision_org_member_contacts
+    from unify.contact_manager.system_contacts import provision_org_member_contacts
 
     provision_org_member_contacts(cm)
 
@@ -288,7 +288,7 @@ def test_existing_contact_updated_to_system_for_org_member(monkeypatch):
 def test_no_org_members_when_personal_api_key(monkeypatch):
     """When _fetch_org_members returns empty (personal key), no extra contacts created."""
     monkeypatch.setattr(
-        "unity.contact_manager.system_contacts._fetch_org_members",
+        "unify.contact_manager.system_contacts._fetch_org_members",
         lambda: [],
     )
 

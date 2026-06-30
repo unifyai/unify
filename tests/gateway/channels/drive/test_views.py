@@ -1,4 +1,4 @@
-"""Behavioural tests for ``unity.gateway.channels.drive``.
+"""Behavioural tests for ``unify.gateway.channels.drive``.
 
 Focused on credential/identity resolution: the picker identifies the connected
 account by ``assistant_id`` (preferred, and the only identity that works for a
@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.channels.drive import router
+from unify.gateway.channels.drive import router
 
 
 @pytest.fixture
@@ -34,10 +34,10 @@ def test_roots_resolves_by_assistant_id_when_provided(client: TestClient) -> Non
     by_id = AsyncMock(return_value=assistant)
     by_email = AsyncMock(return_value=assistant)
     with (
-        patch("unity.gateway.channels.drive.views.lookup_assistant_by_id", new=by_id),
-        patch("unity.gateway.channels.drive.views.lookup_assistant", new=by_email),
+        patch("unify.gateway.channels.drive.views.lookup_assistant_by_id", new=by_id),
+        patch("unify.gateway.channels.drive.views.lookup_assistant", new=by_email),
         patch(
-            "unity.gateway.channels.drive.views.build",
+            "unify.gateway.channels.drive.views.build",
             return_value=_fake_drive_service(),
         ),
     ):
@@ -54,10 +54,10 @@ def test_roots_resolves_by_email_when_no_assistant_id(client: TestClient) -> Non
     by_id = AsyncMock(return_value=assistant)
     by_email = AsyncMock(return_value=assistant)
     with (
-        patch("unity.gateway.channels.drive.views.lookup_assistant_by_id", new=by_id),
-        patch("unity.gateway.channels.drive.views.lookup_assistant", new=by_email),
+        patch("unify.gateway.channels.drive.views.lookup_assistant_by_id", new=by_id),
+        patch("unify.gateway.channels.drive.views.lookup_assistant", new=by_email),
         patch(
-            "unity.gateway.channels.drive.views.build",
+            "unify.gateway.channels.drive.views.build",
             return_value=_fake_drive_service(),
         ),
     ):
@@ -75,7 +75,7 @@ def test_roots_requires_an_identity(client: TestClient) -> None:
 
 def test_roots_409_when_no_connected_token(client: TestClient) -> None:
     with patch(
-        "unity.gateway.channels.drive.views.lookup_assistant_by_id",
+        "unify.gateway.channels.drive.views.lookup_assistant_by_id",
         new=AsyncMock(return_value={"secrets": {}}),
     ):
         resp = client.get("/drive/roots", params={"assistant_id": "123"})

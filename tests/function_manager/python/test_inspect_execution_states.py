@@ -16,11 +16,11 @@ import shutil
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import (
+from unify.function_manager.function_manager import (
     FunctionManager,
     VenvPool,
 )
-from unity.common.context_registry import ContextRegistry
+from unify.common.context_registry import ContextRegistry
 
 # ────────────────────────────────────────────────────────────────────────────
 # Sample Functions

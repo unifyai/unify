@@ -29,8 +29,8 @@ async def resilience_cm():
     Yields the CM *before* init so individual tests can apply mocks around
     the ``init_conv_manager`` call.
     """
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
+    from unify.conversation_manager.event_broker import reset_event_broker
+    from unify.conversation_manager import start_async, stop_async
 
     reset_event_broker()
 
@@ -48,8 +48,8 @@ async def resilience_cm():
 
 async def _init(cm, lock_name="init_resilience"):
     """Helper: run manager init with a SimulatedActor under file lock."""
-    from unity.actor.simulated import SimulatedActor
-    from unity.conversation_manager.domains import managers_utils
+    from unify.actor.simulated import SimulatedActor
+    from unify.conversation_manager.domains import managers_utils
 
     actor = SimulatedActor(
         steps=None,
@@ -73,11 +73,11 @@ class TestDegradableStepResilience:
     async def test_memory_manager_init_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.conversation_manager.domains.managers_utils.ManagerRegistry.get_memory_manager",
+            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_memory_manager",
             side_effect=ConnectionError("Orchestra unreachable"),
         ):
             # Force the feature flag on so the guarded path is exercised
-            from unity.settings import SETTINGS
+            from unify.settings import SETTINGS
 
             original = SETTINGS.memory.ENABLED
             SETTINGS.memory.ENABLED = True
@@ -93,7 +93,7 @@ class TestDegradableStepResilience:
     async def test_file_manager_init_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.conversation_manager.domains.managers_utils.ManagerRegistry.get_file_manager",
+            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_file_manager",
             side_effect=ConnectionError("Orchestra unreachable"),
         ):
             await _init(cm, "resilience_file")
@@ -104,7 +104,7 @@ class TestDegradableStepResilience:
     async def test_custom_function_sync_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.function_manager.custom_functions.collect_functions_from_directories",
+            "unify.function_manager.custom_functions.collect_functions_from_directories",
             side_effect=RuntimeError("filesystem error"),
         ):
             await _init(cm, "resilience_funcsyns")
@@ -115,7 +115,7 @@ class TestDegradableStepResilience:
     async def test_function_manager_warmup_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.conversation_manager.domains.managers_utils.ManagerRegistry.get_function_manager",
+            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.get_function_manager",
         ) as mock_fm:
             mock_instance = MagicMock()
             mock_instance.warm_embeddings.side_effect = RuntimeError("warm error")
@@ -128,7 +128,7 @@ class TestDegradableStepResilience:
     async def test_embedding_warmup_failure(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.conversation_manager.domains.managers_utils.ManagerRegistry.warm_all_embeddings",
+            "unify.conversation_manager.domains.managers_utils.ManagerRegistry.warm_all_embeddings",
             side_effect=ConnectionError("Orchestra unreachable"),
         ):
             await _init(cm, "resilience_embed")
@@ -141,7 +141,7 @@ class TestContextRegistryResilience:
 
     def test_partial_context_creation_failure_does_not_raise(self):
         """ContextRegistry.setup() tolerates individual context creation errors."""
-        from unity.common.context_registry import ContextRegistry
+        from unify.common.context_registry import ContextRegistry
 
         original = ContextRegistry._create_context_wrapper
 
@@ -172,7 +172,7 @@ class TestUserDetailsFetchResilience:
     async def test_user_details_fetch_failure_uses_fallback(self, resilience_cm):
         cm = resilience_cm
         with patch(
-            "unity.contact_manager.system_contacts.unisdk.get_user_basic_info",
+            "unify.contact_manager.system_contacts.unisdk.get_user_basic_info",
             side_effect=ConnectionError("Orchestra unreachable"),
         ):
             await _init(cm, "resilience_userinfo")

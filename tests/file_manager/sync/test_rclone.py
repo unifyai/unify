@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from unity.file_manager.sync.config import SyncConfig
-from unity.file_manager.sync.rclone import RcloneSync, SyncResult
+from unify.file_manager.sync.config import SyncConfig
+from unify.file_manager.sync.rclone import RcloneSync, SyncResult
 
 
 @pytest.fixture

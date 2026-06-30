@@ -1,4 +1,4 @@
-"""Behavioural tests for ``unity.gateway.channels.phone``.
+"""Behavioural tests for ``unify.gateway.channels.phone``.
 
 Includes the 4 scenarios faithfully ported from
 ``communication/tests/phone/test_send_call.py`` (the only existing
@@ -18,8 +18,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.conversation_manager.domains import comms_utils as _comms_utils  # noqa: F401
-from unity.gateway.channels.phone import auth_router, unauth_router
+from unify.conversation_manager.domains import comms_utils as _comms_utils  # noqa: F401
+from unify.gateway.channels.phone import auth_router, unauth_router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -39,7 +39,7 @@ def _phone_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin SETTINGS.conversation.COMMS_URL / ADAPTERS_URL for URL-shape assertions."""
-    from unity.gateway.channels.phone import views as phone_views
+    from unify.gateway.channels.phone import views as phone_views
 
     stub = SimpleNamespace(
         conversation=SimpleNamespace(
@@ -97,7 +97,7 @@ def test_unauth_router_exposes_expected_paths() -> None:
 
 
 def test_routers_are_importable_from_package_root() -> None:
-    from unity.gateway.channels.phone import auth_router as a, unauth_router as u
+    from unify.gateway.channels.phone import auth_router as a, unauth_router as u
 
     assert a is auth_router
     assert u is unauth_router
@@ -125,11 +125,11 @@ def test_send_call_sip_uri_uses_phone_number(
     mock_twilio = _build_send_call_mocks()
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
             new=AsyncMock(),
         ),
     ):
@@ -157,11 +157,11 @@ def test_send_call_twiml_url_contains_phone_number(
     mock_twilio = _build_send_call_mocks()
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
             new=AsyncMock(),
         ),
     ):
@@ -189,11 +189,11 @@ def test_send_call_returns_call_sid(
     mock_twilio = _build_send_call_mocks()
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
             new=AsyncMock(),
         ),
     ):
@@ -220,11 +220,11 @@ def test_send_call_sip_uri_uses_e164_format(
     mock_twilio = _build_send_call_mocks()
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
             new=AsyncMock(),
         ),
     ):
@@ -252,11 +252,11 @@ def test_send_call_invokes_ensure_phone_dispatch_rule_with_twilio_number_and_roo
     mock_ensure = AsyncMock()
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
             new=mock_ensure,
         ),
     ):
@@ -288,7 +288,7 @@ def test_send_text_invokes_twilio_messages_create_with_supplied_fields(
 ) -> None:
     mock_twilio = MagicMock()
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(
@@ -321,7 +321,7 @@ def test_dispatch_livekit_agent_calls_create_room_with_room_name(
 ) -> None:
     mock_create = AsyncMock()
     with patch(
-        "unity.gateway.channels.phone.views.create_room_and_dispatch_agent",
+        "unify.gateway.channels.phone.views.create_room_and_dispatch_agent",
         new=mock_create,
     ):
         resp = client.post(
@@ -344,7 +344,7 @@ def test_dispatch_livekit_agent_falls_back_to_legacy_livekit_agent_name(
     """Backward-compat: older callers send `livekit_agent_name`."""
     mock_create = AsyncMock()
     with patch(
-        "unity.gateway.channels.phone.views.create_room_and_dispatch_agent",
+        "unify.gateway.channels.phone.views.create_room_and_dispatch_agent",
         new=mock_create,
     ):
         resp = client.post(
@@ -397,11 +397,11 @@ def test_delete_phone_number_idempotent_when_already_absent(
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
+            "unify.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
             new=AsyncMock(return_value=False),
         ),
     ):
@@ -429,11 +429,11 @@ def test_delete_phone_number_returns_deleted_true_when_twilio_succeeds(
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=mock_twilio,
         ),
         patch(
-            "unity.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
+            "unify.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -498,7 +498,7 @@ def test_conference_status_unmutes_all_participants_on_end_event(
     mock_twilio.conferences.return_value.participants.list.return_value = [p1, p2]
 
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(
@@ -528,7 +528,7 @@ def test_conference_status_no_op_on_non_end_event(
 ) -> None:
     mock_twilio = MagicMock()
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(
@@ -561,7 +561,7 @@ def test_end_conference_marks_conference_completed(
         status="completed",
     )
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(
@@ -586,7 +586,7 @@ def test_hang_up_removes_participant_from_active_conference(
     conf = MagicMock(sid="CF_test")
     mock_twilio.conferences.list.return_value = [conf]
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(
@@ -606,7 +606,7 @@ def test_hang_up_call_completes_call_by_sid(
     """/hang-up-call completes the given Twilio call SID (outbound teardown)."""
     mock_twilio = MagicMock()
     with patch(
-        "unity.gateway.channels.phone.views.build_twilio_client",
+        "unify.gateway.channels.phone.views.build_twilio_client",
         return_value=mock_twilio,
     ):
         resp = client.post(

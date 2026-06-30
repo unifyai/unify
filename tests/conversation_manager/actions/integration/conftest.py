@@ -105,10 +105,10 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
     test's CodeActActor handle. Module-scoped async fixtures run on a different
     loop under pytest-asyncio strict mode, which can prevent ActorResult propagation.
     """
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
-    from unity.conversation_manager.domains import managers_utils
-    from unity.common.prompt_helpers import now as prompt_now
+    from unify.conversation_manager.event_broker import reset_event_broker
+    from unify.conversation_manager import start_async, stop_async
+    from unify.conversation_manager.domains import managers_utils
+    from unify.common.prompt_helpers import now as prompt_now
 
     reset_event_broker()
 
@@ -172,9 +172,9 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
 @pytest_asyncio.fixture
 async def code_act_actor() -> AsyncIterator[object]:
     """Create a fresh primitives-only CodeActActor for each test."""
-    from unity.actor.code_act_actor import CodeActActor
-    from unity.actor.environments import StateManagerEnvironment
-    from unity.function_manager.primitives import Primitives, PrimitiveScope
+    from unify.actor.code_act_actor import CodeActActor
+    from unify.actor.environments import StateManagerEnvironment
+    from unify.function_manager.primitives import Primitives, PrimitiveScope
 
     scope = PrimitiveScope(
         scoped_managers=frozenset({"contacts", "tasks", "transcripts", "files"}),
@@ -228,7 +228,7 @@ def initialized_cm_codeact(
     assert fixtures_dir.exists(), f"Missing fixtures directory: {fixtures_dir}"
 
     # Reset last_snapshot to use current (possibly patched) prompt time.
-    from unity.common.prompt_helpers import now as prompt_now
+    from unify.common.prompt_helpers import now as prompt_now
 
     driver.cm.last_snapshot = prompt_now(as_string=False)
 

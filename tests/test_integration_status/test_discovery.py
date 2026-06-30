@@ -1,4 +1,4 @@
-"""Integration-style tests for ``unity.integration_status.discovery``.
+"""Integration-style tests for ``unify.integration_status.discovery``.
 
 These run against the real unity-deploy package roots so they verify the
 import path, manifest parsing, and slug-to-directory contract end to end.
@@ -11,7 +11,7 @@ import importlib
 
 import pytest
 
-from unity.integration_status import discovery as D
+from unify.integration_status import discovery as D
 
 # This test module exercises real package discovery, which needs unity_deploy
 # importable.  In unity's standalone venv that's not the case; skip cleanly
@@ -19,7 +19,7 @@ from unity.integration_status import discovery as D
 _UNITY_DEPLOY_AVAILABLE = importlib.util.find_spec("unity_deploy") is not None
 pytestmark = pytest.mark.skipif(
     not _UNITY_DEPLOY_AVAILABLE,
-    reason="unity_deploy not installed in this venv; run from unity-deploy/.venv",
+    reason="unity_deploy not installed in this venv; run from unify-deploy/.venv",
 )
 
 

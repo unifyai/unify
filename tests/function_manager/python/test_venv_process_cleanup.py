@@ -17,8 +17,8 @@ import uuid
 import pytest
 import shutil
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from unify.function_manager.function_manager import FunctionManager
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # Module-level unique ID to namespace PID files for this test session.

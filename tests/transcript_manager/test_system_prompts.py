@@ -14,10 +14,10 @@ from tests.assertion_helpers import (
 )
 from tests.helpers import _handle_project
 
-from unity.contact_manager.types.contact import Contact
-from unity.transcript_manager.prompt_builders import build_ask_prompt
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.session_details import (
+from unify.contact_manager.types.contact import Contact
+from unify.transcript_manager.prompt_builders import build_ask_prompt
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.session_details import (
     SESSION_DETAILS,
     UNASSIGNED_USER_CONTEXT,
     UNASSIGNED_ASSISTANT_CONTEXT,
@@ -53,7 +53,7 @@ def _build_prompt_in_subprocess(test_context: str) -> str:
         if test_ctx:
             unisdk.set_context(test_ctx, relative=False)
         # Install a deterministic timestamp inside this fresh process
-        import unity.common.prompt_helpers as _ph
+        import unify.common.prompt_helpers as _ph
         from datetime import datetime, timezone
         def _static_now(time_only: bool = False):
             dt = datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -63,9 +63,9 @@ def _build_prompt_in_subprocess(test_context: str) -> str:
             return dt.strftime("%A, %B %d, %Y at %I:%M %p ") + label
         _ph.now = _static_now
 
-        from unity.contact_manager.types.contact import Contact
-        from unity.transcript_manager.transcript_manager import TranscriptManager
-        from unity.transcript_manager.prompt_builders import build_ask_prompt
+        from unify.contact_manager.types.contact import Contact
+        from unify.transcript_manager.transcript_manager import TranscriptManager
+        from unify.transcript_manager.prompt_builders import build_ask_prompt
 
         tm = TranscriptManager()
         tools = dict(tm.get_tools("ask"))

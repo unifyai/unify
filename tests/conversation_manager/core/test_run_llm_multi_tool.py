@@ -25,9 +25,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.helpers import _handle_project
-from unity.common.single_shot import SingleShotResult, ToolExecution
-from unity.conversation_manager.conversation_manager import ConversationManager
-from unity.conversation_manager.events import Event, FastBrainNotification
+from unify.common.single_shot import SingleShotResult, ToolExecution
+from unify.conversation_manager.conversation_manager import ConversationManager
+from unify.conversation_manager.events import Event, FastBrainNotification
 
 
 def _make_multi_tool_result(*tool_pairs: tuple[str, dict, object]) -> SingleShotResult:
@@ -73,7 +73,7 @@ async def test_run_llm_returns_all_tool_names(initialized_cm):
     )
 
     with patch(
-        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         AsyncMock(return_value=fake_result),
     ):
         returned = await cm._run_llm()
@@ -112,7 +112,7 @@ async def test_step_driver_tracks_all_tool_names(initialized_cm):
     )
 
     with patch(
-        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         AsyncMock(return_value=fake_result),
     ):
         returned = await cm_driver.cm._run_llm()
@@ -154,7 +154,7 @@ async def test_wait_delay_scheduled_when_not_first_tool(initialized_cm):
 
     with (
         patch(
-            "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
             AsyncMock(return_value=fake_result),
         ),
         patch.object(cm, "run_llm", new_callable=AsyncMock) as mock_run,
@@ -222,7 +222,7 @@ async def test_wait_sets_outbound_suppress_generation():
     wait() stamps _outbound_suppress_gen = _llm_gen, and the event handler
     skips request_llm_run when the two match.
     """
-    from unity.conversation_manager.domains.brain_action_tools import (
+    from unify.conversation_manager.domains.brain_action_tools import (
         ConversationManagerBrainActionTools,
     )
 
@@ -231,7 +231,7 @@ async def test_wait_sets_outbound_suppress_generation():
     cm._outbound_suppress_gen = -1
 
     with patch(
-        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -264,7 +264,7 @@ async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
         ("create_team", {"name": "Ops HQ"}, {"team_id": 11, "name": "Ops HQ"}),
     )
     with patch(
-        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         AsyncMock(return_value=fake_result),
     ):
         await cm._run_llm(trace_meta={"origin_event_name": "SMSSent"})
@@ -314,7 +314,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
         return SingleShotResult(tools=[], text_response="noop", structured_output=None)
 
     with patch(
-        "unity.conversation_manager.conversation_manager.single_shot_tool_decision",
+        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
         AsyncMock(side_effect=fake_single_shot),
     ):
         await cm._run_llm(trace_meta={"origin_event_name": "SMSSent"})
@@ -329,7 +329,7 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
 
 
 def test_duplicate_act_suppression_only_blocks_immediate_followups():
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from unify.conversation_manager.conversation_manager import ConversationManager
 
     cm = ConversationManager.__new__(ConversationManager)
     cm._llm_gen = 7
@@ -364,7 +364,7 @@ def test_duplicate_act_suppression_only_blocks_immediate_followups():
 
 
 def test_act_duplicate_fingerprint_normalizes_optional_defaults():
-    from unity.conversation_manager.conversation_manager import ConversationManager
+    from unify.conversation_manager.conversation_manager import ConversationManager
 
     cm = ConversationManager.__new__(ConversationManager)
     minimal_args = {

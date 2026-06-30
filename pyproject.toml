@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unity"
+name = "unify"
 version = "0.0.0"
 description = "The brain of an AI assistant — steerable async tool loops, CodeAct, and distributed manager orchestration"
 readme = "README.md"
@@ -102,10 +102,10 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["unity", "unity.*"]
+include = ["unify", "unify.*"]
 
 [tool.setuptools.package-data]
-"unity.assets.audio" = ["*.mp3"]
+"unify.assets.audio" = ["*.mp3"]
 
 [tool.uv.sources]
 unisdk = { path = "../unisdk", editable = true }

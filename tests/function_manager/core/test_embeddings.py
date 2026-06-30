@@ -3,7 +3,7 @@ import json
 import pytest
 import unisdk
 
-from unity.function_manager.function_manager import FunctionManager
+from unify.function_manager.function_manager import FunctionManager
 from tests.helpers import _handle_project
 
 

@@ -6,11 +6,11 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.blacklist_manager.blacklist_manager import BlackListManager
-from unity.common.context_registry import ContextRegistry
-from unity.conversation_manager.cm_types import Medium
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.blacklist_manager.blacklist_manager import BlackListManager
+from unify.common.context_registry import ContextRegistry
+from unify.conversation_manager.cm_types import Medium
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 
 
 def _configure_teams() -> tuple[int, int]:
@@ -88,8 +88,8 @@ def test_blacklist_writes_route_to_destination_and_reads_merge_roots():
 
 @_handle_project
 def test_blacklist_any_visible_root_blocks_contact_detail(monkeypatch):
-    from unity.conversation_manager import comms_manager
-    from unity.settings import SETTINGS
+    from unify.conversation_manager import comms_manager
+    from unify.settings import SETTINGS
 
     team_ids = _configure_teams()
     detail = f"blocked.{uuid.uuid4().hex}@example.com"

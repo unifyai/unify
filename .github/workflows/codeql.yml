@@ -7,7 +7,7 @@ name: CodeQL
 # injection, hard-coded credentials, etc.
 #
 # Languages scoped to Unity's actual surface:
-#   - python                — the unity/ package
+#   - python                — the unify/ package
 #   - javascript-typescript — the agent-service/ subproject
 #   - actions               — the .github/workflows/ pipeline itself
 #

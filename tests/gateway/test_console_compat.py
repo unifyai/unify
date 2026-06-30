@@ -10,11 +10,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.app import create_app
-from unity.gateway.context import GatewayContext
-from unity.gateway.public_url import StaticPublicUrlProvider
-from unity.gateway.runtime import LocalRuntimeActivator
-from unity.gateway.scheduler import LocalScheduler
+from unify.gateway.app import create_app
+from unify.gateway.context import GatewayContext
+from unify.gateway.public_url import StaticPublicUrlProvider
+from unify.gateway.runtime import LocalRuntimeActivator
+from unify.gateway.scheduler import LocalScheduler
 
 ADMIN_KEY = "test-admin-key"
 ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
@@ -92,8 +92,8 @@ async def _noop_lifespan(app: FastAPI):
 
 @pytest.fixture
 def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
-    from unity.gateway.adapters import common
-    from unity.gateway.common import auth
+    from unify.gateway.adapters import common
+    from unify.gateway.common import auth
 
     stub_secret = SimpleNamespace(get_secret_value=lambda: ADMIN_KEY)
     settings = SimpleNamespace(
@@ -152,7 +152,7 @@ def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(
     gateway_context: GatewayContext,
 ) -> None:
     with patch(
-        "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+        "unify.gateway.adapters.twilio.resolve_whatsapp_route",
         new=AsyncMock(return_value={"action": "reject_ambiguous"}),
     ):
         response = client.post(
@@ -201,24 +201,24 @@ def test_twilio_whatsapp_call_uses_call_session_room(
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            "unify.gateway.adapters.twilio.resolve_whatsapp_route",
             new=AsyncMock(return_value={"assistant_id": 123, "role": "owner"}),
         ),
         patch(
-            "unity.gateway.adapters.twilio.ensure_call_scoped_dispatch_rule",
+            "unify.gateway.adapters.twilio.ensure_call_scoped_dispatch_rule",
             new=AsyncMock(return_value="rule-CA111"),
         ),
         patch(
-            "unity.gateway.adapters.twilio.build_twilio_wa_client",
+            "unify.gateway.adapters.twilio.build_twilio_wa_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.adapters.twilio.upsert_whatsapp_call_session",
+            "unify.gateway.adapters.twilio.upsert_whatsapp_call_session",
             new=AsyncMock(
                 side_effect=lambda payload: sessions.append(payload) or payload,
             ),
         ),
-        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+        patch("unify.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
     ):
         response = client.post(
             "/twilio/whatsapp-call",
@@ -275,22 +275,22 @@ def test_twilio_whatsapp_call_status_uses_session_not_route(
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.resolve_whatsapp_route",
+            "unify.gateway.adapters.twilio.resolve_whatsapp_route",
             new=AsyncMock(side_effect=AssertionError("should not reroute")),
         ),
         patch(
-            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            "unify.gateway.adapters.twilio.get_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ),
         patch(
-            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            "unify.gateway.adapters.twilio.update_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ) as update_session,
         patch(
-            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            "unify.gateway.adapters.twilio.delete_sip_dispatch_rule",
             new=AsyncMock(),
         ),
-        patch("unity.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
+        patch("unify.gateway.adapters.twilio.get_assistant", new=fake_get_assistant),
     ):
         response = client.post(
             "/twilio/whatsapp-call-status",
@@ -321,19 +321,19 @@ def test_twilio_whatsapp_completed_status_cleans_rule_without_publish(
 
     with (
         patch(
-            "unity.gateway.adapters.twilio.get_whatsapp_call_session",
+            "unify.gateway.adapters.twilio.get_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ),
         patch(
-            "unity.gateway.adapters.twilio.update_whatsapp_call_session",
+            "unify.gateway.adapters.twilio.update_whatsapp_call_session",
             new=AsyncMock(return_value=session),
         ) as update_session,
         patch(
-            "unity.gateway.adapters.twilio.delete_sip_dispatch_rule",
+            "unify.gateway.adapters.twilio.delete_sip_dispatch_rule",
             new=AsyncMock(),
         ) as delete_rule,
         patch(
-            "unity.gateway.adapters.twilio._assistant_for_whatsapp_route",
+            "unify.gateway.adapters.twilio._assistant_for_whatsapp_route",
             new=AsyncMock(side_effect=AssertionError("completed should not publish")),
         ),
     ):
@@ -366,11 +366,11 @@ def test_console_can_create_phone_with_empty_body(client: TestClient) -> None:
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.channels.phone.views.get_livekit_api",
+            "unify.gateway.channels.phone.views.get_livekit_api",
             return_value=livekit_api,
         ),
     ):
@@ -387,11 +387,11 @@ def test_console_can_delete_phone_with_snake_case_body(client: TestClient) -> No
 
     with (
         patch(
-            "unity.gateway.channels.phone.views.build_twilio_client",
+            "unify.gateway.channels.phone.views.build_twilio_client",
             return_value=twilio_client,
         ),
         patch(
-            "unity.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
+            "unify.gateway.channels.phone.views._delete_sip_trunk_for_phone_number",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -422,7 +422,7 @@ def test_console_can_send_social_verification_with_snake_case_body(
     twilio_client.messaging.v1.services.list.return_value = [service]
 
     with patch(
-        "unity.gateway.channels.social.views.build_twilio_client",
+        "unify.gateway.channels.social.views.build_twilio_client",
         return_value=twilio_client,
     ):
         response = client.post(
@@ -447,15 +447,15 @@ def test_console_can_create_whatsapp_sender_with_snake_case_body(
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
+            "unify.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
             return_value={"Authorization": "Basic test"},
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._attach_voice_app",
+            "unify.gateway.channels.whatsapp.views._attach_voice_app",
             new=AsyncMock(return_value=True),
         ),
     ):
@@ -481,11 +481,11 @@ def test_console_can_delete_whatsapp_sender(client: TestClient) -> None:
 
     with (
         patch(
-            "unity.gateway.channels.whatsapp.views.httpx.AsyncClient",
+            "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
             return_value=httpx_client,
         ),
         patch(
-            "unity.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
+            "unify.gateway.channels.whatsapp.views._twilio_whatsapp_auth_headers",
             return_value={"Authorization": "Basic test"},
         ),
     ):

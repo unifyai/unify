@@ -26,11 +26,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.comms_manager import CommsManager
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.conversation_manager.comms_manager import CommsManager
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
 )
-from unity.gateway.ingress_inmemory import InMemoryIngressTransport
+from unify.gateway.ingress_inmemory import InMemoryIngressTransport
 
 # ---------------------------------------------------------------------------
 # Default construction (backward compat)

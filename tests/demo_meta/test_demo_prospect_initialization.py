@@ -35,11 +35,11 @@ async def demo_cm_factory():
     Returns a factory function that accepts demo_id and prospect_details parameters.
     This allows testing both with and without prospect details.
     """
-    from unity.settings import SETTINGS
-    from unity.conversation_manager.event_broker import reset_event_broker
-    from unity.conversation_manager import start_async, stop_async
-    from unity.conversation_manager.domains import managers_utils
-    from unity.actor.simulated import SimulatedActor
+    from unify.settings import SETTINGS
+    from unify.conversation_manager.event_broker import reset_event_broker
+    from unify.conversation_manager import start_async, stop_async
+    from unify.conversation_manager.domains import managers_utils
+    from unify.actor.simulated import SimulatedActor
 
     created_cms = []
 
@@ -107,7 +107,7 @@ async def demo_cm_factory():
             }
 
         # Mock the httpx client for Orchestra API call
-        with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
+        with patch("unify.demo_meta.httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
@@ -325,11 +325,11 @@ class TestDemoProspectInitialization:
         If the Orchestra API call fails, initialization should still complete
         with the boss contact remaining sparse.
         """
-        from unity.settings import SETTINGS
-        from unity.conversation_manager.event_broker import reset_event_broker
-        from unity.conversation_manager import start_async, stop_async
-        from unity.conversation_manager.domains import managers_utils
-        from unity.actor.simulated import SimulatedActor
+        from unify.settings import SETTINGS
+        from unify.conversation_manager.event_broker import reset_event_broker
+        from unify.conversation_manager import start_async, stop_async
+        from unify.conversation_manager.domains import managers_utils
+        from unify.actor.simulated import SimulatedActor
 
         # Save and set demo mode
         original_demo_mode = SETTINGS.DEMO_MODE
@@ -357,7 +357,7 @@ class TestDemoProspectInitialization:
             mock_response = MagicMock()
             mock_response.status_code = 500
 
-            with patch("unity.demo_meta.httpx.AsyncClient") as mock_client_class:
+            with patch("unify.demo_meta.httpx.AsyncClient") as mock_client_class:
                 mock_client = AsyncMock()
                 mock_client.__aenter__.return_value = mock_client
                 mock_client.__aexit__.return_value = None

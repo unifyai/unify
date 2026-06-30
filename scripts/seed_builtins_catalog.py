@@ -433,7 +433,7 @@ def _seed_sync_result(
     result: dict[str, Any],
     sync_payload: dict[str, Any],
 ) -> bool:
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from unify.integrations.builtins_catalog import seed_builtin_integrations
 
     if result.get("status") == "failed":
         raise RuntimeError(
@@ -912,10 +912,10 @@ def _sync_integration_bootstrap_manifest(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
-    from unity.common.builtins import builtins_project
-    from unity.function_manager.builtins_catalog import seed_builtin_primitives
-    from unity.guidance_manager.builtins_catalog import seed_builtin_guidance
-    from unity.integrations.builtins_catalog import seed_builtin_integrations
+    from unify.common.builtins import builtins_project
+    from unify.function_manager.builtins_catalog import seed_builtin_primitives
+    from unify.guidance_manager.builtins_catalog import seed_builtin_guidance
+    from unify.integrations.builtins_catalog import seed_builtin_integrations
 
     project = builtins_project()
     logging.info(

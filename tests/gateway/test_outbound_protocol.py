@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from unity.gateway.outbound import OutboundTransport
+from unify.gateway.outbound import OutboundTransport
 
 
 class _CapturingOutbound:
@@ -126,6 +126,6 @@ def test_publish_shape_pins_three_call_sites_in_comms_utils() -> None:
 
 
 def test_module_exports_match_documented_surface() -> None:
-    import unity.gateway.outbound as outbound_mod
+    import unify.gateway.outbound as outbound_mod
 
     assert hasattr(outbound_mod, "OutboundTransport")

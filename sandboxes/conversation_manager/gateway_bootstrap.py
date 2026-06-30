@@ -1,7 +1,7 @@
 """
 Local gateway auto-start helper for the ConversationManager sandbox.
 
-Starts a local ``unity.gateway`` process on port 8787 for:
+Starts a local ``unify.gateway`` process on port 8787 for:
 - UniLLM proxy traffic used by agent-service / Magnitude computer use
 - Outbound SMS/calls when Twilio credentials are also configured
 
@@ -85,7 +85,7 @@ def try_start_gateway_direct(
     timeout_s: float = _GATEWAY_STARTUP_TIMEOUT_S,
 ) -> GatewayBootstrapResult:
     """
-    Start a local unity.gateway subprocess on port 8787.
+    Start a local unify.gateway subprocess on port 8787.
 
     The gateway exposes ``/unillm`` for agent-service computer use and, when
     Twilio credentials are configured, outbound SMS/call routes as well.
@@ -142,7 +142,7 @@ def try_start_gateway_direct(
     try:
         log_file = open(log_path, "a")  # noqa: WPS515 – intentional open for subprocess
         process = subprocess.Popen(
-            [python, "-m", "unity.gateway", "serve"],
+            [python, "-m", "unify.gateway", "serve"],
             cwd=str(repo_root),
             env=gateway_env,
             stdout=log_file,

@@ -1,6 +1,6 @@
 import pytest
 
-from unity.contact_manager.contact_manager import ContactManager
+from unify.contact_manager.contact_manager import ContactManager
 from tests.helpers import _handle_project
 
 
@@ -60,7 +60,7 @@ def test_all_columns_default():
     cm = ContactManager()
 
     # Create a custom column to be included in the composite expression
-    from unity.knowledge_manager.types import ColumnType
+    from unify.knowledge_manager.types import ColumnType
 
     cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
 
@@ -104,7 +104,7 @@ def test_mean_cosine_ranking():
     cm = ContactManager()
 
     # Ensure custom column exists
-    from unity.knowledge_manager.types import ColumnType
+    from unify.knowledge_manager.types import ColumnType
 
     cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
 

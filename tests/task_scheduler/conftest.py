@@ -10,9 +10,9 @@ import pytest
 import pytest_asyncio
 import unisdk
 
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.manager_registry import ManagerRegistry
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import (
     is_task_scenario_seeded,
     rebuild_task_id_mapping,

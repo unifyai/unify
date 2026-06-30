@@ -11,17 +11,17 @@ from unittest.mock import patch
 import pytest
 from pydantic import BaseModel, Field
 
-from unity.common.reasoning import query_llm
-from unity.common.single_shot import single_shot_tool_decision
-from unity.common.llm_client import new_llm_client
-from unity.conversation_manager.cm_types.mode import Mode
-from unity.conversation_manager.domains.brain import build_brain_spec
-from unity.coordinator_manager.coordinator_manager import (
+from unify.common.reasoning import query_llm
+from unify.common.single_shot import single_shot_tool_decision
+from unify.common.llm_client import new_llm_client
+from unify.conversation_manager.cm_types.mode import Mode
+from unify.conversation_manager.domains.brain import build_brain_spec
+from unify.coordinator_manager.coordinator_manager import (
     COORDINATOR_TOOL_METHOD_NAMES,
 )
-from unity.coordinator_manager.coordinator_manager import CoordinatorManager
-from unity.function_manager.primitives.registry import get_registry
-from unity.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
+from unify.coordinator_manager.coordinator_manager import CoordinatorManager
+from unify.function_manager.primitives.registry import get_registry
+from unify.session_details import SESSION_DETAILS, AssistantDetails, TeamSummary
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -1540,7 +1540,7 @@ def _build_brain_spec(scenario: CoordinatorScenario):
     snapshot_state = SimpleNamespace(full_render=_render_state(scenario))
     cm = _fake_conversation_manager(scenario)
     with patch(
-        "unity.coordinator_manager.coordinator_manager."
+        "unify.coordinator_manager.coordinator_manager."
         "CoordinatorManager.get_org_members",
         return_value=list(_AUTHORIZED_HUMANS),
     ):

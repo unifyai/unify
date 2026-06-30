@@ -628,7 +628,7 @@ class LiveTaskEnvironment:
         return self._instance
 
     def get_tools(self) -> dict[str, Any]:
-        from unity.actor.environments.base import ToolMetadata
+        from unify.actor.environments.base import ToolMetadata
 
         return {
             "primitives.tasks.update": ToolMetadata(
@@ -775,8 +775,8 @@ async def run_unity_live(
     *,
     timeout: float = 900.0,
 ) -> LiveBenchmarkResult:
-    from unity.actor.code_act_actor import CodeActActor
-    from unity.events import event_bus as unity_event_bus
+    from unify.actor.code_act_actor import CodeActActor
+    from unify.events import event_bus as unity_event_bus
 
     with contextlib.suppress(RuntimeError):
         unity_event_bus._initialize_event_bus()

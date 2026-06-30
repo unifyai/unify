@@ -950,7 +950,7 @@ jobs:
     # the gate so any matrix entry under tests/file_manager/ is covered.
     #
     # Caching ~/.cache/huggingface (the original $HOME location) makes
-    # unity/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
+    # unify/tests/conftest.py:pytest_configure() honor its HF_HOME-preserve
     # branch (which only fires when ~/.cache/huggingface exists on the
     # original HOME), pointing the test process at the warm cache instead
     # of a fresh /tmp dir. After the first successful CI run populates the

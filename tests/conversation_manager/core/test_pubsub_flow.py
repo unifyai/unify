@@ -41,7 +41,7 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -122,7 +122,7 @@ class TestMessageAcknowledgment:
     @pytest.mark.asyncio
     async def test_sms_message_acknowledged(self, event_broker, boss_contact):
         """Test that SMS messages are acknowledged after processing."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -145,7 +145,7 @@ class TestMessageAcknowledgment:
     @pytest.mark.asyncio
     async def test_email_message_acknowledged(self, event_broker, boss_contact):
         """Test that email messages are acknowledged."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -179,7 +179,7 @@ class TestMessageAcknowledgment:
         Call events require the publish to complete before ack, because
         losing a call event is more critical than losing a text message.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -205,7 +205,7 @@ class TestMessageAcknowledgment:
 
         We don't want malformed messages to be redelivered forever.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -226,7 +226,7 @@ class TestMessageAcknowledgment:
 
         Unknown threads should be logged but not cause exceptions.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -256,7 +256,7 @@ class TestThreadSafePublishing:
 
         This simulates the real GCP PubSub callback scenario.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -294,7 +294,7 @@ class TestThreadSafePublishing:
 
         In production, multiple PubSub callbacks can run concurrently.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -364,8 +364,8 @@ class TestStartupInboundRace:
 
         This is the mechanism that enables contact lookup before ContactManager init.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.events import BackupContactsEvent, Event
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.events import BackupContactsEvent, Event
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -421,15 +421,15 @@ class TestSubscriptionIdGeneration:
     @pytest.mark.asyncio
     async def test_production_subscription_id(self):
         """Test production subscription ID format."""
-        from unity.conversation_manager.comms_manager import _get_subscription_id
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.comms_manager import _get_subscription_id
+        from unify.session_details import SESSION_DETAILS
 
         original_id = SESSION_DETAILS.assistant.agent_id
         SESSION_DETAILS.assistant.agent_id = 42
 
         try:
             with patch(
-                "unity.conversation_manager.comms_manager.SETTINGS",
+                "unify.conversation_manager.comms_manager.SETTINGS",
             ) as mock_settings:
                 mock_settings.DEPLOY_ENV = "production"
                 mock_settings.ENV_SUFFIX = ""
@@ -442,15 +442,15 @@ class TestSubscriptionIdGeneration:
     @pytest.mark.asyncio
     async def test_staging_subscription_id(self):
         """Test staging subscription ID format."""
-        from unity.conversation_manager.comms_manager import _get_subscription_id
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.comms_manager import _get_subscription_id
+        from unify.session_details import SESSION_DETAILS
 
         original_id = SESSION_DETAILS.assistant.agent_id
         SESSION_DETAILS.assistant.agent_id = 25
 
         try:
             with patch(
-                "unity.conversation_manager.comms_manager.SETTINGS",
+                "unify.conversation_manager.comms_manager.SETTINGS",
             ) as mock_settings:
                 mock_settings.DEPLOY_ENV = "staging"
                 mock_settings.ENV_SUFFIX = "-staging"
@@ -481,7 +481,7 @@ class TestEventPublishChannels:
         boss_contact,
     ):
         """Test that SMS publishes to app:comms:msg_message channel."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -523,7 +523,7 @@ class TestEventPublishChannels:
         boss_contact,
     ):
         """Test that email publishes to app:comms:email_message channel."""
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -571,7 +571,7 @@ class TestEventPublishChannels:
 
         This was broken in Ved's bug (6237411a) - wrong channel name after refactor.
         """
-        from unity.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.comms_manager import CommsManager
 
         cm = CommsManager(event_broker)
         cm.loop = asyncio.get_event_loop()
@@ -621,9 +621,9 @@ class TestPingMechanismForIdleContainers:
     @pytest.mark.asyncio
     async def test_ping_publishes_to_correct_channel(self, event_broker):
         """Test that pings are published to app:comms:ping channel."""
-        from unity.conversation_manager.comms_manager import CommsManager
-        from unity.conversation_manager.events import Ping, Event
-        from unity.session_details import SESSION_DETAILS
+        from unify.conversation_manager.comms_manager import CommsManager
+        from unify.conversation_manager.events import Ping, Event
+        from unify.session_details import SESSION_DETAILS
 
         original_id = SESSION_DETAILS.assistant.agent_id
         SESSION_DETAILS.assistant.agent_id = None
@@ -663,13 +663,13 @@ class TestPingMechanismForIdleContainers:
     @pytest.mark.asyncio
     async def test_ping_has_keepalive_kind(self, event_broker):
         """Test that ping events have kind='keepalive'."""
-        from unity.conversation_manager.events import Ping
+        from unify.conversation_manager.events import Ping
 
         ping = Ping(kind="keepalive")
         assert ping.kind == "keepalive"
 
         # Verify serialization/deserialization
-        from unity.conversation_manager.events import Event
+        from unify.conversation_manager.events import Event
 
         restored = Event.from_json(ping.to_json())
         assert isinstance(restored, Ping)
@@ -701,8 +701,8 @@ class TestDemoIdPropagation:
         The EventHandler for StartupEvent should set both settings before
         managers are initialized, so demo-specific logic takes effect.
         """
-        from unity.conversation_manager.events import StartupEvent
-        from unity.settings import SETTINGS
+        from unify.conversation_manager.events import StartupEvent
+        from unify.settings import SETTINGS
 
         # Ensure demo mode starts as False
         original_demo_mode = SETTINGS.DEMO_MODE

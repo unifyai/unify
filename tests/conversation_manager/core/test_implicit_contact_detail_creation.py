@@ -19,12 +19,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.notifications import NotificationBar
+from unify.conversation_manager.domains.contact_index import ContactIndex
+from unify.conversation_manager.domains.notifications import NotificationBar
 
 # =============================================================================
 # Fixtures
@@ -81,7 +81,7 @@ def mock_cm():
 def brain_action_tools(mock_cm):
     """ConversationManagerBrainActionTools with mocked event broker."""
     with patch(
-        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -358,7 +358,7 @@ class TestSendEmailImplicitEmailAddress:
         _setup_mock_contacts(mock_cm.contact_index, [contact])
 
         with patch(
-            "unity.comms.primitives.comms_utils.send_email_via_address",
+            "unify.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-123"}
 
@@ -393,7 +393,7 @@ class TestSendEmailImplicitEmailAddress:
         _setup_mock_contacts(mock_cm.contact_index, [contact])
 
         with patch(
-            "unity.comms.primitives.comms_utils.send_email_via_address",
+            "unify.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-123"}
 
@@ -448,7 +448,7 @@ class TestSendEmailImplicitEmailAddress:
         _setup_mock_contacts(mock_cm.contact_index, [contact])
 
         with patch(
-            "unity.comms.primitives.comms_utils.send_email_via_address",
+            "unify.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-123"}
 
@@ -489,7 +489,7 @@ class TestSendEmailImplicitEmailAddress:
         _setup_mock_contacts(mock_cm.contact_index, contacts)
 
         with patch(
-            "unity.comms.primitives.comms_utils.send_email_via_address",
+            "unify.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-123"}
 
@@ -587,7 +587,7 @@ class TestSendEmailImplicitEmailAddress:
         _setup_mock_contacts(mock_cm.contact_index, contacts)
 
         with patch(
-            "unity.comms.primitives.comms_utils.send_email_via_address",
+            "unify.comms.primitives.comms_utils.send_email_via_address",
         ) as mock_send:
             mock_send.return_value = {"success": True, "id": "sent-123"}
 

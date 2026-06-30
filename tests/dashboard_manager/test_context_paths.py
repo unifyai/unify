@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from unity.dashboard_manager.dashboard_manager import DashboardManager
-from unity.common.context_registry import ContextRegistry
+from unify.dashboard_manager.dashboard_manager import DashboardManager
+from unify.common.context_registry import ContextRegistry
 
 
 def test_dashboard_manager_uses_registered_dashboard_contexts():

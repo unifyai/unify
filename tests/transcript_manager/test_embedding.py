@@ -1,11 +1,11 @@
 import pytest
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import VALID_MEDIA
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
+from unify.conversation_manager.cm_types import VALID_MEDIA
 from tests.helpers import _handle_project
 import random
-from unity.contact_manager.contact_manager import ContactManager
+from unify.contact_manager.contact_manager import ContactManager
 
 
 @pytest.mark.requires_real_unify

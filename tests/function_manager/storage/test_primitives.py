@@ -15,14 +15,14 @@ import asyncio
 
 import pytest
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import (
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import (
     Primitives,
     _AsyncPrimitiveWrapper,
     _create_async_wrapper,
     get_registry,
 )
-from unity.common.context_registry import ContextRegistry
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -69,8 +69,8 @@ def function_manager_factory():
 
 def test_collect_primitives_returns_expected_methods():
     """Registry should return metadata for all auto-discovered methods."""
-    from unity.function_manager.primitives import PrimitiveScope
-    from unity.function_manager.primitives.registry import get_primitive_sources
+    from unify.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives.registry import get_primitive_sources
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
@@ -104,7 +104,7 @@ def test_collect_primitives_returns_expected_methods():
 
 def test_collect_primitives_has_required_fields():
     """Each primitive should have the required metadata fields including function_id."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
@@ -125,7 +125,7 @@ def test_collect_primitives_has_required_fields():
 
 def test_collect_primitives_has_stable_ids():
     """Primitive function_ids should be stable hash-based IDs."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
@@ -150,7 +150,7 @@ def test_collect_primitives_has_stable_ids():
 
 def test_collect_primitives_has_docstrings():
     """Primitives should have non-empty docstrings (from base class)."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
@@ -167,7 +167,7 @@ def test_collect_primitives_has_docstrings():
 
 def test_compute_primitives_hash_is_stable():
     """Hash should be deterministic for the same primitives."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.all_managers()
@@ -181,7 +181,7 @@ def test_compute_primitives_hash_is_stable():
 
 def test_compute_primitives_hash_changes_for_different_scopes():
     """Hash should be different for different scopes."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope_all = PrimitiveScope.all_managers()
@@ -195,7 +195,7 @@ def test_compute_primitives_hash_changes_for_different_scopes():
 
 def test_compute_primitives_hash_changes_on_modification():
     """Hash should change when primitives are modified."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.single("files")
@@ -219,7 +219,7 @@ def test_compute_primitives_hash_changes_on_modification():
 
 def test_collect_primitives_includes_file_manager():
     """FileManager primitives should be collected from auto-discovery."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     registry = get_registry()
     scope = PrimitiveScope.single("files")
@@ -253,7 +253,7 @@ def test_list_primitives_reads_builtins_catalog(function_manager_factory):
 
 def test_seed_builtin_primitives_is_idempotent():
     """Re-seeding the already-converged catalogue should be a no-op."""
-    from unity.function_manager.builtins_catalog import seed_builtin_primitives
+    from unify.function_manager.builtins_catalog import seed_builtin_primitives
 
     # The session-start seeding already converged the catalogue, so this
     # run must detect matching hashes and write nothing.
@@ -279,7 +279,7 @@ def test_list_primitives_returns_primitive_metadata(function_manager_factory):
 @_handle_project
 def test_primitives_have_stable_ids_in_catalog(function_manager_factory):
     """Catalogue rows should expose the same stable IDs as the registry."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     function_manager = function_manager_factory()
 
@@ -418,7 +418,7 @@ def test_manager_spec_has_excluded_methods():
 
 def test_common_excluded_methods():
     """Common excluded methods should include lifecycle and internal helpers."""
-    from unity.function_manager.primitives.registry import _COMMON_EXCLUDED_METHODS
+    from unify.function_manager.primitives.registry import _COMMON_EXCLUDED_METHODS
 
     assert "clear" in _COMMON_EXCLUDED_METHODS
     assert "add_tools" in _COMMON_EXCLUDED_METHODS
@@ -442,7 +442,7 @@ def test_primitive_methods_respects_exclusions():
 
 def test_async_wrapper_auto_detects_sync_methods():
     """Wrapper should auto-detect sync methods without config."""
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     dm = ManagerRegistry.get_data_manager()
 
@@ -522,7 +522,7 @@ def test_primitives_returns_async_wrapper():
 
 def test_async_wrapper_preserves_async_methods():
     """Wrapper should preserve methods that are already async."""
-    from unity.manager_registry import ManagerRegistry
+    from unify.manager_registry import ManagerRegistry
 
     fm = ManagerRegistry.get_file_manager()
 

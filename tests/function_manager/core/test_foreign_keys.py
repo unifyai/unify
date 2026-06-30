@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import unisdk
 from tests.helpers import _handle_project
-from unity.function_manager.function_manager import FunctionManager
-from unity.guidance_manager.guidance_manager import GuidanceManager
+from unify.function_manager.function_manager import FunctionManager
+from unify.guidance_manager.guidance_manager import GuidanceManager
 
 # --------------------------------------------------------------------------- #
 #  Unit Tests: guidance_ids[*] → Guidance.guidance_id                         #

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from unity.common.context_registry import ContextRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.session_details import SESSION_DETAILS
 from tests.dashboard_manager.helpers import (
     active_read_root,
     context_titles,

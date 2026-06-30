@@ -2,7 +2,7 @@
 """
 Minimal test subprocess for IPC integration testing.
 
-This script uses the REAL IPC client code from unity.conversation_manager.domains.ipc_socket
+This script uses the REAL IPC client code from unify.conversation_manager.domains.ipc_socket
 to test bidirectional communication with the parent process.
 
 It mimics what the real voice agent (call.py) does:
@@ -23,10 +23,10 @@ import os
 import sys
 from pathlib import Path
 
-# Add the project root to path so we can import unity modules
+# Add the project root to path so we can import unify modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from unity.conversation_manager.domains.ipc_socket import (
+from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketClient,
     CM_EVENT_SOCKET_ENV,
 )

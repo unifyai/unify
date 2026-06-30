@@ -43,7 +43,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     UnifyMeetReceived,
     UnifyMeetStarted,
     UnifyMeetEnded,
@@ -51,7 +51,7 @@ from unity.conversation_manager.events import (
     OutboundUnifyMeetUtterance,
     FastBrainNotification,
 )
-from unity.conversation_manager.cm_types import Medium, Mode
+from unify.conversation_manager.cm_types import Medium, Mode
 
 from tests.conversation_manager.conftest import TEST_CONTACTS
 
@@ -76,7 +76,7 @@ def alice_contact():
 @pytest_asyncio.fixture
 async def event_broker():
     """Real in-memory event broker."""
-    from unity.conversation_manager.in_memory_event_broker import (
+    from unify.conversation_manager.in_memory_event_broker import (
         create_in_memory_event_broker,
         reset_in_memory_event_broker,
     )
@@ -806,7 +806,7 @@ class TestRealLiveKitUnifyMeet:
 
         This exercises the actual call.py script with LiveKit.
         """
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
@@ -951,7 +951,7 @@ class TestRealLiveKitUnifyMeet:
         """
         Test that call guidance flows correctly via IPC during Unify Meet.
         """
-        from unity.conversation_manager.domains.ipc_socket import (
+        from unify.conversation_manager.domains.ipc_socket import (
             CallEventSocketServer,
             CM_EVENT_SOCKET_ENV,
         )
@@ -1008,7 +1008,7 @@ class TestRealLiveKitUnifyMeet:
 
             # Send Unify Meet specific guidance
             events_from_subprocess.clear()
-            from unity.conversation_manager.events import FastBrainNotification
+            from unify.conversation_manager.events import FastBrainNotification
 
             guidance_message = "The boss mentioned they prefer morning meetings"
 

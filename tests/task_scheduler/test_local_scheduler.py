@@ -12,17 +12,17 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from unity.task_scheduler.local_scheduler import (
+from unify.task_scheduler.local_scheduler import (
     ActivationMaterializer,
     LocalActivationScheduler,
     NoopMaterializer,
     build_materializer,
 )
-from unity.task_scheduler.local_scheduler import scheduler as scheduler_module
-from unity.task_scheduler.local_scheduler.scheduler import (
+from unify.task_scheduler.local_scheduler import scheduler as scheduler_module
+from unify.task_scheduler.local_scheduler.scheduler import (
     LocalActivationScheduler as _LAS,
 )
-from unity.task_scheduler.machine_state import TaskActivationSnapshot
+from unify.task_scheduler.machine_state import TaskActivationSnapshot
 
 
 def _make_snapshot(
@@ -79,7 +79,7 @@ class TestLocalSchedulerSettings:
                 continue
             monkeypatch.setenv(name, value)
 
-        from unity.task_scheduler.settings import _derive_local_scheduler_default
+        from unify.task_scheduler.settings import _derive_local_scheduler_default
 
         return _derive_local_scheduler_default()
 
@@ -173,7 +173,7 @@ class TestBuildMaterializer:
     """build_materializer routes by SETTINGS.task.LOCAL_SCHEDULER_ENABLED."""
 
     def test_local_returns_local_scheduler(self, monkeypatch):
-        from unity.settings import SETTINGS
+        from unify.settings import SETTINGS
 
         monkeypatch.setattr(SETTINGS.task, "LOCAL_SCHEDULER_ENABLED", True)
         monkeypatch.setattr(
@@ -190,7 +190,7 @@ class TestBuildMaterializer:
         assert materializer._broker is cm.event_broker
 
     def test_hosted_returns_noop(self, monkeypatch):
-        from unity.settings import SETTINGS
+        from unify.settings import SETTINGS
 
         monkeypatch.setattr(SETTINGS.task, "LOCAL_SCHEDULER_ENABLED", False)
 
@@ -337,7 +337,7 @@ def _patch_list_scheduled(
         calls.append(assistant_id)
         return list(activations)
 
-    from unity.task_scheduler import machine_state
+    from unify.task_scheduler import machine_state
 
     monkeypatch.setattr(
         machine_state,
@@ -489,7 +489,7 @@ class TestReconcile:
             "42",
         )
 
-        from unity.task_scheduler import machine_state
+        from unify.task_scheduler import machine_state
 
         def _boom(*, assistant_id):
             raise RuntimeError("simulated Unify outage")
@@ -535,7 +535,7 @@ class TestTaskDueFromSnapshot:
     """`_task_due_from_snapshot` matches the field contract Communication uses."""
 
     def test_returns_none_when_required_fields_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -553,7 +553,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_none_when_revision_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -570,7 +570,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_none_when_due_missing(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -587,7 +587,7 @@ class TestTaskDueFromSnapshot:
         assert _task_due_from_snapshot(bad) is None
 
     def test_returns_taskdue_with_expected_fields(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -624,7 +624,7 @@ class TestTaskDueFromSnapshot:
         assert "Weekly Status" in event.reason
 
     def test_recurring_hint_set_when_repeat_present(self):
-        from unity.task_scheduler.local_scheduler.scheduler import (
+        from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
 
@@ -849,7 +849,7 @@ class TestPollLoop:
         # Mutable list the patched list_scheduled_activations reads from.
         live: list[TaskActivationSnapshot] = []
 
-        from unity.task_scheduler import machine_state
+        from unify.task_scheduler import machine_state
 
         def _fake(*, assistant_id):
             return list(live)

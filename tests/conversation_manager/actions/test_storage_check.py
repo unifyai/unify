@@ -25,7 +25,7 @@ from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     run_cm_until_wait,
 )
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     SMSReceived,
     SMSSent,
 )
@@ -105,7 +105,7 @@ async def test_storage_check_result_relay(initialized_cm):
         run_llm=False,
     )
 
-    from unity.common.prompt_helpers import now as prompt_now
+    from unify.common.prompt_helpers import now as prompt_now
 
     handle_id = 0
 

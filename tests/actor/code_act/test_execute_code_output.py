@@ -20,11 +20,11 @@ from typing import Any, AsyncIterator
 import pytest
 import pytest_asyncio
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution import ExecutionResult, parts_to_text
-from unity.actor.environments import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives
-from unity.manager_registry import ManagerRegistry
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.execution import ExecutionResult, parts_to_text
+from unify.actor.environments import StateManagerEnvironment
+from unify.function_manager.primitives import Primitives
+from unify.manager_registry import ManagerRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -34,7 +34,7 @@ from unity.manager_registry import ManagerRegistry
 @pytest.fixture
 def configure_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configure all managers to use simulated implementations."""
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     for impl_attr in [
         "contact",
@@ -72,7 +72,7 @@ async def actor_with_primitives(
     configure_simulated_managers,
 ) -> AsyncIterator[tuple[CodeActActor, Primitives]]:
     """Create a CodeActActor with primitives environment for direct execute_code testing."""
-    from unity.function_manager.primitives import PrimitiveScope
+    from unify.function_manager.primitives import PrimitiveScope
 
     scope = PrimitiveScope(
         scoped_managers=frozenset({"contacts", "tasks", "transcripts", "knowledge"}),
@@ -209,7 +209,7 @@ async def test_execute_code_can_branch_on_query_llm_structured_output(
         assert "Classify" in prompt
         return response_format(category="billing", needs_reply=True)
 
-    import unity.common.reasoning as reasoning_module
+    import unify.common.reasoning as reasoning_module
 
     monkeypatch.setattr(reasoning_module, "query_llm", fake_query_llm)
 

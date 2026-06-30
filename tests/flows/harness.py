@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 
 # Flow tests run in parallel via parallel_run.sh; disable the shared LLM cache
-# before any unity/unillm imports so completions cannot bleed across sessions.
+# before any unify/unillm imports so completions cannot bleed across sessions.
 # Mirrors conftest: a developer who opts into a per-process cache by exporting
 # UNILLM_CACHE_DIR keeps their setting.
 if not os.environ.get("UNILLM_CACHE_DIR"):
@@ -28,21 +28,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.conversation_manager.comms_manager import CommsManager
-from unity.conversation_manager.domains import managers_utils
-from unity.conversation_manager.domains.comms_utils import set_outbound_transport
-from unity.conversation_manager.event_broker import get_event_broker, reset_event_broker
-from unity.conversation_manager.events import Event, UnifyMessageSent
-from unity.conversation_manager.main import run_conversation_manager
-from unity.gateway.factory import (
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.conversation_manager.comms_manager import CommsManager
+from unify.conversation_manager.domains import managers_utils
+from unify.conversation_manager.domains.comms_utils import set_outbound_transport
+from unify.conversation_manager.event_broker import get_event_broker, reset_event_broker
+from unify.conversation_manager.events import Event, UnifyMessageSent
+from unify.conversation_manager.main import run_conversation_manager
+from unify.gateway.factory import (
     create_ingress_transport_factory,
     create_outbound_transport,
 )
-from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 from sandboxes.conversation_manager.actor_factory import ActorFactory
 from sandboxes.conversation_manager.event_publisher import (
     EventPublisher,
@@ -339,7 +339,7 @@ class FlowHarness:
         a LiveKit server.
         """
 
-        from unity.conversation_manager.events import UnifyMeetStarted
+        from unify.conversation_manager.events import UnifyMeetStarted
 
         self._bind_flow_context()
         self.reset_turn_state()
@@ -350,7 +350,7 @@ class FlowHarness:
     async def speak_in_meet(self, text: str) -> None:
         """Deliver a spoken user utterance into the active meet."""
 
-        from unity.conversation_manager.events import InboundUnifyMeetUtterance
+        from unify.conversation_manager.events import InboundUnifyMeetUtterance
 
         self._reply_baseline = len(self._reply_events)
         await self.publisher.publish_event(
@@ -360,7 +360,7 @@ class FlowHarness:
     async def end_meet(self) -> None:
         """End the active meet and let lifecycle teardown run."""
 
-        from unity.conversation_manager.events import UnifyMeetEnded
+        from unify.conversation_manager.events import UnifyMeetEnded
 
         await self.publisher.publish_event(
             UnifyMeetEnded(contact=self._boss_contact()),
@@ -524,8 +524,8 @@ class FlowHarness:
             return
         try:
             import unisdk
-            from unity.common.context_registry import ContextRegistry
-            from unity.knowledge_manager.knowledge_manager import KNOWLEDGE_TABLE
+            from unify.common.context_registry import ContextRegistry
+            from unify.knowledge_manager.knowledge_manager import KNOWLEDGE_TABLE
 
             try:
                 unisdk.set_context(self.context_path, relative=False, skip_create=True)
@@ -596,7 +596,7 @@ async def build_flow_harness(
     """Start a real CM + CodeAct actor for flow tests."""
 
     import unisdk
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     await _reset_operations_queue()
 
@@ -605,8 +605,8 @@ async def build_flow_harness(
 
     unisdk.activate(project_name, overwrite=False)
     try:
-        from unity.common.context_registry import ContextRegistry
-        from unity.events.event_bus import EVENT_BUS
+        from unify.common.context_registry import ContextRegistry
+        from unify.events.event_bus import EVENT_BUS
 
         ContextRegistry.clear()
         EVENT_BUS.clear(delete_contexts=False)

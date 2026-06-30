@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.conversation_manager import (
+from unify.conversation_manager.conversation_manager import (
     ConversationManager,
     _append_context_to_state_message,
 )
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     StoreChatHistory,
     UnifyMessageReceived,
 )
@@ -228,7 +228,7 @@ class TestStoreChatHistory:
             assert channel == "app:comms:chat_history"
 
             # Parse the event and check it contains last 2 messages
-            from unity.conversation_manager.events import Event
+            from unify.conversation_manager.events import Event
 
             event = Event.from_json(message)
             assert isinstance(event, StoreChatHistory)

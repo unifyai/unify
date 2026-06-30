@@ -41,9 +41,9 @@ from unittest.mock import AsyncMock, MagicMock
 import litellm
 import pytest
 
-from unity.conversation_manager.conversation_manager import ConversationManager
-from unity.conversation_manager.cm_types import Mode
-from unity.conversation_manager.events import Event, FastBrainNotification
+from unify.conversation_manager.conversation_manager import ConversationManager
+from unify.conversation_manager.cm_types import Mode
+from unify.conversation_manager.events import Event, FastBrainNotification
 
 BOSS_CONTACT = {
     "contact_id": 1,

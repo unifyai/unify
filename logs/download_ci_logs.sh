@@ -7,10 +7,10 @@
 #
 # Examples:
 #   # From artifact URL (copy from GitHub Actions UI)
-#   ./logs/download_ci_logs.sh "https://github.com/unifyai/unity/actions/runs/20882540406/artifacts/5086119156"
+#   ./logs/download_ci_logs.sh "https://github.com/unifyai/unify/actions/runs/20882540406/artifacts/5086119156"
 #
 #   # From run URL + pattern
-#   ./logs/download_ci_logs.sh "https://github.com/unifyai/unity/actions/runs/20882540406" --pattern "function_manager"
+#   ./logs/download_ci_logs.sh "https://github.com/unifyai/unify/actions/runs/20882540406" --pattern "function_manager"
 #
 #   # From run ID + pattern
 #   ./logs/download_ci_logs.sh 20882540406 --pattern "function_manager"
@@ -22,7 +22,7 @@
 #   --pattern <pattern>   Filter artifacts by name pattern (case-insensitive substring match)
 #   --list                List available artifacts without downloading
 #   --force               Re-download even if artifact already exists locally
-#   --repo <owner/repo>   GitHub repository (default: unifyai/unity)
+#   --repo <owner/repo>   GitHub repository (default: unifyai/unify)
 #   --help                Show this help message
 #
 
@@ -34,7 +34,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI_LOGS_DIR="${SCRIPT_DIR}/ci"
-DEFAULT_REPO="unifyai/unity"
+DEFAULT_REPO="unifyai/unify"
 MAX_WAIT_SECONDS=600  # 10 minutes max wait for artifacts
 POLL_INTERVAL=10      # seconds between status checks
 

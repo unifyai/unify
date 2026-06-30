@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 import pytest
 
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common._async_tool.time_context import (
+from unify.common.llm_client import new_llm_client
+from unify.common.async_tool_loop import start_async_tool_loop
+from unify.common._async_tool.time_context import (
     format_offset,
     format_duration,
     TimeContext,
@@ -44,7 +44,7 @@ def simulated_time(monkeypatch):
         return float(value)
 
     monkeypatch.setattr(
-        "unity.common._async_tool.time_context.perf_counter",
+        "unify.common._async_tool.time_context.perf_counter",
         _simulated_perf_counter,
     )
 

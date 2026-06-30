@@ -5,7 +5,7 @@ import sys
 import subprocess
 import textwrap
 
-from unity.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
+from unify.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
 from tests.assertion_helpers import first_diff_block
 from tests.helpers import _handle_project
 
@@ -30,7 +30,7 @@ def test_all_ask_tools_have_sufficient_docstrings(file_manager):
 
 
 def test_file_write_tools_expose_destination_guidance():
-    from unity.file_manager.managers.base import BaseFileManager
+    from unify.file_manager.managers.base import BaseFileManager
 
     for method_name in (
         "ingest_files",
@@ -71,10 +71,10 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
 		test_ctx = os.environ.get("_TEST_CONTEXT")
 		if test_ctx:
 			unisdk.set_context(test_ctx, relative=False)
-		from unity.common.llm_helpers import method_to_schema
+		from unify.common.llm_helpers import method_to_schema
 		def _unwrap_callable(tool):
 			return getattr(tool, "fn", tool)
-		from unity.file_manager.managers.local import LocalFileManager as FileManager
+		from unify.file_manager.managers.local import LocalFileManager as FileManager
 		fm = FileManager()
 		tools = fm.get_tools("{method}")
 		if not tools:

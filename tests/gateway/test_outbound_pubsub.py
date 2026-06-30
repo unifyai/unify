@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.gateway.outbound import OutboundTransport
-from unity.gateway.outbound_pubsub import PubSubOutboundTransport
+from unify.gateway.outbound import OutboundTransport
+from unify.gateway.outbound_pubsub import PubSubOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers
@@ -38,7 +38,7 @@ def _install_pubsub_stub(
     pubsub_stub = MagicMock(name="pubsub_v1")
     pubsub_stub.PublisherClient.return_value = _fake_publisher_client(message_id)
     monkeypatch.setattr(
-        "unity.gateway.outbound_pubsub.pubsub_v1",
+        "unify.gateway.outbound_pubsub.pubsub_v1",
         pubsub_stub,
     )
     return pubsub_stub
@@ -225,7 +225,7 @@ async def test_aclose_before_publish_is_a_noop(
 def test_publish_without_pubsub_v1_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("unity.gateway.outbound_pubsub.pubsub_v1", None)
+    monkeypatch.setattr("unify.gateway.outbound_pubsub.pubsub_v1", None)
     transport = PubSubOutboundTransport(project_id="p")
     with pytest.raises(RuntimeError, match="google-cloud-pubsub"):
         transport.publish("topic", b"data", thread="msg")

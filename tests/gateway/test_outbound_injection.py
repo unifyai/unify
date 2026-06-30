@@ -3,7 +3,7 @@
 Phase A.bis.7.4 lands ``set_outbound_transport`` /
 ``get_outbound_transport`` + the shared
 ``_publish_to_assistant_topic`` helper in
-``unity.conversation_manager.domains.comms_utils``, and refactors the
+``unify.conversation_manager.domains.comms_utils``, and refactors the
 three publish helpers to route through it. This test exercises both
 arms:
 
@@ -28,8 +28,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains import comms_utils
-from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unify.conversation_manager.domains import comms_utils
+from unify.gateway.outbound_inmemory import InMemoryOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers

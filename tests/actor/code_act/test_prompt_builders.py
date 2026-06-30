@@ -15,8 +15,8 @@ from typing import Any, Mapping
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.prompt_builders import build_code_act_prompt
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.prompt_builders import build_code_act_prompt
 
 
 class _DummyEnv:
@@ -45,10 +45,10 @@ class _DummyToolEnv(_DummyEnv):
 
 def _real_envs_mixed() -> Mapping[str, Any]:
     """Real environments that produce self-contained prompt context."""
-    from unity.function_manager.primitives import ComputerPrimitives
-    from unity.actor.environments.computer import ComputerEnvironment
-    from unity.actor.environments.state_managers import StateManagerEnvironment
-    from unity.actor.environments.base import _CompositeEnvironment
+    from unify.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
+    from unify.actor.environments.state_managers import StateManagerEnvironment
+    from unify.actor.environments.base import _CompositeEnvironment
 
     cp = ComputerPrimitives(computer_mode="mock")
     composite = _CompositeEnvironment(
@@ -172,8 +172,8 @@ def test_code_act_prompt_teaches_refresh_token_oauth_helper():
 
 @pytest.mark.timeout(30)
 def test_code_act_prompt_includes_comms_namespace_and_docstrings():
-    from unity.actor.environments.state_managers import StateManagerEnvironment
-    from unity.function_manager.primitives import PrimitiveScope, Primitives
+    from unify.actor.environments.state_managers import StateManagerEnvironment
+    from unify.function_manager.primitives import PrimitiveScope, Primitives
 
     actor = CodeActActor()
     env = StateManagerEnvironment(
@@ -456,8 +456,8 @@ def test_custom_environment_empty_prompt_context_excluded():
 @pytest.mark.timeout(30)
 def test_computer_environment_prompt_context_from_registry():
     """ComputerEnvironment should derive prompt context from registry."""
-    from unity.function_manager.primitives import ComputerPrimitives
-    from unity.actor.environments.computer import ComputerEnvironment
+    from unify.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
 
     cp = ComputerPrimitives(computer_mode="mock")
     env = ComputerEnvironment(cp)

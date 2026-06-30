@@ -17,13 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
-from unity.conversation_manager.domains.contact_index import ContactIndex
-from unity.conversation_manager.domains.notifications import NotificationBar
-from unity.conversation_manager.cm_types.mode import Mode
-from unity.events.cost_attribution import COST_ATTRIBUTION
+from unify.conversation_manager.domains.contact_index import ContactIndex
+from unify.conversation_manager.domains.notifications import NotificationBar
+from unify.conversation_manager.cm_types.mode import Mode
+from unify.events.cost_attribution import COST_ATTRIBUTION
 
 SUPERVISOR_UID = "supervisor_uid_999"
 ALICE_UID = "alice_uid_aaa"
@@ -107,7 +107,7 @@ def mock_cm():
 @pytest.fixture
 def brain_action_tools(mock_cm):
     with patch(
-        "unity.conversation_manager.domains.brain_action_tools.get_event_broker",
+        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
         mock_broker.return_value.publish = AsyncMock()
@@ -149,7 +149,7 @@ class TestActCostAttribution:
         actor, captured = _make_fake_actor()
         mock_cm.actor = actor
 
-        with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+        with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
             _mock_session_details(mock_sd)
             await brain_action_tools.act(
                 query="find Alice's email",
@@ -168,7 +168,7 @@ class TestActCostAttribution:
         actor, captured = _make_fake_actor()
         mock_cm.actor = actor
 
-        with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+        with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
             _mock_session_details(mock_sd)
             await brain_action_tools.act(
                 query="check something",
@@ -188,7 +188,7 @@ class TestActCostAttribution:
         actor, captured = _make_fake_actor()
         mock_cm.actor = actor
 
-        with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+        with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
             _mock_session_details(mock_sd)
             await brain_action_tools.act(
                 query="look up something",
@@ -207,7 +207,7 @@ class TestActCostAttribution:
         actor, captured = _make_fake_actor()
         mock_cm.actor = actor
 
-        with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+        with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
             _mock_session_details(mock_sd, org_id=None)
             await brain_action_tools.act(
                 query="find Alice's email",
@@ -315,14 +315,14 @@ class TestSpendingWritePath:
     @pytest.mark.asyncio
     async def test_spend_uses_cost_attribution_contextvar(self):
         """_update_cumulative_spend reads COST_ATTRIBUTION and passes data_overrides."""
-        from unity.events.llm_event_hook import _update_cumulative_spend
+        from unify.events.llm_event_hook import _update_cumulative_spend
 
         token = COST_ATTRIBUTION.set([ALICE_UID])
         try:
             with (
-                patch("unity.session_details.SESSION_DETAILS") as mock_sd,
+                patch("unify.session_details.SESSION_DETAILS") as mock_sd,
                 patch(
-                    "unity.common.log_utils.atomic_upsert",
+                    "unify.common.log_utils.atomic_upsert",
                     new_callable=AsyncMock,
                 ) as mock_upsert,
             ):
@@ -339,14 +339,14 @@ class TestSpendingWritePath:
     @pytest.mark.asyncio
     async def test_spend_falls_back_to_supervisor_when_contextvar_unset(self):
         """When COST_ATTRIBUTION is None, spend is attributed to supervisor."""
-        from unity.events.llm_event_hook import _update_cumulative_spend
+        from unify.events.llm_event_hook import _update_cumulative_spend
 
         token = COST_ATTRIBUTION.set(None)
         try:
             with (
-                patch("unity.session_details.SESSION_DETAILS") as mock_sd,
+                patch("unify.session_details.SESSION_DETAILS") as mock_sd,
                 patch(
-                    "unity.common.log_utils.atomic_upsert",
+                    "unify.common.log_utils.atomic_upsert",
                     new_callable=AsyncMock,
                 ) as mock_upsert,
             ):
@@ -373,16 +373,16 @@ class TestLLMEventPayloadAttribution:
         """When COST_ATTRIBUTION is set (org member), _attributed_user_id
         should reflect the attributed user, not the supervisor."""
         from unillm import LLMEvent
-        from unity.events.llm_event_hook import _llm_event_to_eventbus
-        from unity.events.types.llm import LLMPayload
+        from unify.events.llm_event_hook import _llm_event_to_eventbus
+        from unify.events.types.llm import LLMPayload
 
         token = COST_ATTRIBUTION.set([ALICE_UID])
         try:
-            with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+            with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
                 _mock_session_details(mock_sd)
 
                 # Capture the payload by intercepting Event creation
-                with patch("unity.events.event_bus.Event") as MockEvent:
+                with patch("unify.events.event_bus.Event") as MockEvent:
                     llm_event = LLMEvent(
                         request={"model": "gpt-4o", "messages": []},
                         billed_cost=0.01,
@@ -400,15 +400,15 @@ class TestLLMEventPayloadAttribution:
         """When COST_ATTRIBUTION is None (personal account / no override),
         _attributed_user_id should fall back to SESSION_DETAILS.user.id."""
         from unillm import LLMEvent
-        from unity.events.llm_event_hook import _llm_event_to_eventbus
-        from unity.events.types.llm import LLMPayload
+        from unify.events.llm_event_hook import _llm_event_to_eventbus
+        from unify.events.types.llm import LLMPayload
 
         token = COST_ATTRIBUTION.set(None)
         try:
-            with patch("unity.session_details.SESSION_DETAILS") as mock_sd:
+            with patch("unify.session_details.SESSION_DETAILS") as mock_sd:
                 _mock_session_details(mock_sd)
 
-                with patch("unity.events.event_bus.Event") as MockEvent:
+                with patch("unify.events.event_bus.Event") as MockEvent:
                     llm_event = LLMEvent(
                         request={"model": "gpt-4o", "messages": []},
                         billed_cost=0.01,
@@ -478,7 +478,7 @@ class TestRequestLlmRunMetadata:
     @pytest.mark.asyncio
     async def test_triggering_contact_id_stored_in_meta(self):
         """request_llm_run stores triggering_contact_id in pending meta."""
-        from unity.conversation_manager.conversation_manager import (
+        from unify.conversation_manager.conversation_manager import (
             ConversationManager,
         )
 
@@ -510,7 +510,7 @@ class TestRequestLlmRunMetadata:
     @pytest.mark.asyncio
     async def test_triggering_contact_id_defaults_to_none(self):
         """Without explicit triggering_contact_id, meta stores None."""
-        from unity.conversation_manager.conversation_manager import (
+        from unify.conversation_manager.conversation_manager import (
             ConversationManager,
         )
 
@@ -541,7 +541,7 @@ class TestContactProvisioningUserId:
 
     def test_provision_user_contact_stores_user_id(self):
         """provision_user_contact includes user_id from SESSION_DETAILS."""
-        from unity.contact_manager.system_contacts import provision_user_contact
+        from unify.contact_manager.system_contacts import provision_user_contact
 
         mock_self = MagicMock()
         mock_self._BUILTIN_FIELDS = {
@@ -562,7 +562,7 @@ class TestContactProvisioningUserId:
 
         with (
             patch(
-                "unity.contact_manager.system_contacts._resolve_user_details",
+                "unify.contact_manager.system_contacts._resolve_user_details",
                 return_value={
                     "first_name": "Boss",
                     "last_name": "User",
@@ -570,10 +570,10 @@ class TestContactProvisioningUserId:
                 },
             ),
             patch(
-                "unity.contact_manager.system_contacts._ensure_columns_exist",
+                "unify.contact_manager.system_contacts._ensure_columns_exist",
             ),
-            patch("unity.session_details.SESSION_DETAILS") as mock_sd,
-            patch("unity.settings.SETTINGS") as mock_settings,
+            patch("unify.session_details.SESSION_DETAILS") as mock_sd,
+            patch("unify.settings.SETTINGS") as mock_settings,
         ):
             mock_settings.DEMO_MODE = False
             mock_sd.is_initialized = True
@@ -589,7 +589,7 @@ class TestContactProvisioningUserId:
 
     def test_provision_user_contact_skips_user_id_when_not_initialized(self):
         """user_id is not stored when SESSION_DETAILS is not yet initialized."""
-        from unity.contact_manager.system_contacts import provision_user_contact
+        from unify.contact_manager.system_contacts import provision_user_contact
 
         mock_self = MagicMock()
         mock_self._BUILTIN_FIELDS = {
@@ -610,7 +610,7 @@ class TestContactProvisioningUserId:
 
         with (
             patch(
-                "unity.contact_manager.system_contacts._resolve_user_details",
+                "unify.contact_manager.system_contacts._resolve_user_details",
                 return_value={
                     "first_name": "Boss",
                     "last_name": "User",
@@ -618,10 +618,10 @@ class TestContactProvisioningUserId:
                 },
             ),
             patch(
-                "unity.contact_manager.system_contacts._ensure_columns_exist",
+                "unify.contact_manager.system_contacts._ensure_columns_exist",
             ),
-            patch("unity.session_details.SESSION_DETAILS") as mock_sd,
-            patch("unity.settings.SETTINGS") as mock_settings,
+            patch("unify.session_details.SESSION_DETAILS") as mock_sd,
+            patch("unify.settings.SETTINGS") as mock_settings,
         ):
             mock_settings.DEMO_MODE = False
             mock_sd.is_initialized = False

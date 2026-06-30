@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.prompt_builders import (
+from unify.conversation_manager.prompt_builders import (
     build_system_prompt,
     build_voice_agent_prompt,
 )
-from unity.session_details import TeamSummary
+from unify.session_details import TeamSummary
 
 pytestmark = pytest.mark.no_unify_context
 
@@ -728,7 +728,7 @@ class TestPerUserDesktopResolution:
 
     @staticmethod
     def _assistant_with_links() -> object:
-        from unity.session_details import AssistantDetails, UserDesktopLink
+        from unify.session_details import AssistantDetails, UserDesktopLink
 
         a = AssistantDetails()
         a.user_desktops = {
@@ -893,7 +893,7 @@ class TestSmalltalkMessages:
     biographical / self-context / repeat turns, and DEFERs everything else."""
 
     def test_build_smalltalk_messages_structure(self):
-        from unity.conversation_manager.prompt_builders import build_smalltalk_messages
+        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
 
         history = [
             {"role": "assistant", "content": "Hi there!"},
@@ -912,7 +912,7 @@ class TestSmalltalkMessages:
         assert {"role": "assistant", "content": "Hi there!"} in msgs
 
     def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
-        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
 
         g = _SMALLTALK_GUARDRAIL.lower()
         assert "tell me about yourself" in g
@@ -922,7 +922,7 @@ class TestSmalltalkMessages:
         assert "do not guess" in g or "do not actually know" in g
 
     def test_smalltalk_guardrail_defers_substantive_and_mixed(self):
-        from unity.conversation_manager.prompt_builders import (
+        from unify.conversation_manager.prompt_builders import (
             SMALLTALK_DEFER_SENTINEL,
             _SMALLTALK_GUARDRAIL,
         )
@@ -938,7 +938,7 @@ class TestSmalltalkMessages:
         assert "when unsure" in low
 
     def test_smalltalk_guardrail_stays_silent_on_bare_acks(self):
-        from unity.conversation_manager.prompt_builders import (
+        from unify.conversation_manager.prompt_builders import (
             SMALLTALK_SILENCE_SENTINEL,
             _SMALLTALK_GUARDRAIL,
         )
@@ -954,7 +954,7 @@ class TestSmalltalkMessages:
         assert "authorises an action" in low or "authorizes an action" in low
 
     def test_smalltalk_guardrail_defers_action_and_status_questions(self):
-        from unity.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
 
         low = _SMALLTALK_GUARDRAIL.lower()
         # The fast brain must never promise/report on an action it controls.

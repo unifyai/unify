@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-from unity.common.context_registry import ContextRegistry
-from unity.dashboard_manager.simulated import SimulatedDashboardManager
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.dashboard_manager.simulated import SimulatedDashboardManager
+from unify.session_details import SESSION_DETAILS
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def seeded_dm(simulated_dm):
         title="Revenue Chart",
     )
 
-    from unity.dashboard_manager.types.dashboard import TilePosition
+    from unify.dashboard_manager.types.dashboard import TilePosition
 
     simulated_dm.create_dashboard(
         "Test Dashboard",

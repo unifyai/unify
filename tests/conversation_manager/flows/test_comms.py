@@ -34,7 +34,7 @@ from tests.conversation_manager.conftest import (
     BOSS,
     HELPFUL_RESPONSE_POLICY,
 )
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     ApiMessageReceived,
     ApiMessageSent,
     DiscordMessageReceived,
@@ -54,8 +54,8 @@ from unity.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
 )
-from unity.conversation_manager.domains import comms_utils
-from unity.conversation_manager.cm_types import Medium
+from unify.conversation_manager.domains import comms_utils
+from unify.conversation_manager.cm_types import Medium
 
 pytestmark = pytest.mark.eval
 
@@ -571,7 +571,7 @@ async def test_discord_message_to_discord_message(initialized_cm):
     )
 
     with patch(
-        "unity.comms.primitives.comms_utils.send_discord_message",
+        "unify.comms.primitives.comms_utils.send_discord_message",
         new=AsyncMock(return_value={"success": True}),
     ):
         result = await cm.step_until_wait(

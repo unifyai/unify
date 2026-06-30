@@ -35,14 +35,14 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     Event,
     InboundPhoneUtterance,
     InboundUnifyMeetUtterance,
     PhoneCallStarted,
     UnifyMeetStarted,
 )
-from unity.conversation_manager.cm_types import Medium, Mode
+from unify.conversation_manager.cm_types import Medium, Mode
 
 # Path to audio fixtures
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "audio"
@@ -148,7 +148,7 @@ def boss_contact():
 @pytest_asyncio.fixture
 async def event_broker():
     """Real in-memory event broker for tests."""
-    from unity.conversation_manager.in_memory_event_broker import (
+    from unify.conversation_manager.in_memory_event_broker import (
         create_in_memory_event_broker,
         reset_in_memory_event_broker,
     )

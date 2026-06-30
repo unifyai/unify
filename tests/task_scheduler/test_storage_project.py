@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from unity.task_scheduler.machine_state import TASK_MACHINE_STATE_PROJECT
-from unity.task_scheduler.storage import TasksStore
+from unify.task_scheduler.machine_state import TASK_MACHINE_STATE_PROJECT
+from unify.task_scheduler.storage import TasksStore
 
 
 def test_tasks_store_get_rows_passes_explicit_project_override(monkeypatch):
@@ -11,7 +11,7 @@ def test_tasks_store_get_rows_passes_explicit_project_override(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
 
     store = TasksStore("Tasks/Activations", project=TASK_MACHINE_STATE_PROJECT)
     rows = store.get_rows(limit=5)
@@ -28,9 +28,9 @@ def test_tasks_store_defaults_to_active_project(monkeypatch):
         captured.update(kwargs)
         return []
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
     monkeypatch.setattr(
-        "unity.task_scheduler.storage.unisdk.active_project",
+        "unify.task_scheduler.storage.unisdk.active_project",
         lambda: "Assistants",
     )
 
@@ -47,7 +47,7 @@ def test_tasks_store_log_passes_explicit_project_to_helper(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(id=1)
 
-    monkeypatch.setattr("unity.task_scheduler.storage.unity_log", _fake_log)
+    monkeypatch.setattr("unify.task_scheduler.storage.unity_log", _fake_log)
 
     store = TasksStore("42/7/Tasks", project=TASK_MACHINE_STATE_PROJECT)
     result = store.log(entries={"task_id": 101})

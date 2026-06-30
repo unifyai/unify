@@ -21,8 +21,8 @@ import asyncio
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor, _start_storage_check_loop
-from unity.function_manager.function_manager import FunctionManager
+from unify.actor.code_act_actor import CodeActActor, _start_storage_check_loop
+from unify.function_manager.function_manager import FunctionManager
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 

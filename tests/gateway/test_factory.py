@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.gateway.factory import (
+from unify.gateway.factory import (
     KNOWN_TRANSPORT_KINDS,
     TRANSPORT_KIND_INMEMORY,
     TRANSPORT_KIND_LEGACY,
@@ -21,10 +21,10 @@ from unity.gateway.factory import (
     create_ingress_transport_factory,
     create_outbound_transport,
 )
-from unity.gateway.ingress_inmemory import InMemoryIngressTransport
-from unity.gateway.ingress_pubsub import PubSubIngressTransport
-from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
-from unity.gateway.outbound_pubsub import PubSubOutboundTransport
+from unify.gateway.ingress_inmemory import InMemoryIngressTransport
+from unify.gateway.ingress_pubsub import PubSubIngressTransport
+from unify.gateway.outbound_inmemory import InMemoryOutboundTransport
+from unify.gateway.outbound_pubsub import PubSubOutboundTransport
 
 # ---------------------------------------------------------------------------
 # Default / fallback behaviour -- the production safety net

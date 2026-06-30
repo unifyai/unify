@@ -3,8 +3,8 @@ import time
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
+from unify.events.event_bus import EventBus, Event
+from unify.events.types.comms import CommsPayload
 
 
 @pytest.mark.asyncio

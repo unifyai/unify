@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from io import StringIO
 
-from unity.gateway.local_setup import select_channel_setups
-from unity.gateway.wizard import (
+from unify.gateway.local_setup import select_channel_setups
+from unify.gateway.wizard import (
     load_env_file,
     mask_value,
     read_env_file,
