@@ -6,7 +6,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiohttp
 from livekit.api import CreateAgentDispatchRequest, LiveKitAPI
@@ -121,7 +121,7 @@ class LivekitCallManager:
         self.is_outbound: bool = False
         self.initial_notification: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
-        self.on_fast_brain_generating: Callable[[], None] | None = None
+        self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
         # Pulled at the top of every dispatch so a call always carries the
         # assistant's current voice/config rather than a snapshot taken at
@@ -551,7 +551,12 @@ class LivekitCallManager:
                     channel == "app:comms:fast_brain_generating"
                     and self.on_fast_brain_generating is not None
                 ):
-                    self.on_fast_brain_generating()
+                    response = self.on_fast_brain_generating()
+                    if response is not None and self._socket_server is not None:
+                        await self._socket_server.queue_for_clients(
+                            "app:call:idle_smalltalk_state",
+                            json.dumps(response),
+                        )
                 elif (
                     channel == "app:comms:pipeline_quiescent"
                     and self.on_pipeline_quiescent is not None
