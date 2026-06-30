@@ -18,8 +18,8 @@ The agent runtime runs locally on your machine; persistence and your assistant l
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/hero-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/hero-architecture-light.png" alt="Unify architecture: the user talks directly with the Slow Brain (ConversationManager) over normal messages and events, or through the Fast Brain during live calls; the Slow Brain dispatches steerable act(...) work to CodeActActor, which composes execute_code, execute_function, FunctionManager, GuidanceManager, and typed primitives." width="820">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hero-architecture-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hero-architecture-light.png" alt="Unify architecture: the user talks directly with the Slow Brain (ConversationManager) over normal messages and events, or through the Fast Brain during live calls; the Slow Brain dispatches steerable act(...) work to CodeActActor, which composes execute_code, execute_function, FunctionManager, GuidanceManager, and typed primitives." width="820">
   </picture>
 </p>
 
@@ -199,8 +199,8 @@ This is the same **interaction loop / background reasoner** split [recently arti
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/architecture-flow-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/architecture-flow-light.png" alt="Unify's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/architecture-flow-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/architecture-flow-light.png" alt="Unify's dispatch and steering flow: the user reaches the ConversationManager through mediums (chat, voice, video, email, SMS) and an event broker; the ConversationManager calls act(...) on the Actor, which calls primitives.* on the back office (Contacts, Knowledge, Tasks, Transcripts, Files, Images, Web, Secrets, Functions, Guidance). The steering bus runs the other way: SteerableToolHandles propagate from the back office up through the Actor to the ConversationManager, and streamed responses reach the user." width="820">
   </picture>
 </p>
 
@@ -208,8 +208,8 @@ This is the same **interaction loop / background reasoner** split [recently arti
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/nested-steering-sequence-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/nested-steering-sequence-light.png" alt="Sequence diagram showing nested steering: the user asks 'find when Sarah last mentioned Berlin', the ConversationManager calls act(prompt) on the Actor which returns handle_A, the Actor calls transcripts.ask(...) on the TranscriptManager which returns the nested handle_B. Mid-flight the user interjects 'actually include emails too' — the interject signal flows down through handle_A and then through handle_B, the TranscriptManager returns refined results, the Actor notifies the ConversationManager, which streams 'scanning emails too...' back to the user before delivering the final answer." width="820">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/nested-steering-sequence-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/nested-steering-sequence-light.png" alt="Sequence diagram showing nested steering: the user asks 'find when Sarah last mentioned Berlin', the ConversationManager calls act(prompt) on the Actor which returns handle_A, the Actor calls transcripts.ask(...) on the TranscriptManager which returns the nested handle_B. Mid-flight the user interjects 'actually include emails too' — the interject signal flows down through handle_A and then through handle_B, the TranscriptManager returns refined results, the Actor notifies the ConversationManager, which streams 'scanning emails too...' back to the user before delivering the final answer." width="820">
   </picture>
 </p>
 
@@ -343,8 +343,8 @@ The colour palette is locked across all three diagrams and means exactly one thi
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/unity-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/unity-architecture-light.png" alt="Unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, knowledge, tasks, transcripts, files, images, web, secrets, functions, guidance); primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-light.png" alt="Unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, knowledge, tasks, transcripts, files, images, web, secrets, functions, guidance); primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
   </picture>
 </p>
 
@@ -357,8 +357,8 @@ Unify puts a persistent reasoning loop (`ConversationManager`, pink) *above* the
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/openclaw-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/openclaw-architecture-light.png" alt="OpenClaw architecture: user (white) and cron + webhooks (peach, automation triggers) feed into channels (Telegram, Discord, Slack, SMS, device Nodes); channels hand off to a Gateway daemon (white, channel-first dispatcher with per-session lanes; steer = abort + redeliver) which start/abort runs on a single Pi embedded agent loop (green, single tool-calling loop, no supervising loop); the agent calls tools (core, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the Hermes and Unify diagrams in this section. Architectural deltas vs. the other two: a dedicated Gateway daemon dispatcher tier between channels and the agent (Unify and Hermes have none); cron + webhook automation implemented as an in-process timer + HTTP server inside the Gateway daemon (same mechanism as Hermes, different from Unify)." width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/openclaw-architecture-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/openclaw-architecture-light.png" alt="OpenClaw architecture: user (white) and cron + webhooks (peach, automation triggers) feed into channels (Telegram, Discord, Slack, SMS, device Nodes); channels hand off to a Gateway daemon (white, channel-first dispatcher with per-session lanes; steer = abort + redeliver) which start/abort runs on a single Pi embedded agent loop (green, single tool-calling loop, no supervising loop); the agent calls tools (core, voice-call plugin, mcporter → MCP servers) and reads/writes local-first state (JSONL sessions, workspace files like SKILL.md / SOUL.md / AGENTS.md, memory plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the Hermes and Unify diagrams in this section. Architectural deltas vs. the other two: a dedicated Gateway daemon dispatcher tier between channels and the agent (Unify and Hermes have none); cron + webhook automation implemented as an in-process timer + HTTP server inside the Gateway daemon (same mechanism as Hermes, different from Unify)." width="780">
   </picture>
 </p>
 
@@ -371,8 +371,8 @@ OpenClaw is a local-first control plane with a wide channel matrix and a plugin 
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/hermes-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/hermes-architecture-light.png" alt="Hermes Agent architecture: user (white) and cron + webhooks (peach, automation triggers) feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off directly to a single ~12k-LOC sync agent-loop infrastructure called AIAgent (green; steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the OpenClaw and Unify diagrams in this section. Architectural deltas vs. the other two: surfaces hand off directly to the agent with no dispatcher tier in between (OpenClaw has one, Unify has none either); cron + webhook automation implemented as a background thread + aiohttp webhook server inside the gateway process (same in-process pattern as OpenClaw, different from Unify)." width="780">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hermes-architecture-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/hermes-architecture-light.png" alt="Hermes Agent architecture: user (white) and cron + webhooks (peach, automation triggers) feed into a wide surfaces row (CLI, TUI, Gateway across Telegram/Discord/Slack/SMS, and ACP for IDEs); surfaces hand off directly to a single ~12k-LOC sync agent-loop infrastructure called AIAgent (green; steer() injects text into the next tool result, interrupt() is a thread-scoped abort flag), which calls tools (native, execute_code, TTS / voice_mode / SMS, delegate_tool, MCP servers) and reads/writes state (SQLite sessions + FTS5, MEMORY.md / USER.md workspace files, SKILL.md library, memory provider plugin). No persistent reasoning loop above the agent. Drawn in the same shared visual grammar as the OpenClaw and Unify diagrams in this section. Architectural deltas vs. the other two: surfaces hand off directly to the agent with no dispatcher tier in between (OpenClaw has one, Unify has none either); cron + webhook automation implemented as a background thread + aiohttp webhook server inside the gateway process (same in-process pattern as OpenClaw, different from Unify)." width="780">
   </picture>
 </p>
 
@@ -407,8 +407,8 @@ The architectural bet above isn't abstract. Because *every* operation — at eve
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-course-correct-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-course-correct-technical-light.png" alt="A technical flow diagram showing a correction injected at the top of a four-level nested stack (ConversationManager → Actor → TaskScheduler → ContactManager) propagating straight down to the innermost ContactManager while each loop remains running — captioned 'live redirect, no restart'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-course-correct-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-course-correct-technical-light.png" alt="A technical flow diagram showing a correction injected at the top of a four-level nested stack (ConversationManager → Actor → TaskScheduler → ContactManager) propagating straight down to the innermost ContactManager while each loop remains running — captioned 'live redirect, no restart'." width="760">
   </picture>
 </p>
 
@@ -421,8 +421,8 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-live-introspection-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-live-introspection-technical-light.png" alt="A technical flow diagram where a running task loop is queried by a read-only probe over a non-intrusive dotted line and returns a live status card ('step 3 of 5: scanning emails') while continuing to run — captioned 'introspect a live task, zero disruption'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-live-introspection-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-live-introspection-technical-light.png" alt="A technical flow diagram where a running task loop is queried by a read-only probe over a non-intrusive dotted line and returns a live status card ('step 3 of 5: scanning emails') while continuing to run — captioned 'introspect a live task, zero disruption'." width="760">
   </picture>
 </p>
 
@@ -435,8 +435,8 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-pause-resume-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-pause-resume-technical-light.png" alt="A technical timeline of one nested operation in three states left to right: running, paused for inspection, and resumed from the same point — captioned 'pause · inspect · resume'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-pause-resume-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-pause-resume-technical-light.png" alt="A technical timeline of one nested operation in three states left to right: running, paused for inspection, and resumed from the same point — captioned 'pause · inspect · resume'." width="760">
   </picture>
 </p>
 
@@ -449,8 +449,8 @@ Kick off work that nests `ConversationManager → Actor → TaskScheduler → Co
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-concurrent-steering-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-concurrent-steering-technical-light.png" alt="A technical flow diagram where an orchestrator that keeps reasoning holds three independent control handles to parallel task loops; one is paused, one receives an interjected constraint, and one is stopped — captioned 'three tasks at once, each steered independently'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-concurrent-steering-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-concurrent-steering-technical-light.png" alt="A technical flow diagram where an orchestrator that keeps reasoning holds three independent control handles to parallel task loops; one is paused, one receives an interjected constraint, and one is stopped — captioned 'three tasks at once, each steered independently'." width="760">
   </picture>
 </p>
 
@@ -463,8 +463,8 @@ Hold a live handle to each of several concurrent actions. **Pause** one, **inter
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-clarification-bubbling-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-clarification-bubbling-technical-light.png" alt="A technical flow diagram with a vertical stack (user → ConversationManager → Actor → ContactManager); a question 'which Sarah? two matches' bubbles up from the innermost ContactManager to the user, and the answer 'the one in Berlin' routes back down to the innermost loop — captioned 'clarification up, answer back down'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-clarification-bubbling-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-clarification-bubbling-technical-light.png" alt="A technical flow diagram with a vertical stack (user → ConversationManager → Actor → ContactManager); a question 'which Sarah? two matches' bubbles up from the innermost ContactManager to the user, and the answer 'the one in Berlin' routes back down to the innermost loop — captioned 'clarification up, answer back down'." width="760">
   </picture>
 </p>
 
@@ -477,8 +477,8 @@ When an inner manager hits genuine ambiguity, its clarification **bubbles up thr
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-stop-one-branch-technical-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/staging/public_images/demo-stop-one-branch-technical-light.png" alt="A technical flow diagram where a parent task fans out into three sibling branches; the middle branch is stopped with a recorded reason while the left and right branches remain running — captioned 'stop one branch, the rest keep running'." width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-stop-one-branch-technical-dark.png">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/demo-stop-one-branch-technical-light.png" alt="A technical flow diagram where a parent task fans out into three sibling branches; the middle branch is stopped with a recorded reason while the left and right branches remain running — captioned 'stop one branch, the rest keep running'." width="760">
   </picture>
 </p>
 
