@@ -6,7 +6,7 @@ without needing a live SFTP link or rclone binary.
 
 from pathlib import Path, PurePosixPath
 
-from unity.file_manager.sync.user_sftp import (
+from unify.file_manager.sync.user_sftp import (
     EDITS_DIR,
     UserHomeSFTP,
     _build_excludes,

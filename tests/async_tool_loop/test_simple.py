@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import time
 from tests.helpers import _handle_project
-from unity.common.llm_client import new_llm_client
+from unify.common.llm_client import new_llm_client
 from tests.async_helpers import (
     _wait_for_tool_request,
     _is_synthetic_check_status_stub,
@@ -42,8 +42,8 @@ pytestmark = pytest.mark.llm_call
 # --------------------------------------------------------------------------- #
 #  MODULE UNDER TEST                                                          #
 # --------------------------------------------------------------------------- #
-from unity.common.async_tool_loop import start_async_tool_loop
-from unity.common.tool_spec import ToolSpec
+from unify.common.async_tool_loop import start_async_tool_loop
+from unify.common.tool_spec import ToolSpec
 
 
 # --------------------------------------------------------------------------- #

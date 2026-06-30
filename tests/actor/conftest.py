@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from unity.actor.execution.capture import StreamLike
-from unity.actor.execution.session import SessionExecutor
-from unity.manager_registry import ManagerRegistry
+from unify.actor.execution.capture import StreamLike
+from unify.actor.execution.session import SessionExecutor
+from unify.manager_registry import ManagerRegistry
 
 _ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 
@@ -31,7 +31,7 @@ def _normalize_execute_function_duration(result: Any) -> Any:
 @pytest.fixture(autouse=True)
 def _force_simulated_web(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force WebSearcher to use the simulated implementation for actor tests."""
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     monkeypatch.setenv("UNITY_WEB_IMPL", "simulated")
     monkeypatch.setattr(SETTINGS.web, "IMPL", "simulated", raising=False)

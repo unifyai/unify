@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor, _StorageCheckHandle
-from unity.common.task_execution_context import PostRunReviewContext
+from unify.actor.code_act_actor import CodeActActor, _StorageCheckHandle
+from unify.common.task_execution_context import PostRunReviewContext
 
 # ---------------------------------------------------------------------------
 # Symbolic: _StorageCheckHandle runs Phase 2 after stop
@@ -67,10 +67,10 @@ async def test_storage_check_runs_after_stop():
 
     with (
         patch(
-            "unity.actor.code_act_actor._start_storage_check_loop",
+            "unify.actor.code_act_actor._start_storage_check_loop",
         ) as mock_loop,
         patch(
-            "unity.actor.code_act_actor.publish_manager_method_event",
+            "unify.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ),
     ):
@@ -130,10 +130,10 @@ async def test_storage_check_runs_after_stop_no_reason():
 
     with (
         patch(
-            "unity.actor.code_act_actor._start_storage_check_loop",
+            "unify.actor.code_act_actor._start_storage_check_loop",
         ) as mock_loop,
         patch(
-            "unity.actor.code_act_actor.publish_manager_method_event",
+            "unify.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ),
     ):
@@ -197,10 +197,10 @@ async def test_storage_check_incoming_event_has_instructions():
 
     with (
         patch(
-            "unity.actor.code_act_actor._start_storage_check_loop",
+            "unify.actor.code_act_actor._start_storage_check_loop",
         ) as mock_loop,
         patch(
-            "unity.actor.code_act_actor.publish_manager_method_event",
+            "unify.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ) as mock_publish,
     ):
@@ -267,9 +267,9 @@ async def test_task_entrypoint_review_uses_reusable_workflow_event_label():
     )
 
     with (
-        patch("unity.actor.code_act_actor._start_storage_check_loop") as mock_loop,
+        patch("unify.actor.code_act_actor._start_storage_check_loop") as mock_loop,
         patch(
-            "unity.actor.code_act_actor.publish_manager_method_event",
+            "unify.actor.code_act_actor.publish_manager_method_event",
             new_callable=AsyncMock,
         ) as mock_publish,
     ):
@@ -319,7 +319,7 @@ async def test_persist_stop_with_memoize_intent_stores_function():
     stopped with a memoization-intent reason.  The storage review loop
     should detect the pattern and store it in the FunctionManager.
     """
-    from unity.function_manager.function_manager import FunctionManager
+    from unify.function_manager.function_manager import FunctionManager
 
     fm = FunctionManager(include_primitives=False)
 

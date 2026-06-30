@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 
-from unity.manager_registry import ManagerRegistry
+from unify.manager_registry import ManagerRegistry
 
 
 def _in_tree(request: pytest.FixtureRequest, segment: str) -> bool:
@@ -44,7 +44,7 @@ def _apply_impl_overrides(
 
     # Also update the already-instantiated SETTINGS singleton so ManagerRegistry's
     # settings accessors (lambda: SETTINGS.<x>) see the new IMPL values.
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     monkeypatch.setattr(SETTINGS.contact, "IMPL", impl, raising=False)
     monkeypatch.setattr(SETTINGS.task, "IMPL", impl, raising=False)

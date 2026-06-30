@@ -1,4 +1,4 @@
-"""Behavioural tests for ``unity.gateway.channels.sharepoint``.
+"""Behavioural tests for ``unify.gateway.channels.sharepoint``.
 
 11 endpoints; tests cover router contract + happy-path per endpoint
 + key edge cases (drive_id = "me" vs explicit id, missing required
@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from unity.gateway.channels.sharepoint import router
+from unify.gateway.channels.sharepoint import router
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -64,7 +64,7 @@ def test_router_exposes_expected_paths() -> None:
 
 
 def test_router_importable_from_package_root() -> None:
-    from unity.gateway.channels.sharepoint import router as exported
+    from unify.gateway.channels.sharepoint import router as exported
 
     assert exported is router
 
@@ -84,7 +84,7 @@ def test_list_sites_returns_site_records(client: TestClient) -> None:
     fake_graph = _make_graph_mock()
     fake_graph.sites.get = AsyncMock(return_value=MagicMock(value=[site]))
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get("/sharepoint/sites", params={"user_email": "u@x.com"})
@@ -100,7 +100,7 @@ def test_get_site_returns_single_site(client: TestClient) -> None:
     fake_graph = _make_graph_mock()
     fake_graph.sites.by_site_id.return_value.get = AsyncMock(return_value=site)
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -136,7 +136,7 @@ def test_list_user_drives_marks_personal_drive(client: TestClient) -> None:
         return_value=MagicMock(value=[my_drive, other]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get("/sharepoint/drives", params={"user_email": "u@x.com"})
@@ -159,7 +159,7 @@ def test_list_site_drives(client: TestClient) -> None:
         return_value=MagicMock(value=[drive]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -202,7 +202,7 @@ def test_list_items_root_default(client: TestClient) -> None:
         return_value=MagicMock(value=[item]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -223,7 +223,7 @@ def test_list_items_explicit_drive_id_uses_drives_by_id(
         return_value=MagicMock(value=[item]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -241,7 +241,7 @@ def test_list_items_by_path(client: TestClient) -> None:
         return_value=MagicMock(value=[item]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -261,7 +261,7 @@ def test_get_item(client: TestClient) -> None:
         return_value=item,
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -279,7 +279,7 @@ def test_download_folder_returns_400(client: TestClient) -> None:
         return_value=item,
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -299,7 +299,7 @@ def test_download_file_returns_bytes_with_content_type(client: TestClient) -> No
         return_value=b"file-content",
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(
@@ -345,7 +345,7 @@ def test_upload_decodes_base64_content(client: TestClient) -> None:
     fake_graph.me.drive.root.item_with_path.return_value.content.put = _capture
 
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.put(
@@ -373,7 +373,7 @@ def test_upload_falls_back_to_plain_text_when_not_base64(
     fake_graph.me.drive.root.item_with_path.return_value.content.put = _capture
 
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.put(
@@ -406,7 +406,7 @@ def test_create_folder_at_root(client: TestClient) -> None:
     new_folder = MagicMock(id="f-1", name="New", web_url="x")
     fake_graph.me.drive.root.children.post = AsyncMock(return_value=new_folder)
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.post(
@@ -425,7 +425,7 @@ def test_create_folder_with_parent_path(client: TestClient) -> None:
         return_value=new_folder,
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.post(
@@ -441,7 +441,7 @@ def test_delete_item_me_drive(client: TestClient) -> None:
     fake_graph = _make_graph_mock()
     fake_graph.me.drive.items.by_drive_item_id.return_value.delete = AsyncMock()
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.request(
@@ -459,7 +459,7 @@ def test_delete_item_explicit_drive(client: TestClient) -> None:
         AsyncMock()
     )  # noqa: E501
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.request(
@@ -483,7 +483,7 @@ def test_search_returns_matching_items(client: TestClient) -> None:
         return_value=MagicMock(value=[item]),
     )
     with patch(
-        "unity.gateway.channels.sharepoint.views.get_graph_client",
+        "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
     ):
         resp = client.get(

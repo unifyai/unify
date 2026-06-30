@@ -12,8 +12,8 @@ then asserts on the `urgent` boolean returned by the model.
 
 import pytest
 
-from unity.conversation_manager.domains.speech_urgency import SpeechUrgencyEvaluator
-from unity.settings import SETTINGS
+from unify.conversation_manager.domains.speech_urgency import SpeechUrgencyEvaluator
+from unify.settings import SETTINGS
 
 pytestmark = pytest.mark.eval
 

@@ -71,14 +71,14 @@ def _redirect_voice_worker_output(log_path: Path) -> None:
     and ``⬥ Suppressed speech`` lines to spill into the terminal.
 
     We patch both module-level bindings of ``run_script`` that
-    ``call_manager`` and ``unity.helpers`` each hold before ``initialize_cm``
+    ``call_manager`` and ``unify.helpers`` each hold before ``initialize_cm``
     is called so the worker is spawned with the log file as its fd 1/2.
     The patch stays in place for the lifetime of the sandbox; subsequent
     ``_spawn_quiet`` calls in ``live_voice.py`` will temporarily override it
     during session spawning and then restore it.
     """
-    import unity.conversation_manager.domains.call_manager as _cm_mod
-    import unity.helpers as _helpers
+    import unify.conversation_manager.domains.call_manager as _cm_mod
+    import unify.helpers as _helpers
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fh = log_path.open("a")

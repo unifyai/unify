@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
@@ -110,7 +110,7 @@ async def test_inbound_call_does_not_force_an_opener():
 def test_opener_guardrails_handle_reply_to_hello():
     """The opener is held until the callee speaks, so the drafted line must read
     naturally both as a standalone opener AND as a reply to their "Hello?"."""
-    from unity.conversation_manager.prompt_builders import (
+    from unify.conversation_manager.prompt_builders import (
         _BRIEFED_OPENING_GUARDRAIL,
         _OPENING_GREETING_GUARDRAIL,
     )

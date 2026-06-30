@@ -21,7 +21,7 @@ All tests bypass the CM brain LLM to ensure determinism.
 import pytest
 
 from tests.helpers import _handle_project
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
 
@@ -180,7 +180,7 @@ class TestActStartedInHistory:
         The rendered in-flight actions should include a <history> section
         containing the timestamped 'started' event from the act() call.
         """
-        from unity.conversation_manager.domains.renderer import Renderer
+        from unify.conversation_manager.domains.renderer import Renderer
 
         cm = initialized_cm.cm
 
@@ -223,8 +223,8 @@ class TestActCompletionInHistory:
         completed_actions. This gives the LLM a full lifecycle timeline
         (started → … → completed) in the rendered history.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.events import ActorResult
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import ActorResult
 
         cm = initialized_cm.cm
 
@@ -302,7 +302,7 @@ class TestSteeringContextPropagation:
         from datetime import datetime, timezone
         from unittest.mock import MagicMock
 
-        from unity.conversation_manager.domains.renderer import (
+        from unify.conversation_manager.domains.renderer import (
             SnapshotState,
             MessageElement,
         )
@@ -432,7 +432,7 @@ class TestSteeringContextPropagation:
         from datetime import datetime, timezone
         from unittest.mock import MagicMock
 
-        from unity.conversation_manager.domains.renderer import (
+        from unify.conversation_manager.domains.renderer import (
             SnapshotState,
             MessageElement,
         )
@@ -665,7 +665,7 @@ class TestContextContent:
         This tests that context is fresh and includes the current turn.
         """
         from tests.conversation_manager.conftest import BOSS
-        from unity.conversation_manager.events import SMSReceived
+        from unify.conversation_manager.events import SMSReceived
 
         cm_driver = initialized_cm
         cm = cm_driver.cm
@@ -719,7 +719,7 @@ class TestContextContent:
         cm = initialized_cm.cm
 
         # Create a snapshot via the normal rendering path
-        from unity.conversation_manager.domains.brain import build_brain_spec
+        from unify.conversation_manager.domains.brain import build_brain_spec
 
         snapshot_state = cm.prompt_renderer.render_state(
             cm.contact_index,
@@ -753,7 +753,7 @@ class TestContextContent:
         This tests that the context is fresh and includes relevant action information.
         """
         from tests.conversation_manager.conftest import BOSS
-        from unity.conversation_manager.events import SMSReceived, ActorHandleStarted
+        from unify.conversation_manager.events import SMSReceived, ActorHandleStarted
         from tests.conversation_manager.cm_helpers import filter_events_by_type
 
         cm_driver = initialized_cm

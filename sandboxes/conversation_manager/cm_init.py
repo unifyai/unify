@@ -20,9 +20,9 @@ from typing import Any, Callable, Optional
 
 from sandboxes.conversation_manager.actor_factory import ActorFactory
 from sandboxes.conversation_manager.config_manager import ActorConfig
-from unity.conversation_manager.event_broker import get_event_broker, reset_event_broker
-from unity.conversation_manager.main import run_conversation_manager
-from unity.conversation_manager.domains.managers_utils import init_conv_manager
+from unify.conversation_manager.event_broker import get_event_broker, reset_event_broker
+from unify.conversation_manager.main import run_conversation_manager
+from unify.conversation_manager.domains.managers_utils import init_conv_manager
 
 LG = logging.getLogger("conversation_manager_sandbox")
 
@@ -42,7 +42,7 @@ def _sync_coordinator_flag(cm) -> None:
 
     import httpx
 
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
 
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
@@ -113,7 +113,7 @@ async def initialize_cm(
     # repoint those caches to the freshly reset instance to keep all event
     # publications visible to the sandbox subscriber.
     try:  # sandbox-only best-effort patching
-        from unity.conversation_manager.domains import managers_utils as _managers_utils
+        from unify.conversation_manager.domains import managers_utils as _managers_utils
 
         _managers_utils.event_broker = event_broker  # type: ignore[attr-defined]
     except Exception:
@@ -139,8 +139,8 @@ async def initialize_cm(
     # returns success. The REPL display is driven by the event broker, not
     # Pub/Sub, so no response visibility is lost.
     try:
-        from unity.gateway.outbound_inmemory import InMemoryOutboundTransport
-        from unity.conversation_manager.domains.comms_utils import (
+        from unify.gateway.outbound_inmemory import InMemoryOutboundTransport
+        from unify.conversation_manager.domains.comms_utils import (
             set_outbound_transport,
         )
 

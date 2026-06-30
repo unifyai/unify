@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.common.llm_client import new_llm_client
-from unity.common.llm_helpers import method_to_schema
-from unity.conversation_manager.cm_types.mode import Mode
-from unity.conversation_manager.domains.brain_action_tools import (
+from unify.common.llm_client import new_llm_client
+from unify.common.llm_helpers import method_to_schema
+from unify.conversation_manager.cm_types.mode import Mode
+from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
 

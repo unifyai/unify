@@ -2,7 +2,7 @@ import asyncio
 import functools
 import pytest
 
-from unity.actor.simulated import SimulatedActor, SimulatedActorHandle
+from unify.actor.simulated import SimulatedActor, SimulatedActorHandle
 from pydantic import BaseModel, Field
 from typing import List
 from tests.helpers import (
@@ -10,7 +10,7 @@ from tests.helpers import (
     _assert_blocks_while_paused,
     DEFAULT_TIMEOUT,
 )
-from unity.function_manager.function_manager import FunctionManager
+from unify.function_manager.function_manager import FunctionManager
 
 pytestmark = pytest.mark.llm_call
 

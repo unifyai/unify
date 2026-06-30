@@ -15,16 +15,16 @@ import os
 
 import pytest
 
-from unity.function_manager.primitives import (
+from unify.function_manager.primitives import (
     PrimitiveScope,
     get_registry,
     VALID_MANAGER_ALIASES,
 )
-from unity.function_manager.primitives.registry import get_primitive_sources
-from unity.function_manager.function_manager import FunctionManager
-from unity.actor.environments.state_managers import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives
-from unity.common.context_registry import ContextRegistry
+from unify.function_manager.primitives.registry import get_primitive_sources
+from unify.function_manager.function_manager import FunctionManager
+from unify.actor.environments.state_managers import StateManagerEnvironment
+from unify.function_manager.primitives import Primitives
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -256,7 +256,7 @@ def test_catalog_reads_only_scoped_managers(scoped_function_manager_factory):
 
 def test_primitives_instance_respects_scope():
     """Primitives instance should only expose scoped managers."""
-    from unity.function_manager.primitives import Primitives
+    from unify.function_manager.primitives import Primitives
 
     scope = PrimitiveScope.single("files")
     primitives = Primitives(primitive_scope=scope)

@@ -6,10 +6,10 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.common.context_registry import ContextRegistry
-from unity.data_manager.data_manager import DataManager
-from unity.manager_registry import ManagerRegistry
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.data_manager.data_manager import DataManager
+from unify.manager_registry import ManagerRegistry
+from unify.session_details import SESSION_DETAILS
 
 
 def _fresh_manager() -> DataManager:

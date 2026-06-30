@@ -151,7 +151,7 @@ fi
 
 # Headless offline task jobs bypass the live conversation runtime entirely.
 # UNITY_OFFLINE_TASK_MODE is set (currently to "actor"; see
-# unity/task_scheduler/offline_runner_contract.build_offline_runner_env, pinned
+# unify/task_scheduler/offline_runner_contract.build_offline_runner_env, pinned
 # by tests/task_scheduler/test_offline_runner_contract.test_mode_is_actor) ONLY
 # for offline-task jobs, so any non-empty value means "run the headless offline
 # runner". This previously hard-checked == "function", which silently stopped
@@ -162,7 +162,7 @@ fi
 # non-empty is rename-proof.
 if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
     echo "⬥ Starting offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
-    python3 -m unity.task_scheduler.offline_runner
+    python3 -m unify.task_scheduler.offline_runner
     exit $?
 fi
 
@@ -193,7 +193,7 @@ sleep 3
 
 # Start the main application
 echo "⬥ Starting convo manager..."
-python3 unity/conversation_manager/main.py &
+python3 unify/conversation_manager/main.py &
 MAIN_PID=$!
 echo "⬥ Main application started with PID: $MAIN_PID"
 

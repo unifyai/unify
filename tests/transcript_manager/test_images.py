@@ -4,11 +4,11 @@ import pytest
 from datetime import datetime, UTC
 import unisdk
 
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.image_manager.utils import make_solid_png_base64
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
+from unify.image_manager.utils import make_solid_png_base64
 from tests.helpers import _handle_project
-from unity.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
+from unify.image_manager.types import AnnotatedImageRefs, RawImageRef, AnnotatedImageRef
 
 PNG_BLUE = make_solid_png_base64(32, 32, (0, 0, 255))
 

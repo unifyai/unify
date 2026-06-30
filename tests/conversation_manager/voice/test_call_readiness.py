@@ -18,11 +18,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
-from unity.conversation_manager.medium_scripts import worker as worker_mod
+from unify.conversation_manager.medium_scripts import worker as worker_mod
 
 
 def _build_call_manager() -> LivekitCallManager:
@@ -190,7 +190,7 @@ async def test_restart_worker_terminates_and_restarts(monkeypatch):
     proc = _alive_worker()
     cm._worker_proc = proc
 
-    import unity.conversation_manager.domains.call_manager as cm_mod
+    import unify.conversation_manager.domains.call_manager as cm_mod
 
     terminated: list = []
     monkeypatch.setattr(cm_mod, "terminate_process", lambda p, _t: terminated.append(p))

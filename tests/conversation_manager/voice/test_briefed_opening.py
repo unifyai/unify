@@ -14,7 +14,7 @@ The deterministic tests lock the sidecar prompt-construction contract.
 
 from __future__ import annotations
 
-from unity.conversation_manager.prompt_builders import (
+from unify.conversation_manager.prompt_builders import (
     _BRIEFED_OPENING_GUARDRAIL,
     _OPENING_GREETING_GUARDRAIL,
     build_opening_greeting_messages,

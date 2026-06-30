@@ -20,8 +20,8 @@ import pytest
 import unisdk
 from datetime import datetime
 from tests.helpers import _handle_project
-from unity.contact_manager.contact_manager import ContactManager
-from unity.transcript_manager.transcript_manager import TranscriptManager
+from unify.contact_manager.contact_manager import ContactManager
+from unify.transcript_manager.transcript_manager import TranscriptManager
 
 # --------------------------------------------------------------------------- #
 #  Integration: Contact Deletion Cascade                                      #
@@ -160,10 +160,10 @@ def test_delete_image_nullifies_refs():
     - Transcripts.images[*].raw_image_ref.image_id → Images.image_id: SET NULL
     - Guidance.images[*].raw_image_ref.image_id → Images.image_id: SET NULL
     """
-    from unity.contact_manager.contact_manager import ContactManager
-    from unity.transcript_manager.transcript_manager import TranscriptManager
-    from unity.guidance_manager.guidance_manager import GuidanceManager
-    from unity.image_manager.image_manager import ImageManager
+    from unify.contact_manager.contact_manager import ContactManager
+    from unify.transcript_manager.transcript_manager import TranscriptManager
+    from unify.guidance_manager.guidance_manager import GuidanceManager
+    from unify.image_manager.image_manager import ImageManager
 
     cm = ContactManager()
     tm = TranscriptManager()
@@ -175,7 +175,7 @@ def test_delete_image_nullifies_refs():
         size: int = 32,
         color: tuple[int, int, int] = (255, 0, 0),
     ) -> str:
-        from unity.image_manager.utils import make_solid_png_base64
+        from unify.image_manager.utils import make_solid_png_base64
 
         return make_solid_png_base64(size, size, color)
 
@@ -294,8 +294,8 @@ def test_function_guidance_bidirectional_cascade():
     - Functions.guidance_ids[*] → Guidance.guidance_id: CASCADE (remove from array)
     - Guidance.function_ids[*] → Functions.function_id: CASCADE (remove from array)
     """
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.guidance_manager.guidance_manager import GuidanceManager
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.guidance_manager.guidance_manager import GuidanceManager
 
     fm = FunctionManager()
     gm = GuidanceManager()
@@ -415,9 +415,9 @@ def test_delete_function_cascades_tasks_guidance():
     - Tasks.entrypoint → Functions.function_id: SET NULL
     - Guidance.function_ids[*] → Functions.function_id: CASCADE
     """
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.task_scheduler.task_scheduler import TaskScheduler
-    from unity.guidance_manager.guidance_manager import GuidanceManager
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.task_scheduler.task_scheduler import TaskScheduler
+    from unify.guidance_manager.guidance_manager import GuidanceManager
 
     fm = FunctionManager()
     ts = TaskScheduler()
@@ -496,12 +496,12 @@ def test_complex_fk_workflow():
     - Guidance.function_ids[*] → Functions: CASCADE
     - Tasks.entrypoint → Functions: SET NULL
     """
-    from unity.contact_manager.contact_manager import ContactManager
-    from unity.image_manager.image_manager import ImageManager
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.guidance_manager.guidance_manager import GuidanceManager
-    from unity.task_scheduler.task_scheduler import TaskScheduler
-    from unity.transcript_manager.transcript_manager import TranscriptManager
+    from unify.contact_manager.contact_manager import ContactManager
+    from unify.image_manager.image_manager import ImageManager
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.guidance_manager.guidance_manager import GuidanceManager
+    from unify.task_scheduler.task_scheduler import TaskScheduler
+    from unify.transcript_manager.transcript_manager import TranscriptManager
 
     cm = ContactManager()
     im = ImageManager()
@@ -515,7 +515,7 @@ def test_complex_fk_workflow():
         size: int = 32,
         color: tuple[int, int, int] = (255, 0, 0),
     ) -> str:
-        from unity.image_manager.utils import make_solid_png_base64
+        from unify.image_manager.utils import make_solid_png_base64
 
         return make_solid_png_base64(size, size, color)
 
@@ -757,8 +757,8 @@ def test_circular_fk_deletion_safety():
 
     The backend should handle circular CASCADE correctly without infinite loops.
     """
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.guidance_manager.guidance_manager import GuidanceManager
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.guidance_manager.guidance_manager import GuidanceManager
 
     fm = FunctionManager()
     gm = GuidanceManager()

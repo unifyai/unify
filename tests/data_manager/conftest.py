@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.manager_registry import ManagerRegistry
+from unify.data_manager.simulated import SimulatedDataManager
+from unify.manager_registry import ManagerRegistry
 
 
 @pytest.fixture

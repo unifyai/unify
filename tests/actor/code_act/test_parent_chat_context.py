@@ -4,11 +4,11 @@ import pytest
 from pydantic import BaseModel, Field
 from unittest.mock import MagicMock
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution.session import PythonExecutionSession, _PARENT_CHAT_CONTEXT
-from unity.actor.environments.state_managers import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives
-from unity.function_manager.primitives.scope import PrimitiveScope
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.execution.session import PythonExecutionSession, _PARENT_CHAT_CONTEXT
+from unify.actor.environments.state_managers import StateManagerEnvironment
+from unify.function_manager.primitives import Primitives
+from unify.function_manager.primitives.scope import PrimitiveScope
 
 
 class SecretModel(BaseModel):

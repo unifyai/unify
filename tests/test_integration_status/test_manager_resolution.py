@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity import integration_status as IS
+from unify import integration_status as IS
 
 
 def _pkg(slug: str, label: str, required: list[str], function_names: list[str]) -> dict:
@@ -30,8 +30,8 @@ class FakeFunctionManager:
 def test_build_function_filter_scope_hides_disabled_package_functions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unity.integration_status import discovery
-    from unity.manager_registry import ManagerRegistry
+    from unify.integration_status import discovery
+    from unify.manager_registry import ManagerRegistry
 
     packages = [
         _pkg("hubspot", "HubSpot", ["HUBSPOT_TOKEN"], ["enabled_package_func"]),
@@ -60,7 +60,7 @@ def test_build_function_filter_scope_hides_disabled_package_functions(
 def test_build_function_filter_scope_preserves_normal_rows_when_no_disabled_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unity.integration_status import discovery
+    from unify.integration_status import discovery
 
     package = _pkg("hubspot", "HubSpot", ["HUBSPOT_TOKEN"], ["enabled_package_func"])
     monkeypatch.setattr(discovery, "discover_available_packages", lambda: [package])
@@ -73,8 +73,8 @@ def test_build_function_filter_scope_preserves_normal_rows_when_no_disabled_ids(
 async def test_code_act_actor_appends_enabled_integration_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unity.actor import code_act_actor as code_act_module
-    from unity.actor.code_act_actor import CodeActActor
+    from unify.actor import code_act_actor as code_act_module
+    from unify.actor.code_act_actor import CodeActActor
 
     captured: dict[str, str] = {}
 

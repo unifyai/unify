@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from unity.gateway.storage import LocalDiskStorage, Storage, StorageError
+from unify.gateway.storage import LocalDiskStorage, Storage, StorageError
 
 
 def test_local_disk_storage_satisfies_storage_protocol(tmp_path: Path) -> None:

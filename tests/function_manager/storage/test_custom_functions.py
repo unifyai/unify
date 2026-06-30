@@ -8,15 +8,15 @@ the per-client customization architecture.
 import pytest
 from pathlib import Path
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.custom_functions import (
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.custom_functions import (
     collect_custom_functions,
     compute_custom_functions_hash,
     collect_custom_venvs,
     compute_custom_venvs_hash,
     collect_functions_from_directories,
 )
-from unity.common.context_registry import ContextRegistry
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ from tests.helpers import _handle_project
 # ────────────────────────────────────────────────────────────────────────────
 
 _EXAMPLE_FUNCTIONS_PY = """\
-from unity.function_manager.custom import custom_function
+from unify.function_manager.custom import custom_function
 
 @custom_function()
 async def example_add(a: int, b: int) -> int:
@@ -191,7 +191,7 @@ def test_collect_functions_from_multiple_directories(tmp_path):
     dir_a = tmp_path / "a"
     dir_a.mkdir()
     (dir_a / "funcs.py").write_text(
-        "from unity.function_manager.custom import custom_function\n\n"
+        "from unify.function_manager.custom import custom_function\n\n"
         "@custom_function()\n"
         "async def func_a(x: int) -> int:\n"
         '    """From dir A."""\n'
@@ -201,7 +201,7 @@ def test_collect_functions_from_multiple_directories(tmp_path):
     dir_b = tmp_path / "b"
     dir_b.mkdir()
     (dir_b / "funcs.py").write_text(
-        "from unity.function_manager.custom import custom_function\n\n"
+        "from unify.function_manager.custom import custom_function\n\n"
         "@custom_function()\n"
         "async def func_b(x: int) -> int:\n"
         '    """From dir B."""\n'
@@ -217,7 +217,7 @@ def test_collect_functions_later_dir_overrides_earlier(tmp_path):
     dir_a = tmp_path / "a"
     dir_a.mkdir()
     (dir_a / "funcs.py").write_text(
-        "from unity.function_manager.custom import custom_function\n\n"
+        "from unify.function_manager.custom import custom_function\n\n"
         "@custom_function()\n"
         "async def shared_fn(x: int) -> int:\n"
         '    """Version A."""\n'
@@ -227,7 +227,7 @@ def test_collect_functions_later_dir_overrides_earlier(tmp_path):
     dir_b = tmp_path / "b"
     dir_b.mkdir()
     (dir_b / "funcs.py").write_text(
-        "from unity.function_manager.custom import custom_function\n\n"
+        "from unify.function_manager.custom import custom_function\n\n"
         "@custom_function()\n"
         "async def shared_fn(x: int) -> int:\n"
         '    """Version B."""\n'

@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.contact_manager.types.contact import UNASSIGNED
-from unity.conversation_manager.domains import managers_utils
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.events import (
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.contact_manager.types.contact import UNASSIGNED
+from unify.conversation_manager.domains import managers_utils
+from unify.conversation_manager.domains.event_handlers import EventHandler
+from unify.conversation_manager.events import (
     SyncContacts,
     InboundUnifyMeetUtterance,
     OutboundUnifyMeetUtterance,
@@ -28,7 +28,7 @@ from unity.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
 )
-from unity.transcript_manager.simulated import SimulatedTranscriptManager
+from unify.transcript_manager.simulated import SimulatedTranscriptManager
 
 
 async def _wait_for_condition(

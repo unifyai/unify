@@ -1,4 +1,4 @@
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 from tests.helpers import _handle_project
 import pytest
 

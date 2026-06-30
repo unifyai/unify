@@ -5,9 +5,9 @@ import time
 import unisdk
 
 from tests.helpers import _handle_project
-from unity.common.context_registry import ContextRegistry
-from unity.contact_manager.contact_manager import ContactManager
-from unity.session_details import SESSION_DETAILS
+from unify.common.context_registry import ContextRegistry
+from unify.contact_manager.contact_manager import ContactManager
+from unify.session_details import SESSION_DETAILS
 
 
 @pytest.mark.requires_real_unify

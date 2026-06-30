@@ -41,7 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from unity.conversation_manager.in_memory_event_broker import (
+from unify.conversation_manager.in_memory_event_broker import (
     create_in_memory_event_broker,
     reset_in_memory_event_broker,
 )
@@ -98,7 +98,7 @@ class TestQueueOperationDuringInit:
 
         This is the core guarantee of the queue_operation pattern.
         """
-        from unity.conversation_manager.domains import managers_utils
+        from unify.conversation_manager.domains import managers_utils
 
         # Reset the queue
         while not managers_utils._operations_queue.empty():
@@ -163,7 +163,7 @@ class TestQueueOperationDuringInit:
 
         Order matters for things like logging messages and contact updates.
         """
-        from unity.conversation_manager.domains import managers_utils
+        from unify.conversation_manager.domains import managers_utils
 
         # Reset the queue
         while not managers_utils._operations_queue.empty():
@@ -226,7 +226,7 @@ class TestBackupContactsFallback:
 
         This is critical - without it, contact lookups fail during init.
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
 
@@ -261,7 +261,7 @@ class TestBackupContactsFallback:
         because contacts from recent inbounds should remain available
         until ContactManager can look them up.
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
 
@@ -296,9 +296,9 @@ class TestBackupContactsFallback:
 
         This tests the actual event handler code path.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.events import BackupContactsEvent
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import BackupContactsEvent
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         # Create a mock CM with real ContactIndex (uninitialized)
         ci = ContactIndex()
@@ -328,9 +328,9 @@ class TestBackupContactsFallback:
 
         After initialization, ContactManager is the source of truth.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.events import BackupContactsEvent
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import BackupContactsEvent
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
         mock_cm = MagicMock()
@@ -378,9 +378,9 @@ class TestEventsDuringInitialization:
         3. ContactManager not initialized yet
         4. Handler needs to resolve contact
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.events import SMSReceived, BackupContactsEvent
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import SMSReceived, BackupContactsEvent
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
         mock_cm = MagicMock()
@@ -418,9 +418,9 @@ class TestEventsDuringInitialization:
         SyncContacts requires ContactManager to be initialized.
         Before Ved's fix (78ae1915), this would fail or block.
         """
-        from unity.conversation_manager.domains.event_handlers import EventHandler
-        from unity.conversation_manager.domains import managers_utils
-        from unity.conversation_manager.events import SyncContacts
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.domains import managers_utils
+        from unify.conversation_manager.events import SyncContacts
 
         # Reset the queue
         while not managers_utils._operations_queue.empty():
@@ -463,7 +463,7 @@ class TestRapidEventsRaceCondition:
         2. Adapter immediately sends inbound to unity-{assistant_id}
         3. Both must be handled without race conditions
         """
-        from unity.conversation_manager.events import (
+        from unify.conversation_manager.events import (
             StartupEvent,
             SMSReceived,
             Event,
@@ -545,7 +545,7 @@ class TestRapidEventsRaceCondition:
 
         A flurry of messages shouldn't cause any to be dropped.
         """
-        from unity.conversation_manager.events import SMSReceived, Event
+        from unify.conversation_manager.events import SMSReceived, Event
 
         messages_received = []
 
@@ -600,7 +600,7 @@ class TestInitializationTimeout:
         """
         Test that wait_for_initialization returns when cm.initialized becomes True.
         """
-        from unity.conversation_manager.domains.managers_utils import (
+        from unify.conversation_manager.domains.managers_utils import (
             wait_for_initialization,
         )
 
@@ -631,7 +631,7 @@ class TestContactIndexInitializationState:
         """
         Test that is_contact_manager_initialized correctly reflects state.
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
 
@@ -649,7 +649,7 @@ class TestContactIndexInitializationState:
 
         This catches code that incorrectly assumes manager is always available.
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
 
@@ -668,7 +668,7 @@ class TestContactIndexInitializationState:
 
         This is important for graceful degradation during init.
         """
-        from unity.conversation_manager.domains.contact_index import ContactIndex
+        from unify.conversation_manager.domains.contact_index import ContactIndex
 
         ci = ContactIndex()
 

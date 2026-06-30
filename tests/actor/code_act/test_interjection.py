@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
+from unify.actor.code_act_actor import CodeActActor
 
 from .conftest import wait_for_turn_completion
 

@@ -14,13 +14,13 @@ provider default:
 from __future__ import annotations
 
 
-from unity.conversation_manager import conversation_manager as cm_mod
-from unity.conversation_manager.conversation_manager import ConversationManager
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager import conversation_manager as cm_mod
+from unify.conversation_manager.conversation_manager import ConversationManager
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
-from unity.session_details import SessionDetails
+from unify.session_details import SessionDetails
 
 
 def _bare_cm() -> ConversationManager:

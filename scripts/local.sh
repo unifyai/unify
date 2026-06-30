@@ -217,9 +217,9 @@ run_gateway_doctor() {
   local python_cmd
   python_cmd="$(get_python)"
   if [[ -n "$GATEWAY_PUBLIC_URL" ]]; then
-    "$python_cmd" -m unity.gateway doctor --public-url "$GATEWAY_PUBLIC_URL"
+    "$python_cmd" -m unify.gateway doctor --public-url "$GATEWAY_PUBLIC_URL"
   else
-    "$python_cmd" -m unity.gateway doctor
+    "$python_cmd" -m unify.gateway doctor
   fi
 }
 
@@ -257,7 +257,7 @@ start_gateway() {
   python_cmd="$(get_python)"
 
   local gateway_command=(
-    "$python_cmd" -m unity.gateway serve
+    "$python_cmd" -m unify.gateway serve
     --host "$GATEWAY_HOST"
     --port "$GATEWAY_PORT"
     --mode all
@@ -432,7 +432,7 @@ __start_full_cm_impl() {
   [[ -z "${USER_EMAIL:-}" ]]           && env_vars+=("USER_EMAIL=local@test.example.com")
   [[ -n "${USER_EMAIL:-}" ]]           && env_vars+=("USER_EMAIL=$USER_EMAIL")
 
-  env "${env_vars[@]}" $python_cmd -m unity.conversation_manager.main \
+  env "${env_vars[@]}" $python_cmd -m unify.conversation_manager.main \
     > "$LOGFILE" 2>&1 &
 
   local pid=$!

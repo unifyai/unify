@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from unity.conversation_manager.domains.call_manager import (
+from unify.conversation_manager.domains.call_manager import (
     CallConfig,
     LivekitCallManager,
 )
-from unity.conversation_manager.domains.event_handlers import EventHandler
-from unity.conversation_manager.events import RecordingReady
-from unity.gateway.common.livekit import make_call_scoped_sip_uri
+from unify.conversation_manager.domains.event_handlers import EventHandler
+from unify.conversation_manager.events import RecordingReady
+from unify.gateway.common.livekit import make_call_scoped_sip_uri
 
 
 @pytest.mark.asyncio

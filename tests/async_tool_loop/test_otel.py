@@ -53,14 +53,14 @@ class TestOtelEnabled:
 
     def test_otel_disabled_by_default(self, monkeypatch):
         """UNITY_OTEL defaults to false."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         assert logger.is_otel_enabled() is False
 
     def test_otel_enabled_via_setting(self, monkeypatch):
         """UNITY_OTEL=true enables OTel."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         assert logger.is_otel_enabled() is True
@@ -71,7 +71,7 @@ class TestGetTracer:
 
     def test_returns_none_when_disabled(self, monkeypatch):
         """get_tracer returns None when OTel is disabled."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
@@ -80,7 +80,7 @@ class TestGetTracer:
 
     def test_returns_tracer_when_enabled(self, reset_otel, monkeypatch):
         """get_tracer returns a tracer when OTel is enabled."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -91,7 +91,7 @@ class TestGetTracer:
 
     def test_uses_existing_provider(self, reset_otel, monkeypatch):
         """get_tracer uses existing TracerProvider if available."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -111,7 +111,7 @@ class TestGetTracer:
         a ProxyTracerProvider may be in place. Unity should replace it with
         a real TracerProvider to enable span export.
         """
-        from unity import logger
+        from unify import logger
         from opentelemetry.sdk.trace import TracerProvider
 
         # Reset OTel global state to get fresh ProxyTracerProvider
@@ -148,7 +148,7 @@ class TestUnitySpan:
 
     def test_span_created_when_otel_enabled(self, reset_otel, monkeypatch):
         """unity_span creates a span when OTel is enabled."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -163,11 +163,11 @@ class TestUnitySpan:
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].name == "ContactManager.ask"
-        assert spans[0].attributes.get("unity.query") == "find john"
+        assert spans[0].attributes.get("unify.query") == "find john"
 
     def test_span_none_when_otel_disabled(self, monkeypatch):
         """unity_span yields None when OTel is disabled."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         monkeypatch.setattr(logger, "_TRACER", None)
@@ -177,7 +177,7 @@ class TestUnitySpan:
 
     def test_span_records_error_on_exception(self, reset_otel, monkeypatch):
         """unity_span records errors when exceptions occur."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -200,14 +200,14 @@ class TestGetCurrentTraceId:
 
     def test_returns_none_when_disabled(self, monkeypatch):
         """get_current_trace_id returns None when OTel is disabled."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", False)
         assert logger.get_current_trace_id() is None
 
     def test_returns_trace_id_when_span_active(self, reset_otel, monkeypatch):
         """get_current_trace_id returns trace ID when span is active."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
 
@@ -230,7 +230,7 @@ class TestUnityOnlyHierarchy:
 
     def test_nested_unity_spans_same_trace(self, reset_otel, monkeypatch):
         """Nested unity_spans share the same trace ID."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -267,7 +267,7 @@ class TestUnityToUnillmHierarchy:
 
     def test_unillm_span_child_of_unity(self, reset_otel, monkeypatch):
         """Unillm spans become children of Unity spans."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -310,7 +310,7 @@ class TestUnityToUnifyHierarchy:
 
     def test_unify_span_child_of_unity(self, reset_otel, monkeypatch):
         """Unify HTTP spans become children of Unity spans."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -351,7 +351,7 @@ class TestFullStackHierarchy:
 
     def test_full_stack_trace_hierarchy(self, reset_otel, monkeypatch):
         """Full hierarchy maintains parent-child relationships."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -390,7 +390,7 @@ class TestFullStackHierarchy:
 
     def test_parallel_unity_to_unify_calls(self, reset_otel, monkeypatch):
         """Multiple direct Unity -> Unify calls create sibling spans."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -430,7 +430,7 @@ class TestSettingsValidation:
 
     def test_otel_setting_parses_true(self):
         """UNITY_OTEL parses 'true' string correctly."""
-        from unity.settings import _parse_bool
+        from unify.settings import _parse_bool
 
         assert _parse_bool("true") is True
         assert _parse_bool("True") is True
@@ -440,7 +440,7 @@ class TestSettingsValidation:
 
     def test_otel_setting_parses_false(self):
         """UNITY_OTEL parses 'false' string correctly."""
-        from unity.settings import _parse_bool
+        from unify.settings import _parse_bool
 
         assert _parse_bool("false") is False
         assert _parse_bool("False") is False
@@ -459,7 +459,7 @@ class TestCrossPackageIntegration:
 
     def test_unity_provider_used_by_child_packages(self, reset_otel, monkeypatch):
         """Child packages use Unity's TracerProvider when it exists."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -484,7 +484,7 @@ class TestCrossPackageIntegration:
 
     def test_span_attributes_preserved_across_packages(self, reset_otel, monkeypatch):
         """Span attributes from each package are preserved in the trace."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -495,7 +495,7 @@ class TestCrossPackageIntegration:
         unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("Actor.act", method="ask") as unity_span:
-            unity_span.set_attribute("unity.query", "find contacts")
+            unity_span.set_attribute("unify.query", "find contacts")
 
             with unillm_tracer.start_as_current_span("LLM call") as llm_span:
                 llm_span.set_attribute("llm.model", "gpt-4")
@@ -512,8 +512,8 @@ class TestCrossPackageIntegration:
         llm_s = next(s for s in spans if "LLM" in s.name)
         http_s = next(s for s in spans if "HTTP" in s.name)
 
-        assert unity_s.attributes.get("unity.method") == "ask"
-        assert unity_s.attributes.get("unity.query") == "find contacts"
+        assert unity_s.attributes.get("unify.method") == "ask"
+        assert unity_s.attributes.get("unify.query") == "find contacts"
 
         assert llm_s.attributes.get("llm.model") == "gpt-4"
         assert llm_s.attributes.get("llm.cache_status") == "miss"
@@ -534,7 +534,7 @@ class TestFileSpanExporter:
         """FileSpanExporter writes spans to JSONL files."""
         import json
 
-        from unity.logger import FileSpanExporter
+        from unify.logger import FileSpanExporter
 
         exporter = reset_otel["exporter"]
         file_exporter = FileSpanExporter(tmp_path, service_name="unity")
@@ -581,7 +581,7 @@ class TestFileSpanExporter:
         """Nested spans go to the same trace file."""
         import json
 
-        from unity.logger import FileSpanExporter
+        from unify.logger import FileSpanExporter
 
         file_exporter = FileSpanExporter(tmp_path, service_name="unity")
         provider = reset_otel["provider"]
@@ -622,7 +622,7 @@ class TestFileSpanExporter:
         """Different traces go to different files."""
         from opentelemetry import context
 
-        from unity.logger import FileSpanExporter
+        from unify.logger import FileSpanExporter
 
         file_exporter = FileSpanExporter(tmp_path, service_name="unity")
         provider = reset_otel["provider"]
@@ -654,7 +654,7 @@ class TestFileSpanExporter:
         import json
         import time
 
-        from unity.logger import FileSpanExporter
+        from unify.logger import FileSpanExporter
 
         file_exporter = FileSpanExporter(tmp_path, service_name="unity")
         provider = reset_otel["provider"]
@@ -680,7 +680,7 @@ class TestFileSpanExporter:
 
         from opentelemetry.trace import Status, StatusCode
 
-        from unity.logger import FileSpanExporter
+        from unify.logger import FileSpanExporter
 
         file_exporter = FileSpanExporter(tmp_path, service_name="unity")
         provider = reset_otel["provider"]
@@ -703,7 +703,7 @@ class TestFileSpanExporter:
 
     def test_get_otel_log_dir_returns_none_when_unset(self, monkeypatch):
         """get_otel_log_dir returns None when UNITY_OTEL_LOG_DIR is not set."""
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", "")
         assert logger.get_otel_log_dir() is None
@@ -711,7 +711,7 @@ class TestFileSpanExporter:
     def test_get_otel_log_dir_returns_path_when_set(self, monkeypatch, tmp_path):
         """get_otel_log_dir returns Path when UNITY_OTEL_LOG_DIR is set."""
 
-        from unity import logger
+        from unify import logger
 
         monkeypatch.setattr(logger, "_OTEL_LOG_DIR", str(tmp_path))
         result = logger.get_otel_log_dir()
@@ -725,8 +725,8 @@ class TestFileSpanExporterIntegration:
         """unity_span writes spans to file when UNITY_OTEL_LOG_DIR is set."""
         import json
 
-        from unity import logger
-        from unity.logger import FileSpanExporter
+        from unify import logger
+        from unify.logger import FileSpanExporter
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)
@@ -748,7 +748,7 @@ class TestFileSpanExporterIntegration:
 
         assert span_data["name"] == "ContactManager.ask"
         assert span_data["service"] == "unity"
-        assert span_data["attributes"]["unity.query"] == "find john"
+        assert span_data["attributes"]["unify.query"] == "find john"
 
     def test_full_hierarchy_writes_to_same_file(
         self,
@@ -759,8 +759,8 @@ class TestFileSpanExporterIntegration:
         """Full Unity->Unillm->Unify hierarchy writes to same trace file."""
         import json
 
-        from unity import logger
-        from unity.logger import FileSpanExporter
+        from unify import logger
+        from unify.logger import FileSpanExporter
 
         monkeypatch.setattr(logger, "_OTEL_ENABLED", True)
         monkeypatch.setattr(logger, "_OTEL_INITIALIZED", False)

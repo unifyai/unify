@@ -1,4 +1,4 @@
-"""Tests for the vendored type utilities in unity.common.type_utils.
+"""Tests for the vendored type utilities in unify.common.type_utils.
 
 Covers:
 - ``infer_type_from_value``: content-based type inference for all categories
@@ -12,7 +12,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from unity.common.type_utils import (
+from unify.common.type_utils import (
     infer_type_from_value,
     normalize_type_string,
     types_match,

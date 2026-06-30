@@ -3,9 +3,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from unity.function_manager.computer_backends import ActResult
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import ComputerPrimitives
+from unify.function_manager.computer_backends import ActResult
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import ComputerPrimitives
 
 _FM_METHOD_NAMES = (
     "search_functions",

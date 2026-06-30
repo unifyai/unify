@@ -12,7 +12,7 @@ import os
 import pytest
 
 from tests.helpers import _handle_project
-from unity.function_manager.shell_session import ShellSession
+from unify.function_manager.shell_session import ShellSession
 
 # ────────────────────────────────────────────────────────────────────────────
 # Phase 1.1: Basic Session Lifecycle

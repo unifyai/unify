@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from sandboxes.conversation_manager.scenario_generator import build_event_catalogue
 from sandboxes.scenario_builder import ScenarioBuilder
-from unity.common.llm_client import DEFAULT_MODEL
+from unify.common.llm_client import DEFAULT_MODEL
 
 
 class ScenarioEvent(BaseModel):

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from unity.common.pipeline.types import InlineRowsHandle
-from unity.data_manager.simulated import SimulatedDataManager
-from unity.data_manager.types import IngestResult
+from unify.common.pipeline.types import InlineRowsHandle
+from unify.data_manager.simulated import SimulatedDataManager
+from unify.data_manager.types import IngestResult
 
 
 @pytest.fixture

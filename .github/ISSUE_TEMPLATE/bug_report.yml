@@ -9,9 +9,9 @@ body:
       Thanks for taking the time to file a bug report.
 
       Before submitting:
-      - Search [existing issues](https://github.com/unifyai/unity/issues) to avoid duplicates.
-      - Try `unity update` and confirm the bug still reproduces.
-      - If this is install-related, run `unity doctor` and include its output below.
+      - Search [existing issues](https://github.com/unifyai/unify/issues) to avoid duplicates.
+      - Try `unify update` and confirm the bug still reproduces.
+      - If this is install-related, run `unify doctor` and include its output below.
 
 - type: textarea
   id: description
@@ -29,7 +29,7 @@ body:
     label: Steps to reproduce
     description: Minimal steps to trigger the bug. The more specific, the faster we can fix it.
     placeholder: |
-      1. `unity` from a fresh terminal
+      1. `unify` from a fresh terminal
       2. Send the message "..."
       3. Observe ...
   validations:
@@ -56,9 +56,9 @@ body:
     label: Affected surface
     multiple: true
     options:
-    - CLI (`unity`)
-    - Voice (`unity --live-voice`)
-    - Installer / setup (`scripts/install.sh`, `unity setup`, `unity doctor`)
+    - CLI (`unify`)
+    - Voice (`unify --live-voice`)
+    - Installer / setup (`scripts/install.sh`, `unify setup`, `unify doctor`)
     - Local Orchestra (Docker / Postgres)
     - Tests (`tests/parallel_run.sh`)
     - A specific state manager (Contact / Knowledge / Task / Transcript / Guidance / Function / File / Image / Web / Secret / Blacklist / Data)
@@ -88,16 +88,16 @@ body:
 - type: input
   id: unity-commit
   attributes:
-    label: Unity commit
-    description: Output of `git rev-parse --short HEAD` in the unity repo.
+    label: Unify commit
+    description: Output of `git rev-parse --short HEAD` in the unify repo.
     placeholder: "aaabf3d4"
 
 - type: textarea
   id: doctor
   attributes:
-    label: "`unity doctor` output (recommended)"
+    label: "`unify doctor` output (recommended)"
     description: |
-      Paste the full output of `unity doctor`. This catches the majority of install / environment bugs without back-and-forth.
+      Paste the full output of `unify doctor`. This catches the majority of install / environment bugs without back-and-forth.
     render: shell
 
 - type: textarea

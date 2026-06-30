@@ -12,7 +12,7 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
-from unity.conversation_manager.events import (
+from unify.conversation_manager.events import (
     ActorClarificationRequest,
     ActorClarificationResponse,
     ActorHandleStarted,
@@ -56,8 +56,8 @@ from unity.conversation_manager.events import (
 from sandboxes.conversation_manager.event_tree_display import EventTreeDisplay
 from sandboxes.conversation_manager.log_aggregator import LogAggregator
 from sandboxes.conversation_manager.trace_display import TraceDisplay
-from unity.events.event_bus import EVENT_BUS, Event as BusEvent
-from unity.events.types.manager_method import ManagerMethodPayload
+from unify.events.event_bus import EVENT_BUS, Event as BusEvent
+from unify.events.types.manager_method import ManagerMethodPayload
 
 LG = logging.getLogger("conversation_manager_sandbox")
 

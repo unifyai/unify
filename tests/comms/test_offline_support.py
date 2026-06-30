@@ -3,13 +3,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.comms import offline_support
-from unity.comms import primitives as primitives_module
-from unity.comms.primitives import CommsPrimitives
-from unity.conversation_manager.cm_types import Medium
-from unity.conversation_manager.domains import comms_utils
-from unity.conversation_manager.events import Event, WhatsAppSent
-from unity.task_scheduler.machine_state import (
+from unify.comms import offline_support
+from unify.comms import primitives as primitives_module
+from unify.comms.primitives import CommsPrimitives
+from unify.conversation_manager.cm_types import Medium
+from unify.conversation_manager.domains import comms_utils
+from unify.conversation_manager.events import Event, WhatsAppSent
+from unify.task_scheduler.machine_state import (
     TaskOutboundOperationRecord,
     TaskOutboundOperationReference,
 )
@@ -92,11 +92,11 @@ def _stub_offline_tracking(monkeypatch, *, operation_key: str):
 def test_missing_detail_error_is_coordinator_boss_aware(monkeypatch):
     comms = CommsPrimitives()
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.is_coordinator",
+        "unify.comms.primitives.SESSION_DETAILS.is_coordinator",
         True,
     )
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.boss_contact_id",
+        "unify.comms.primitives.SESSION_DETAILS.boss_contact_id",
         1,
     )
 
@@ -116,7 +116,7 @@ def test_missing_detail_error_is_coordinator_boss_aware(monkeypatch):
 def test_missing_detail_error_keeps_inline_guidance_for_regular_contacts(monkeypatch):
     comms = CommsPrimitives()
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.is_coordinator",
+        "unify.comms.primitives.SESSION_DETAILS.is_coordinator",
         False,
     )
 
@@ -481,7 +481,7 @@ async def test_send_sms_offline_duplicate_skips_transport(monkeypatch):
     comms._event_broker.publish = AsyncMock()
 
     monkeypatch.setattr(
-        "unity.comms.primitives.reserve_outbound_operation",
+        "unify.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: offline_support.OfflineOutboundDecision(
             reservation=None,
             response={"status": "ok", "deduped": True},
@@ -510,7 +510,7 @@ async def test_send_email_missing_assistant_email_does_not_reserve_or_attach(
     )
     monkeypatch.setattr(comms, "_assistant_email", lambda: "")
     monkeypatch.setattr(
-        "unity.comms.primitives.reserve_outbound_operation",
+        "unify.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("offline reservation should not happen"),
         ),
@@ -544,7 +544,7 @@ async def test_send_discord_channel_missing_bot_does_not_reserve_or_send(monkeyp
         },
     )
     monkeypatch.setattr(
-        "unity.comms.primitives.reserve_outbound_operation",
+        "unify.comms.primitives.reserve_outbound_operation",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("offline reservation should not happen"),
         ),
@@ -636,12 +636,12 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
     comms._event_broker.publish = AsyncMock()
     monkeypatch.setattr(comms, "_assistant_whatsapp_number", lambda: "+15555550001")
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.assistant.first_name",
+        "unify.comms.primitives.SESSION_DETAILS.assistant.first_name",
         "T-W1N",
         raising=False,
     )
     monkeypatch.setattr(
-        "unity.comms.primitives.SESSION_DETAILS.assistant.agent_id",
+        "unify.comms.primitives.SESSION_DETAILS.assistant.agent_id",
         42,
         raising=False,
     )
@@ -728,7 +728,7 @@ async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback
     comms._event_broker.publish = AsyncMock()
 
     monkeypatch.setattr(
-        "unity.conversation_manager.domains.call_manager.make_room_name",
+        "unify.conversation_manager.domains.call_manager.make_room_name",
         lambda assistant_id, medium: f"{assistant_id}-{medium}",
     )
 

@@ -3,17 +3,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tests.helpers import _handle_project
-from unity.actor.simulated import SimulatedActor
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.repetition import (
+from unify.actor.simulated import SimulatedActor
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.repetition import (
     Frequency,
     RepeatPattern,
     Weekday,
     normalize_repeat_patterns,
     next_repeated_start_at,
 )
-from unity.task_scheduler.types.schedule import Schedule
-from unity.task_scheduler.types.status import Status
+from unify.task_scheduler.types.schedule import Schedule
+from unify.task_scheduler.types.status import Status
 
 
 def _passing_certification_metadata():

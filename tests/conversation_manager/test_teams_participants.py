@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.comms_manager import _resolve_teams_participants
-from unity.conversation_manager.events import (
+from unify.conversation_manager.comms_manager import _resolve_teams_participants
+from unify.conversation_manager.events import (
     TeamsChannelMessageReceived,
     TeamsChannelMessageSent,
     TeamsMessageReceived,

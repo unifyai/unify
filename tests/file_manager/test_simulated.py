@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.file_manager.simulated import (
+from unify.file_manager.simulated import (
     SimulatedFileManager,
 )
 
@@ -17,8 +17,8 @@ from tests.helpers import (
 # 1.  Doc-string inheritance                                                 #
 # ────────────────────────────────────────────────────────────────────────────
 def test_docstrings_match_base():
-    from unity.file_manager.base import BaseFileManager
-    from unity.file_manager.simulated import SimulatedFileManager
+    from unify.file_manager.base import BaseFileManager
+    from unify.file_manager.simulated import SimulatedFileManager
 
     assert (
         BaseFileManager.ask_about_file.__doc__.strip()

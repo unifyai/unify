@@ -12,10 +12,10 @@ import inspect
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments.actor import ActorEnvironment, _ActorRunner
-from unity.actor.prompt_builders import build_code_act_prompt
-from unity.common.async_tool_loop import SteerableToolHandle
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments.actor import ActorEnvironment, _ActorRunner
+from unify.actor.prompt_builders import build_code_act_prompt
+from unify.common.async_tool_loop import SteerableToolHandle
 
 # ---------------------------------------------------------------------------
 # Symbolic tests — environment installation and gating
@@ -140,7 +140,7 @@ def test_actor_discovery_scope_used_directly():
     Since _ActorRunner.act() constructs a fresh FunctionManager (no parent
     inheritance), the discovery_scope becomes the filter_scope verbatim.
     """
-    from unity.actor.environments.actor import _build_scoped_fm
+    from unify.actor.environments.actor import _build_scoped_fm
 
     fm = _build_scoped_fm("language == 'python'")
     assert fm.filter_scope == "language == 'python'"
@@ -212,7 +212,7 @@ async def test_actor_env_capture_state():
 @pytest.mark.timeout(30)
 def test_actor_in_collect_primitives():
     """collect_primitives() should include primitives.actor.act with correct metadata."""
-    from unity.function_manager.primitives.registry import collect_primitives
+    from unify.function_manager.primitives.registry import collect_primitives
 
     primitives = collect_primitives()
     assert "primitives.actor.act" in primitives
@@ -225,8 +225,8 @@ def test_actor_in_collect_primitives():
 @pytest.mark.timeout(30)
 def test_actor_accessible_via_primitives_class():
     """Primitives().actor should return an _ActorRunner instance."""
-    from unity.function_manager.primitives import Primitives
-    from unity.function_manager.primitives.scope import PrimitiveScope
+    from unify.function_manager.primitives import Primitives
+    from unify.function_manager.primitives.scope import PrimitiveScope
 
     scope = PrimitiveScope(scoped_managers=frozenset({"actor"}))
     prims = Primitives(primitive_scope=scope)
@@ -323,15 +323,15 @@ async def test_actor_act_forwards_llm_profile(monkeypatch):
             captured["closed"] = True
 
     monkeypatch.setattr(
-        "unity.actor.code_act_actor.CodeActActor",
+        "unify.actor.code_act_actor.CodeActActor",
         _FakeInnerActor,
     )
     monkeypatch.setattr(
-        "unity.actor.environments.actor._build_scoped_fm",
+        "unify.actor.environments.actor._build_scoped_fm",
         lambda discovery_scope: _FakeFunctionManager(),
     )
     monkeypatch.setattr(
-        "unity.actor.environments.actor._build_scoped_gm",
+        "unify.actor.environments.actor._build_scoped_gm",
         lambda guidance_scope: _FakeGuidanceManager(),
     )
 
@@ -366,8 +366,8 @@ def test_construct_sandbox_root_primitives_returns_primitives_with_actor():
     "primitives.actor.act" dependency at runtime when a stored function is
     executed outside of a live CodeActActor sandbox.
     """
-    from unity.function_manager.primitives.registry import construct_sandbox_root
-    from unity.function_manager.primitives.runtime import Primitives
+    from unify.function_manager.primitives.registry import construct_sandbox_root
+    from unify.function_manager.primitives.runtime import Primitives
 
     root = construct_sandbox_root("primitives")
     assert root is not None
@@ -384,8 +384,8 @@ def test_construct_sandbox_root_primitives_is_stateless():
     primitives.actor.act(...) receive a freshly constructed Primitives via
     _inject_dependencies, with no shared state between invocations.
     """
-    from unity.function_manager.primitives.registry import construct_sandbox_root
-    from unity.function_manager.primitives.runtime import Primitives
+    from unify.function_manager.primitives.registry import construct_sandbox_root
+    from unify.function_manager.primitives.runtime import Primitives
 
     root_a = construct_sandbox_root("primitives")
     root_b = construct_sandbox_root("primitives")
@@ -398,7 +398,7 @@ def test_construct_sandbox_root_primitives_is_stateless():
 def test_construct_sandbox_root_primitives_has_act_as_primitive_method():
     """The _ActorRunner exposed via construct_sandbox_root("primitives").actor
     should have 'act' in _PRIMITIVE_METHODS so the registry can discover it."""
-    from unity.function_manager.primitives.registry import construct_sandbox_root
+    from unify.function_manager.primitives.registry import construct_sandbox_root
 
     root = construct_sandbox_root("primitives")
     runner = root.actor
@@ -409,7 +409,7 @@ def test_construct_sandbox_root_primitives_has_act_as_primitive_method():
 @pytest.mark.timeout(30)
 def test_construct_sandbox_root_actor_returns_none():
     """construct_sandbox_root("actor") is no longer a valid root and returns None."""
-    from unity.function_manager.primitives.registry import construct_sandbox_root
+    from unify.function_manager.primitives.registry import construct_sandbox_root
 
     assert construct_sandbox_root("actor") is None
 
@@ -417,7 +417,7 @@ def test_construct_sandbox_root_actor_returns_none():
 @pytest.mark.timeout(30)
 def test_construct_sandbox_root_unknown_returns_none():
     """construct_sandbox_root with an unknown root name returns None."""
-    from unity.function_manager.primitives.registry import construct_sandbox_root
+    from unify.function_manager.primitives.registry import construct_sandbox_root
 
     assert construct_sandbox_root("nonexistent_root") is None
 
@@ -485,8 +485,8 @@ async def test_stored_actor_function_reexecutes_successfully():
     -> Primitives() -> .actor -> _ActorRunner.act() -> inner CodeActActor -> result
     """
     from tests.helpers import _handle_project
-    from unity.function_manager.function_manager import FunctionManager
-    from unity.function_manager.execution_env import create_base_globals
+    from unify.function_manager.function_manager import FunctionManager
+    from unify.function_manager.execution_env import create_base_globals
 
     @_handle_project
     async def _inner():

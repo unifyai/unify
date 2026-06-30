@@ -1,6 +1,6 @@
 import json
 
-from unity.common.context_dump import make_messages_safe_for_context_dump
+from unify.common.context_dump import make_messages_safe_for_context_dump
 
 
 def test_make_messages_safe_for_context_dump_redacts_image_blobs() -> None:

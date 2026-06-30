@@ -9,8 +9,8 @@ import asyncio
 
 import pytest
 
-from unity.common.async_tool_loop import SteerableToolHandle
-from unity.function_manager.execution_env import create_execution_globals
+from unify.common.async_tool_loop import SteerableToolHandle
+from unify.function_manager.execution_env import create_execution_globals
 
 
 class _ImmediateHandle(SteerableToolHandle):
@@ -233,7 +233,7 @@ async def codeact_workflow(goal: str) -> SteerableToolHandle:
     compositional functions that can be searched, retrieved, and executed
     with full steering support.
     \"\"\"
-    from unity.actor.code_act_actor import CodeActActor
+    from unify.actor.code_act_actor import CodeActActor
 
     # Create a CodeActActor with custom configuration
     actor = CodeActActor()

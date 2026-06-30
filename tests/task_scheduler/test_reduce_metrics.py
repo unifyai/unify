@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.helpers import _handle_project
-from unity.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import TaskScheduler
 
 
 @pytest.mark.requires_real_unify

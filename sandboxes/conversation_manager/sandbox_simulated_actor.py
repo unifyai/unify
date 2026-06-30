@@ -2,7 +2,7 @@
 Sandbox-only SimulatedActor wrapper.
 
 Goal:
-- Keep production `unity.actor.simulated.SimulatedActor` unchanged.
+- Keep production `unify.actor.simulated.SimulatedActor` unchanged.
 - Make sandbox runs feel realistic by:
   - emitting throttled progress notifications (so the UI isn't spammy)
   - producing an actionable completion result (found / not found / ask for missing info)
@@ -17,8 +17,8 @@ from typing import Any, Optional, Type
 
 from pydantic import BaseModel
 
-from unity.actor.simulated import SimulatedActor
-from unity.common.async_tool_loop import SteerableToolHandle
+from unify.actor.simulated import SimulatedActor
+from unify.common.async_tool_loop import SteerableToolHandle
 
 
 class _ThrottledHandle(SteerableToolHandle):

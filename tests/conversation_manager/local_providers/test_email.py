@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.local_providers.email import _as_message_id
+from unify.conversation_manager.local_providers.email import _as_message_id
 
 
 @pytest.mark.parametrize(

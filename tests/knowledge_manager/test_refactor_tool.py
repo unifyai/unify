@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.contact_manager.contact_manager import ContactManager
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 # helper – spins up an isolated temporary Unify project
 from tests.helpers import _handle_project

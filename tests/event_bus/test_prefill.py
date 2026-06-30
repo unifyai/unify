@@ -1,11 +1,11 @@
 import pytest
 import datetime as dt
 
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
-from unity.events.types.coordinator_activity import CoordinatorActivityPayload
-from unity.transcript_manager.types.message import Message
-from unity.conversation_manager.cm_types import Medium
+from unify.events.event_bus import EventBus, Event
+from unify.events.types.comms import CommsPayload
+from unify.events.types.coordinator_activity import CoordinatorActivityPayload
+from unify.transcript_manager.types.message import Message
+from unify.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

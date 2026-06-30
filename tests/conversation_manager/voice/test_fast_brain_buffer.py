@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from unity.conversation_manager.domains import fast_brain_buffer
-from unity.conversation_manager.domains.fast_brain_buffer import (
+from unify.conversation_manager.domains import fast_brain_buffer
+from unify.conversation_manager.domains.fast_brain_buffer import (
     compute_resume_text,
     select_continuation,
     select_fast_reply,

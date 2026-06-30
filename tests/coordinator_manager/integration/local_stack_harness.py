@@ -84,7 +84,7 @@ def resolve_sibling_repo(name: str) -> Path:
 
 def _resolve_stack_script() -> tuple[Path, Path]:
     # The self-host stack orchestration lives in the private unity-deploy repo
-    # (selfhost/stack.sh), which drives the sibling unity/console/orchestra
+    # (selfhost/stack.sh), which drives the sibling unify/console/orchestra
     # checkouts. Returns (cwd, stack.sh path).
     deploy_repo = resolve_sibling_repo("unity-deploy")
     stack_script = deploy_repo / "selfhost" / "stack.sh"

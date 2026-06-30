@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from unity.gateway.context import create_default_gateway_context
-from unity.gateway.envelope_sink import HttpEnvelopeSink, MissingEnvelopeSink
+from unify.gateway.context import create_default_gateway_context
+from unify.gateway.envelope_sink import HttpEnvelopeSink, MissingEnvelopeSink
 
 
 def test_default_context_requires_explicit_sink(monkeypatch) -> None:

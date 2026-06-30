@@ -39,7 +39,7 @@ import json
 import unisdk
 from pydantic import BaseModel, Field
 from sandboxes.scenario_builder import ScenarioBuilder
-from unity.common.llm_client import new_llm_client
+from unify.common.llm_client import new_llm_client
 
 # Ensure repository root resolves for local execution
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,11 +47,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ────────────────────────────────  unity imports  ───────────────────────────
-from unity.file_manager.managers.file_manager import FileManager
-from unity.file_manager.managers.local import LocalFileManager
-from unity.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
-from unity.file_manager.types.config import FilePipelineConfig
-from unity.common.async_tool_loop import SteerableToolHandle
+from unify.file_manager.managers.file_manager import FileManager
+from unify.file_manager.managers.local import LocalFileManager
+from unify.file_manager.filesystem_adapters.local_adapter import LocalFileSystemAdapter
+from unify.file_manager.types.config import FilePipelineConfig
+from unify.common.async_tool_loop import SteerableToolHandle
 from sandboxes.utils import (
     record_until_enter as _record_until_enter,
     transcribe_deepgram as _transcribe_deepgram,

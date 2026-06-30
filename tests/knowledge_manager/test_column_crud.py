@@ -1,5 +1,5 @@
 from tests.helpers import _handle_project
-from unity.knowledge_manager.knowledge_manager import KnowledgeManager
+from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 
 @_handle_project

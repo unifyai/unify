@@ -13,9 +13,9 @@ from __future__ import annotations
 import pytest
 from unisdk.utils.http import RequestError
 
-from unity.data_manager.data_manager import DataManager
-from unity.data_manager.types import TableDescription
-from unity.manager_registry import ManagerRegistry
+from unify.data_manager.data_manager import DataManager
+from unify.data_manager.types import TableDescription
+from unify.manager_registry import ManagerRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────

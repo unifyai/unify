@@ -1,7 +1,7 @@
 import pytest
 
-from unity.blacklist_manager.blacklist_manager import BlackListManager
-from unity.conversation_manager.cm_types import Medium
+from unify.blacklist_manager.blacklist_manager import BlackListManager
+from unify.conversation_manager.cm_types import Medium
 from tests.helpers import _handle_project
 
 

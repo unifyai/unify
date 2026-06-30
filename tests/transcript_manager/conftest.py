@@ -13,11 +13,11 @@ import pytest_asyncio
 import os
 import unisdk
 
-from unity.contact_manager.contact_manager import ContactManager
-from unity.transcript_manager.transcript_manager import TranscriptManager
-from unity.transcript_manager.types.message import Message
-from unity.manager_registry import ManagerRegistry
-from unity.common.context_registry import ContextRegistry
+from unify.contact_manager.contact_manager import ContactManager
+from unify.transcript_manager.transcript_manager import TranscriptManager
+from unify.transcript_manager.types.message import Message
+from unify.manager_registry import ManagerRegistry
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import (
     get_or_create_contact,
     rebuild_id_mapping,
@@ -26,7 +26,7 @@ from tests.helpers import (
     mutation_test_lock,
     restore_scenario_context,
 )
-from unity.common.embed_utils import ensure_vector_column
+from unify.common.embed_utils import ensure_vector_column
 
 SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 

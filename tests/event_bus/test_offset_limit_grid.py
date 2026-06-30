@@ -1,5 +1,5 @@
 # Exhaustive coverage of the 2 × 2 grid of ``offset``/``limit`` type-combinations
-# accepted by :pymeth:`unity.events.event_bus.EventBus.search`.  The table below
+# accepted by :pymeth:`unify.events.event_bus.EventBus.search`.  The table below
 # comes straight from the updated docstring; every row now has a dedicated test.
 #
 # ┌──────────────┬──────────────┬────────────────────────────────────────────┐
@@ -18,9 +18,9 @@ import datetime as dt
 import pytest
 
 from tests.helpers import _handle_project
-from unity.events.event_bus import EventBus, Event
-from unity.events.types.comms import CommsPayload
-from unity.events.types.manager_method import ManagerMethodPayload
+from unify.events.event_bus import EventBus, Event
+from unify.events.types.comms import CommsPayload
+from unify.events.types.manager_method import ManagerMethodPayload
 
 # --------------------------------------------------------------------------- #
 #  deterministic timestamps                                                   #

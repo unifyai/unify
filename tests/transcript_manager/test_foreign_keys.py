@@ -30,10 +30,10 @@ import pytest
 import unisdk
 from datetime import datetime
 from tests.helpers import _handle_project
-from unity.contact_manager.contact_manager import ContactManager
-from unity.image_manager.image_manager import ImageManager
-from unity.image_manager.utils import make_solid_png_base64
-from unity.transcript_manager.transcript_manager import TranscriptManager
+from unify.contact_manager.contact_manager import ContactManager
+from unify.image_manager.image_manager import ImageManager
+from unify.image_manager.utils import make_solid_png_base64
+from unify.transcript_manager.transcript_manager import TranscriptManager
 
 
 # Helper function for creating valid test images
@@ -241,7 +241,7 @@ def test_fk_message_sender_id_null_does_not_break_manager_init():
     assert messages[0].entries["content"] == "Hello from Alice"
 
     # Verify we can construct Message objects from the DB data (no ValidationError)
-    from unity.transcript_manager.types.message import Message
+    from unify.transcript_manager.types.message import Message
 
     msg = Message(**messages[0].entries)
     assert msg.sender_id is None
@@ -329,7 +329,7 @@ def test_fk_message_receiver_ids_null_does_not_break_manager_init():
     assert None in messages[0].entries["receiver_ids"]
 
     # Verify we can construct Message objects from the DB data (no ValidationError)
-    from unity.transcript_manager.types.message import Message
+    from unify.transcript_manager.types.message import Message
 
     msg = Message(**messages[0].entries)
     assert bob_id in msg.receiver_ids
@@ -442,7 +442,7 @@ def test_fk_message_images_null_does_not_break_manager_init():
     assert len(images_list) == 2
 
     # Verify we can construct Message objects from the DB data (no ValidationError)
-    from unity.transcript_manager.types.message import Message
+    from unify.transcript_manager.types.message import Message
 
     msg = Message(**messages[0].entries)
     assert len(msg.images.root) == 2

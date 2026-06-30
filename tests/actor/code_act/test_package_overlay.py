@@ -15,8 +15,8 @@ import sys
 
 import pytest
 
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.execution.package_overlay import (
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.execution.package_overlay import (
     PackageOverlay,
     _CURRENT_PACKAGE_OVERLAY,
 )

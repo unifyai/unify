@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unity.actor.single_function_actor import (
+from unify.actor.single_function_actor import (
     SingleFunctionActor,
 )
-from unity.actor.execution import ExecutionResult
-from unity.function_manager.function_manager import FunctionManager
+from unify.actor.execution import ExecutionResult
+from unify.function_manager.function_manager import FunctionManager
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1552,7 +1552,7 @@ async def verified_sum(a: int, b: int) -> dict:
 async def test_steerable_function_detected_and_forwarded():
     """A function returning a SteerableToolHandle should be detected via
     _extract_nested_handle and wired to the outer handle for steering."""
-    from unity.common.async_tool_loop import SteerableToolHandle
+    from unify.common.async_tool_loop import SteerableToolHandle
 
     fm = FunctionManager()
 
@@ -1724,14 +1724,14 @@ async def test_non_steerable_function_not_marked_steerable():
 @_handle_project
 async def test_codeact_actor_compositional_function_steerable():
     """A compositional function wrapping CodeActActor should be steerable."""
-    from unity.common.async_tool_loop import SteerableToolHandle
+    from unify.common.async_tool_loop import SteerableToolHandle
 
     fm = FunctionManager()
 
     codeact_impl = '''
 async def codeact_workflow(goal: str):
     """A workflow powered by CodeActActor."""
-    from unity.actor.code_act_actor import CodeActActor
+    from unify.actor.code_act_actor import CodeActActor
 
     actor = CodeActActor()
     handle = await actor.act(
@@ -1769,7 +1769,7 @@ async def codeact_workflow(goal: str):
 @_handle_project
 async def test_codeact_compositional_search_no_primitives_with_interjection():
     """Search for a CodeActActor compositional function (no primitives) and test interjection passthrough."""
-    from unity.common.async_tool_loop import SteerableToolHandle
+    from unify.common.async_tool_loop import SteerableToolHandle
 
     fm = FunctionManager()
 
@@ -1780,7 +1780,7 @@ async def counting_workflow(target: int):
     This function uses an AI agent to count from 1 to the target number,
     announcing each number one at a time.
     """
-    from unity.actor.code_act_actor import CodeActActor
+    from unify.actor.code_act_actor import CodeActActor
 
     actor = CodeActActor()
     handle = await actor.act(
@@ -1835,7 +1835,7 @@ async def test_compositional_function_forwards_context_and_queues_to_inner_actor
     This verifies the full chain:
       SFA injects → function reads from namespace → function passes to inner actor
     """
-    from unity.common.async_tool_loop import SteerableToolHandle
+    from unify.common.async_tool_loop import SteerableToolHandle
 
     fm = FunctionManager()
 
@@ -1847,7 +1847,7 @@ async def test_compositional_function_forwards_context_and_queues_to_inner_actor
     codeact_impl = '''
 async def context_aware_workflow(goal: str):
     """A workflow that forwards parent context and clarification queues to CodeActActor."""
-    from unity.actor.code_act_actor import CodeActActor
+    from unify.actor.code_act_actor import CodeActActor
 
     ctx = __parent_chat_context__
     up_q = __clarification_up_q__

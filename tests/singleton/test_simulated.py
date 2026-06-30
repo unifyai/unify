@@ -1,14 +1,14 @@
 import pytest
 
-from unity.manager_registry import ManagerRegistry
+from unify.manager_registry import ManagerRegistry
 from tests.helpers import _handle_project
 
 # Import simulated manager variants – each relies on `SingletonABCMeta` via their base class.
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.transcript_manager.simulated import SimulatedTranscriptManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.memory_manager.simulated import SimulatedMemoryManager
+from unify.transcript_manager.simulated import SimulatedTranscriptManager
+from unify.task_scheduler.simulated import SimulatedTaskScheduler
 
 # ---------------------------------------------------------------------------
 #  Helper – parameterisation over the concrete simulated manager classes

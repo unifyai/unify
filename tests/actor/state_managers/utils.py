@@ -7,12 +7,12 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal, Optional
 
 from tests.async_helpers import _wait_for_condition
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.function_manager.primitives import Primitives
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.function_manager.primitives import Primitives
 
 try:
-    from unity.function_manager.function_manager import FunctionManager
+    from unify.function_manager.function_manager import FunctionManager
 except Exception:  # pragma: no cover
     FunctionManager = Any  # type: ignore[misc,assignment]
 
@@ -36,7 +36,7 @@ def instrument_basic_primitives_calls(primitives: Primitives) -> list[str]:
     proxy into the ``Primitives._managers`` cache so tracing is
     transparent to both the CodeActActor sandbox and the manager itself.
     """
-    from unity.function_manager.primitives.registry import get_registry
+    from unify.function_manager.primitives.registry import get_registry
 
     calls: list[str] = []
     registry = get_registry()
@@ -302,7 +302,7 @@ async def make_code_act_actor(
     This argument is kept as an assertion/documentation aid.
     """
     if exposed_managers:
-        from unity.function_manager.primitives import PrimitiveScope
+        from unify.function_manager.primitives import PrimitiveScope
 
         scope = PrimitiveScope(scoped_managers=frozenset(exposed_managers))
         primitives = Primitives(primitive_scope=scope)

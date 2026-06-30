@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from unity.common.image_content import sniff_image_mime, to_image_content_block
+from unify.common.image_content import sniff_image_mime, to_image_content_block
 
 ASSET_JPEG = Path(__file__).parent.parent / "image_manager" / "assets" / "google.jpeg"
 

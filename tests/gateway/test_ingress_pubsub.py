@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from unity.gateway.ingress import IngressTransport
-from unity.gateway.ingress_pubsub import PubSubIngressTransport
+from unify.gateway.ingress import IngressTransport
+from unify.gateway.ingress_pubsub import PubSubIngressTransport
 
 # ---------------------------------------------------------------------------
 # Test helpers: minimal stand-ins for Pub/Sub primitives
@@ -53,7 +53,7 @@ def _install_pubsub_stub(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         **kwargs,
     )
     monkeypatch.setattr(
-        "unity.gateway.ingress_pubsub.pubsub_v1",
+        "unify.gateway.ingress_pubsub.pubsub_v1",
         pubsub_stub,
     )
     return pubsub_stub
@@ -195,7 +195,7 @@ async def test_stop_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_start_without_pubsub_v1_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("unity.gateway.ingress_pubsub.pubsub_v1", None)
+    monkeypatch.setattr("unify.gateway.ingress_pubsub.pubsub_v1", None)
     transport = PubSubIngressTransport(subscription_id="s", project_id="p")
 
     async def dispatcher(payload: dict, **_kwargs: Any) -> None:

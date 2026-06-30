@@ -15,18 +15,18 @@ registration.
 Each test gets a fresh, isolated Unify context that is cleaned up after the test.
 """
 
-from unity.dashboard_manager.dashboard_manager import DashboardManager
+from unify.dashboard_manager.dashboard_manager import DashboardManager
 import json
 
 import pytest
 
-from unity.dashboard_manager.types.dashboard import TilePosition
-from unity.dashboard_manager.types.tile import (
+from unify.dashboard_manager.types.dashboard import TilePosition
+from unify.dashboard_manager.types.tile import (
     DASHBOARD_BRIDGE_MAX_ROW_LIMIT,
     FilterBinding,
 )
-from unity.function_manager.primitives import Primitives
-from unity.manager_registry import ManagerRegistry
+from unify.function_manager.primitives import Primitives
+from unify.manager_registry import ManagerRegistry
 from tests.dashboard_manager.helpers import (
     active_read_root,
     create_context_if_missing,

@@ -7,21 +7,21 @@ from types import SimpleNamespace
 import pytest
 
 from tests.helpers import _handle_project
-from unity.actor.code_act_actor import (
+from unify.actor.code_act_actor import (
     CodeActActor,
     _CodeActTaskExecutionDelegate,
     _build_storage_tools,
 )
-from unity.actor.simulated import SimulatedActor
-from unity.common.task_execution_context import current_task_execution_delegate
-from unity.conversation_manager.domains.task_activation import (
+from unify.actor.simulated import SimulatedActor
+from unify.common.task_execution_context import current_task_execution_delegate
+from unify.conversation_manager.domains.task_activation import (
     _ConversationTaskExecutionDelegate,
 )
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import PrimitiveScope, Primitives
-from unity.manager_registry import ManagerRegistry
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.status import Status
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import PrimitiveScope, Primitives
+from unify.manager_registry import ManagerRegistry
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.status import Status
 
 
 def _certification_evidence():

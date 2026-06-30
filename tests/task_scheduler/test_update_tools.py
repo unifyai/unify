@@ -1,11 +1,11 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 from tests.helpers import _handle_project
-from unity.task_scheduler.types.status import Status
-from unity.task_scheduler.types.priority import Priority
-from unity.task_scheduler.task_scheduler import TaskScheduler
-from unity.task_scheduler.types.repetition import RepeatPattern, Frequency, Weekday
-from unity.task_scheduler.types.schedule import Schedule
+from unify.task_scheduler.types.status import Status
+from unify.task_scheduler.types.priority import Priority
+from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.repetition import RepeatPattern, Frequency, Weekday
+from unify.task_scheduler.types.schedule import Schedule
 
 
 @_handle_project

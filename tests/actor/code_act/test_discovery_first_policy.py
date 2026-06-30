@@ -11,19 +11,19 @@ import pytest
 
 from tests.async_helpers import _wait_for_condition
 from tests.helpers import _handle_project
-from unity.actor.code_act_actor import CodeActActor
-from unity.actor.environments import StateManagerEnvironment
-from unity.function_manager.function_manager import FunctionManager
-from unity.function_manager.primitives import Primitives, PrimitiveScope
-from unity.guidance_manager.guidance_manager import GuidanceManager
-from unity.manager_registry import ManagerRegistry
+from unify.actor.code_act_actor import CodeActActor
+from unify.actor.environments import StateManagerEnvironment
+from unify.function_manager.function_manager import FunctionManager
+from unify.function_manager.primitives import Primitives, PrimitiveScope
+from unify.guidance_manager.guidance_manager import GuidanceManager
+from unify.manager_registry import ManagerRegistry
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 def _force_simulated_managers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Switch manager implementations to simulated mode for a deterministic eval."""
-    from unity.settings import SETTINGS
+    from unify.settings import SETTINGS
 
     for name in (
         "CONTACT",

@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from unity.common.pipeline import (
+from unify.common.pipeline import (
     InMemoryWorkQueue,
     LocalQueueWorker,
     RetryWorkItem,

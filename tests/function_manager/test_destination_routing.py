@@ -7,7 +7,7 @@ import unisdk
 from tests.destination_routing_helpers import (
     manager_routing_context as manager_routing_context,  # noqa: F401
 )
-from unity.function_manager.function_manager import FunctionManager
+from unify.function_manager.function_manager import FunctionManager
 
 
 def test_function_writes_route_to_destination_and_reads_merge_roots(

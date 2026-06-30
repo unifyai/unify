@@ -24,11 +24,11 @@ import functools
 import pytest
 import asyncio
 
-from unity.memory_manager.simulated import SimulatedMemoryManager
-from unity.contact_manager.simulated import SimulatedContactManager
-from unity.knowledge_manager.simulated import SimulatedKnowledgeManager
-from unity.task_scheduler.simulated import SimulatedTaskScheduler
-from unity.contact_manager.types.contact import Contact
+from unify.memory_manager.simulated import SimulatedMemoryManager
+from unify.contact_manager.simulated import SimulatedContactManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.task_scheduler.simulated import SimulatedTaskScheduler
+from unify.contact_manager.types.contact import Contact
 
 # shared helper used throughout the test-suite -- isolates each test run
 from tests.helpers import _handle_project, DEFAULT_TIMEOUT

@@ -66,7 +66,7 @@ WORKDIR /app
 # Remove git credentials after all git operations (security best practice)
 RUN git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
-# Copy source and install unity with all dependencies
+# Copy source and install unify with all dependencies
 COPY . /app
 RUN uv pip install --system --no-cache .
 
@@ -90,7 +90,7 @@ RUN install -m 0755 /app/scripts/sandbox-dpkg /usr/local/bin/sandbox-dpkg
 # so the entrypoint can seed the emptyDir /tmp volume regardless of which user runs.
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
-RUN HF_HOME=/opt/hf-cache python unity/conversation_manager/medium_scripts/call.py download-files
+RUN HF_HOME=/opt/hf-cache python unify/conversation_manager/medium_scripts/call.py download-files
 
 # Browsers install once into a single user-owned cache. The CM spawns agent-service
 # with PLAYWRIGHT_BROWSERS_PATH set to this path, and the runtime user resolves the

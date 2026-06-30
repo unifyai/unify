@@ -18,8 +18,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from unity.function_manager.function_manager import FunctionManager
-from unity.common.context_registry import ContextRegistry
+from unify.function_manager.function_manager import FunctionManager
+from unify.common.context_registry import ContextRegistry
 from tests.helpers import _handle_project
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ def function_manager_factory():
 @pytest.fixture
 def mock_session_details_windows(monkeypatch):
     """Configure SESSION_DETAILS for Windows VM execution."""
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "windows")
     monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_001)
@@ -90,7 +90,7 @@ def mock_session_details_windows(monkeypatch):
     # times out after 5 min with
     # `RuntimeError: Managed VM did not become ready within 5 minutes`.
     # Pre-set the event so the wait returns immediately.
-    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+    from unify.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
 
     _was_set = _runtime_vm_ready.is_set()
     _runtime_vm_ready.set()
@@ -104,14 +104,14 @@ def mock_session_details_windows(monkeypatch):
 @pytest.fixture
 def mock_session_details_ubuntu(monkeypatch):
     """Configure SESSION_DETAILS for Ubuntu VM execution (managed VM, not Windows)."""
-    from unity.session_details import SESSION_DETAILS
+    from unify.session_details import SESSION_DETAILS
 
     monkeypatch.setattr(SESSION_DETAILS.assistant, "desktop_mode", "ubuntu")
     monkeypatch.setattr(SESSION_DETAILS.assistant, "agent_id", 999_002)
 
     # Same _vm_ready pre-set rationale as in
     # mock_session_details_windows above.
-    from unity.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
+    from unify.function_manager.primitives.runtime import _vm_ready as _runtime_vm_ready
 
     _runtime_vm_ready.set()
     monkeypatch.setattr(
@@ -398,7 +398,7 @@ class TestPrepareVenvOnRemoteWindows:
         mock_aiohttp_session,
     ):
         """Venv preparation installs uv + runs uv sync over /exec, never /api/files."""
-        from unity.actor.execution.targets.assistant_desktop import (
+        from unify.actor.execution.targets.assistant_desktop import (
             AssistantDesktopTarget,
         )
 

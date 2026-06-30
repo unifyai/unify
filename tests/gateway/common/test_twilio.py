@@ -1,4 +1,4 @@
-"""Tests for ``unity.gateway.common.twilio``.
+"""Tests for ``unify.gateway.common.twilio``.
 
 Direct tests of the shared Twilio factories. The social channel's
 test_views.py also exercises this surface indirectly; these tests
@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 import pytest
 
-from unity.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
-from unity.gateway.credentials import EnvCredentialStore
+from unify.gateway.common.twilio import build_twilio_client, build_twilio_wa_client
+from unify.gateway.credentials import EnvCredentialStore
 
 
 def test_build_twilio_client_uses_sms_credentials(
