@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from typing import ClassVar
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -836,7 +836,6 @@ class TestPhoneCallHandlers:
         """Accepted WhatsApp permission should preserve the pre-refactor room-name fallback."""
 
         mock_cm._pending_whatsapp_call_contexts = {2: "pending call context"}
-        mock_cm._event_broker = mock_cm.event_broker
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -866,6 +865,10 @@ class TestPhoneCallHandlers:
             "unity_None_whatsapp_call"
         )
         mock_cm.request_llm_run.assert_not_called()
+        mock_cm.event_broker.publish.assert_awaited_once_with(
+            "app:comms:whatsapp_call_sent",
+            ANY,
+        )
 
     @pytest.mark.asyncio
     async def test_whatsapp_call_invite_is_permission_request(self, mock_cm):
@@ -913,7 +916,6 @@ class TestPhoneCallHandlers:
     ):
         mock_cm._pending_whatsapp_call_contexts = {}
         mock_cm.assistant_whatsapp_number = "+15550000000"
-        mock_cm._event_broker = mock_cm.event_broker
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -958,6 +960,10 @@ class TestPhoneCallHandlers:
         mock_clear_intent.assert_awaited_once_with(
             pool_number="+15550000000",
             contact_number="+15555552222",
+        )
+        mock_cm.event_broker.publish.assert_awaited_once_with(
+            "app:comms:whatsapp_call_sent",
+            ANY,
         )
 
     @pytest.mark.asyncio
