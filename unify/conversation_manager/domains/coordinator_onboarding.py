@@ -50,6 +50,14 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user just opened the onboarding session with you — they are "
         "waiting for you to open with one short turn."
     ),
+    "task_beat_requested": (
+        "The user wants to set up a task with you but hasn't said what yet — "
+        "ask them in one short message what they'd like."
+    ),
+    "task_chip_requested": (
+        "The user picked an example task — set it up now with your task tools "
+        "and confirm it in one short message."
+    ),
 }
 
 
@@ -62,6 +70,8 @@ _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_STEP_RESET = "onboarding_step_reset"
 _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
+_SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
+_SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
 
 
 def _detail_string(details: dict[str, Any], key: str) -> str:
@@ -323,6 +333,25 @@ def _coordinator_onboarding_notification_text(
             "until this step is done or skipped."
         )
         return f"{subtype_hint} {body}{step_note}{progress_note}{skipped_note} {guidance}".strip()
+
+    if event.subtype in (_SUBTYPE_TASK_BEAT_REQUESTED, _SUBTYPE_TASK_CHIP_REQUESTED):
+        # The orchestra-supplied ``body`` already carries the full directive
+        # (ask-first for a beat row, create-now for a chip). We only append the
+        # task-kind context and the medium-safety rule the message can't know.
+        details = event.details if isinstance(event.details, dict) else {}
+        task_kind = _detail_string(details, "task_kind")
+        kind_note = (
+            " (event-triggered 'triggerable task' work)"
+            if task_kind == "triggered"
+            else " (scheduled task work)" if task_kind == "scheduled" else ""
+        )
+        medium_note = (
+            " Keep it to one short message and don't re-list onboarding steps. "
+            "If a voice call is active you MUST speak via "
+            'guide_voice_agent(message="...") rather than sending a chat '
+            "message; otherwise send a single chat message."
+        )
+        return f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
 
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
