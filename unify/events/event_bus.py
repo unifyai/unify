@@ -42,7 +42,7 @@ from uuid import uuid4
 
 __all__ = ["Event", "EventBus", "Subscription", "EVENT_BUS"]
 from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
-from ..common.log_utils import _inject_private_fields
+from ..common.log_utils import _inject_private_fields, payload_from_log_entries
 from ..common.model_to_fields import model_to_fields
 from ..logger import LOGGER
 from .stream_filters import is_streaming_noise
@@ -903,7 +903,7 @@ class EventBus:
             else Event._to_python(event.payload)
         )
 
-        # Base entries for both log calls (before private field injection)
+        # Base entries for the log write (before private field injection)
         base_entries = {
             "row_id": event.row_id,
             "event_id": event.event_id,
@@ -912,19 +912,15 @@ class EventBus:
             "payload_cls": event.payload_cls,
         }
 
-        # Buffer entries for deferred batch upload (flushed in flush()/clear())
-        global_entries = _inject_private_fields(
-            {
-                **base_entries,
-                "type": event.type,
-                "payload_json": json.dumps(payload_dict),
-            },
-        )
-        self._pending_writes.append((global_entries, self._global_ctx))
-
+        # Buffer entries for deferred batch upload (flushed in flush()/clear()).
+        # Events are stored only in their per-type context, with payload fields
+        # spread into columns for queryability. ``type`` is retained as a column
+        # (not just implied by the context name) so ``type``-predicated search
+        # filters resolve against the per-type context read path.
         specific_entries = _inject_private_fields(
             {
                 **base_entries,
+                "type": event.type,
                 **payload_dict,
             },
         )
@@ -1229,48 +1225,26 @@ class EventBus:
             need_backend[etype] = still_needed
 
         # ----------------------------------------------------------------------
-        # 3a. FAST-PATH: one backend call when we are in "global window" mode
-        #     *and* have no in-memory events yet (cold start). This avoids N
-        #     serial/parallel round-trips while staying trivial to reason about.
+        # Per-type backend fetches – concurrently. Each event type lives in its
+        # own context (``Events/{Type}``), so a fetch reads that context directly
+        # with no ``type`` predicate; the combined-window merge happens in the
+        # shaping step below.
         # ----------------------------------------------------------------------
-        if combined_window and all(len(dq) == 0 for dq in self._deques.values()):
-
-            if need_backend:  # only when something is actually missing
-                types_in = ", ".join(f'"{et}"' for et in need_backend)
-                global_limit = offset + limit
-                full_filter = f"type in ({types_in})"
-                if filter:
-                    full_filter += f" and ({filter})"
-
-                logs = await asyncio.to_thread(
-                    unisdk.get_logs,
-                    context=self._global_ctx,
-                    filter=full_filter,
-                    sorting={"timestamp": "descending"},
-                    offset=0,
-                    limit=global_limit,
-                )
-
-                for lg in logs:
-                    evt = self._row_to_event(lg.entries)
-                    in_memory.setdefault(evt.type, []).append(evt)
-
-                # We've satisfied the need; skip the per-type fetch branch
-                need_backend.clear()
-
-        # ----------------------------------------------------------------------
-        # 3b. Per-type backend fetches – concurrently (as before) --------------
         async def _fetch_one(etype: str, want: int) -> tuple[str, list[Event]]:
             """
             Run the blocking ``unisdk.get_logs`` call in a worker thread and
             re-wrap the raw log rows as :class:`Event` objects.
             """
-            full_filter = f'type == "{etype}"' + (f" and ({filter})" if filter else "")
+            context = self._specific_ctxs.get(etype)
+            if context is None:
+                # A type with an in-memory deque but no registered backend
+                # context has nothing to fetch from Orchestra.
+                return etype, []
 
             logs = await asyncio.to_thread(
                 unisdk.get_logs,
-                context=self._global_ctx,
-                filter=full_filter,
+                context=context,
+                filter=filter,
                 sorting={"timestamp": "descending"},
                 offset=backend_offsets[etype],
                 limit=want,
@@ -1736,14 +1710,16 @@ class EventBus:
         # Prefer non-flattened payload when available (newer schema)
         payload_json_str = entries.pop("payload_json", None)
 
-        # Determine the payload dict: prefer JSON blob when present
+        # Determine the payload dict. Legacy global-context rows carry the whole
+        # payload as a JSON blob; per-type rows spread it into columns, so strip
+        # the injected private fields to recover the original payload.
         if payload_json_str is not None:
             try:
                 payload_dict = json.loads(payload_json_str)
             except Exception:
-                payload_dict = entries
+                payload_dict = payload_from_log_entries(entries)
         else:
-            payload_dict = entries
+            payload_dict = payload_from_log_entries(entries)
 
         # Pass dict payload - Event validator handles validation and keeps as dict
         return Event(

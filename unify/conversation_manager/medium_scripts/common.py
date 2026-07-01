@@ -79,6 +79,7 @@ from unify.conversation_manager.tracing import (
 from unify.session_details import SESSION_DETAILS
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
+from unify.common.log_utils import payload_from_log_entries
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FastBrainLogger — mirrors the async tool loop's LoopLogger format so all
@@ -1539,14 +1540,14 @@ async def hydrate_fast_brain_history(
     import unisdk
 
     context = (
-        f"{SESSION_DETAILS.user_context}/" f"{SESSION_DETAILS.assistant_context}/Events"
+        f"{SESSION_DETAILS.user_context}/"
+        f"{SESSION_DETAILS.assistant_context}/Events/Comms"
     )
 
     try:
         logs = await asyncio.to_thread(
             unisdk.get_logs,
             context=context,
-            filter='type == "Comms"',
             sorting={"timestamp": "descending"},
             limit=limit,
         )
@@ -1565,12 +1566,11 @@ async def hydrate_fast_brain_history(
         if "." in payload_cls:
             payload_cls = payload_cls.rsplit(".", 1)[-1]
 
-        payload_json_str = entries.get("payload_json")
-        if not payload_json_str:
+        payload = payload_from_log_entries(entries)
+        if not payload:
             continue
 
         try:
-            payload = json.loads(payload_json_str)
             cm_event = Event.from_dict({"event_name": payload_cls, "payload": payload})
         except Exception:
             continue
