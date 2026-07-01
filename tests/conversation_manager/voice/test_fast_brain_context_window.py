@@ -702,6 +702,23 @@ class TestOnboardingOutboundNeutralization:
         result = render_participant_comms(ev.to_json(), {2})
         assert result == "[You WhatsApped Alice Smith] See you at 5pm"
 
+    def test_live_workspace_demo_unify_message_verbatim(self):
+        # A workspace-demo summary is delivered over unify_message and carries
+        # an onboarding_trigger_step_id, but unlike a quiz clue its body is the
+        # deliverable — the fast brain must see it so the Voice Agent can
+        # confirm/discuss it and offer a follow-up reply.
+        ev = UnifyMessageSent(
+            contact=ALICE,
+            content="Your mailbox: 3 unread, top thread from Bob re: Q3 budget.",
+            onboarding_trigger_step_id="workspace-mailbox",
+        )
+        result = render_participant_comms(ev.to_json(), {2})
+        assert result == (
+            "[You messaged Alice Smith] "
+            "Your mailbox: 3 unread, top thread from Bob re: Q3 budget."
+        )
+        assert "onboarding message sent" not in result
+
     # -- History render (_render_history_event) --
 
     def test_history_whatsapp_clue_body_withheld(self):
@@ -732,6 +749,19 @@ class TestOnboardingOutboundNeutralization:
         ev = WhatsAppSent(contact=ALICE, content="See you at 5pm")
         result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
         assert result == "[WhatsApp to Alice Smith] See you at 5pm"
+
+    def test_history_workspace_demo_unify_message_verbatim(self):
+        ev = UnifyMessageSent(
+            contact=ALICE,
+            content="Your mailbox: 3 unread, top thread from Bob re: Q3 budget.",
+            onboarding_trigger_step_id="workspace-mailbox",
+        )
+        result = _render_history_event(ev, {2}, False, ASSISTANT_NAME)
+        assert result == (
+            "[Message to Alice Smith] "
+            "Your mailbox: 3 unread, top thread from Bob re: Q3 budget."
+        )
+        assert "onboarding message sent" not in result
 
     def test_history_clue_skipped_for_non_participant(self):
         ev = WhatsAppSent(

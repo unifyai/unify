@@ -2955,6 +2955,7 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
+                **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
             )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
