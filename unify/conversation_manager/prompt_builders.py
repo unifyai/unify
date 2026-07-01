@@ -2044,7 +2044,7 @@ def build_system_prompt(
     is_voice_call: bool = False,
     is_internal_call: bool = False,
     on_voice_call: bool = False,
-    voice_line_ready: bool = True,
+    outbound_voice_line_ready: bool = True,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
@@ -2097,6 +2097,10 @@ def build_system_prompt(
         so they must not be advertised; a dynamic block explains they return once
         the current call ends. Mirrors ``ConversationManager.in_voice_session`` and
         is broader than ``is_voice_call`` (which only gates the voice-calls guide).
+    outbound_voice_line_ready : bool
+        Whether assistant-initiated phone/WhatsApp calls can start with a
+        prepared outbound voice worker. Inbound calls and answered Unify Meet
+        sessions do not use this gate.
     demo_mode : bool
         Whether the assistant is operating in demo mode (pre-signup).
     computer_fast_path : bool
@@ -2205,7 +2209,7 @@ def build_system_prompt(
         assistant_has_teams,
         is_coordinator,
         on_voice_call,
-        call_line_ready=voice_line_ready,
+        call_line_ready=outbound_voice_line_ready,
         masked_tools=onboarding_masked_tools,
     )
     if assistant_has_phone or assistant_has_whatsapp:
@@ -2503,9 +2507,10 @@ Messages from the current turn have **NEW** tag prepended:
     )
 
     available_tool_names = ["send_unify_message", "send_api_response"]
-    # Call-starting tools are listed only when actually offered: not on a live
-    # voice call AND the voice worker has a freshly prewarmed process ready.
-    call_tools_listed = not on_voice_call and voice_line_ready
+    # Assistant-initiated call tools are listed only when actually offered: not
+    # on a live voice call AND the voice worker has a freshly prewarmed process
+    # ready. Inbound calls bypass this gate.
+    call_tools_listed = not on_voice_call and outbound_voice_line_ready
     if assistant_has_phone:
         # ``make_call`` is withheld while on a voice call (one at a time) and
         # while the line is still re-warming after a prior session.
@@ -2724,10 +2729,12 @@ When contacts communicate in a non-English language, I match their language in m
     #      tool set.
     if on_voice_call:
         parts.add(_build_active_voice_session_block(), static=False)
-    elif not voice_line_ready and (assistant_has_phone or assistant_has_whatsapp):
-        # Between sessions while the voice worker re-warms: the call-starting
-        # tools are briefly withheld, so explain that to keep the prompt aligned
-        # with the masked tool set.
+    elif not outbound_voice_line_ready and (
+        assistant_has_phone or assistant_has_whatsapp
+    ):
+        # Between sessions while the outbound voice worker re-warms: the
+        # assistant-initiated call tools are briefly withheld, so explain that
+        # to keep the prompt aligned with the masked tool set.
         parts.add(_build_voice_line_preparing_block(), static=False)
 
     # 16. Scenarios.
