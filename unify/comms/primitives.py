@@ -211,20 +211,21 @@ class CommsPrimitives:
             await asyncio.sleep(_VOICE_SESSION_CLEAR_POLL_SECONDS)
         return True
 
-    async def _await_ready_for_new_call(self) -> bool:
-        """Await until the voice worker can host a brand-new call.
+    async def _await_ready_for_outbound_call(self) -> bool:
+        """Await until the voice worker can host an outbound call.
 
         Delegates to the call manager, which awaits the real resource — a
         freshly prewarmed idle worker process plus a drained prior session —
         with no fixed sleep. Belt-and-suspenders for the (rare) race where the
         tool was exposed at turn start but the resource was consumed before the
-        handler ran. Returns True when a new call is safe, False on timeout.
+        handler ran. Returns True when an outbound call is safe, False on
+        timeout.
         """
         if self._cm is None:
             return True
         await_ready = getattr(
             self._cm.call_manager,
-            "await_ready_for_new_call",
+            "await_ready_for_outbound_call",
             None,
         )
         if not callable(await_ready):
@@ -2955,6 +2956,7 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
+                **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
             )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
@@ -3853,7 +3855,7 @@ class CommsPrimitives:
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
 
-        if self._cm is not None and not await self._await_ready_for_new_call():
+        if self._cm is not None and not await self._await_ready_for_outbound_call():
             return {
                 "status": "retry_later_active_voice_session",
                 "message": (
@@ -4051,7 +4053,7 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
-        if not await self._await_ready_for_new_call():
+        if not await self._await_ready_for_outbound_call():
             return {
                 "status": "retry_later_active_voice_session",
                 "message": (

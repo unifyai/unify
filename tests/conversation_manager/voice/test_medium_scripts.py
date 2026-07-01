@@ -3227,6 +3227,39 @@ class TestFastBrainSmalltalk:
         a._publish_fast_brain_continued.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_idle_status_gate_is_passed_to_smalltalk(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=True)
+        a._generate_smalltalk_reply = AsyncMock(return_value=None)
+        a._publish_fast_brain_continued = AsyncMock()
+
+        async def _filler(*args, **kwargs):
+            return "One moment."
+
+        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+
+        chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
+
+        assert len(chunks) == 1
+        assert chunks[0].delta.content == "One moment."
+        a._generate_smalltalk_reply.assert_awaited_once_with(
+            "",
+            idle_status_smalltalk=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
         self,
         boss_contact,

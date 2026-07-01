@@ -1143,6 +1143,7 @@ async def start_call(to_number: str) -> str:
                 "From": from_number,
                 "To": to_number,
                 "room_name": room_name,
+                "assistant_id": assistant_id,
             },
         ) as response:
             try:
