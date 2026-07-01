@@ -48,11 +48,10 @@ def _match_context(path: str, base: str, known: set[str]) -> str:
        forms like ``Data/Sales`` or ``Contacts``).
     3. **Suffix match** -- all known contexts ending with ``/{path}`` are
        collected.  Base-scoped candidates (starting with ``{base}/``) are
-       preferred over aggregation contexts (``All/...``, ``{user}/All/...``)
-       so that a short relative path like ``examplehousing/Repairs/...``
-       resolves to the assistant's own context, not a cross-assistant or
-       global aggregation view.  If after scoping exactly one candidate
-       remains, it is returned; otherwise the full set is checked.
+       preferred so that a short relative path like
+       ``examplehousing/Repairs/...`` resolves to the assistant's own context.
+       If after scoping exactly one candidate remains, it is returned;
+       otherwise the full set is checked.
     4. **No match** -- raises ``ValueError``.
 
     Raises ``ValueError`` on ambiguous suffix matches (more than one
