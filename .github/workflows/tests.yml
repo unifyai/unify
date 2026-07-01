@@ -1254,7 +1254,7 @@ jobs:
     # =========================================================================
     - name: Upload cache artifact
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: cache-diff-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: .cache_write.ndjson
@@ -1330,7 +1330,7 @@ jobs:
 
     - name: Upload logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: logs-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: logs/
