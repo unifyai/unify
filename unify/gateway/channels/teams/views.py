@@ -27,6 +27,7 @@ import base64
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from msgraph.generated.models.aad_user_conversation_member import (
@@ -128,6 +129,17 @@ async def _upload_and_build_attachments(
 ) -> list[ChatMessageAttachment]:
     """Upload files to OneDrive and return Graph ChatMessageAttachment objects."""
     result: list[ChatMessageAttachment] = []
+    if not raw_attachments:
+        return result
+
+    # ``graph.me.drive`` (DriveRequestBuilder) only supports fetching the drive;
+    # item operations go through ``graph.drives.by_drive_id(...)``. Resolve the
+    # personal drive id once, then address uploads by path via ``with_url``
+    # (``drive.root.item_with_path`` no longer exists in the SDK).
+    me_drive = await graph.me.drive.get()
+    drive = graph.drives.by_drive_id(me_drive.id)
+    base_url = graph.request_adapter.base_url.rstrip("/")
+
     for att in raw_attachments:
         filename = att.get("filename", "attachment")
         content_b64 = att.get("content_base64", "")
@@ -136,9 +148,13 @@ async def _upload_and_build_attachments(
         file_bytes = base64.b64decode(content_b64)
 
         safe_name = f"{uuid.uuid4().hex[:8]}_{filename}"
-        drive_item = await graph.me.drive.root.item_with_path(
-            f"Teams Attachments/{safe_name}",
-        ).content.put(file_bytes)
+        encoded = quote(f"Teams Attachments/{safe_name}", safe="/")
+        content_url = f"{base_url}/drives/{me_drive.id}/root:/{encoded}:/content"
+        drive_item = (
+            await drive.items.by_drive_item_id("root")
+            .content.with_url(content_url)
+            .put(file_bytes)
+        )
 
         att_id = uuid.uuid4().hex
         result.append(

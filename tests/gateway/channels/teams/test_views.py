@@ -717,3 +717,53 @@ class TestCreateMeeting:
                 json={"assistant_email": "alice@unify.ai", "mode": "instant"},
             )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# OneDrive attachment upload
+# ---------------------------------------------------------------------------
+
+
+def test_upload_and_build_attachments_puts_by_path() -> None:
+    """Attachments upload to OneDrive by resolving the me-drive id + path URL.
+
+    ``graph.me.drive`` (DriveRequestBuilder) can't navigate items and
+    ``drive.root.item_with_path`` no longer exists, so the upload resolves the
+    personal drive id and binds the ``/root:/Teams Attachments/<name>:/content``
+    URL onto the content builder via ``with_url``. The ``me.drive`` mock is
+    spec-restricted to ``get`` so a revert to the old navigation raises here.
+    """
+    import asyncio
+    import base64
+
+    from unify.gateway.channels.teams.views import _upload_and_build_attachments
+
+    graph = MagicMock()
+    graph.request_adapter.base_url = "https://graph.microsoft.com/v1.0"
+    graph.me.drive = MagicMock(spec=["get"])
+    graph.me.drive.get = AsyncMock(return_value=MagicMock(id="me-drive-id"))
+    drive = graph.drives.by_drive_id.return_value
+    content = drive.items.by_drive_item_id.return_value.content
+    put_mock = AsyncMock(return_value=MagicMock(web_url="https://od/report"))
+    content.with_url.return_value.put = put_mock
+
+    payload = base64.b64encode(b"hello").decode()
+    out = asyncio.run(
+        _upload_and_build_attachments(
+            graph,
+            [{"filename": "report.pdf", "content_base64": payload}],
+        ),
+    )
+
+    assert len(out) == 1
+    assert out[0].name == "report.pdf"
+    assert out[0].content_url == "https://od/report"
+    graph.me.drive.get.assert_awaited_once()
+    graph.drives.by_drive_id.assert_called_with("me-drive-id")
+    put_mock.assert_awaited_once_with(b"hello")
+    url = content.with_url.call_args.args[0]
+    assert url.startswith(
+        "https://graph.microsoft.com/v1.0/drives/me-drive-id"
+        "/root:/Teams%20Attachments/",
+    )
+    assert url.endswith("_report.pdf:/content")
