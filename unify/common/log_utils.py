@@ -121,6 +121,27 @@ def _inject_private_fields(entries: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+# EventBus metadata columns stored alongside an event's spread payload fields.
+_EVENT_META_KEYS = frozenset(
+    {"row_id", "event_id", "calling_id", "event_timestamp", "payload_cls", "type"},
+)
+
+
+def payload_from_log_entries(entries: Dict[str, Any]) -> Dict[str, Any]:
+    """Reconstruct an event payload from a spread event log row.
+
+    Events are stored in their per-type context with payload fields spread into
+    top-level columns. This drops the EventBus metadata columns and the injected
+    private fields (all underscore-prefixed, see :func:`_inject_private_fields`)
+    so the result matches the payload dict that was originally published.
+    """
+    return {
+        key: value
+        for key, value in entries.items()
+        if key not in _EVENT_META_KEYS and not key.startswith("_")
+    }
+
+
 def log(
     context: str,
     *,
