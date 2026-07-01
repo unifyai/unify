@@ -3,18 +3,18 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
-  <a href="https://docs.unify.ai/basics/overview"><img src="https://img.shields.io/badge/Docs-docs.unify.ai-4A67FF?style=for-the-badge" alt="Docs"></a>
-  <a href="https://github.com/unifyai/unify/actions"><img src="https://img.shields.io/github/actions/workflow/status/unifyai/unify/tests.yml?branch=staging&style=for-the-badge" alt="CI"></a>
-  <a href="https://discord.com/invite/sXyFF8tDtm"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://unify.ai"><img src="https://img.shields.io/badge/Built%20by-Unify-black?style=for-the-badge" alt="Built by Unify"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2f9d97.svg?style=for-the-badge&labelColor=241a2b" alt="MIT License"></a>
+  <a href="https://docs.unify.ai/basics/overview"><img src="https://img.shields.io/badge/Docs-docs.unify.ai-6e4a86?style=for-the-badge&labelColor=241a2b" alt="Docs"></a>
+  <a href="https://github.com/unifyai/unify/actions"><img src="https://img.shields.io/github/actions/workflow/status/unifyai/unify/tests.yml?branch=staging&style=for-the-badge&labelColor=241a2b" alt="CI"></a>
+  <a href="https://discord.com/invite/sXyFF8tDtm"><img src="https://img.shields.io/badge/Discord-3478f6?style=for-the-badge&logo=discord&logoColor=f3ead9&labelColor=241a2b" alt="Discord"></a>
+  <a href="https://unify.ai"><img src="https://img.shields.io/badge/Built%20by-Unify-f3ead9?style=for-the-badge&labelColor=241a2b" alt="Built by Unify"></a>
 </p>
 
 # Unify
 
-**Unify is a droid teammate that actually just talks to you. No prompting, no CLI, no configuration or setup. Just hop on a call, share your screen, share their screen, introduce yourself, explain how they can help, or just start thinking out loud. Unify will fill in the gaps 👾**
+**Unify is an AI teammate that actually just talks to you. No prompting, no CLI, no configuration or setup. Just hop on a call, share your screen, share their screen, introduce yourself, explain how they can help, or just start thinking out loud. Unify will fill in the gaps 🤖**
 
-The agent runtime runs locally on your machine; persistence and your assistant live in the hosted backend at [console.unify.ai](https://console.unify.ai). The shape is deliberately human-in-the-loop: AI to help you keep moving, not replace the person steering it.
+The agent can run locally on your machine, or you can run the hosted version at [console.unify.ai](https://console.unify.ai). The shape is deliberately human-in-the-loop: AI to help you keep moving, not replace the person steering it.
 
 <p align="center">
   <picture>
@@ -193,7 +193,7 @@ Unify        ▸  Three tasks running at once.
 
 ## How it works
 
-A persistent **interaction loop** (`ConversationManager`) stays present across every medium and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over a back office of typed state managers. Every operation returns a live, steerable handle, and those handles nest — a correction the user makes in chat propagates *down* through the dispatched action into whatever manager call is currently running. That is the technical backbone of the product promise: keep the human in control while the droid does the tedious work.
+A persistent **interaction loop** (`ConversationManager`) stays present across every medium and keeps thinking while work is in flight. When something needs deeper reasoning, it dispatches a **background reasoner** (`Actor`) that writes Python plans over a back office of typed state managers. Every operation returns a live, steerable handle, and those handles nest — a correction the user makes in chat propagates *down* through the dispatched action into whatever manager call is currently running. That is the technical backbone of the product promise: keep the human in control while Unify does the tedious work.
 
 This is the same **interaction loop / background reasoner** split [recently articulated by Thinking Machines](https://thinkingmachines.ai/blog/interaction-models/) — they put it *inside the model* (one model trained to interact natively); Unify arrives at the same shape at the harness level. When interaction-native models ship publicly, they would replace Unify's fast/slow-brain split end-to-end.
 
