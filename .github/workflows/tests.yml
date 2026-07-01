@@ -645,8 +645,11 @@ jobs:
       # ORCHESTRA_URL: if repo variable set, use remote; otherwise local orchestra sets it
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      # The brain (unillm) routes LLM calls through OpenRouter; without this the
+      # slow-brain turns fail with a 401 "No cookie auth credentials found".
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       # Orchestra routes embeddings (embed() derived logs / Builtins seeding)
-      # through OpenRouter, so the CI-local Orchestra needs this key.
+      # through OpenRouter, so the CI-local Orchestra needs this key too.
       ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       # Communication service URL (org secret is still named UNITY_COMMS_URL)
