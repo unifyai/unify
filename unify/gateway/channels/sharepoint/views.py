@@ -184,7 +184,10 @@ async def list_items(
         elif path:
             items = await drive.root.item_with_path(path).children.get()
         else:
-            items = await drive.root.children.get()
+            # ``drive.root`` (RootRequestBuilder) exposes only ``get``/``content``
+            # -- it has no ``children`` navigation. List the root's children via
+            # the drive-item builder using Graph's reserved ``root`` item id.
+            items = await drive.items.by_drive_item_id("root").children.get()
 
         return {
             "items": [

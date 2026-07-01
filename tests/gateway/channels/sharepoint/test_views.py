@@ -195,10 +195,18 @@ def _mock_drive_item(
 
 
 def test_list_items_root_default(client: TestClient) -> None:
-    """No path / no item_id -> root.children.get."""
+    """No path / no item_id -> list root children via the ``root`` drive-item.
+
+    ``drive.root`` (RootRequestBuilder) has no ``children`` navigation, so the
+    endpoint must go through ``items.by_drive_item_id("root").children``. The
+    ``root`` mock is spec-restricted to the real surface (``get``/``content``)
+    so a regression back to ``drive.root.children`` raises here instead of only
+    blowing up in production.
+    """
     item = _mock_drive_item()
     fake_graph = _make_graph_mock()
-    fake_graph.me.drive.root.children.get = AsyncMock(
+    fake_graph.me.drive.root = MagicMock(spec=["get", "content"])
+    fake_graph.me.drive.items.by_drive_item_id.return_value.children.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -211,15 +219,18 @@ def test_list_items_root_default(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json()["items"][0]["type"] == "file"
+    fake_graph.me.drive.items.by_drive_item_id.assert_called_with("root")
 
 
 def test_list_items_explicit_drive_id_uses_drives_by_id(
     client: TestClient,
 ) -> None:
-    """drive_id != 'me' -> graph.drives.by_drive_id."""
+    """drive_id != 'me' -> graph.drives.by_drive_id, then root children."""
     item = _mock_drive_item(name="other.txt")
     fake_graph = _make_graph_mock()
-    fake_graph.drives.by_drive_id.return_value.root.children.get = AsyncMock(
+    drive_ref = fake_graph.drives.by_drive_id.return_value
+    drive_ref.root = MagicMock(spec=["get", "content"])
+    drive_ref.items.by_drive_item_id.return_value.children.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -232,6 +243,7 @@ def test_list_items_explicit_drive_id_uses_drives_by_id(
         )
     assert resp.status_code == 200
     fake_graph.drives.by_drive_id.assert_called_with("external-drive-1")
+    drive_ref.items.by_drive_item_id.assert_called_with("root")
 
 
 def test_list_items_by_path(client: TestClient) -> None:
