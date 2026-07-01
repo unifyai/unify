@@ -1172,7 +1172,10 @@ def _build_coordinator_onboarding_progress_block(
         "-----------------------------",
         "This is the authoritative, always-current picture of the user's "
         "onboarding, computed server-side. I never re-derive what is done "
-        "or what comes next — I read it straight from here.",
+        "or what comes next — I read it straight from here. A step's status "
+        "can also revert from done back to available if the user resets it, "
+        "so I never claim a step is done based on my own memory of having "
+        "completed it earlier — only the status shown here counts.",
     ]
 
     # Breadth: the whole checklist, one line per step, grouped by section.
