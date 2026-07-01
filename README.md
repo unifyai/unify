@@ -12,9 +12,9 @@
 
 # Unify
 
-**Unify is an AI teammate that actually just talks to you. No prompting, no CLI, no configuration or setup. Just hop on a call, share your screen, share their screen, introduce yourself, explain how they can help, or just start thinking out loud. Unify will fill in the gaps 🤖**
+**Unify is the open-source runtime for AI teammates that actually talk to you. No prompting, no CLI, no configuration ceremony. Just hop on a call, share your screen, introduce yourself, explain how your teammate can help, or start thinking out loud. Unify gives that teammate the brain, memory, tools, and steering loop to fill in the gaps 🤖**
 
-The agent can run locally on your machine, or you can run the hosted version at [console.unify.ai](https://console.unify.ai). The shape is deliberately human-in-the-loop: AI to help you keep moving, not replace the person steering it.
+Run this repo locally to work with one teammate and trace how its brain thinks, or use the hosted product at [console.unify.ai](https://console.unify.ai) to hire, configure, and collaborate with multiple teammates. The shape is deliberately human-in-the-loop: AI to help you keep moving, not replace the person steering it.
 
 <p align="center">
   <picture>
@@ -23,11 +23,11 @@ The agent can run locally on your machine, or you can run the hosted version at 
   </picture>
 </p>
 
-Unify stays with you across chat, voice, phone, video, and screen-share, and stays steerable mid-task — pause it, redirect it, correct it without restarting the run. Every conversation gets distilled into **typed, queryable memory** (contacts, knowledge, tasks, files, each in its own table — not transcript soup or markdown files you maintain by hand), so Unify actually knows what your weekend rewrite is for, which libraries you care about, and the regression you asked it to watch out for last Wednesday.
+A teammate running on Unify stays with you across chat, voice, phone, video, and screen-share, and stays steerable mid-task — pause it, redirect it, correct it without restarting the run. Every conversation gets distilled into **typed, queryable memory** (contacts, knowledge, tasks, files, each in its own table — not transcript soup or markdown files you maintain by hand), so your teammate actually knows what your weekend rewrite is for, which libraries you care about, and the regression you asked it to watch out for last Wednesday.
 
 After enough successful runs it **promotes what worked into a personal skill library** — executable Python *plus* the procedural how-to prose to use it — that every future session consults before reaching for raw tools. Recurring jobs and event triggers — *"every Monday at 9, digest this week's GitHub notifications"*, *"ping me whenever a CI run on `main` fails"* — are first-class **natural-language primitives**, not cron expressions or webhook YAML you hand-maintain.
 
-**Install once, and Unify lives on your laptop, accumulating state across every session.**
+**Install once, and the local runtime lives on your laptop, accumulating state across every session.**
 
 **At a glance, vs the closest open-source alternatives:**
 
@@ -45,7 +45,7 @@ Full architectural comparison with diagrams is [further down](#where-unify-sits-
 
 ## Install
 
-**Prerequisites:** Python 3.12+, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2. Get a Unify API key and create your assistant at [console.unify.ai](https://console.unify.ai).
+**Prerequisites:** Python 3.12+, and an LLM provider key (OpenAI, Anthropic, or DeepSeek). macOS, Linux, or WSL2. Get a Unify API key and create your teammate at [console.unify.ai](https://console.unify.ai).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/unifyai/unify/staging/scripts/install.sh | bash
@@ -57,7 +57,7 @@ The installer clones `unify`, syncs Python deps with `uv` (which resolves `unisd
 unify
 ```
 
-`unify` opens an interactive local chat with the full assistant runtime, talking to the hosted Orchestra backend. Run headless (ConversationManager + gateway) with `unify serve`.
+`unify` opens an interactive local chat with one teammate, powered by the full local runtime and the hosted Orchestra backend. Run headless (ConversationManager + gateway) with `unify serve`.
 
 ```text
 > What did I leave half-finished on the indexer rewrite last week?
@@ -76,7 +76,7 @@ Get your `UNIFY_KEY` and `ASSISTANT_ID` from [console.unify.ai](https://console.
 
 ---
 
-## Voice — talking to your assistant in the browser
+## Voice — talking to your teammate in the browser
 
 Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and Unify voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys. The all-repo source stack managed by `unity-deploy/selfhost` loads those LiveKit Cloud credentials from its self-host state directory.
 
@@ -90,9 +90,9 @@ Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one*
 
 ---
 
-## Your assistant
+## Your Teammate
 
-The local runtime drives **one hosted assistant** — the one whose `ASSISTANT_ID` you set, provisioned at [console.unify.ai](https://console.unify.ai). The multi-assistant experience (multiple named teammates, organisations, real telephony, inbound channel integrations, third-party app integrations, screen-share, billing, and the onboarding flow) is part of the hosted product.
+The local runtime drives **one teammate** — the assistant record whose `ASSISTANT_ID` you set, provisioned at [console.unify.ai](https://console.unify.ai). The multi-teammate experience (multiple named teammates, organisations, real telephony, inbound channel integrations, third-party app integrations, screen-share, billing, and the onboarding flow) is part of the hosted product.
 
 ---
 
@@ -100,7 +100,7 @@ The local runtime drives **one hosted assistant** — the one whose `ASSISTANT_I
 
 Everything below runs on your machine after install, against the hosted backend:
 
-- **Chat** with your assistant — an LLM key (OpenAI, Anthropic, or DeepSeek) is what lets it think and reply.
+- **Chat** with your teammate — an LLM key (OpenAI, Anthropic, or DeepSeek) is what lets it think and reply.
 - **Browser voice calls** — a Deepgram (speech-to-text) key lets it hear you, and a Cartesia or ElevenLabs (text-to-speech) key lets it speak back.
 - **Web search** — a free [Tavily](https://tavily.com) key lets it look things up on the web while researching.
 - **Computer use** — it drives a real browser and desktop; an optional [AntiCaptcha](https://anti-captcha.com) key lets it get past CAPTCHAs instead of stalling.
@@ -128,7 +128,7 @@ Bring-your-own-keys (LLM, voice, research) live in `~/.unity/unity/.env` — edi
 
 ## Steering while work is in-flight
 
-When Unify is mid-task in the local chat REPL, steer it the same way you would a teammate in the hosted Console: **send another message**. There are no special slash commands (`/ask`, `/i`, `/stop`) in `unify` — those were an old sandbox experiment and are not wired to the runtime.
+When your teammate is mid-task in the local chat REPL, steer it the same way you would in the hosted Console: **send another message**. There are no special slash commands (`/ask`, `/i`, `/stop`) in `unify` — those were an old sandbox experiment and are not wired to the runtime.
 
 **Text:** use `msg` at the `>` prompt:
 
@@ -183,7 +183,7 @@ Unify        ▸  Three tasks running at once.
 <tr><td><b>🧠 Plans in code, not tool-by-tool</b></td><td>Multi-step work is one sandboxed Python program with real variables, loops, and control flow — not a chain of one-tool-at-a-time JSON decisions.</td></tr>
 <tr><td><b>📞 One identity across every channel</b></td><td>Chat, SMS, email, phone, voice, video — all feed the same memory. Sarah is the same Sarah whether she texted, called, or mailed.</td></tr>
 <tr><td><b>📚 Structured memory, not transcript soup</b></td><td>Contacts, knowledge, tasks, and files live in typed, queryable tables — distilled from conversations every fifty messages, not piled into markdown.</td></tr>
-<tr><td><b>⚙️ Learns reusable skills</b></td><td>After a successful trajectory, the assistant saves both the underlying Python (with metadata + venv) and the procedural prose for using it — the next session composes them into a plan instead of re-deriving.</td></tr>
+<tr><td><b>⚙️ Learns reusable skills</b></td><td>After a successful trajectory, your teammate saves both the underlying Python (with metadata + venv) and the procedural prose for using it — the next session composes them into a plan instead of re-deriving.</td></tr>
 <tr><td><b>🔀 Concurrent work, independently steerable</b></td><td>Multiple actions run at once — pause one, redirect another, ask a third for status, without affecting the rest.</td></tr>
 <tr><td><b>⏰ Schedules and triggers in plain English</b></td><td><i>"Every Monday at 9, digest this week's GitHub notifications"</i>, <i>"ping me whenever a CI run on `main` fails"</i> — natural-language <code>Task</code> rows that can graduate into stored functions.</td></tr>
 <tr><td><b>🔌 Local-first, fully open</b></td><td>Runtime, persistence backend, LLM client, and Python SDK are all MIT-licensed and run locally with one Docker command. Hosted backend optional.</td></tr>
@@ -490,7 +490,7 @@ When an inner manager hits genuine ambiguity, its clarification **bubbles up thr
 
 ## The runtime stack
 
-Unify is one of three MIT-licensed repos that make up the open agent runtime. They talk to the hosted Orchestra backend; you can also use any of them independently.
+This repository is one of three MIT-licensed repos that make up the open one-teammate runtime. They talk to the hosted Orchestra backend; you can also use any of them independently.
 
 | Repo | Role |
 |------|------|
