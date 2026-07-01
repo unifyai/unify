@@ -1458,6 +1458,7 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "web": "get_web_searcher",
     "files": "get_file_manager",
     "workspace_files": "",
+    "workspace_email": "",
     "integrations": "",
     "computer": "",
     "actor": "",
@@ -1634,6 +1635,11 @@ class Primitives:
     def workspace_files(self) -> Any:
         """Allowlist-enforced connected workspace files (Drive/SharePoint/OneDrive)."""
         return self._get_manager("workspace_files")
+
+    @property
+    def workspace_email(self) -> Any:
+        """Connected workspace mailbox send/read (Gmail/Outlook impersonation)."""
+        return self._get_manager("workspace_email")
 
     @property
     def integrations(self) -> Any:

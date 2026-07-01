@@ -634,6 +634,16 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
        not permitted. `get_oauth_access_token(...)` remains appropriate for
        non-file provider APIs (e.g. calendar, contacts, tasks).
 
+       **The connected mailbox has a first-class surface.** To send from, or
+       read/search, the user's own connected Gmail/Outlook mailbox, use
+       `primitives.workspace_email.*` (`send`, `list_messages`, `search`,
+       `get_message`) rather than hand-rolling Gmail/Graph mail calls. This is
+       impersonation of the user's connected account and is distinct from
+       `primitives.comms.send_email`, which sends AS THE ASSISTANT from its own
+       managed mailbox. Choose `comms.send_email` for assistant-owned outreach
+       (contact-graph aware) and `workspace_email.send` only when the message
+       must originate from the user's connected account.
+
     4. **Store for reuse**: After a successful integration, store reusable
        functions via `store_skills` and document the setup via
        `GuidanceManager_add_guidance` so future interactions can reuse the

@@ -292,6 +292,40 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
     ),
     ManagerSpec(
+        manager_alias="workspace_email",
+        manager_registry_key="",
+        primitive_class_path=(
+            "unify.workspace_email.workspace_email_manager.WorkspaceEmailManager"
+        ),
+        excluded_methods=frozenset(),
+        priority=4,
+        domain="Connected Workspace Mailbox (Gmail / Outlook)",
+        description=(
+            "Send from and read the user's CONNECTED Google Workspace / "
+            "Microsoft 365 mailbox (the account linked via OAuth). Sends as the "
+            "connected account, not the assistant's own managed mailbox."
+        ),
+        use_when=(
+            "The task is explicitly about the user's own connected inbox: "
+            "reading/searching messages in their linked Gmail/Outlook, or "
+            "sending an email that must come FROM the user's connected account"
+        ),
+        examples=(
+            "'Check my inbox for anything from the landlord', "
+            "'Search my email for the Q3 invoice', "
+            "'Reply from my own account to the client thread'"
+        ),
+        special_note=(
+            "Distinct from `primitives.comms.send_email`, which sends AS THE "
+            "ASSISTANT from its managed mailbox and is wired into the contact "
+            "graph. Use `workspace_email` only to act on the user's own "
+            "connected account. Recipients here are plain email-address "
+            "strings, not contact ids. Requires a connected workspace account "
+            "with the relevant Gmail/Graph scopes; errors clearly if none is "
+            "connected."
+        ),
+    ),
+    ManagerSpec(
         manager_alias="integrations",
         manager_registry_key="",
         primitive_class_path="unify.integrations.primitives.IntegrationPrimitives",

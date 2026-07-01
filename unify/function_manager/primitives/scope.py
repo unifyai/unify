@@ -23,6 +23,7 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
         "data",
         "files",
         "workspace_files",
+        "workspace_email",
         "integrations",
         "computer",
         "actor",
