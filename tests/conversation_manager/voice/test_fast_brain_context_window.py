@@ -12,7 +12,6 @@ Covers:
 All tests are symbolic — unisdk.get_logs is mocked to return synthetic log rows.
 """
 
-import json
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -74,7 +73,11 @@ ASSISTANT_NAME = "Alex"
 
 
 def _make_log_rows(cm_events):
-    """Convert CM events to unisdk.Log-shaped rows in descending order (newest first)."""
+    """Convert CM events to unisdk.Log-shaped rows in descending order (newest first).
+
+    Events live in their per-type context (``Events/Comms``) with payload fields
+    spread into top-level columns, so the mock rows mirror that schema.
+    """
     rows = []
     for ev in cm_events:
         payload = ev.to_dict()["payload"]
@@ -82,9 +85,8 @@ def _make_log_rows(cm_events):
         rows.append(
             SimpleNamespace(
                 entries={
-                    "type": "Comms",
                     "payload_cls": ev.__class__.__name__,
-                    "payload_json": json.dumps(payload),
+                    **payload,
                 },
             ),
         )
@@ -526,8 +528,7 @@ class TestHydrateFastBrainHistory:
             await hydrate_fast_brain_history({2}, False, ASSISTANT_NAME, limit=25)
 
         mock_get_logs.assert_called_once_with(
-            context="test_user/test_assistant/Events",
-            filter='type == "Comms"',
+            context="test_user/test_assistant/Events/Comms",
             sorting={"timestamp": "descending"},
             limit=25,
         )
@@ -539,9 +540,8 @@ class TestHydrateFastBrainHistory:
         log_rows = _make_log_rows([good])
         bad_row = SimpleNamespace(
             entries={
-                "type": "Comms",
                 "payload_cls": "NonExistentEvent",
-                "payload_json": json.dumps({"broken": True}),
+                "broken": True,
             },
         )
         log_rows.insert(0, bad_row)
