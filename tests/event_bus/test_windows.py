@@ -54,13 +54,13 @@ async def test_cache_only_skips_backend():
     contents = [r.payload.get("content") for r in results]
     assert contents == ["4", "3", "2"]
 
-    # Verify no backend call was made for Message type specifically
-    # The filter arg starts with 'type == "Message"' when fetching Message events
-    # (Other types like ToolLoop/Comms may be fetched but won't match our filter)
+    # Verify no backend call was made against the Message per-type context
+    # (the deque/cache should have satisfied the search). Each type is read from
+    # its own ``Events/{Type}`` context, so a Message fetch targets that context.
     message_fetch_calls = [
         call
         for call in spy.call_args_list
-        if call.kwargs.get("filter", "").startswith('type == "Message"')
+        if str(call.kwargs.get("context", "")).endswith("Events/Message")
     ]
     assert (
         len(message_fetch_calls) == 0
