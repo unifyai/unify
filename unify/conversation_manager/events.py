@@ -1017,6 +1017,10 @@ class UnifyMessageSent(Event):
     content: str
     # List of attachment dicts with full metadata.
     attachments: list[dict] = field(default_factory=list)
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
 
 
 @dataclass

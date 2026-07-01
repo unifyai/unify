@@ -2927,6 +2927,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
+            "unify_message": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None

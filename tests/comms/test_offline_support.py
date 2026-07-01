@@ -8,7 +8,7 @@ from unify.comms import primitives as primitives_module
 from unify.comms.primitives import CommsPrimitives
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.domains import comms_utils
-from unify.conversation_manager.events import Event, WhatsAppSent
+from unify.conversation_manager.events import Event, UnifyMessageSent, WhatsAppSent
 from unify.task_scheduler.machine_state import (
     TaskOutboundOperationRecord,
     TaskOutboundOperationReference,
@@ -704,6 +704,63 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
     assert published.onboarding_request_id == "req-1"
     assert published.onboarding_origin_event_id == "evt-1"
     assert cm._pending_whatsapp_resend_onboarding_metadata == {}
+    assert pending_outbound == {}
+
+
+@pytest.mark.anyio
+async def test_send_unify_message_live_stamps_workspace_demo_onboarding_metadata(
+    monkeypatch,
+):
+    # A workspace-demo click arms a pending onboarding outbound on the channel
+    # ``unify_message``; the next unify_message send must carry the onboarding
+    # metadata so Orchestra can derive the demo step as complete.
+    pending_outbound = {
+        "metadata": {
+            "onboarding_trigger_step_id": "workspace-mailbox",
+            "onboarding_reply_step_id": "",
+            "onboarding_request_id": "req-9",
+            "onboarding_origin_event_id": "evt-9",
+        },
+    }
+
+    def consume_pending_onboarding_outbound(medium):
+        assert medium == "unify_message"
+        return pending_outbound.pop("metadata", None)
+
+    cm = SimpleNamespace(
+        consume_pending_onboarding_outbound=consume_pending_onboarding_outbound,
+    )
+    comms = CommsPrimitives(conversation_manager=cm)
+    comms._get_contact = lambda **kwargs: {
+        "contact_id": 5,
+        "first_name": "Alice",
+        "surname": "Owner",
+        "should_respond": True,
+    }
+    comms._event_broker.publish = AsyncMock()
+
+    async def _fake_send_unify_message(**kwargs):
+        assert kwargs["content"] == "Mailbox summary"
+        assert kwargs["contact_id"] == 5
+        return {"success": True}
+
+    monkeypatch.setattr(
+        comms_utils,
+        "send_unify_message",
+        _fake_send_unify_message,
+    )
+
+    result = await comms.send_unify_message(content="Mailbox summary", contact_id=5)
+
+    assert result == {"status": "ok"}
+    published = Event.from_json(comms._event_broker.publish.await_args.args[1])
+    assert isinstance(published, UnifyMessageSent)
+    assert published.content == "Mailbox summary"
+    assert published.onboarding_trigger_step_id == "workspace-mailbox"
+    assert published.onboarding_reply_step_id == ""
+    assert published.onboarding_request_id == "req-9"
+    assert published.onboarding_origin_event_id == "evt-9"
+    # The pending outbound is consumed exactly once.
     assert pending_outbound == {}
 
 
