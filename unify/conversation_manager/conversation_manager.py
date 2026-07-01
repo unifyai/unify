@@ -2931,6 +2931,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "workspace_mailbox": {"unify_message"},
             "workspace_drive": {"unify_message"},
             "workspace_calendar": {"unify_message"},
+            "workspace_contacts": {"unify_message"},
+            "workspace_tasks": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None
