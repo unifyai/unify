@@ -66,6 +66,9 @@ jobs:
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      # Orchestra routes embeddings (embed() derived logs / Builtins seeding)
+      # through OpenRouter, so the CI-local Orchestra needs this key.
+      ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       # Brain default model is deepseek-v4-max@deepseek, which litellm calls
       # directly; without this the slow-brain turns fail auth and no reply lands.
