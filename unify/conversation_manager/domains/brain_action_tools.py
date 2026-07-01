@@ -1082,9 +1082,9 @@ class ConversationManagerBrainActionTools:
             return await self._leave_teams_meet()
 
         await self._cm.call_manager.end_call()
-        # Wait for the real resource — a freshly prewarmed idle worker process —
-        # so a follow-on dial only proceeds once a new call can be placed safely.
-        ready = await self._cm.call_manager.await_ready_for_new_call()
+        # Wait for the outbound-only resource gate so a follow-on dial only
+        # proceeds once a new assistant-initiated call can open cleanly.
+        ready = await self._cm.call_manager.await_ready_for_outbound_call()
         return {
             "status": "ok",
             "message": (
@@ -1092,7 +1092,7 @@ class ConversationManagerBrainActionTools:
                 if ready
                 else "Call ended, but the voice line is still being prepared."
             ),
-            "ready_for_new_call": ready,
+            "ready_for_outbound_call": ready,
         }
 
     async def start_teams_meet_screenshare(self) -> dict[str, Any]:
@@ -2104,13 +2104,13 @@ class ConversationManagerBrainActionTools:
             "wait": self.wait,
         }
         call_or_meet_in_progress = self._cm.in_voice_session
-        # Call-starting tools that dispatch the LiveKit voice worker are exposed
-        # only when a new call can actually be placed: no live session AND the
-        # worker has a freshly prewarmed idle process ready. This prevents the
-        # brain from dialing into a worker that has not re-warmed after a prior
-        # session (the Meet -> WhatsApp-call handoff race).
+        # Assistant-initiated call tools are exposed only when a new outbound
+        # call can actually open cleanly: no live session AND the worker has a
+        # freshly prewarmed idle process ready. Inbound sessions bypass this
+        # gate and are accepted by the runtime immediately.
         ready_to_start_call = (
-            not call_or_meet_in_progress and self._cm.call_manager.is_ready_for_new_call
+            not call_or_meet_in_progress
+            and self._cm.call_manager.is_ready_for_outbound_call
         )
         if not call_or_meet_in_progress:
             tools["join_google_meet"] = self.join_google_meet
