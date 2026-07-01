@@ -911,6 +911,37 @@ class TestSmalltalkMessages:
         # History is preserved between persona and guardrail.
         assert {"role": "assistant", "content": "Hi there!"} in msgs
 
+    def test_idle_status_smalltalk_guidance_is_absent_by_default(self):
+        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+
+        msgs = build_smalltalk_messages(
+            system_prompt="PERSONA",
+            history_messages=[],
+            user_text="what are you doing?",
+        )
+
+        system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "Idle status small-talk is available" not in system_text
+        assert "Mario Kart" not in system_text
+
+    def test_idle_status_smalltalk_guidance_is_gated(self):
+        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+
+        msgs = build_smalltalk_messages(
+            system_prompt="PERSONA",
+            history_messages=[],
+            user_text="what are you doing?",
+            idle_status_smalltalk=True,
+        )
+
+        system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+        assert "Idle status small-talk is available" in system_text
+        assert "what are you doing" in system_text
+        assert "Snake" in system_text
+        assert "Sudoku" in system_text
+        assert "Mario Kart" in system_text
+        assert "Tetris" in system_text
+
     def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
         from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
 
@@ -961,4 +992,11 @@ class TestSmalltalkMessages:
         assert "hang up" in low
         assert "are you calling me" in low
         assert "did you send it yet" in low
+        assert "idle status small-talk" in low
         assert "never promise, claim, or report" in low
+
+    def test_slow_brain_voice_guide_knows_idle_smalltalk_exception(self):
+        prompt = _build(is_voice_call=True)
+        assert "Idle small-talk exception" in prompt
+        assert "playing Snake" in prompt
+        assert "no in-flight action" in prompt

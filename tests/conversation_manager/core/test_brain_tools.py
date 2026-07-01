@@ -103,6 +103,8 @@ def mock_cm():
     cm.call_manager.has_active_teams_meet = False
     cm.call_manager.has_gmeet_presenting = False
     cm.call_manager.has_teams_presenting = False
+    cm.call_manager.is_ready_for_outbound_call = True
+    cm.call_manager.await_ready_for_outbound_call = AsyncMock(return_value=True)
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
     cm.call_manager._call_channel = None
@@ -351,6 +353,7 @@ class TestActionToolsAsTools:
         expected = {
             "join_google_meet",
             "join_teams_meet",
+            "start_unify_meet",
             "send_sms",
             "send_unify_message",
             "send_api_response",
@@ -715,7 +718,9 @@ class TestHangUpTool:
         mock_cm.call_manager.has_active_google_meet = False
         mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
+        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
+            return_value=True,
+        )
 
         result = await brain_action_tools.hang_up()
 
@@ -742,7 +747,9 @@ class TestHangUpTool:
         mock_cm.call_manager.has_active_google_meet = False
         mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
+        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
+            return_value=True,
+        )
 
         await brain_action_tools.hang_up()
         mock_cm.call_manager.end_call.assert_not_awaited()
@@ -804,7 +811,7 @@ class TestHangUpTool:
         voice worker has a freshly prewarmed idle process ready."""
         mock_cm.in_voice_session = False
         mock_cm.assistant_whatsapp_number = "+15555550000"
-        mock_cm.call_manager.is_ready_for_new_call = False
+        mock_cm.call_manager.is_ready_for_outbound_call = False
         with patch(
             "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
@@ -823,7 +830,7 @@ class TestHangUpTool:
         are offered again."""
         mock_cm.in_voice_session = False
         mock_cm.assistant_whatsapp_number = "+15555550000"
-        mock_cm.call_manager.is_ready_for_new_call = True
+        mock_cm.call_manager.is_ready_for_outbound_call = True
         with patch(
             "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
         ) as mock_broker:
@@ -847,15 +854,17 @@ class TestHangUpTool:
         mock_cm.call_manager.has_active_google_meet = False
         mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=True)
+        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
+            return_value=True,
+        )
 
         await brain_action_tools.hang_up()
         result = await brain_action_tools._perform_hang_up_teardown()
 
         mock_cm.call_manager.end_call.assert_awaited_once()
-        mock_cm.call_manager.await_ready_for_new_call.assert_awaited_once()
+        mock_cm.call_manager.await_ready_for_outbound_call.assert_awaited_once()
         assert result["status"] == "ok"
-        assert result["ready_for_new_call"] is True
+        assert result["ready_for_outbound_call"] is True
 
     @pytest.mark.asyncio
     async def test_hang_up_teardown_reports_not_ready_on_timeout(
@@ -870,13 +879,15 @@ class TestHangUpTool:
         mock_cm.call_manager.has_active_google_meet = False
         mock_cm.call_manager.has_active_teams_meet = False
         mock_cm.call_manager.end_call = AsyncMock()
-        mock_cm.call_manager.await_ready_for_new_call = AsyncMock(return_value=False)
+        mock_cm.call_manager.await_ready_for_outbound_call = AsyncMock(
+            return_value=False,
+        )
 
         await brain_action_tools.hang_up()
         result = await brain_action_tools._perform_hang_up_teardown()
 
         assert result["status"] == "ok"
-        assert result["ready_for_new_call"] is False
+        assert result["ready_for_outbound_call"] is False
 
 
 class TestWaitTool:

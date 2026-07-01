@@ -46,8 +46,32 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
             COMMS_URL="https://comms.example.com",
             ADAPTERS_URL="https://adapters.example.com",
         ),
+        ORCHESTRA_URL="https://orchestra.example.com",
+        ORCHESTRA_ADMIN_KEY=SimpleNamespace(
+            get_secret_value=lambda: "test-admin-key",
+        ),
     )
     monkeypatch.setattr(phone_views, "SETTINGS", stub)
+
+
+@pytest.fixture
+def _orchestra_call_session(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Capture the outbound ``/admin/phone/call-session`` POST at the Orchestra
+    HTTP boundary so ``send_call`` can run without a live Orchestra."""
+    from unify.gateway.channels.phone import views as phone_views
+
+    httpx_client = AsyncMock()
+    httpx_client.__aenter__.return_value = httpx_client
+    httpx_client.post.return_value = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"id": 1}),
+    )
+    monkeypatch.setattr(
+        phone_views.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: httpx_client,
+    )
+    return httpx_client
 
 
 @pytest.fixture
@@ -120,6 +144,7 @@ def test_send_call_sip_uri_uses_phone_number(
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
+    _orchestra_call_session: AsyncMock,
 ) -> None:
     """PORTED: The SIP URI user part is the E.164 From number (trunk matching)."""
     mock_twilio = _build_send_call_mocks()
@@ -152,6 +177,7 @@ def test_send_call_twiml_url_contains_phone_number(
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
+    _orchestra_call_session: AsyncMock,
 ) -> None:
     """PORTED: The TwiML URL must reference the recipient's phone number."""
     mock_twilio = _build_send_call_mocks()
@@ -184,6 +210,7 @@ def test_send_call_returns_call_sid(
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
+    _orchestra_call_session: AsyncMock,
 ) -> None:
     """PORTED: Response carries the Twilio call SID."""
     mock_twilio = _build_send_call_mocks()
@@ -215,6 +242,7 @@ def test_send_call_sip_uri_uses_e164_format(
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
+    _orchestra_call_session: AsyncMock,
 ) -> None:
     """PORTED: The SIP URI preserves E.164 format with the + prefix."""
     mock_twilio = _build_send_call_mocks()
@@ -246,6 +274,7 @@ def test_send_call_invokes_ensure_phone_dispatch_rule_with_twilio_number_and_roo
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
+    _orchestra_call_session: AsyncMock,
 ) -> None:
     """Routing setup happens before the outbound call dispatch."""
     mock_twilio = _build_send_call_mocks()
@@ -274,6 +303,116 @@ def test_send_call_invokes_ensure_phone_dispatch_rule_with_twilio_number_and_roo
     # Signature is (twilio_number, room_name, credentials)
     assert args[0] == "+12526595494"
     assert args[1] == "unity_42_phone"
+
+
+def test_send_call_persists_outbound_call_session(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _orchestra_call_session: AsyncMock,
+) -> None:
+    """The placing assistant is recorded against the Twilio SID so the
+    status webhook resolves it even when ``From`` is a shared coordinator
+    number held by many assistants."""
+    mock_twilio = _build_send_call_mocks(call_sid="CA_outbound_parent")
+    with (
+        patch(
+            "unify.gateway.channels.phone.views.build_twilio_client",
+            return_value=mock_twilio,
+        ),
+        patch(
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            new=AsyncMock(),
+        ),
+    ):
+        resp = client.post(
+            "/phone/send-call",
+            json={
+                "From": "+12526595494",
+                "To": "+19206146850",
+                "room_name": "unity_568_phone",
+                # The runtime sends the id as a string (str(agent_id)).
+                "assistant_id": "568",
+            },
+        )
+
+    assert resp.status_code == 200
+    post_call = _orchestra_call_session.post.await_args
+    assert post_call.args[0] == (
+        "https://orchestra.example.com/admin/phone/call-session"
+    )
+    assert post_call.kwargs["headers"]["Authorization"] == "Bearer test-admin-key"
+    body = post_call.kwargs["json"]
+    assert body["provider_call_sid"] == "CA_outbound_parent"
+    assert body["assistant_id"] == 568
+    assert body["channel"] == "phone_call"
+    # to/pool = the (shared) coordinator number; from = the external callee.
+    assert body["to_number"] == "+12526595494"
+    assert body["pool_number"] == "+12526595494"
+    assert body["from_number"] == "+19206146850"
+    assert body["livekit_room"] == "unity_568_phone"
+    assert body["metadata"]["call_type"] == "outbound"
+
+
+def test_send_call_derives_assistant_id_from_room_when_not_explicit(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _orchestra_call_session: AsyncMock,
+) -> None:
+    """Older runtimes omit ``assistant_id``; it is recovered from room_name."""
+    mock_twilio = _build_send_call_mocks()
+    with (
+        patch(
+            "unify.gateway.channels.phone.views.build_twilio_client",
+            return_value=mock_twilio,
+        ),
+        patch(
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            new=AsyncMock(),
+        ),
+    ):
+        resp = client.post(
+            "/phone/send-call",
+            json={
+                "From": "+12526595494",
+                "To": "+19206146850",
+                "room_name": "unity_568_phone",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert _orchestra_call_session.post.await_args.kwargs["json"]["assistant_id"] == 568
+
+
+def test_send_call_requires_assistant_id_or_parseable_room(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _orchestra_call_session: AsyncMock,
+) -> None:
+    """Without a routable assistant the call is rejected rather than placed
+    into a state where the status webhook would mis-route ``call_answered``."""
+    mock_twilio = _build_send_call_mocks()
+    with (
+        patch(
+            "unify.gateway.channels.phone.views.build_twilio_client",
+            return_value=mock_twilio,
+        ),
+        patch(
+            "unify.gateway.channels.phone.views.ensure_phone_dispatch_rule",
+            new=AsyncMock(),
+        ),
+    ):
+        resp = client.post(
+            "/phone/send-call",
+            json={"From": "+12526595494", "To": "+19206146850"},
+        )
+
+    assert resp.status_code == 400
+    assert "assistant_id" in resp.json()["detail"]
+    mock_twilio.calls.create.assert_not_called()
+    _orchestra_call_session.post.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

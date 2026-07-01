@@ -643,8 +643,8 @@ class TranscriptManager(BaseTranscriptManager):
                     context={"name": transcripts_context},
                     entries=entries_with_private,
                 )
-                # Add callback to mirror to aggregation contexts when log is created
-                # and to preserve the write if the async worker fails after enqueue.
+                # Add callback to preserve the write if the async worker fails
+                # after enqueue.
                 if future is not None:
                     ctx = transcripts_context
                     fallback_entries = dict(entries)

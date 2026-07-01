@@ -104,6 +104,7 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
 VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
 ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
 ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
+IDLE_SMALLTALK_STATE_TIMEOUT_S = 0.2
 
 
 def has_video_avatar_channel(channel: str) -> bool:
@@ -373,11 +374,35 @@ class Assistant(Agent):
         # Fully answers a pure small-talk turn from persona + recent history, or
         # returns None to defer to the slow brain. Set in the entrypoint.
         self._generate_smalltalk_reply: Callable | None = None
+        self._idle_smalltalk_allowed = False
+        self._idle_smalltalk_state_event = asyncio.Event()
 
         super().__init__(instructions=instructions)
 
     def set_credit_gate_state_provider(self, provider: Callable) -> None:
         self._credit_gate_state_provider = provider
+
+    def set_idle_smalltalk_allowed(self, allowed: bool) -> None:
+        self._idle_smalltalk_allowed = allowed
+        self._idle_smalltalk_state_event.set()
+
+    async def _request_idle_smalltalk_state(self) -> bool:
+        self._idle_smalltalk_allowed = False
+        self._idle_smalltalk_state_event.clear()
+        publish_task = asyncio.create_task(
+            event_broker.publish("app:comms:fast_brain_generating", "{}"),
+        )
+        if getattr(event_broker, "_socket_client", None) is None:
+            return False
+        await publish_task
+        try:
+            await asyncio.wait_for(
+                self._idle_smalltalk_state_event.wait(),
+                timeout=IDLE_SMALLTALK_STATE_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            return False
+        return self._idle_smalltalk_allowed
 
     def set_call_received(self):
         self.call_received = True
@@ -468,9 +493,7 @@ class Assistant(Agent):
                 _log.info("Buffer suppressed: slow brain already responded this turn")
                 return
 
-            asyncio.create_task(
-                event_broker.publish("app:comms:fast_brain_generating", "{}"),
-            )
+            idle_status_smalltalk = await self._request_idle_smalltalk_state()
 
             # The fast brain does not compose the real answer (the slow brain
             # does, spoken verbatim). It gives one brief, natural reaction to
@@ -527,7 +550,12 @@ class Assistant(Agent):
             # concurrently keeps DEFER turns at the filler's latency.
             _log.info("Selecting fast reply… (llm_node_start)")
             smalltalk_task = (
-                asyncio.create_task(self._generate_smalltalk_reply(user_text))
+                asyncio.create_task(
+                    self._generate_smalltalk_reply(
+                        user_text,
+                        idle_status_smalltalk=idle_status_smalltalk,
+                    ),
+                )
                 if self._generate_smalltalk_reply is not None
                 else None
             )
@@ -2784,6 +2812,16 @@ async def entrypoint(ctx: agents.JobContext):
     event_broker.register_callback("app:call:status", on_status)
     event_broker.register_callback("app:call:notification", on_notification)
 
+    def on_idle_smalltalk_state(data: dict) -> None:
+        assistant.set_idle_smalltalk_allowed(
+            bool(data.get("idle_smalltalk_allowed")),
+        )
+
+    event_broker.register_callback(
+        "app:call:idle_smalltalk_state",
+        on_idle_smalltalk_state,
+    )
+
     # --- Tier 1: Comms from call participants (all calls) ---
     is_boss_user = bool(contact.get("is_system", False))
     participant_ids: set[int] = set()
@@ -2924,7 +2962,11 @@ async def entrypoint(ctx: agents.JobContext):
         )
         return await greeting_client.generate(messages=greeting_messages)
 
-    async def _generate_smalltalk_reply(user_text: str):
+    async def _generate_smalltalk_reply(
+        user_text: str,
+        *,
+        idle_status_smalltalk: bool = False,
+    ):
         """Resolve a pure small-talk turn, or return None to defer.
 
         Returns one of:
@@ -2950,6 +2992,7 @@ async def entrypoint(ctx: agents.JobContext):
                 system_prompt=system_prompt,
                 history_messages=_extract_chat_messages(session.history, tail=8),
                 user_text=user_text.strip(),
+                idle_status_smalltalk=idle_status_smalltalk,
             )
             raw = await client.generate(messages=messages)
             text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")

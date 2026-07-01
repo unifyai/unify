@@ -46,6 +46,7 @@ def _manager_with_worker() -> tuple[LivekitCallManager, dict]:
     ):
         captured["extra_metadata"] = extra_metadata
         captured["outbound"] = outbound
+        return True
 
     manager._dispatch_job = _fake_dispatch  # type: ignore[assignment]
     manager._ensure_socket_server = AsyncMock(return_value=None)  # type: ignore[assignment]

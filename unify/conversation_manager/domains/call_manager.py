@@ -6,7 +6,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiohttp
 from livekit.api import CreateAgentDispatchRequest, LiveKitAPI
@@ -69,21 +69,27 @@ _BASE_FORWARD_CHANNELS = [
     "app:comms:*",
 ]
 
-WORKER_POOL_REGISTERED_TIMEOUT_S = 120.0
 DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
-# before starting a new call. Prewarm normally completes in well under this;
-# the cap exists so a wedged worker surfaces as a failure rather than hanging.
-NEW_CALL_READINESS_TIMEOUT_S = 30.0
+# before starting an assistant-initiated outbound call. Prewarm normally
+# completes in well under this; the cap exists so a wedged worker surfaces as a
+# failure rather than hanging.
+OUTBOUND_CALL_READINESS_TIMEOUT_S = 30.0
+
+# Dispatch should only wait briefly for a running worker to publish its
+# registration marker. Inbound sessions have already been accepted by the user,
+# and outbound sessions reached this point only after the stricter readiness
+# gate, so an unregistered worker should fall back to a per-call subprocess.
+WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 
 # How long the worker may stay alive-but-unwarmed while the manager is fully
-# idle before the watchdog force-restarts it to recover. The normal post-job
-# re-warm completes in seconds (LiveKit warms the replacement at dispatch time,
-# not job end), so a stall this long means the idle pool is genuinely wedged —
-# e.g. a prewarmed process was consumed by a dispatch that never became a live
-# job (clearing WORKER_READY) and no replacement ever re-signaled. Without this
-# the call-starting tools stay masked forever (the Meet -> WhatsApp-call hang).
-WORKER_REWARM_STALL_S = 20.0
+# idle before the watchdog force-restarts it to recover. Post-job re-warm usually
+# completes in seconds, but a cold container prewarm can take the full LiveKit
+# initialize window (~30-60s). The stall threshold must exceed that window or
+# the watchdog kills the worker before WORKER_READY is written and voice stays
+# wedged forever. Keep this aligned with ``initialize_process_timeout`` in
+# ``medium_scripts/worker.py``.
+WORKER_REWARM_STALL_S = 60.0
 
 # Fallback briefing for an outbound call that somehow reaches dispatch without a
 # mission context. An agent-initiated call must never open "blind", so even
@@ -121,7 +127,7 @@ class LivekitCallManager:
         self.is_outbound: bool = False
         self.initial_notification: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
-        self.on_fast_brain_generating: Callable[[], None] | None = None
+        self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
         # Pulled at the top of every dispatch so a call always carries the
         # assistant's current voice/config rather than a snapshot taken at
@@ -187,15 +193,15 @@ class LivekitCallManager:
         return self._active_job or self._call_proc is not None
 
     @property
-    def is_ready_for_new_call(self) -> bool:
-        """Whether the voice worker can safely host a brand-new call right now.
+    def is_ready_for_outbound_call(self) -> bool:
+        """Whether the voice worker can safely host an outbound call right now.
 
         True only when the persistent worker is alive with a freshly prewarmed
-        idle process available (``WORKER_READY_PATH``), the previous job — if
-        any — has fully disconnected from the IPC socket, and no dispatch is in
-        flight. When LiveKit is not configured / no persistent worker is in use,
-        the subprocess path spawns a fresh process per call, so a new call is
-        always safe.
+        idle process available (``WORKER_READY_PATH``), the previous job has
+        fully disconnected from the IPC socket, and no dispatch is in flight.
+        This gate is for assistant-initiated calls only. Inbound phone,
+        WhatsApp, and Unify Meet sessions are accepted first and then dispatch
+        through the best available path.
         """
         if not os.environ.get("LIVEKIT_URL"):
             return True
@@ -220,16 +226,17 @@ class LivekitCallManager:
 
         return os.path.exists(WORKER_READY_PATH)
 
-    async def await_ready_for_new_call(
+    async def await_ready_for_outbound_call(
         self,
-        timeout: float = NEW_CALL_READINESS_TIMEOUT_S,
+        timeout: float = OUTBOUND_CALL_READINESS_TIMEOUT_S,
         poll_interval: float = 0.25,
     ) -> bool:
-        """Await until a brand-new call can be safely started, or until timeout.
+        """Await until an outbound call can be safely started, or until timeout.
 
         Polls the real resource signals (no fixed sleep): a freshly prewarmed
         idle worker process, the IPC socket draining the previous job, and
-        dispatch state. A stale dispatch that LiveKit never activated is cleared
+        dispatch state. This is deliberately not used for inbound call
+        acceptance. A stale dispatch that LiveKit never activated is cleared
         opportunistically so a genuinely-idle worker is not reported busy by a
         leftover flag. Returns True once ready, False if the timeout elapses.
         """
@@ -237,7 +244,7 @@ class LivekitCallManager:
         while True:
             if self._active_job and self._call_proc is None:
                 self._clear_stale_dispatch_state()
-            if self.is_ready_for_new_call:
+            if self.is_ready_for_outbound_call:
                 return True
             if time.monotonic() >= deadline:
                 return False
@@ -338,6 +345,8 @@ class LivekitCallManager:
             and self._socket_server.has_connected_clients
         ):
             return False
+        if self._dispatch_lock.locked():
+            return False
         from unify.conversation_manager.medium_scripts.worker import (
             WORKER_READY_PATH,
         )
@@ -346,6 +355,8 @@ class LivekitCallManager:
 
     async def _restart_worker(self) -> None:
         """Terminate the live worker and start a fresh one to re-warm the pool."""
+        if self._dispatch_lock.locked():
+            return
         proc = self._worker_proc
         self._worker_proc = None
         if proc is not None and proc.poll() is None:
@@ -370,14 +381,16 @@ class LivekitCallManager:
         unwarmed_since: float | None = None
         while True:
             await asyncio.sleep(2)
-            if self._worker_proc is None:
+            proc = self._worker_proc
+            if proc is None:
                 continue
-            if self._worker_proc.poll() is not None:
+            if proc.poll() is not None:
                 LOGGER.warning(
                     f"{ICONS['ipc']} [LivekitCallManager] Persistent worker exited "
-                    f"(code={self._worker_proc.returncode}), restarting…",
+                    f"(code={proc.returncode}), restarting…",
                 )
-                self._worker_proc = None
+                if self._worker_proc is proc:
+                    self._worker_proc = None
                 ready_logged = False
                 unwarmed_since = None
                 from unify.conversation_manager.medium_scripts.worker import (
@@ -454,11 +467,12 @@ class LivekitCallManager:
 
     async def _wait_for_worker_registered(
         self,
-        timeout: float = WORKER_POOL_REGISTERED_TIMEOUT_S,
-    ) -> None:
-        """Wait until the persistent worker registers with LiveKit."""
-        if self._worker_proc is None:
-            return
+        worker_proc: subprocess.Popen,
+        timeout: float = WORKER_DISPATCH_REGISTERED_TIMEOUT_S,
+    ) -> bool:
+        """Wait until this worker process registers with LiveKit."""
+        if worker_proc.poll() is not None:
+            return False
 
         from unify.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
@@ -466,16 +480,19 @@ class LivekitCallManager:
 
         deadline = time.monotonic() + max(0.0, float(timeout))
         while time.monotonic() < deadline:
-            if self._worker_proc.poll() is not None:
-                return
+            if self._worker_proc is not worker_proc:
+                return False
+            if worker_proc.poll() is not None:
+                return False
             if os.path.exists(WORKER_REGISTERED_PATH):
-                return
+                return True
             await asyncio.sleep(0.5)
 
         LOGGER.warning(
             f"{ICONS['ipc']} [LivekitCallManager] Worker registration timeout "
-            f"after {timeout:.0f}s; dispatching anyway",
+            f"after {timeout:.0f}s; using subprocess fallback",
         )
+        return False
 
     async def _dispatch_job(
         self,
@@ -486,11 +503,22 @@ class LivekitCallManager:
         outbound: bool,
         *,
         extra_metadata: dict | None = None,
-    ) -> None:
+        registration_timeout: float = WORKER_DISPATCH_REGISTERED_TIMEOUT_S,
+    ) -> bool:
         """Dispatch a LiveKit job to the persistent worker."""
         self._refresh_config()
         async with self._dispatch_lock:
-            await self._wait_for_worker_registered()
+            worker_proc = self._worker_proc
+            if worker_proc is None or worker_proc.poll() is not None:
+                return False
+            if not await self._wait_for_worker_registered(
+                worker_proc,
+                timeout=registration_timeout,
+            ):
+                return False
+            if self._worker_proc is not worker_proc or worker_proc.poll() is not None:
+                return False
+
             socket_path = await self._ensure_socket_server()
 
             meta_dict = {
@@ -531,6 +559,7 @@ class LivekitCallManager:
                     f"(dispatch_id={dispatch.id}, room={room_name}, "
                     f"call_session_id={meta_dict.get('call_session_id', '')})",
                 )
+                return True
             finally:
                 await lk.aclose()
 
@@ -551,7 +580,12 @@ class LivekitCallManager:
                     channel == "app:comms:fast_brain_generating"
                     and self.on_fast_brain_generating is not None
                 ):
-                    self.on_fast_brain_generating()
+                    response = self.on_fast_brain_generating()
+                    if response is not None and self._socket_server is not None:
+                        await self._socket_server.queue_for_clients(
+                            "app:call:idle_smalltalk_state",
+                            json.dumps(response),
+                        )
                 elif (
                     channel == "app:comms:pipeline_quiescent"
                     and self.on_pipeline_quiescent is not None
@@ -636,8 +670,9 @@ class LivekitCallManager:
             {"opening_config": json.dumps(opening_config)} if opening_config else None
         )
 
+        dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(
+            dispatched = await self._dispatch_job(
                 room_name,
                 channel,
                 contact,
@@ -645,7 +680,7 @@ class LivekitCallManager:
                 outbound,
                 extra_metadata=extra_metadata,
             )
-        else:
+        if not dispatched:
             await self._start_call_subprocess(
                 room_name,
                 channel,
@@ -726,8 +761,9 @@ class LivekitCallManager:
             if value
         } or None
 
+        dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(
+            dispatched = await self._dispatch_job(
                 room_name,
                 "unify_meet",
                 contact,
@@ -735,7 +771,7 @@ class LivekitCallManager:
                 False,
                 extra_metadata=extra_metadata or None,
             )
-        else:
+        if not dispatched:
             await self._start_call_subprocess(
                 room_name,
                 "unify_meet",
@@ -874,8 +910,9 @@ class LivekitCallManager:
             "agent_service_url": "http://localhost:3000",
         }
 
+        dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
-            await self._dispatch_job(
+            dispatched = await self._dispatch_job(
                 room_name,
                 channel,
                 contact,
@@ -883,7 +920,7 @@ class LivekitCallManager:
                 False,
                 extra_metadata=meet_extra,
             )
-        else:
+        if not dispatched:
             await self._start_call_subprocess(
                 room_name,
                 channel,

@@ -280,6 +280,9 @@ class TestJobDispatch:
     ):
         config.is_coordinator = is_coordinator
         call_manager = LivekitCallManager(config)
+        worker_proc = MagicMock()
+        worker_proc.poll.return_value = None
+        call_manager._worker_proc = worker_proc
         mock_dispatch = MagicMock()
         mock_dispatch.id = "dispatch_123"
 
@@ -305,7 +308,7 @@ class TestJobDispatch:
         ):
             with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
                 pass
-            await call_manager._dispatch_job(
+            dispatched = await call_manager._dispatch_job(
                 "unity_42_phone",
                 "phone",
                 sample_contact,
@@ -313,6 +316,7 @@ class TestJobDispatch:
                 False,
             )
 
+        assert dispatched is True
         mock_lk.agent_dispatch.create_dispatch.assert_called_once()
         req = mock_lk.agent_dispatch.create_dispatch.call_args[0][0]
         assert req.agent_name == "unity_unity-test-pod-abc123"
@@ -353,6 +357,7 @@ class TestJobDispatch:
                 sample_contact,
                 boss_contact,
                 False,
+                extra_metadata=None,
             )
 
     @pytest.mark.asyncio
@@ -434,6 +439,71 @@ class TestLegacyFallback:
 
             mock_run.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_inbound_start_call_falls_back_when_worker_unregistered(
+        self,
+        call_manager,
+        sample_contact,
+        boss_contact,
+    ):
+        worker = MagicMock()
+        worker.poll.return_value = None
+        call_manager._worker_proc = worker
+
+        with (
+            patch.object(
+                call_manager,
+                "_wait_for_worker_registered",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "unify.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_run.return_value = mock_proc
+            await call_manager.start_call(sample_contact, boss_contact, outbound=False)
+
+        mock_run.assert_called_once()
+        assert call_manager._call_proc is mock_proc
+
+    @pytest.mark.asyncio
+    async def test_inbound_unify_meet_falls_back_if_worker_restarts_during_wait(
+        self,
+        call_manager,
+        sample_contact,
+        boss_contact,
+    ):
+        worker = MagicMock()
+        worker.poll.return_value = None
+        call_manager._worker_proc = worker
+
+        async def _worker_replaced(*_args, **_kwargs):
+            call_manager._worker_proc = None
+            return False
+
+        with (
+            patch.object(
+                call_manager,
+                "_wait_for_worker_registered",
+                side_effect=_worker_replaced,
+            ),
+            patch(
+                "unify.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+        ):
+            mock_proc = MagicMock()
+            mock_run.return_value = mock_proc
+            await call_manager.start_unify_meet(
+                sample_contact,
+                boss_contact,
+                room_name="unity_42_meet",
+            )
+
+        mock_run.assert_called_once()
+        assert call_manager._call_proc is mock_proc
+
 
 # ---------------------------------------------------------------------------
 # has_active_call guard
@@ -500,7 +570,10 @@ class TestWorkerReadiness:
 
         with patch.object(worker_mod, "WORKER_REGISTERED_PATH", str(registered_path)):
             wait_task = asyncio.create_task(
-                call_manager._wait_for_worker_registered(timeout=2.0),
+                call_manager._wait_for_worker_registered(
+                    mock_worker,
+                    timeout=2.0,
+                ),
             )
             touch_task = asyncio.create_task(_touch_later())
             await asyncio.wait([wait_task, touch_task], timeout=3.0)

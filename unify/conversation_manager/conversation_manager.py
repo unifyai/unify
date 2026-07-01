@@ -3,7 +3,7 @@ import contextlib
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Reversible
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON
@@ -60,6 +60,7 @@ MAX_CONV_MANAGER_MSGS = 50
 # before tearing down anyway (guards a line that never surfaces). Generous so it
 # rarely cuts off a legitimately-playing line.
 _HANG_UP_SPEECH_TIMEOUT_S = 20.0
+IDLE_SMALLTALK_RECENT_COMMS_SECONDS = 20.0
 RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
@@ -87,6 +88,30 @@ COMMISSIONING_OUTBOUND_FOLLOWUP_EVENTS = frozenset(
         "TeamsChannelMessageSent",
     },
 )
+
+
+def _idle_status_smalltalk_allowed(
+    *,
+    in_flight_actions: dict[int, dict],
+    global_thread: Reversible[CommsMessage],
+    inflight_voice_speech: str,
+    now: datetime,
+    recent_comms_seconds: float = IDLE_SMALLTALK_RECENT_COMMS_SECONDS,
+) -> bool:
+    if in_flight_actions:
+        return False
+    if inflight_voice_speech.strip():
+        return False
+    for message in reversed(global_thread):
+        if not isinstance(message, CommsMessage):
+            continue
+        if getattr(message, "role", None) != "assistant":
+            continue
+        age_seconds = (now - message.timestamp).total_seconds()
+        return age_seconds >= recent_comms_seconds
+    return True
+
+
 ACT_FOLLOWUP_ARGUMENT_DEFAULTS: dict[str, Any] = {
     "response_format": None,
     "persist": False,
@@ -426,6 +451,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._session_logger.debug(
             "session_start",
             "ConversationManager session initialized",
+        )
+
+    def fast_brain_idle_smalltalk_allowed(self) -> bool:
+        return _idle_status_smalltalk_allowed(
+            in_flight_actions=self.in_flight_actions,
+            global_thread=self.contact_index.global_thread,
+            inflight_voice_speech=self._inflight_voice_speech,
+            now=prompt_now(as_string=False),
         )
 
     def snapshot(self):
@@ -2894,6 +2927,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
+            # Workspace demo rows deliver their proof-of-completion summary over the unify_message medium.
+            "workspace_mailbox": {"unify_message"},
+            "workspace_drive": {"unify_message"},
+            "workspace_calendar": {"unify_message"},
+            "workspace_contacts": {"unify_message"},
+            "workspace_tasks": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None
@@ -2985,16 +3024,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
     PROACTIVE_DEBOUNCE_SECONDS = 5
 
-    def _on_fast_brain_generating(self) -> None:
+    def _on_fast_brain_generating(self) -> dict[str, bool]:
         """Called via IPC when the fast brain starts generating a reply.
 
         Restarts the proactive speech cycle so any in-flight decision is
         cancelled.  The quiescence gate in ``_proactive_speech_loop`` will
         prevent the countdown from starting until the pipeline is idle again.
         """
-        if not self._proactive_speech_enabled:
-            return
-        asyncio.ensure_future(self.schedule_proactive_speech())
+        if self._proactive_speech_enabled:
+            asyncio.ensure_future(self.schedule_proactive_speech())
+        return {"idle_smalltalk_allowed": self.fast_brain_idle_smalltalk_allowed()}
 
     def _on_pipeline_quiescent(self, quiescent: bool) -> None:
         """Called via IPC when the voice pipeline quiescence state changes."""

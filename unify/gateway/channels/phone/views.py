@@ -45,6 +45,7 @@ import json
 import logging
 from urllib.parse import quote_plus
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from livekit.api import (
     CreateSIPInboundTrunkRequest,
@@ -178,6 +179,62 @@ async def dispatch_livekit_agent(request: Request):
     return {"success": True}
 
 
+def _admin_headers() -> dict:
+    """Bearer headers for Orchestra admin API calls."""
+    return {
+        "Authorization": f"Bearer {SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()}",
+    }
+
+
+def _assistant_id_from_room(room_name: str) -> int | None:
+    """Recover the assistant id from a canonical ``unity_{id}_{medium}`` room."""
+    parts = (room_name or "").split("_")
+    if len(parts) >= 3 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+async def _upsert_outbound_phone_call_session(
+    *,
+    provider_call_sid: str,
+    assistant_id: int,
+    user_number: str,
+    pool_number: str,
+    room_name: str,
+    sip_uri: str,
+) -> dict:
+    """Persist the SID->assistant routing decision for an outbound PSTN call.
+
+    Without this record the ``/twilio/call-status`` webhook cannot tell which
+    assistant placed a call whose caller id is a shared coordinator number, so
+    it would publish ``call_answered`` to the wrong assistant and the outbound
+    opener would never fire. Mirrors the inbound and outbound-WhatsApp paths.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/phone/call-session",
+            headers=_admin_headers(),
+            json={
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "channel": "phone_call",
+                "assistant_id": assistant_id,
+                "from_number": user_number,
+                "to_number": pool_number,
+                "pool_number": pool_number,
+                # Outbound calls bridge straight into LiveKit over SIP, so there
+                # is no Twilio Conference; only the LiveKit room is meaningful.
+                "conference_name": "",
+                "livekit_room": room_name,
+                "status": "created",
+                "metadata": {"sip_uri": sip_uri, "call_type": "outbound"},
+            },
+            timeout=10.0,
+        )
+    response.raise_for_status()
+    return response.json()
+
+
 @auth_router.post("/send-call")
 async def send_call(request: Request):
     """Initiate an outbound Twilio call bridged into a LiveKit room.
@@ -188,12 +245,29 @@ async def send_call(request: Request):
        caller-supplied room.
     3. Ask Twilio to create the outbound call; Twilio fetches TwiML
        from /phone/twiml which builds the user-facing call leg.
+    4. Persist the SID->assistant routing session so the status webhook
+       resolves the placing assistant even on shared coordinator numbers.
     """
     credentials = EnvCredentialStore()
     data = await _json_object_or_empty(request)
     phone_number = data.get("To")
     twilio_number = data.get("From")
     room_name = data.get("room_name")
+
+    explicit_assistant_id = data.get("assistant_id")
+    assistant_id: int | None = None
+    if explicit_assistant_id is not None:
+        try:
+            assistant_id = int(explicit_assistant_id)
+        except (TypeError, ValueError):
+            assistant_id = None
+    if assistant_id is None:
+        assistant_id = _assistant_id_from_room(room_name)
+    if assistant_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="assistant_id (or a canonical room_name) is required",
+        )
 
     sip_uri = make_sip_uri(twilio_number, credentials)
     await ensure_phone_dispatch_rule(twilio_number, room_name, credentials)
@@ -207,6 +281,14 @@ async def send_call(request: Request):
             hosted_base=SETTINGS.conversation.COMMS_URL,
             hosted_path=f"/phone/twiml?phone_number={phone_number}",
         ),
+    )
+    await _upsert_outbound_phone_call_session(
+        provider_call_sid=call.sid,
+        assistant_id=assistant_id,
+        user_number=phone_number,
+        pool_number=twilio_number,
+        room_name=room_name,
+        sip_uri=sip_uri,
     )
     return {"success": True, "call_sid": call.sid}
 

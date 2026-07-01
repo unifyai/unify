@@ -1201,6 +1201,11 @@ def _neutral_onboarding_outbound(
     Voice Agent read out or solve clue content. Returns a summary with the
     body omitted, or None when the event is not an onboarding-trigger
     outbound. The ``(not delivered directly)`` template marker is preserved.
+
+    ``UnifyMessageSent`` is deliberately excluded: the only onboarding-trigger
+    outbound that uses ``unify_message`` is a workspace demo, whose summary is
+    the deliverable the brain should be free to confirm and discuss (e.g. to
+    offer a follow-up reply) — not a secret to withhold.
     """
     if not isinstance(
         event,
@@ -1208,7 +1213,6 @@ def _neutral_onboarding_outbound(
             SMSSent,
             WhatsAppSent,
             EmailSent,
-            UnifyMessageSent,
             DiscordMessageSent,
             DiscordChannelMessageSent,
         ),
@@ -1224,8 +1228,6 @@ def _neutral_onboarding_outbound(
         label = f"WhatsApp to {name}" if history else f"You WhatsApped {name}"
     elif isinstance(event, EmailSent):
         label = f"Email to {name}" if history else f"You emailed {name}"
-    elif isinstance(event, UnifyMessageSent):
-        label = f"Message to {name}" if history else f"You messaged {name}"
     else:
         label = f"Discord to {name}" if history else f"You Discord messaged {name}"
 
