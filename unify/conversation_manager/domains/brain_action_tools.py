@@ -1980,6 +1980,36 @@ class ConversationManagerBrainActionTools:
         """
         return await self._cm._patch_coordinator_onboarding_active(active=True)
 
+    async def set_onboarding_task_state(
+        self,
+        step_id: str,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """Mark one onboarding checklist step complete or incomplete.
+
+        Use the ``step_id`` values from my live onboarding progress block
+        (for example ``apps``, ``create-scheduled-task``). Communication
+        rows and auto-triggered checklist actions complete on their own —
+        if this tool returns an error, relay that explanation rather than
+        guessing which steps are settable.
+
+        **Call when:** I have finished onboarding work that the checklist
+        cannot detect yet (semantic setup, guided walkthroughs outside
+        Communication) and the user agrees the step is done — or when I need
+        to undo a manual completion I set earlier.
+
+        **Do not call when:** onboarding is inactive; the step is in the
+        Communication section; the user only clicked a checklist row that
+        auto-starts an action; or I have not actually done the work.
+
+        After success: confirm briefly and continue from the refreshed
+        onboarding progress block.
+        """
+        return await self._cm._patch_coordinator_onboarding_step_state(
+            step_id=step_id,
+            completed=completed,
+        )
+
     async def wait(
         self,
         delay: int | None = None,
@@ -2265,6 +2295,7 @@ class ConversationManagerBrainActionTools:
         if is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
             if self._cm.coordinator_onboarding_active:
                 tools["deactivate_onboarding"] = self.deactivate_onboarding
+                tools["set_onboarding_task_state"] = self.set_onboarding_task_state
             else:
                 tools["activate_onboarding"] = self.activate_onboarding
         return tools

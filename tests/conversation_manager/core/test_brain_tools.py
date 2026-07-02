@@ -2304,6 +2304,7 @@ class TestOnboardingToggleTools:
             settings.DEMO_MODE = False
             tools = self._action_tools(mock_cm).as_tools()
         assert "deactivate_onboarding" in tools
+        assert "set_onboarding_task_state" in tools
         assert "activate_onboarding" not in tools
 
     def test_activate_exposed_when_onboarding_inactive(
@@ -2318,6 +2319,7 @@ class TestOnboardingToggleTools:
             tools = self._action_tools(mock_cm).as_tools()
         assert "activate_onboarding" in tools
         assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
 
     def test_neither_tool_without_console_ui(
         self,
@@ -2330,6 +2332,7 @@ class TestOnboardingToggleTools:
             settings.DEMO_MODE = False
             tools = self._action_tools(mock_cm).as_tools()
         assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
         assert "activate_onboarding" not in tools
 
     def test_neither_tool_for_non_coordinator(self, mock_cm):
@@ -2344,7 +2347,34 @@ class TestOnboardingToggleTools:
         finally:
             SESSION_DETAILS.is_coordinator = previous
         assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
         assert "activate_onboarding" not in tools
+
+    @pytest.mark.asyncio
+    async def test_set_onboarding_task_state_calls_patch_helper(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
+            return_value={"status": "ok", "message": "done"},
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.set_onboarding_task_state("apps", True)
+        mock_cm._patch_coordinator_onboarding_step_state.assert_awaited_once_with(
+            step_id="apps",
+            completed=True,
+        )
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_set_onboarding_task_state_surfaces_patch_error(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
+            return_value={
+                "status": "error",
+                "message": "Communication checklist steps complete automatically",
+            },
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.set_onboarding_task_state("email-reference", True)
+        assert result["status"] == "error"
+        assert "Communication" in result["message"]
 
     @pytest.mark.asyncio
     async def test_deactivate_calls_patch_helper(self, mock_cm):
