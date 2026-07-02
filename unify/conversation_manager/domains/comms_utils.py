@@ -1136,6 +1136,7 @@ async def send_email_via_address(
         return {"success": False, "error": "No sender email configured"}
 
     body = normalize_outbound_plain_text(body)
+    from_name = (SESSION_DETAILS.assistant.name or "").strip()
 
     payload = {
         "from": from_email,
@@ -1144,6 +1145,8 @@ async def send_email_via_address(
         "body": body,
         "in_reply_to": email_id,
     }
+    if from_name:
+        payload["from_name"] = from_name
     if thread_id:
         payload["thread_id"] = thread_id
     if cc:
