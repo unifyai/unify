@@ -672,6 +672,20 @@ class TestExternalAppIntegration:
         assert "**External apps & services**" not in prompt
 
 
+class TestExternalResourcesActBlock:
+    """External-resource work must go through ``act``."""
+
+    def test_external_resources_block_present(self):
+        prompt = _build()
+        assert "External resources (use ``act``)" in prompt
+        assert "Ground truth rule" in prompt
+        assert "I do not answer from memory" in prompt
+
+    def test_external_resources_block_absent_in_demo_mode(self):
+        prompt = _build(demo_mode=True)
+        assert "External resources (use ``act``)" not in prompt
+
+
 # ---------------------------------------------------------------------------
 # Tests – seeing/controlling the user's machine (screen-share → linked desktop)
 # ---------------------------------------------------------------------------
