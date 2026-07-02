@@ -2933,6 +2933,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "workspace_calendar": {"unify_message"},
             "workspace_contacts": {"unify_message"},
             "workspace_tasks": {"unify_message"},
+            "workspace_teams": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None
