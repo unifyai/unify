@@ -2207,11 +2207,12 @@ class ConversationManagerBrainActionTools:
         # During onboarding, withhold a reference-quiz channel's send tool until
         # the user clicks its trigger row (this session) or the step durably
         # completes — so T-W1N cannot send an untagged clue proactively.
-        for name in masked_reference_quiz_tools(
-            self._cm.coordinator_onboarding_render,
-            self._cm.onboarding_clicked_trigger_steps,
-        ):
-            tools.pop(name, None)
+        if self._cm.coordinator_onboarding_active:
+            for name in masked_reference_quiz_tools(
+                self._cm.coordinator_onboarding_render,
+                self._cm.onboarding_clicked_trigger_steps,
+            ):
+                tools.pop(name, None)
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:

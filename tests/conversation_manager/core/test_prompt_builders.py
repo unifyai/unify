@@ -1033,6 +1033,25 @@ class TestOnboardingPromptLeakageGuard:
         assert "internal guidance — I never repeat it to the user" in prompt
         assert "No genre lists, franchise names" in prompt
 
+    def test_coordinator_onboarding_scaffolding_omitted_when_inactive(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=False,
+        )
+        assert "My onboarding narration" not in prompt
+        assert "My onboarding progress (live)" not in prompt
+
+    def test_coordinator_onboarding_scaffolding_present_when_active(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [],
+                "next_targets": [],
+            },
+        )
+        assert "My onboarding narration" in prompt
+
     def test_reference_quiz_rules_omit_parrotable_franchise_lists(self):
         prompt = _build(is_coordinator=True)
         assert "Star Wars" not in prompt

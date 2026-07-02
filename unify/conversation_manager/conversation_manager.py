@@ -255,13 +255,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
         self.is_coordinator = assistant_is_coordinator
-        # Global "do onboarding later" switch, mirrored from Orchestra's
-        # ``Coordinator/State`` and refreshed on a short TTL (see
-        # ``_refresh_coordinator_onboarding_deferred``). When True the
-        # slow-brain drops all onboarding scaffolding so the Coordinator
-        # behaves as if onboarding never existed. Defaults to False until
+        # Global onboarding scaffolding gate, mirrored from Orchestra's
+        # ``Coordinator/State`` and refreshed on a short TTL. When False the
+        # slow-brain drops all onboarding scaffolding. Defaults to True until
         # the first refresh resolves.
-        self.coordinator_onboarding_deferred: bool = False
+        self.coordinator_onboarding_active: bool = True
         # Precomputed depends_on-aware onboarding picture (steps + statuses
         # + valid next targets with nudge copy), mirrored from Orchestra so
         # the slow brain reads a standing progress block instead of
@@ -2716,8 +2714,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         Mirrors two things from Orchestra's ``Coordinator/State`` onto the
         session so ``build_brain_spec`` never has to derive anything:
-          - ``coordinator_onboarding_deferred``: the global "do onboarding
-            later" switch (drops all onboarding scaffolding when set).
+          - ``coordinator_onboarding_active``: whether onboarding scaffolding
+            is live (narration, progress block, tool masking).
           - ``coordinator_onboarding_render``: the precomputed
             depends_on-aware picture (steps + statuses + valid next
             targets with nudge copy) that drives the standing progress
@@ -2737,7 +2735,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Refresh more eagerly while actively onboarding (a render is
         # present) so "what's next" stays fresh during a fast-moving
         # setup conversation; back off once onboarding is done/deferred.
-        ttl = 10.0 if self.coordinator_onboarding_render else 30.0
+        ttl = 10.0 if self.coordinator_onboarding_active else 30.0
         # Stamp before the await so concurrent runs don't stampede the
         # endpoint; a failed fetch still respects the TTL backoff.
         if now - self._coordinator_state_checked_at < ttl:
@@ -2770,7 +2768,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     self.onboarding_catalog = (
                         catalog if isinstance(catalog, dict) else None
                     )
-            self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
+            self.coordinator_onboarding_active = bool(info.get("onboarding_active"))
             render = info.get("onboarding")
             self.coordinator_onboarding_render = (
                 render if isinstance(render, dict) else None
@@ -2778,8 +2776,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         except Exception as exc:
             LOGGER.warning(
                 "Coordinator onboarding-state refresh failed; "
-                "keeping previous values (deferred=%s): %s",
-                self.coordinator_onboarding_deferred,
+                "keeping previous values (active=%s): %s",
+                self.coordinator_onboarding_active,
                 exc,
             )
 

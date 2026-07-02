@@ -14,7 +14,7 @@ sessions. The notification we push here carries only the structured
 event payload + a one-line system instruction; the brain owns the
 phrasing.
 
-Gating on ``Coordinator/State.mode == 'onboarding'`` happens on the
+Gating on ``Coordinator/State.onboarding_active`` happens on the
 orchestra side before the event is ever published, so handlers here
 can assume the user is currently in the onboarding flow. Outside of
 onboarding the helper simply never runs.
@@ -396,6 +396,8 @@ async def _handle_coordinator_onboarding_event(
     # no notification, no LLM run — rather than nudge them toward UI steps
     # they cannot see.
     if not SETTINGS.UNITY_CONSOLE_UI:
+        return False
+    if not cm.coordinator_onboarding_active:
         return False
     # Refresh the standing onboarding progress model from the event's
     # attached render so the slow brain's next turn reflects this change
