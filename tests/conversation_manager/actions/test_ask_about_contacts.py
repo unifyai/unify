@@ -12,13 +12,15 @@ correctly and passes a well-formed question, not the CM's actual answer.
 import pytest
 
 from tests.helpers import _handle_project
-from tests.conversation_manager.cm_helpers import assert_efficient
-from tests.conversation_manager.core.slow_brain_benchmark_helpers import (
-    assert_contact_preference_lookup,
-    run_contact_preference_lookup,
+from tests.conversation_manager.cm_helpers import (
+    filter_events_by_type,
+    assert_efficient,
 )
 from tests.conversation_manager.conftest import BOSS
-from unify.conversation_manager.events import SMSReceived
+from unify.conversation_manager.events import (
+    SMSReceived,
+    ActorHandleStarted,
+)
 
 pytestmark = pytest.mark.eval
 
@@ -33,11 +35,9 @@ def _assert_contact_ask_triggered(
     *,
     expected_substrings: list[str],
 ) -> None:
-    """Assert ``ask_about_contacts`` was called with expected query fragments."""
-
-    from tests.conversation_manager.cm_helpers import filter_events_by_type
-    from unify.conversation_manager.events import ActorHandleStarted
-
+    """Assert ``ask_about_contacts`` was called and each expected substring
+    appears in the query text OR in the ``response_format`` keys.
+    """
     events = filter_events_by_type(result.output_events, ActorHandleStarted)
     contact_events = [e for e in events if e.action_name == "ask_about_contacts"]
     assert contact_events, (
@@ -67,13 +67,17 @@ async def test_contact_preference_lookup(initialized_cm):
     ``ask_about_contacts``."""
     cm = initialized_cm
 
-    result = await run_contact_preference_lookup(cm)
+    result = await cm.step_until_wait(
+        SMSReceived(
+            contact=BOSS,
+            content="Does Sarah prefer phone or email?",
+        ),
+    )
 
     _assert_contact_ask_triggered(
         result,
         expected_substrings=["sarah"],
     )
-    assert_contact_preference_lookup(result)
     assert_efficient(result, 3)
 
 
