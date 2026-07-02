@@ -2105,7 +2105,7 @@ def build_system_prompt(
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
-    coordinator_onboarding_deferred: bool = False,
+    coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
     onboarding_catalog: dict[str, Any] | None = None,
@@ -2238,9 +2238,13 @@ def build_system_prompt(
     # Reference-quiz comms tools withheld until the user clicks the channel's
     # trigger row (this session) or the step durably completes. Kept consistent
     # with the hard gate in ``BrainActionTools.as_tools``.
-    onboarding_masked_tools = masked_reference_quiz_tools(
-        coordinator_onboarding_render,
-        coordinator_clicked_trigger_steps,
+    onboarding_masked_tools = (
+        masked_reference_quiz_tools(
+            coordinator_onboarding_render,
+            coordinator_clicked_trigger_steps,
+        )
+        if coordinator_onboarding_active
+        else set()
     )
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
@@ -2299,18 +2303,15 @@ def build_system_prompt(
                     catalog=onboarding_catalog,
                 )
             )
-            # ``coordinator_onboarding_deferred`` is the user's global "do
-            # onboarding later" switch: when set we drop the
-            # onboarding-specific scaffolding (reactive narration, the
-            # checklist/flow map, and the live progress block) so the
-            # Coordinator behaves as if onboarding never existed and never
-            # nudges toward the checklist. General platform literacy above
+            # ``coordinator_onboarding_active`` gates onboarding-specific
+            # scaffolding (reactive narration, the checklist/flow map, and
+            # the live progress block). General platform literacy above
             # is intentionally kept on.
-            if not coordinator_onboarding_deferred:
+            if coordinator_onboarding_active:
                 # Reactive-narration rules for the gradual onboarding flow.
                 # Cheap to build unconditionally for coordinators — orchestra
-                # gates emission on ``Coordinator/State.mode == 'onboarding'``
-                # so the block is harmless when the user is past onboarding;
+                # gates emission on ``Coordinator/State.onboarding_active``
+                # so the block is harmless when onboarding is inactive;
                 # they simply never see the notification it describes.
                 coordinator_onboarding_narration_block = (
                     _build_coordinator_onboarding_narration_block()
