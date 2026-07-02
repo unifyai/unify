@@ -1613,6 +1613,22 @@ class CommsPrimitives:
                 },
             )
 
+        # Reach a workspace member we've never received a Slack message from:
+        # when the contact has an email but no Slack user ID on file (and none
+        # was supplied inline), resolve it from the email via the workspace
+        # bot (users.lookupByEmail). _resolve_or_attach_detail then persists it
+        # onto the contact, so this lookup happens at most once per contact.
+        if (
+            slack_user_id is None
+            and contact is not None
+            and not contact.get("slack_user_id")
+            and contact.get("email_address")
+        ):
+            slack_user_id = await comms_utils.resolve_slack_user_id_by_email(
+                team_id=team_id,
+                email=contact["email_address"],
+            )
+
         detail_error, contact = self._resolve_or_attach_detail(
             contact=contact,
             contact_id=contact_id,
