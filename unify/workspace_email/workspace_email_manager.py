@@ -16,7 +16,7 @@ The two identities are deliberately distinct:
   explicitly about the user's workspace inbox.
 
 Credentials come from the connected account's OAuth token, resolved in the
-trusted runtime via :func:`unify.common.runtime_oauth.get_oauth_access_token`.
+trusted runtime via :func:`unify.common.runtime_oauth.get_provider_access_token`.
 The token secrets are kept fresh by the deployed refresh cron; this manager
 never handles refresh tokens itself. The ``From`` address (Gmail) is resolved
 from the provider profile of the token itself, so no additional secret needs to
@@ -33,7 +33,7 @@ from typing import Any, Optional
 
 import httpx
 
-from unify.common.runtime_oauth import get_oauth_access_token
+from unify.common.runtime_oauth import get_provider_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class WorkspaceEmailManager:
         )
 
     def _headers(self, provider: str) -> dict[str, str]:
-        token = get_oauth_access_token(provider)
+        token = get_provider_access_token(provider)
         return {"Authorization": f"Bearer {token}"}
 
     async def _account_email(self, provider: str) -> str:
