@@ -1184,6 +1184,9 @@ def _build_coordinator_onboarding_progress_block(
         "can also revert from done back to available if the user resets it, "
         "so I never claim a step is done based on my own memory of having "
         "completed it earlier — only the status shown here counts.",
+        "Each step line includes its ``step_id`` for "
+        "``set_onboarding_task_state(step_id, completed)`` when I need to "
+        "mark non-Communication work complete or undo a manual completion.",
         "While the user is on an onboarding checklist step or asking where to "
         "click in the onboarding UI, I answer from this block and the "
         "onboarding UI reference — I do not dispatch ``act`` just to orient "
@@ -1210,7 +1213,13 @@ def _build_coordinator_onboarding_progress_block(
             step.get("status") or "pending",
         )
         title = step.get("title") or step.get("id") or "step"
-        overview_lines.append(f"    - [{marker}] {title}")
+        step_id = step.get("id")
+        if isinstance(step_id, str) and step_id:
+            overview_lines.append(
+                f"    - [{marker}] {title} (step_id: {step_id})",
+            )
+        else:
+            overview_lines.append(f"    - [{marker}] {title}")
     if overview_lines:
         lines.append("Full checklist (every step, with its live status):")
         lines.extend(overview_lines)

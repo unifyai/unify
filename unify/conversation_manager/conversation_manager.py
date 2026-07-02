@@ -2860,6 +2860,106 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "message": f"Failed to update onboarding state: {exc}",
             }
 
+    async def _patch_coordinator_onboarding_step_state(
+        self,
+        *,
+        step_id: str,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """PATCH manual onboarding step completion on Orchestra."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": (
+                    "Onboarding step completion can only be changed for the "
+                    "workspace Coordinator."
+                ),
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        import httpx as _httpx
+        import time as _time
+
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.patch(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                    headers={
+                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                    },
+                    json={
+                        "onboarding_step_completion": {
+                            "step_id": step_id,
+                            "completed": completed,
+                        },
+                    },
+                )
+            payload = resp.json() if resp.content else {}
+            if resp.status_code == 403:
+                return {
+                    "status": "error",
+                    "message": (
+                        "I do not have permission to change onboarding step "
+                        "completion in this workspace."
+                    ),
+                }
+            if resp.status_code == 400:
+                detail = payload.get("detail")
+                if isinstance(detail, dict):
+                    message = detail.get("message") or detail.get("code")
+                else:
+                    message = detail
+                return {
+                    "status": "error",
+                    "message": message or "Invalid onboarding step completion.",
+                    "step_id": step_id,
+                }
+            resp.raise_for_status()
+            info = payload.get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            completed_step_ids = (
+                info.get("completed_step_ids")
+                if isinstance(info.get("completed_step_ids"), list)
+                else []
+            )
+            if completed:
+                message = f"Marked '{step_id}' complete in the onboarding checklist."
+            elif step_id in completed_step_ids:
+                message = (
+                    f"Removed my manual completion for '{step_id}', but the "
+                    "checklist still shows it as done because the platform "
+                    "detects it is already complete."
+                )
+            else:
+                message = f"Marked '{step_id}' incomplete in the onboarding checklist."
+            return {
+                "status": "ok",
+                "message": message,
+                "step_id": step_id,
+                "completed": completed,
+            }
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator onboarding step completion PATCH failed "
+                "(step_id=%s, completed=%s): %s",
+                step_id,
+                completed,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update onboarding step completion: {exc}",
+                "step_id": step_id,
+            }
+
     def set_coordinator_onboarding_render(self, render: Any) -> None:
         """Update the cached onboarding render from a fresh event payload.
 
