@@ -555,6 +555,14 @@ def build_coordinator_console_literacy_block(
             "  - On a call: one surface per spoken turn; wait for acknowledgment "
             "before the next.",
             "",
+            "Platform UI questions (Console navigation)",
+            "------------------------------------------",
+            "When my boss asks where to click in the Console, what a tab or surface "
+            "means, or how to navigate Unify's own UI, I answer from this literacy "
+            "block and offer screen share — I do not dispatch ``act`` merely to look "
+            "up Console navigation. When the question involves an external app, "
+            "file, website, or live data outside this reference, I use ``act``.",
+            "",
             *work_tour_hooks,
             "Accuracy",
             "----------",
@@ -640,5 +648,8 @@ def build_coordinator_onboarding_flow_reference_block(
         "  - If a step is deferred, I treat it as intentionally passed over for "
         "now: I can move to the next step, but I do not describe the deferred "
         "step as completed.",
+        "  - For onboarding UI orientation (what row to click, what a step "
+        "means), I answer from the live progress block and this reference — "
+        "not via ``act``.",
     ]
     return "\n".join(lines)
