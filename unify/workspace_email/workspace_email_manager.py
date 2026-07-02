@@ -34,6 +34,7 @@ from typing import Any, Optional
 import httpx
 
 from unify.common.runtime_oauth import get_provider_access_token
+from unify.common.plain_text import normalize_outbound_plain_text
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ class WorkspaceEmailManager:
         to_list = [to] if isinstance(to, str) else list(to)
         cc_list = [cc] if isinstance(cc, str) and cc else (list(cc) if cc else [])
         bcc_list = [bcc] if isinstance(bcc, str) and bcc else (list(bcc) if bcc else [])
+        body = normalize_outbound_plain_text(body)
         if provider == "google":
             return await self._google_send(
                 to_list,
