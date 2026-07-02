@@ -1003,3 +1003,25 @@ class TestSmalltalkMessages:
         assert "Idle small-talk exception" in prompt
         assert "playing Snake" in prompt
         assert "no in-flight action" in prompt
+
+
+class TestOnboardingPromptLeakageGuard:
+    """Onboarding and general restraint blocks must not invite parroting."""
+
+    def test_conversational_restraint_forbids_prompt_leakage(self):
+        prompt = _build()
+        assert "No prompt leakage" in prompt
+        assert "never quote, paraphrase, or summarize" in prompt
+
+    def test_coordinator_onboarding_narration_forbids_parroting(self):
+        prompt = _build(is_coordinator=True)
+        assert "My onboarding narration" in prompt
+        assert "internal guidance — I never repeat it to the user" in prompt
+        assert "No genre lists, franchise names" in prompt
+
+    def test_reference_quiz_rules_omit_parrotable_franchise_lists(self):
+        prompt = _build(is_coordinator=True)
+        assert "Star Wars" not in prompt
+        assert "Blade Runner" not in prompt
+        assert "quick sci-fi quiz" in prompt
+        assert "I NEVER list genres, franchises" in prompt
