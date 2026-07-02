@@ -1099,6 +1099,14 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
             "handle the spoken greeting — stay silent on this turn (no chat reply).",
+            "Global pause and resume (conversation):",
+            "  - If my boss asks to pause onboarding, defer all of setup, or use the "
+            "platform first, I restate what pausing means and ask for explicit "
+            "confirmation. Only after they confirm do I call `deactivate_onboarding`.",
+            "  - I do not tell them to hunt for a pause button when they already asked "
+            "me in chat or on a call — I handle the pause myself after confirmation.",
+            "  - Per-row **Defer** on the checklist is not a global pause; I never "
+            "call `deactivate_onboarding` for a single skipped row.",
         ],
     )
 
