@@ -31,7 +31,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
-from unify.provider_proxy.ancestry import is_allowed
+from unify.provider_proxy.ancestry import is_allowed, ms_get_by_path, parent_path
 from unify.provider_proxy.classify import (
     KIND_BATCH,
     KIND_FILE_READ,
@@ -162,24 +162,69 @@ def _write_destinations(
     return dests
 
 
+async def _resolve_ids(
+    provider: str,
+    loc: Optional[Locator],
+) -> tuple[Optional[tuple[str, str]], bool]:
+    """Resolve a locator to concrete ``(drive_id, item_id)``.
+
+    Returns ``(ids, existed)``. For id-addressed locators, ``existed`` is True
+    (existence is enforced downstream by ancestry). For Graph path-addressed
+    locators, the path is resolved via the provider; ``existed`` is False when
+    the item does not exist (used to distinguish create-vs-edit).
+    """
+    if loc is None:
+        return (None, False)
+    if provider == "microsoft" and loc.is_path:
+        node = await ms_get_by_path(loc.drive_id, loc.anchor_item_id, loc.path or "")
+        if node is None:
+            return (None, False)
+        return ((node["drive_id"], node["item_id"]), True)
+    return ((loc.drive_id, loc.item_id), True)
+
+
+async def _resolve_parent_ids(
+    provider: str,
+    loc: Locator,
+) -> Optional[tuple[str, str]]:
+    """Resolve the parent folder of a (possibly nonexistent) path locator."""
+    if provider != "microsoft" or not loc.is_path:
+        return None
+    node = await ms_get_by_path(
+        loc.drive_id,
+        loc.anchor_item_id,
+        parent_path(loc.path or ""),
+    )
+    if node is None:
+        return None
+    return (node["drive_id"], node["item_id"])
+
+
 async def _handle_write(
     c: Classification,
     query: dict[str, str],
     body: Optional[bytes],
 ) -> Optional[JSONResponse]:
-    """Return a 403 response if the write touches a masked location, else None."""
-    if c.parent is not None and not await is_allowed(
-        c.provider,
-        c.parent.drive_id,
-        c.parent.item_id,
-    ):
-        return _forbidden("Destination folder is not accessible.")
-    if c.target is not None and not await is_allowed(
-        c.provider,
-        c.target.drive_id,
-        c.target.item_id,
-    ):
-        return _not_found()
+    """Return a deny response if the write touches a masked location, else None.
+
+    An allowed folder always accepts new files (create checks the parent
+    folder); editing an existing item checks that item (so an explicitly-masked
+    sensitive file stays blocked for writes too).
+    """
+    if c.parent is not None:
+        pids, _ = await _resolve_ids(c.provider, c.parent)
+        if pids is not None and not await is_allowed(c.provider, *pids):
+            return _forbidden("Destination folder is not accessible.")
+    if c.target is not None:
+        tids, existed = await _resolve_ids(c.provider, c.target)
+        if existed and tids is not None:
+            if not await is_allowed(c.provider, *tids):
+                return _not_found()
+        else:
+            # Creating a new item at a path: an allowed parent folder permits it.
+            pids = await _resolve_parent_ids(c.provider, c.target)
+            if pids is not None and not await is_allowed(c.provider, *pids):
+                return _forbidden("Destination folder is not accessible.")
     body_json: Optional[dict[str, Any]] = None
     if body:
         try:
@@ -206,7 +251,7 @@ async def _handle_batch(
 
     synth: dict[str, dict[str, Any]] = {}
     forward: list[dict[str, Any]] = []
-    listing_ids: dict[str, Classification] = {}
+    listing_parent: dict[str, Optional[Locator]] = {}
 
     for sub in requests:
         sub_id = str(sub.get("id"))
@@ -226,11 +271,16 @@ async def _handle_batch(
                 synth[sub_id] = {"id": sub_id, "status": deny.status_code}
                 continue
         elif c.kind == KIND_FILE_READ and c.target is not None:
-            if not await is_allowed(provider, c.target.drive_id, c.target.item_id):
+            tids, existed = await _resolve_ids(provider, c.target)
+            if existed and tids is not None and not await is_allowed(provider, *tids):
                 synth[sub_id] = {"id": sub_id, "status": 404}
                 continue
         if c.kind == KIND_FILE_READ and c.is_listing:
-            listing_ids[sub_id] = c
+            parent_loc = c.parent
+            if parent_loc is not None and parent_loc.is_path:
+                pids, _ = await _resolve_ids(provider, parent_loc)
+                parent_loc = Locator(pids[0], pids[1]) if pids is not None else None
+            listing_parent[sub_id] = parent_loc
         forward.append(sub)
 
     upstream_by_id: dict[str, dict[str, Any]] = {}
@@ -260,11 +310,11 @@ async def _handle_batch(
         if item is None:
             responses.append({"id": sub_id, "status": 502})
             continue
-        if sub_id in listing_ids and isinstance(item.get("body"), dict):
+        if sub_id in listing_parent and isinstance(item.get("body"), dict):
             item["body"] = await filter_listing(
                 provider,
                 item["body"],
-                listing_ids[sub_id].parent,
+                listing_parent[sub_id],
                 rewrite,
             )
         responses.append(item)
@@ -346,6 +396,11 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
 
     # KIND_FILE_READ
     if c.is_listing:
+        # Resolve a path-addressed parent folder to concrete ids for filtering.
+        parent_loc = c.parent
+        if parent_loc is not None and parent_loc.is_path:
+            pids, _ = await _resolve_ids(provider, parent_loc)
+            parent_loc = Locator(pids[0], pids[1]) if pids is not None else None
         resp = await _forward(
             provider,
             method,
@@ -363,13 +418,14 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
         filtered = await filter_listing(
             provider,
             payload,
-            c.parent,
+            parent_loc,
             _rewriter(provider, session),
         )
         return JSONResponse(content=filtered, status_code=resp.status_code)
 
     if c.target is not None:
-        if not await is_allowed(provider, c.target.drive_id, c.target.item_id):
+        tids, existed = await _resolve_ids(provider, c.target)
+        if existed and tids is not None and not await is_allowed(provider, *tids):
             return _not_found()
         resp = await _forward(
             provider,

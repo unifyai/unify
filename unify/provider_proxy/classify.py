@@ -26,10 +26,22 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 @dataclass
 class Locator:
-    """A unified ``(drive_id, item_id)`` handle for an item."""
+    """A unified handle for an item.
+
+    Either id-addressed (``item_id`` set, ``path is None``) or, for Microsoft
+    Graph, path-addressed relative to an anchor (``path`` set,
+    ``anchor_item_id`` = ``"root"`` or a concrete item id). Path-addressed
+    locators are resolved to concrete ids by the proxy before allow-checks.
+    """
 
     drive_id: str
-    item_id: str
+    item_id: str = ""
+    path: str | None = None
+    anchor_item_id: str | None = None
+
+    @property
+    def is_path(self) -> bool:
+        return self.path is not None
 
 
 @dataclass
@@ -45,11 +57,6 @@ class Classification:
     root_listing: bool = False
 
 
-def _has_path_addressing(segs: list[str]) -> bool:
-    # Graph path addressing (root:/A/B:) is not yet parsed; deny by default.
-    return any(":" in seg for seg in segs)
-
-
 # ── Microsoft Graph ─────────────────────────────────────────────────────────
 
 
@@ -57,6 +64,95 @@ def _strip_ms_version(segs: list[str]) -> list[str]:
     if segs and segs[0] in ("v1.0", "beta"):
         return segs[1:]
     return segs
+
+
+def _ms_split_drive_base(rest: str) -> tuple[str, str] | None:
+    """Return ``(drive_id, remainder)`` after the drive base, or None.
+
+    ``remainder`` is the string after ``me/drive`` or ``drives/{id}`` and may
+    contain Graph path-addressing colons. Only the personal drive and explicit
+    ``drives/{id}`` are supported for path addressing.
+    """
+    if rest == "me/drive" or rest.startswith("me/drive/"):
+        return (_MS_DEFAULT_DRIVE, rest[len("me/drive") :].lstrip("/"))
+    if rest.startswith("drives/"):
+        remainder = rest[len("drives/") :]
+        drive_id, _, after = remainder.partition("/")
+        if not drive_id:
+            return None
+        return (drive_id, after)
+    return None
+
+
+def _classify_ms_path(
+    method: str,
+    drive_id: str,
+    after: str,
+    query: dict[str, str],
+) -> Classification | None:
+    """Classify a Graph path-addressed request (``root:/path:`` forms).
+
+    ``after`` is the remainder after the drive base, e.g. ``root:/A/B:/children``
+    or ``items/{id}:/rel/file.txt:/content``. Returns None if the shape is not
+    recognized so the caller can default-deny.
+    """
+    if after.startswith("root:"):
+        anchor_id = "root"
+        remainder = after[len("root:") :]
+    elif after.startswith("items/"):
+        body = after[len("items/") :]
+        anchor_id, colon, remainder = body.partition(":")
+        if not colon or not anchor_id:
+            return None
+    else:
+        return None
+
+    path_part, _, suffix = remainder.partition(":")
+    path = path_part.strip("/")
+    loc = Locator(drive_id=drive_id, path=path, anchor_item_id=anchor_id)
+    write = method in _WRITE_METHODS
+
+    if suffix == "":
+        kind = KIND_FILE_WRITE if write else KIND_FILE_READ
+        return Classification("microsoft", kind, "path_item", target=loc)
+    if suffix == "/children":
+        if write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_WRITE,
+                "path_children",
+                parent=loc,
+            )
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "path_children",
+            parent=loc,
+            is_listing=True,
+        )
+    if suffix == "/content":
+        kind = KIND_FILE_WRITE if write else KIND_FILE_READ
+        return Classification(
+            "microsoft",
+            kind,
+            "path_content",
+            target=loc,
+            is_content=not write,
+        )
+    if suffix == "/createUploadSession":
+        return Classification("microsoft", KIND_FILE_WRITE, "path_upload", target=loc)
+    if suffix == "/copy":
+        return Classification("microsoft", KIND_FILE_WRITE, "path_copy", target=loc)
+    if suffix.startswith("/search("):
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "path_search",
+            parent=loc,
+            is_listing=True,
+            is_search=True,
+        )
+    return None
 
 
 def _ms_is_file_domain(segs: list[str]) -> bool:
@@ -101,6 +197,20 @@ def _classify_microsoft(
     if not _ms_is_file_domain(segs):
         return Classification("microsoft", KIND_NON_FILE, "/".join(segs))
 
+    rest_str = "/".join(segs)
+
+    # Graph path addressing (root:/A/B: or items/{id}:/rel:) is resolved to a
+    # concrete item by the proxy; anything colon-shaped we cannot parse is
+    # default-denied.
+    if ":" in rest_str:
+        parsed = _ms_split_drive_base(rest_str)
+        if parsed is not None:
+            drive_id, after = parsed
+            path_class = _classify_ms_path(method, drive_id, after, query)
+            if path_class is not None:
+                return path_class
+        return Classification("microsoft", KIND_UNKNOWN, rest_str)
+
     # me/drives => list of drives (roots); leave unfiltered.
     if segs[:2] == ["me", "drives"]:
         return Classification(
@@ -111,7 +221,7 @@ def _classify_microsoft(
         )
 
     parsed = _ms_drive_and_rest(segs)
-    if parsed is None or _has_path_addressing(segs):
+    if parsed is None:
         return Classification("microsoft", KIND_UNKNOWN, "/".join(segs))
     drive_id, rest = parsed
     write = method in _WRITE_METHODS
