@@ -736,6 +736,40 @@ async def resolve_slack_user_profile(
             return await response.json()
 
 
+async def resolve_slack_user_id_by_email(
+    *,
+    team_id: str,
+    email: str,
+) -> str | None:
+    """Resolve a Slack user ID from an email via the Communication gateway.
+
+    The reverse of ``resolve_slack_user_profile``: given a contact's email
+    it returns their Slack user ID (via ``users.lookupByEmail``), so an
+    assistant can DM a workspace member it has never received a message
+    from. Returns ``None`` when the workspace has no member with that email,
+    when the bot lacks the ``users:read.email`` scope, or on any failure —
+    callers treat ``None`` as "unresolved" and fall back to their existing
+    behaviour.
+    """
+    if not email:
+        return None
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/slack/user-by-email",
+            headers=headers,
+            json={"team_id": team_id, "email": email},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(
+                    f"{ICONS['comms_outbound']} Slack user-by-email failed: {e}",
+                )
+                return None
+            result = await response.json()
+            return result.get("slack_user_id") or None
+
+
 async def send_teams_message(
     chat_id: str | None = None,
     team_id: str | None = None,
