@@ -4,6 +4,7 @@ import json
 import queue
 import asyncio
 import threading
+from dataclasses import dataclass
 from importlib import resources
 
 os.environ["UNITY_TERMINAL_LOG"] = "true"
@@ -926,6 +927,112 @@ _RECORDED_OPENINGS = {
 }
 
 
+@dataclass(frozen=True)
+class _PreloadedAudio:
+    pcm: bytes
+    sample_rate: int
+    num_channels: int
+
+
+def _load_recorded_asset_pcm(asset_key: str) -> _PreloadedAudio:
+    import numpy as _np
+    import soundfile as _sf
+
+    filename = _RECORDED_OPENING_ASSETS.get(asset_key)
+    if not filename:
+        raise ValueError(f"unknown recorded opening asset: {asset_key}")
+    asset = resources.files("unify.assets.audio").joinpath(filename)
+    with resources.as_file(asset) as recording_path:
+        with _sf.SoundFile(str(recording_path)) as recording:
+            data = recording.read(dtype="int16", always_2d=True)
+            sample_rate = recording.samplerate
+            num_channels = recording.channels
+    return _PreloadedAudio(
+        pcm=_np.ascontiguousarray(data).tobytes(),
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+    )
+
+
+def _preload_recorded_opening_pcm(config: dict) -> dict[str, _PreloadedAudio]:
+    asset_key = config.get("recording_asset", "").strip()
+    spec = _RECORDED_OPENINGS.get(asset_key)
+    if spec is None:
+        source = _recorded_opening_source(config)
+        if source.startswith("asset://"):
+            key = source.removeprefix("asset://")
+            if key in _RECORDED_OPENING_ASSETS:
+                return {key: _load_recorded_asset_pcm(key)}
+        return {}
+
+    preloaded: dict[str, _PreloadedAudio] = {}
+    for segment in spec["segments"]:
+        key = segment["asset"]
+        if key not in preloaded:
+            preloaded[key] = _load_recorded_asset_pcm(key)
+    if bridge := spec.get("bridge"):
+        key = bridge["asset"]
+        if key not in preloaded:
+            preloaded[key] = _load_recorded_asset_pcm(key)
+    return preloaded
+
+
+def _pcm_audio_frames(
+    pcm: bytes,
+    *,
+    sample_rate: int,
+    num_channels: int,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    async def _frames() -> AsyncIterable[rtc.AudioFrame]:
+        import numpy as _np
+
+        samples_per_chunk = max(1, int(sample_rate * frame_duration_ms / 1000))
+        bytes_per_chunk = samples_per_chunk * num_channels * 2
+        offset = 0
+        while offset < len(pcm):
+            end = min(offset + bytes_per_chunk, len(pcm))
+            chunk = pcm[offset:end]
+            block = _np.frombuffer(chunk, dtype="int16").reshape(-1, num_channels)
+            yield rtc.AudioFrame(
+                data=_np.ascontiguousarray(block).tobytes(),
+                sample_rate=sample_rate,
+                num_channels=num_channels,
+                samples_per_channel=len(block),
+            )
+            offset = end
+            await asyncio.sleep(0)
+
+    return _frames()
+
+
+def _preloaded_audio_frames(
+    audio: _PreloadedAudio,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    return _pcm_audio_frames(
+        audio.pcm,
+        sample_rate=audio.sample_rate,
+        num_channels=audio.num_channels,
+        frame_duration_ms=frame_duration_ms,
+    )
+
+
+def _recorded_opening_audio(
+    source: str,
+    preloaded: dict[str, _PreloadedAudio] | None = None,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    if source.startswith("asset://"):
+        asset_key = source.removeprefix("asset://")
+        cached = (preloaded or {}).get(asset_key)
+        if cached is not None:
+            return _preloaded_audio_frames(cached, frame_duration_ms=frame_duration_ms)
+    return _recording_audio_frames(source, frame_duration_ms=frame_duration_ms)
+
+
 def _recording_audio_frames(
     source: str,
     *,
@@ -1507,6 +1614,7 @@ async def entrypoint(ctx: agents.JobContext):
     user_is_speaking = False
     _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
+    _recorded_opening_preloaded: dict[str, _PreloadedAudio] = {}
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1545,7 +1653,10 @@ async def entrypoint(ctx: agents.JobContext):
         )
         return session.say(
             text,
-            audio=_recording_audio_frames(recording_source),
+            audio=_recorded_opening_audio(
+                recording_source,
+                _recorded_opening_preloaded,
+            ),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
@@ -1572,7 +1683,10 @@ async def entrypoint(ctx: agents.JobContext):
         )
         session.say(
             text,
-            audio=_recording_audio_frames(f"asset://{segment['asset']}"),
+            audio=_recorded_opening_audio(
+                f"asset://{segment['asset']}",
+                _recorded_opening_preloaded,
+            ),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
@@ -1581,22 +1695,29 @@ async def entrypoint(ctx: agents.JobContext):
         asset_key = config.get("recording_asset", "").strip()
         spec = _RECORDED_OPENINGS.get(asset_key)
         if spec is None:
-            _say_recorded_opening(
+            handle = _say_recorded_opening(
                 _recorded_opening_transcript(config),
                 _recorded_opening_source(config),
             )
+            await handle.wait_for_playout()
             return
 
         segments = spec["segments"]
         bridge = spec.get("bridge")
-        for index, segment in enumerate(segments):
-            handle = _say_recorded_opening(
+        transition_index = len(segments) - 1
+        handles = [
+            _say_recorded_opening(
                 segment["transcript"],
                 f"asset://{segment['asset']}",
             )
+            for segment in segments
+        ]
+        for index, handle in enumerate(handles):
             await handle.wait_for_playout()
-            reached_transition = index == len(segments) - 1
-            if handle.interrupted and not reached_transition:
+            if handle.interrupted and index != transition_index:
+                for pending in handles[index + 1 :]:
+                    if not pending.done():
+                        pending.interrupt(force=True)
                 if bridge is not None:
                     assistant._pending_opening_bridge = (
                         lambda b=bridge: _schedule_opening_bridge(b)
@@ -2980,7 +3101,14 @@ async def entrypoint(ctx: agents.JobContext):
                 await _generate_opening_greeting(authoritative_briefing=True),
             )
         if opening_mode == "recorded":
-            return "recorded", opening_config
+            preloaded = await asyncio.to_thread(
+                _preload_recorded_opening_pcm,
+                opening_config,
+            )
+            return "recorded", {
+                "config": opening_config,
+                "preloaded": preloaded,
+            }
         if opening_mode == "simulated":
             simulated_utterance = opening_config.get("simulated_utterance", "").strip()
             if not simulated_utterance:
@@ -3035,8 +3163,14 @@ async def entrypoint(ctx: agents.JobContext):
         await _publish_ready_to_speak()
         _say_opening(str(prepared_payload or "Hello — I'm here."))
     elif prepared_mode == "recorded":
+        payload = prepared_payload or opening_config
+        if isinstance(payload, dict) and "config" in payload:
+            recorded_config = payload["config"]
+            _recorded_opening_preloaded = payload.get("preloaded") or {}
+        else:
+            recorded_config = payload
         await _publish_ready_to_speak()
-        await _run_recorded_opening(prepared_payload or opening_config)
+        await _run_recorded_opening(recorded_config)
     elif prepared_mode == "simulated":
         simulated_utterance = str(prepared_payload or "")
         await _publish_ready_to_speak()
