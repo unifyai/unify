@@ -1042,6 +1042,19 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
 
             return _done().__await__()
 
+    class _FakeSpeechHandle:
+        interrupted = False
+
+        async def wait_for_playout(self):
+            return None
+
+        def done(self) -> bool:
+            return False
+
+        def interrupt(self, *, force: bool = False) -> "_FakeSpeechHandle":
+            self.interrupted = True
+            return self
+
     class _FakeLocalParticipant:
         async def publish_data(self, payload, *, topic=None, reliable=False):
             sequence.append(("data", json.loads(payload.decode()), topic, reliable))
@@ -1134,7 +1147,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
         def say(self, text, **kwargs):
             sequence.append(("say", text, kwargs))
             self.say_calls.append((text, kwargs))
-            return _ImmediateAwaitable()
+            return _FakeSpeechHandle()
 
         def interrupt(self):
             pass
@@ -1166,7 +1179,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     async def _noop_end_call():
         return None
 
-    def _fake_recording_audio_frames(source):
+    def _fake_recording_audio_frames(source, **_kwargs):
         audio_sources.append(source)
         return fake_audio
 
@@ -1219,6 +1232,11 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
         call_script,
         "_recording_audio_frames",
         _fake_recording_audio_frames,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "_preload_recorded_opening_pcm",
+        lambda _config: {},
     )
     monkeypatch.setattr(
         call_script,
@@ -1288,9 +1306,18 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     class _FakeSpeechHandle:
         def __init__(self, interrupted):
             self.interrupted = interrupted
+            self._cancelled = False
 
         async def wait_for_playout(self):
             return None
+
+        def done(self) -> bool:
+            return self._cancelled
+
+        def interrupt(self, *, force: bool = False) -> "_FakeSpeechHandle":
+            self._cancelled = True
+            self.interrupted = True
+            return self
 
     class _FakeLocalParticipant:
         async def publish_data(self, payload, *, topic=None, reliable=False):
@@ -1360,6 +1387,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
             self.agent_state = "listening"
             self.current_speech = None
             self.say_calls = []
+            self.speech_handles = []
             self.generate_reply_calls = []
 
         @property
@@ -1384,7 +1412,9 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
             sequence.append(("say", text, kwargs))
             self.say_calls.append((text, kwargs))
             interrupted = interrupt_flags.pop(0) if interrupt_flags else False
-            return _FakeSpeechHandle(interrupted)
+            handle = _FakeSpeechHandle(interrupted)
+            self.speech_handles.append(handle)
+            return handle
 
         def interrupt(self):
             pass
@@ -1417,7 +1447,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     async def _noop_end_call():
         return None
 
-    def _fake_recording_audio_frames(source):
+    def _fake_recording_audio_frames(source, **_kwargs):
         audio_sources.append(source)
         return fake_audio
 
@@ -1473,6 +1503,11 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     )
     monkeypatch.setattr(
         call_script,
+        "_preload_recorded_opening_pcm",
+        lambda _config: {},
+    )
+    monkeypatch.setattr(
+        call_script,
         "create_end_call",
         lambda *args, **kwargs: _noop_end_call,
     )
@@ -1497,11 +1532,11 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     assert session.say_calls[0][0].startswith("Hi, I'm T dash W 1 N.")
 
     if interrupt_walkie:
-        # Interrupting the first staticky sentence stops the opener immediately;
-        # no later sentence (nor the clean transition) plays, and the bridge is
-        # armed for the next turn.
-        assert audio_sources == ["asset://coordinator_onboarding_intro_walkie_00"]
-        assert len(session.say_calls) == 1
+        # All segments are pre-queued; interrupting the first cancels the rest.
+        assert len(session.say_calls) == 21
+        assert audio_sources[0] == "asset://coordinator_onboarding_intro_walkie_00"
+        assert session.speech_handles[0].interrupted is True
+        assert all(handle._cancelled for handle in session.speech_handles[1:])
         assert session.current_agent._pending_opening_bridge is not None
     else:
         # All 20 staticky sentence slices play in order, then the clean
@@ -1527,6 +1562,30 @@ def test_recorded_opening_builtin_asset_validates_without_single_transcript():
         },
     )
     assert config["recording_asset"] == "coordinator_onboarding_intro"
+
+
+@pytest.mark.asyncio
+async def test_preloaded_recorded_opening_frames_match_file_decode():
+    from unify.conversation_manager.medium_scripts import call as call_script
+
+    config = {
+        "mode": "recorded",
+        "recording_asset": "coordinator_onboarding_intro",
+    }
+    preloaded = call_script._preload_recorded_opening_pcm(config)
+    assert len(preloaded) == 22
+
+    asset_key = "coordinator_onboarding_intro_walkie_00"
+    file_frames = []
+    async for frame in call_script._recording_audio_frames(f"asset://{asset_key}"):
+        file_frames.append(frame)
+    preloaded_frames = []
+    async for frame in call_script._preloaded_audio_frames(preloaded[asset_key]):
+        preloaded_frames.append(frame)
+
+    assert len(preloaded_frames) == len(file_frames)
+    assert preloaded_frames[0].sample_rate == file_frames[0].sample_rate
+    assert preloaded_frames[-1].data == file_frames[-1].data
 
 
 def test_walkie_opener_segments_split_at_static_removal_transition():
