@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import logging
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from msgraph.generated.models.drive_item import DriveItem
@@ -159,11 +160,32 @@ async def list_site_drives(user_email: str, site_id: str):
 # ---------------------------------------------------------------------------
 
 
-def _drive_ref(graph, drive_id: str):
-    """Return the Graph drive request builder for ``drive_id`` (or ``me``)."""
+async def _drive_ref(graph, drive_id: str):
+    """Resolve a drive to ``(drive_id, DriveItemRequestBuilder)``.
+
+    The SDK's ``graph.me.drive`` (DriveRequestBuilder) only supports fetching the
+    drive itself -- it exposes no item/root navigation -- so every item operation
+    must go through ``graph.drives.by_drive_id(...)``. Resolve the personal
+    drive's real id first when ``me`` is requested, then return the id alongside
+    the builder (the id is needed to build path-addressed URLs below).
+    """
     if drive_id == "me":
-        return graph.me.drive
-    return graph.drives.by_drive_id(drive_id)
+        me_drive = await graph.me.drive.get()
+        drive_id = me_drive.id
+    return drive_id, graph.drives.by_drive_id(drive_id)
+
+
+def _path_item_url(graph, drive_id: str, path: str, suffix: str) -> str:
+    """Absolute Graph URL for a path-addressed drive-item navigation.
+
+    ``drive.root`` no longer exposes ``item_with_path`` in the SDK, so build the
+    ``/drives/{id}/root:/{path}:/{suffix}`` URL explicitly and bind it onto the
+    matching request builder via ``with_url``. Path separators stay literal so
+    the colon-addressing hierarchy is preserved.
+    """
+    base = graph.request_adapter.base_url.rstrip("/")
+    encoded = quote(path, safe="/")
+    return f"{base}/drives/{drive_id}/root:/{encoded}:/{suffix}"
 
 
 @router.get("/drives/{drive_id}/items")
@@ -177,14 +199,21 @@ async def list_items(
     """List files and folders in a drive (by root, by path, or by item_id)."""
     try:
         graph = await get_graph_client(user_email, assistant_id=assistant_id)
-        drive = _drive_ref(graph, drive_id)
+        drive_id, drive = await _drive_ref(graph, drive_id)
 
         if item_id:
             items = await drive.items.by_drive_item_id(item_id).children.get()
         elif path:
-            items = await drive.root.item_with_path(path).children.get()
+            items = (
+                await drive.items.by_drive_item_id("root")
+                .children.with_url(_path_item_url(graph, drive_id, path, "children"))
+                .get()
+            )
         else:
-            items = await drive.root.children.get()
+            # The root's children are reached via the drive-item builder using
+            # Graph's reserved ``root`` item id -- ``drive.root`` has no
+            # ``children`` navigation in the SDK.
+            items = await drive.items.by_drive_item_id("root").children.get()
 
         return {
             "items": [
@@ -219,15 +248,9 @@ async def get_item(user_email: str, drive_id: str, item_id: str):
     """Get metadata for a specific file or folder."""
     try:
         graph = await get_graph_client(user_email)
+        _, drive = await _drive_ref(graph, drive_id)
 
-        if drive_id == "me":
-            item = await graph.me.drive.items.by_drive_item_id(item_id).get()
-        else:
-            item = (
-                await graph.drives.by_drive_id(drive_id)
-                .items.by_drive_item_id(item_id)
-                .get()
-            )
+        item = await drive.items.by_drive_item_id(item_id).get()
 
         return {
             "id": item.id,
@@ -258,7 +281,7 @@ async def download_file(user_email: str, drive_id: str, item_id: str):
     """Download a file's content."""
     try:
         graph = await get_graph_client(user_email)
-        drive = _drive_ref(graph, drive_id)
+        _, drive = await _drive_ref(graph, drive_id)
 
         item = await drive.items.by_drive_item_id(item_id).get()
         if item.folder:
@@ -299,14 +322,18 @@ async def upload_file(request: Request, user_email: str, drive_id: str):
             )
 
         graph = await get_graph_client(user_email)
-        drive = _drive_ref(graph, drive_id)
+        drive_id, drive = await _drive_ref(graph, drive_id)
 
         try:
             file_bytes = base64.b64decode(content)
         except Exception:
             file_bytes = content.encode("utf-8")
 
-        result = await drive.root.item_with_path(path).content.put(file_bytes)
+        result = (
+            await drive.items.by_drive_item_id("root")
+            .content.with_url(_path_item_url(graph, drive_id, path, "content"))
+            .put(file_bytes)
+        )
 
         return {
             "success": True,
@@ -334,16 +361,22 @@ async def create_folder(request: Request, user_email: str, drive_id: str):
             raise HTTPException(status_code=400, detail="Missing required field: name")
 
         graph = await get_graph_client(user_email)
-        drive = _drive_ref(graph, drive_id)
+        drive_id, drive = await _drive_ref(graph, drive_id)
 
         new_folder = DriveItem(name=folder_name, folder=Folder())
 
         if parent_path:
-            result = await drive.root.item_with_path(parent_path).children.post(
-                new_folder,
+            result = (
+                await drive.items.by_drive_item_id("root")
+                .children.with_url(
+                    _path_item_url(graph, drive_id, parent_path, "children"),
+                )
+                .post(new_folder)
             )
         else:
-            result = await drive.root.children.post(new_folder)
+            result = await drive.items.by_drive_item_id("root").children.post(
+                new_folder,
+            )
 
         return {
             "success": True,
@@ -363,15 +396,9 @@ async def delete_item(user_email: str, drive_id: str, item_id: str):
     """Delete a file or folder."""
     try:
         graph = await get_graph_client(user_email)
+        _, drive = await _drive_ref(graph, drive_id)
 
-        if drive_id == "me":
-            await graph.me.drive.items.by_drive_item_id(item_id).delete()
-        else:
-            await (
-                graph.drives.by_drive_id(drive_id)
-                .items.by_drive_item_id(item_id)
-                .delete()
-            )
+        await drive.items.by_drive_item_id(item_id).delete()
 
         return {"success": True}
     except Exception as exc:
@@ -389,13 +416,11 @@ async def search_files(user_email: str, drive_id: str, q: str):
     """Search for files in a drive."""
     try:
         graph = await get_graph_client(user_email)
+        _, drive = await _drive_ref(graph, drive_id)
 
-        if drive_id == "me":
-            results = await graph.me.drive.root.search_with_q(q).get()
-        else:
-            results = (
-                await graph.drives.by_drive_id(drive_id).root.search_with_q(q).get()
-            )
+        # ``search_with_q`` is a navigation on the drive builder, not on
+        # ``drive.root``.
+        results = await drive.search_with_q(q).get()
 
         return {
             "results": [

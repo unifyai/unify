@@ -34,9 +34,23 @@ def client(app: FastAPI) -> TestClient:
     return TestClient(app)
 
 
-def _make_graph_mock() -> MagicMock:
-    """Build a Graph SDK client mock with common surface configured."""
-    return MagicMock()
+def _make_graph_mock(me_drive_id: str = "me-drive-id") -> MagicMock:
+    """Graph client mock matching the real SDK's navigation surface.
+
+    ``graph.me.drive`` (DriveRequestBuilder) only supports ``get`` -- it has no
+    item/root navigation -- and ``drive.root`` (RootRequestBuilder) only supports
+    ``get``/``content``. Restricting both with ``spec`` means code that reverts to
+    the removed navigations (``me.drive.items``, ``drive.root.children``,
+    ``drive.root.item_with_path``, ``drive.root.search_with_q``) raises here rather
+    than only blowing up against real Graph. ``request_adapter.base_url`` is a real
+    string so path-addressed ``with_url`` targets can be asserted exactly.
+    """
+    graph = MagicMock()
+    graph.request_adapter.base_url = "https://graph.microsoft.com/v1.0"
+    graph.me.drive = MagicMock(spec=["get"])
+    graph.me.drive.get = AsyncMock(return_value=MagicMock(id=me_drive_id))
+    graph.drives.by_drive_id.return_value.root = MagicMock(spec=["get", "content"])
+    return graph
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +209,16 @@ def _mock_drive_item(
 
 
 def test_list_items_root_default(client: TestClient) -> None:
-    """No path / no item_id -> root.children.get."""
+    """No path / no item_id -> list root children via the reserved ``root`` id.
+
+    Also exercises ``me`` resolution: ``graph.me.drive`` can't navigate items, so
+    the endpoint resolves the personal drive id and goes through
+    ``graph.drives.by_drive_id(...)``.
+    """
     item = _mock_drive_item()
-    fake_graph = _make_graph_mock()
-    fake_graph.me.drive.root.children.get = AsyncMock(
+    fake_graph = _make_graph_mock(me_drive_id="me-drive-id")
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.children.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -211,15 +231,19 @@ def test_list_items_root_default(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json()["items"][0]["type"] == "file"
+    fake_graph.me.drive.get.assert_awaited()  # me resolved to a real drive id
+    fake_graph.drives.by_drive_id.assert_called_with("me-drive-id")
+    drive.items.by_drive_item_id.assert_called_with("root")
 
 
 def test_list_items_explicit_drive_id_uses_drives_by_id(
     client: TestClient,
 ) -> None:
-    """drive_id != 'me' -> graph.drives.by_drive_id."""
+    """drive_id != 'me' -> graph.drives.by_drive_id directly (no me-resolution)."""
     item = _mock_drive_item(name="other.txt")
     fake_graph = _make_graph_mock()
-    fake_graph.drives.by_drive_id.return_value.root.children.get = AsyncMock(
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.children.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -231,13 +255,22 @@ def test_list_items_explicit_drive_id_uses_drives_by_id(
             params={"user_email": "u@x.com"},
         )
     assert resp.status_code == 200
+    fake_graph.me.drive.get.assert_not_awaited()
     fake_graph.drives.by_drive_id.assert_called_with("external-drive-1")
+    drive.items.by_drive_item_id.assert_called_with("root")
 
 
 def test_list_items_by_path(client: TestClient) -> None:
+    """A ``path`` lists children of the path-addressed folder via ``with_url``.
+
+    ``drive.root.item_with_path`` no longer exists, so children are listed by
+    binding the ``/root:/{path}:/children`` URL onto the children builder.
+    """
     item = _mock_drive_item(is_folder=True, name="Reports")
-    fake_graph = _make_graph_mock()
-    fake_graph.me.drive.root.item_with_path.return_value.children.get = AsyncMock(
+    fake_graph = _make_graph_mock(me_drive_id="me-drive-id")
+    drive = fake_graph.drives.by_drive_id.return_value
+    children = drive.items.by_drive_item_id.return_value.children
+    children.with_url.return_value.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -249,17 +282,18 @@ def test_list_items_by_path(client: TestClient) -> None:
             params={"user_email": "u@x.com", "path": "Documents/Reports"},
         )
     assert resp.status_code == 200
-    fake_graph.me.drive.root.item_with_path.assert_called_with("Documents/Reports")
-    body = resp.json()
-    assert body["items"][0]["type"] == "folder"
+    assert resp.json()["items"][0]["type"] == "folder"
+    children.with_url.assert_called_with(
+        "https://graph.microsoft.com/v1.0/drives/me-drive-id"
+        "/root:/Documents/Reports:/children",
+    )
 
 
 def test_get_item(client: TestClient) -> None:
     item = _mock_drive_item(id_="x-1")
     fake_graph = _make_graph_mock()
-    fake_graph.me.drive.items.by_drive_item_id.return_value.get = AsyncMock(
-        return_value=item,
-    )
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.get = AsyncMock(return_value=item)
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
@@ -270,14 +304,14 @@ def test_get_item(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json()["id"] == "x-1"
+    drive.items.by_drive_item_id.assert_called_with("x-1")
 
 
 def test_download_folder_returns_400(client: TestClient) -> None:
     item = _mock_drive_item(is_folder=True)
     fake_graph = _make_graph_mock()
-    fake_graph.me.drive.items.by_drive_item_id.return_value.get = AsyncMock(
-        return_value=item,
-    )
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.get = AsyncMock(return_value=item)
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
@@ -292,10 +326,9 @@ def test_download_folder_returns_400(client: TestClient) -> None:
 def test_download_file_returns_bytes_with_content_type(client: TestClient) -> None:
     item = _mock_drive_item()
     fake_graph = _make_graph_mock()
-    fake_graph.me.drive.items.by_drive_item_id.return_value.get = AsyncMock(
-        return_value=item,
-    )
-    fake_graph.me.drive.items.by_drive_item_id.return_value.content.get = AsyncMock(
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.get = AsyncMock(return_value=item)
+    drive.items.by_drive_item_id.return_value.content.get = AsyncMock(
         return_value=b"file-content",
     )
     with patch(
@@ -330,11 +363,10 @@ def test_upload_decodes_base64_content(client: TestClient) -> None:
     file_bytes = b"hello world"
     content_b64 = base64.b64encode(file_bytes).decode("utf-8")
 
-    fake_graph = _make_graph_mock()
+    fake_graph = _make_graph_mock(me_drive_id="me-drive-id")
     uploaded = MagicMock(id="u-1", name="x.txt", web_url="x", size=11)
-    fake_graph.me.drive.root.item_with_path.return_value.content.put = AsyncMock(
-        return_value=uploaded,
-    )
+    drive = fake_graph.drives.by_drive_id.return_value
+    content = drive.items.by_drive_item_id.return_value.content
 
     captured: dict = {}
 
@@ -342,7 +374,7 @@ def test_upload_decodes_base64_content(client: TestClient) -> None:
         captured["bytes"] = payload
         return uploaded
 
-    fake_graph.me.drive.root.item_with_path.return_value.content.put = _capture
+    content.with_url.return_value.put = _capture
 
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
@@ -356,6 +388,9 @@ def test_upload_decodes_base64_content(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert captured["bytes"] == file_bytes
+    content.with_url.assert_called_with(
+        "https://graph.microsoft.com/v1.0/drives/me-drive-id/root:/x.txt:/content",
+    )
 
 
 def test_upload_falls_back_to_plain_text_when_not_base64(
@@ -370,7 +405,10 @@ def test_upload_falls_back_to_plain_text_when_not_base64(
         captured["bytes"] = payload
         return uploaded
 
-    fake_graph.me.drive.root.item_with_path.return_value.content.put = _capture
+    content = (
+        fake_graph.drives.by_drive_id.return_value.items.by_drive_item_id.return_value.content
+    )  # noqa: E501
+    content.with_url.return_value.put = _capture
 
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
@@ -404,7 +442,10 @@ def test_create_folder_missing_name_returns_400(client: TestClient) -> None:
 def test_create_folder_at_root(client: TestClient) -> None:
     fake_graph = _make_graph_mock()
     new_folder = MagicMock(id="f-1", name="New", web_url="x")
-    fake_graph.me.drive.root.children.post = AsyncMock(return_value=new_folder)
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.children.post = AsyncMock(
+        return_value=new_folder,
+    )
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
@@ -416,14 +457,15 @@ def test_create_folder_at_root(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json()["id"] == "f-1"
+    drive.items.by_drive_item_id.assert_called_with("root")
 
 
 def test_create_folder_with_parent_path(client: TestClient) -> None:
-    fake_graph = _make_graph_mock()
+    fake_graph = _make_graph_mock(me_drive_id="me-drive-id")
     new_folder = MagicMock(id="f-1", name="Sub", web_url="x")
-    fake_graph.me.drive.root.item_with_path.return_value.children.post = AsyncMock(
-        return_value=new_folder,
-    )
+    drive = fake_graph.drives.by_drive_id.return_value
+    children = drive.items.by_drive_item_id.return_value.children
+    children.with_url.return_value.post = AsyncMock(return_value=new_folder)
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
@@ -434,12 +476,16 @@ def test_create_folder_with_parent_path(client: TestClient) -> None:
             json={"name": "Sub", "parent_path": "Documents/Project"},
         )
     assert resp.status_code == 200
-    fake_graph.me.drive.root.item_with_path.assert_called_with("Documents/Project")
+    children.with_url.assert_called_with(
+        "https://graph.microsoft.com/v1.0/drives/me-drive-id"
+        "/root:/Documents/Project:/children",
+    )
 
 
 def test_delete_item_me_drive(client: TestClient) -> None:
-    fake_graph = _make_graph_mock()
-    fake_graph.me.drive.items.by_drive_item_id.return_value.delete = AsyncMock()
+    fake_graph = _make_graph_mock(me_drive_id="me-drive-id")
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.items.by_drive_item_id.return_value.delete = AsyncMock()
     with patch(
         "unify.gateway.channels.sharepoint.views.get_graph_client",
         new=AsyncMock(return_value=fake_graph),
@@ -451,6 +497,8 @@ def test_delete_item_me_drive(client: TestClient) -> None:
         )
     assert resp.status_code == 200
     assert resp.json() == {"success": True}
+    fake_graph.me.drive.get.assert_awaited()
+    fake_graph.drives.by_drive_id.assert_called_with("me-drive-id")
 
 
 def test_delete_item_explicit_drive(client: TestClient) -> None:
@@ -468,6 +516,7 @@ def test_delete_item_explicit_drive(client: TestClient) -> None:
             params={"user_email": "u@x.com"},
         )
     assert resp.status_code == 200
+    fake_graph.me.drive.get.assert_not_awaited()
     fake_graph.drives.by_drive_id.assert_called_with("external")
 
 
@@ -479,7 +528,8 @@ def test_delete_item_explicit_drive(client: TestClient) -> None:
 def test_search_returns_matching_items(client: TestClient) -> None:
     item = _mock_drive_item(name="quarterly.pdf")
     fake_graph = _make_graph_mock()
-    fake_graph.me.drive.root.search_with_q.return_value.get = AsyncMock(
+    drive = fake_graph.drives.by_drive_id.return_value
+    drive.search_with_q.return_value.get = AsyncMock(
         return_value=MagicMock(value=[item]),
     )
     with patch(
@@ -491,5 +541,5 @@ def test_search_returns_matching_items(client: TestClient) -> None:
             params={"user_email": "u@x.com", "q": "quarterly"},
         )
     assert resp.status_code == 200
-    fake_graph.me.drive.root.search_with_q.assert_called_with("quarterly")
+    drive.search_with_q.assert_called_with("quarterly")
     assert resp.json()["results"][0]["name"] == "quarterly.pdf"
