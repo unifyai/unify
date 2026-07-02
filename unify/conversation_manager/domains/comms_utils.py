@@ -8,6 +8,7 @@ from pathlib import Path
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
+from unify.common.plain_text import normalize_outbound_plain_text
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
@@ -171,6 +172,8 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
     if not from_number:
         return {"success": False}
 
+    content = normalize_outbound_plain_text(content)
+
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/send-text",
@@ -219,6 +222,8 @@ async def send_whatsapp_message(
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
         return {"success": False}
+
+    content = normalize_outbound_plain_text(content)
 
     payload = {
         "to": to_number,
@@ -290,6 +295,8 @@ async def send_unify_message(
     Returns:
         dict with "success" key indicating delivery status.
     """
+    content = normalize_outbound_plain_text(content)
+
     agent_id = SESSION_DETAILS.assistant.agent_id
     event_data = {"content": content, "role": "assistant", "contact_id": contact_id}
     if attachment:
@@ -617,6 +624,8 @@ async def send_discord_message(
     if agent_id is None:
         return {"success": False}
 
+    body = normalize_outbound_plain_text(body)
+
     payload: dict = {
         "body": body,
         "assistant_id": agent_id,
@@ -680,6 +689,8 @@ async def send_slack_message(
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
         return {"success": False}
+
+    body = normalize_outbound_plain_text(body)
 
     payload: dict = {
         "team_id": team_id,
@@ -800,6 +811,9 @@ async def send_teams_message(
     from_email = SESSION_DETAILS.assistant.email
     if not from_email:
         return {"success": False, "error": "No sender email configured"}
+
+    if content_type == "text":
+        body = normalize_outbound_plain_text(body)
 
     payload: dict = {
         "from": from_email,
@@ -1120,6 +1134,8 @@ async def send_email_via_address(
     from_email = SESSION_DETAILS.assistant.email
     if not from_email:
         return {"success": False, "error": "No sender email configured"}
+
+    body = normalize_outbound_plain_text(body)
 
     payload = {
         "from": from_email,
