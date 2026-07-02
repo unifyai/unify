@@ -2768,11 +2768,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     self.onboarding_catalog = (
                         catalog if isinstance(catalog, dict) else None
                     )
-            self.coordinator_onboarding_active = bool(info.get("onboarding_active"))
-            render = info.get("onboarding")
-            self.coordinator_onboarding_render = (
-                render if isinstance(render, dict) else None
-            )
+            self._apply_coordinator_state_info(info)
         except Exception as exc:
             LOGGER.warning(
                 "Coordinator onboarding-state refresh failed; "
@@ -2780,6 +2776,89 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 self.coordinator_onboarding_active,
                 exc,
             )
+
+    def _apply_coordinator_state_info(self, info: dict[str, Any]) -> None:
+        """Mirror onboarding gate + render from a Coordinator/State snapshot."""
+        self.coordinator_onboarding_active = bool(info.get("onboarding_active"))
+        render = info.get("onboarding")
+        self.coordinator_onboarding_render = (
+            render if isinstance(render, dict) else None
+        )
+
+    async def _patch_coordinator_onboarding_active(
+        self,
+        *,
+        active: bool,
+        clear_onboarding_step: bool = False,
+    ) -> dict[str, Any]:
+        """PATCH ``onboarding_active`` on Orchestra and refresh the session cache."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": "Onboarding can only be toggled for the workspace Coordinator.",
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        body: dict[str, Any] = {"onboarding_active": active}
+        if clear_onboarding_step:
+            body["clear_onboarding_step"] = True
+        import httpx as _httpx
+        import time as _time
+
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.patch(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                    headers={
+                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                    },
+                    json=body,
+                )
+            if resp.status_code == 403:
+                return {
+                    "status": "error",
+                    "message": (
+                        "I do not have permission to change onboarding state "
+                        "in this workspace."
+                    ),
+                }
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            if active:
+                message = (
+                    "Onboarding is live again — the setup checklist and nudges "
+                    "are back."
+                )
+            else:
+                message = (
+                    "Onboarding is paused — they can use the platform normally "
+                    "and resume setup anytime from the Onboarding tab or by "
+                    "asking me."
+                )
+            return {
+                "status": "ok",
+                "message": message,
+                "onboarding_active": self.coordinator_onboarding_active,
+            }
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator onboarding_active PATCH failed (active=%s): %s",
+                active,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update onboarding state: {exc}",
+            }
 
     def set_coordinator_onboarding_render(self, render: Any) -> None:
         """Update the cached onboarding render from a fresh event payload.
