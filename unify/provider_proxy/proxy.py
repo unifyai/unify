@@ -31,6 +31,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from starlette.responses import JSONResponse, Response
 
+from unify.common import runtime_oauth
 from unify.provider_proxy.ancestry import is_allowed, ms_get_by_path, parent_path
 from unify.provider_proxy.classify import (
     KIND_BATCH,
@@ -82,16 +83,33 @@ def _forbidden(message: str) -> JSONResponse:
     )
 
 
-def _real_token_headers(provider: str, incoming: dict[str, str]) -> dict[str, str]:
-    from unify.common.runtime_oauth import get_provider_access_token
-
-    headers = {
+def _base_headers(incoming: dict[str, str]) -> dict[str, str]:
+    return {
         k: v
         for k, v in incoming.items()
         if k.lower() not in _HOP_BY_HOP and k.lower() != "authorization"
     }
-    headers["Authorization"] = f"Bearer {get_provider_access_token(provider)}"
-    return headers
+
+
+def _make_client(follow_redirects: bool) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=120, follow_redirects=follow_redirects)
+
+
+def _reconnect_response(provider: str) -> httpx.Response:
+    name = "Microsoft" if provider == "microsoft" else "Google"
+    return httpx.Response(
+        401,
+        json={
+            "error": {
+                "code": "authenticationRequired",
+                "message": (
+                    f"The connected {name} account could not be authenticated "
+                    "(token expired and could not be refreshed). Reconnect the "
+                    "account from the Integrations tab and retry."
+                ),
+            },
+        },
+    )
 
 
 async def _forward(
@@ -104,15 +122,43 @@ async def _forward(
     *,
     follow_redirects: bool = False,
 ) -> httpx.Response:
+    """Forward to the upstream provider, injecting the real token.
+
+    Uses the token optimistically (no pre-emptive expiry gate) and, if the
+    provider rejects it with 401, forces one refresh from Orchestra and retries
+    once. A persistent 401 is normalized to a clean "reconnect account" 401 so
+    stale-expiry metadata never surfaces as an opaque 500.
+    """
     url = f"{_UPSTREAM[provider]}/{rest_path}"
     if query_string:
         url = f"{url}?{query_string}"
-    headers = _real_token_headers(provider, incoming_headers)
-    async with httpx.AsyncClient(
-        timeout=120,
-        follow_redirects=follow_redirects,
-    ) as http:
-        return await http.request(method, url, headers=headers, content=body)
+    base_headers = _base_headers(incoming_headers)
+
+    token = runtime_oauth.get_provider_access_token_optimistic(provider)
+    if not token:
+        token = runtime_oauth.refresh_provider_access_token(provider)
+    if not token:
+        return _reconnect_response(provider)
+
+    async with _make_client(follow_redirects) as http:
+        resp = await http.request(
+            method,
+            url,
+            headers={**base_headers, "Authorization": f"Bearer {token}"},
+            content=body,
+        )
+        if resp.status_code == 401:
+            new_token = runtime_oauth.refresh_provider_access_token(provider)
+            if new_token and new_token != token:
+                resp = await http.request(
+                    method,
+                    url,
+                    headers={**base_headers, "Authorization": f"Bearer {new_token}"},
+                    content=body,
+                )
+            if resp.status_code == 401:
+                return _reconnect_response(provider)
+    return resp
 
 
 def _passthrough_response(resp: httpx.Response) -> Response:

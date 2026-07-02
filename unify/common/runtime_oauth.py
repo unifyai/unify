@@ -216,6 +216,47 @@ def get_provider_access_token(provider: str, *, min_ttl_seconds: int = 300) -> s
     return token
 
 
+def get_provider_access_token_optimistic(provider: str) -> str | None:
+    """Return the current access token WITHOUT a pre-emptive expiry gate.
+
+    TRUSTED-RUNTIME ONLY. Unlike :func:`get_provider_access_token`, this does not
+    refuse a token whose stored ``*_TOKEN_EXPIRES_AT`` looks stale/missing: it
+    trusts the provider to reject a genuinely-expired token (the proxy then
+    forces a refresh and retries once). This avoids blocking valid tokens on
+    stale expiry metadata. Performs a debounced sync (forced only when no token
+    is cached). Returns None if no token is available.
+    """
+    metadata = _resolve_oauth_provider(provider)
+    secret_manager = _get_secret_manager()
+    token = _read_access_token(secret_manager, metadata.access_token_secret)
+    secret_manager.sync_assistant_secrets_if_stale(
+        ttl_seconds=60.0,
+        force=token is None,
+        reason=f"oauth_optimistic:{metadata.canonical_name}",
+    )
+    return _read_access_token(secret_manager, metadata.access_token_secret)
+
+
+def refresh_provider_access_token(provider: str) -> str | None:
+    """Force a secret sync from Orchestra and return the freshest token, or None.
+
+    TRUSTED-RUNTIME ONLY. Used by the proxy after the provider rejects a token
+    with 401. This pulls whatever the platform refresh job has persisted to
+    Orchestra; it does not itself call the provider's token endpoint, so it only
+    recovers when Orchestra already holds a newer token (e.g. the 30-minute
+    refresh cron has run). If it still returns a stale token, the proxy surfaces
+    a clean "reconnect account" 401.
+    """
+    metadata = _resolve_oauth_provider(provider)
+    secret_manager = _get_secret_manager()
+    secret_manager.sync_assistant_secrets_if_stale(
+        ttl_seconds=0.0,
+        force=True,
+        reason=f"oauth_refresh_on_401:{metadata.canonical_name}",
+    )
+    return _read_access_token(secret_manager, metadata.access_token_secret)
+
+
 def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
     """
     Authorize provider REST calls from ``execute_code`` via the local proxy.
