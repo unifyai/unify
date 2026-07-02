@@ -1137,6 +1137,17 @@ async def entrypoint(ctx: agents.JobContext):
             os.environ.get("OPENING_CONFIG"),
         )
 
+    from unify.coordinator_voice import resolve_runtime_voice
+
+    is_coordinator = (
+        bool(meta.get("is_coordinator")) if meta else SESSION_DETAILS.is_coordinator
+    )
+    voice_provider, voice_id = resolve_runtime_voice(
+        is_coordinator=is_coordinator,
+        voice_provider=voice_provider,
+        voice_id=voice_id,
+    )
+
     # Browser-meet diarization config (Google Meet / Teams Meet)
     meet_session_id: str = ""
     call_session_id: str = ""
