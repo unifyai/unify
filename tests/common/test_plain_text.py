@@ -35,3 +35,25 @@ def test_normalizes_crlf_and_trims_edges() -> None:
 def test_empty_and_whitespace_only() -> None:
     assert normalize_outbound_plain_text("") == ""
     assert normalize_outbound_plain_text("   \n  \n  ") == ""
+
+
+def test_preserves_bullet_list_items() -> None:
+    raw = "- first thing\n- second thing"
+    assert normalize_outbound_plain_text(raw) == raw
+
+
+def test_preserves_numbered_list_items() -> None:
+    raw = "1. First item\n2. Second item"
+    assert normalize_outbound_plain_text(raw) == raw
+
+
+def test_preserves_list_intro_line_before_bullets() -> None:
+    raw = "Here are the steps:\n- first thing\n- second thing"
+    assert normalize_outbound_plain_text(raw) == raw
+
+
+def test_joins_line_after_colon_when_not_starting_a_list() -> None:
+    raw = "Note: this continues\non the next line."
+    assert (
+        normalize_outbound_plain_text(raw) == "Note: this continues on the next line."
+    )
