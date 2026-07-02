@@ -10,6 +10,7 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.common.startup_timing import log_startup_timing
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
 from unify.session_details import SESSION_DETAILS
+from unify.coordinator_voice import resolve_runtime_voice
 from unify.settings import SETTINGS
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
@@ -2693,6 +2694,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.voice_provider or SESSION_DETAILS.voice.provider or "cartesia"
         )
         voice_id = self.voice_id or SESSION_DETAILS.voice.id or ""
+        voice_provider, voice_id = resolve_runtime_voice(
+            is_coordinator=SESSION_DETAILS.is_coordinator,
+            voice_provider=voice_provider,
+            voice_id=voice_id,
+        )
         return CallConfig(
             assistant_id=self.assistant_id,
             user_id=self.user_id,
@@ -2933,6 +2939,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "workspace_calendar": {"unify_message"},
             "workspace_contacts": {"unify_message"},
             "workspace_tasks": {"unify_message"},
+            "workspace_teams": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None

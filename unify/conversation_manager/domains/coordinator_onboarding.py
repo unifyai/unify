@@ -179,16 +179,17 @@ def _coordinator_onboarding_notification_text(
             "way. I send a clue now only if none has gone out yet."
         )
         clue_note = (
-            " I invent my own short reference-quiz clue on the spot — there is "
-            "no supplied clue or answer. I pick a fresh sci-fi or pop-culture "
-            "quote of my own each time and keep the answer to myself."
+            " I invent my own short sci-fi quote clue on the spot — there is "
+            "no supplied clue or answer, and I keep the answer to myself. "
+            "User-facing lines stay minimal (one sentence that we're testing "
+            "the channel with a quick sci-fi quiz); I never list genres or "
+            "franchises."
         )
         framing_note = f" Section framing: {framing}" if framing else ""
         interaction_note = (
-            " Structured interaction: reference_quiz. Explain the quiz before "
-            "sending or discussing any clue; the user should know this is a "
-            "channel-proving mini-game, not a mysterious email. Outbound text "
-            "or email clue messages must include that context before the clue."
+            " Structured interaction: reference_quiz. One short sentence of "
+            "context before the clue — we're testing the channel with a quick "
+            "sci-fi quiz — not a genre list or franchise rundown."
             if isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
             else ""
