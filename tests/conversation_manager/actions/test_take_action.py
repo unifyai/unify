@@ -19,12 +19,16 @@ from tests.conversation_manager.cm_helpers import (
     assert_efficient,
     filter_events_by_type,
 )
+from tests.conversation_manager.core.slow_brain_benchmark_helpers import (
+    assert_knowledge_query_triggers_act,
+    run_knowledge_query_triggers_act,
+)
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
-    SMSReceived,
-    EmailReceived,
-    UnifyMessageReceived,
     ActorHandleStarted,
+    EmailReceived,
+    SMSReceived,
+    UnifyMessageReceived,
 )
 
 pytestmark = pytest.mark.eval
@@ -47,12 +51,7 @@ async def test_knowledge_query_triggers_act(initialized_cm):
     """
     cm = initialized_cm
 
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content="What are our office hours again?",
-        ),
-    )
+    result = await run_knowledge_query_triggers_act(cm)
 
     assert_act_triggered(
         result,
@@ -60,6 +59,7 @@ async def test_knowledge_query_triggers_act(initialized_cm):
         "Knowledge query should trigger act",
         cm=cm,
     )
+    assert_knowledge_query_triggers_act(result, cm)
 
     # Efficiency assertions at end
     assert_efficient(result, 3)
