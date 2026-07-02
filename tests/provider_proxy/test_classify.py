@@ -71,8 +71,55 @@ def test_ms_non_file_passthrough():
     assert classify("microsoft", "GET", "v1.0/me/messages", {}).kind == KIND_NON_FILE
 
 
-def test_ms_path_addressing_is_denied():
-    c = classify("microsoft", "GET", "v1.0/me/drive/root:/Finance/report.xlsx:", {})
+def test_ms_path_get_item_is_read_with_path_target():
+    c = classify("microsoft", "GET", "v1.0/me/drive/root:/Finance/report.xlsx", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.target is not None and c.target.is_path
+    assert c.target.path == "Finance/report.xlsx"
+    assert c.target.anchor_item_id == "root"
+
+
+def test_ms_path_children_listing():
+    c = classify("microsoft", "GET", "v1.0/me/drive/root:/Finance:/children", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.is_listing is True
+    assert c.parent is not None and c.parent.path == "Finance"
+
+
+def test_ms_path_content_download():
+    c = classify("microsoft", "GET", "v1.0/drives/D1/root:/a/b.txt:/content", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.is_content is True
+    assert (c.target.drive_id, c.target.path) == ("D1", "a/b.txt")
+
+
+def test_ms_path_content_upload_is_write():
+    c = classify("microsoft", "PUT", "v1.0/me/drive/root:/Finance/new.txt:/content", {})
+    assert c.kind == KIND_FILE_WRITE
+    assert c.target is not None and c.target.path == "Finance/new.txt"
+
+
+def test_ms_path_upload_session_is_write():
+    c = classify(
+        "microsoft",
+        "POST",
+        "v1.0/me/drive/root:/Finance/big.zip:/createUploadSession",
+        {},
+    )
+    assert c.kind == KIND_FILE_WRITE
+    assert c.target is not None and c.target.path == "Finance/big.zip"
+
+
+def test_ms_path_relative_to_item():
+    c = classify("microsoft", "GET", "v1.0/drives/D1/items/I1:/sub/file.txt", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.target.anchor_item_id == "I1"
+    assert c.target.path == "sub/file.txt"
+
+
+def test_ms_unparseable_colon_shape_denied():
+    # A colon in a non-drive-base position we cannot parse stays default-deny.
+    c = classify("microsoft", "GET", "v1.0/sites/S1/drive/root:/x:", {})
     assert c.kind == KIND_UNKNOWN
 
 

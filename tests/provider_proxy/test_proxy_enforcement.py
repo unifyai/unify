@@ -61,7 +61,30 @@ class _Forwarder:
                     ],
                 },
             )
+        if method == "GET" and rest_path.endswith("/children"):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "HRchild", "parentReference": {"driveId": "D"}},
+                        {"id": "FIN", "parentReference": {"driveId": "D"}},
+                    ],
+                },
+            )
         return httpx.Response(200, json={"ok": rest_path})
+
+
+# Path -> resolved node for Graph path addressing (None => nonexistent).
+_PATH_NODES = {
+    "Finance": {"drive_id": "D", "item_id": "FIN"},
+    "Finance/report.xlsx": {"drive_id": "D", "item_id": "FIN"},
+    "HR": {"drive_id": "D", "item_id": "HR"},
+    "HR/notes.txt": {"drive_id": "D", "item_id": "HRchild"},
+}
+
+
+async def _fake_ms_get_by_path(drive_id, anchor_item_id, path):
+    return _PATH_NODES.get(path)
 
 
 async def _is_allowed(provider, drive_id, item_id):
@@ -77,6 +100,7 @@ def client(monkeypatch):
     fwd = _Forwarder()
     monkeypatch.setattr(pxy, "_forward", fwd)
     monkeypatch.setattr(pxy, "is_allowed", _is_allowed)
+    monkeypatch.setattr(pxy, "ms_get_by_path", _fake_ms_get_by_path)
     monkeypatch.setattr(flt, "is_allowed", _is_allowed)
 
     transport = httpx.ASGITransport(app=pxy.build_app())
@@ -156,7 +180,7 @@ async def test_create_under_masked_parent_is_forbidden(client):
 
 @pytest.mark.asyncio
 async def test_unknown_file_endpoint_is_denied(client):
-    resp = await client.get("/microsoft/v1.0/me/drive/root:/Finance:")
+    resp = await client.get("/microsoft/v1.0/me/drive/special")
     assert resp.status_code == 403
     assert client._forwarder.calls == []
 
@@ -167,6 +191,59 @@ async def test_non_file_endpoint_passes_through(client):
     assert resp.status_code == 200
     assert resp.json() == {"ok": "v1.0/me/events"}
     assert client._forwarder.calls[-1] == ("microsoft", "GET", "v1.0/me/events")
+
+
+@pytest.mark.asyncio
+async def test_path_get_masked_file_is_not_found(client):
+    resp = await client.get("/microsoft/v1.0/me/drive/root:/Finance/report.xlsx")
+    assert resp.status_code == 404
+    assert client._forwarder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_path_get_allowed_file_is_forwarded(client):
+    resp = await client.get("/microsoft/v1.0/me/drive/root:/HR/notes.txt")
+    assert resp.status_code == 200
+    assert client._forwarder.calls != []
+
+
+@pytest.mark.asyncio
+async def test_path_create_new_file_in_allowed_folder_is_forwarded(client):
+    # New file (path does not resolve) inside an allowed folder -> permitted.
+    resp = await client.put(
+        "/microsoft/v1.0/me/drive/root:/HR/new.txt:/content",
+        content=b"data",
+    )
+    assert resp.status_code == 200
+    assert client._forwarder.calls[-1][1] == "PUT"
+
+
+@pytest.mark.asyncio
+async def test_path_create_new_file_in_masked_folder_is_forbidden(client):
+    resp = await client.put(
+        "/microsoft/v1.0/me/drive/root:/Finance/new.txt:/content",
+        content=b"data",
+    )
+    assert resp.status_code == 403
+    assert client._forwarder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_path_edit_existing_masked_file_is_blocked(client):
+    resp = await client.patch(
+        "/microsoft/v1.0/me/drive/root:/Finance/report.xlsx",
+        json={"name": "x"},
+    )
+    assert resp.status_code == 404
+    assert client._forwarder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_path_children_in_masked_folder_are_filtered_out(client):
+    resp = await client.get("/microsoft/v1.0/me/drive/root:/Finance:/children")
+    assert resp.status_code == 200
+    # Parent folder is masked, so children with no explicit allow are hidden.
+    assert resp.json()["value"] == []
 
 
 @pytest.mark.asyncio

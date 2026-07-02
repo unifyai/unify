@@ -113,6 +113,54 @@ async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
     return _ms_node(resp.json(), drive_id)
 
 
+def _ms_drive_base(drive_id: str) -> str:
+    if drive_id in _MS_DEFAULT_DRIVE_ALIASES:
+        return f"{_GRAPH_BASE}/me/drive"
+    return f"{_GRAPH_BASE}/drives/{drive_id}"
+
+
+def _ms_path_url(drive_id: str, anchor_item_id: Optional[str], path: str) -> str:
+    base = _ms_drive_base(drive_id)
+    anchor = (
+        "root"
+        if not anchor_item_id or anchor_item_id == "root"
+        else f"items/{anchor_item_id}"
+    )
+    if path:
+        return f"{base}/{anchor}:/{path}"
+    return f"{base}/{anchor}"
+
+
+async def ms_get_by_path(
+    drive_id: str,
+    anchor_item_id: Optional[str],
+    path: str,
+) -> Optional[dict[str, Any]]:
+    """Resolve a Graph path-addressed item to a normalized node, or None if 404.
+
+    ``path`` is kept URL-encoded exactly as received. Default fields (including
+    ``parentReference``) are returned, so no ``$select`` (which would require the
+    trailing-colon path-query form) is needed.
+    """
+    async with httpx.AsyncClient(timeout=30) as http:
+        resp = await http.get(
+            _ms_path_url(drive_id, anchor_item_id, path),
+            headers=_headers("microsoft"),
+        )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return _ms_node(resp.json(), drive_id)
+
+
+def parent_path(path: str) -> str:
+    """Return the parent path of a ``/``-separated path (``""`` for top level)."""
+    trimmed = (path or "").strip("/")
+    if "/" in trimmed:
+        return trimmed.rsplit("/", 1)[0]
+    return ""
+
+
 # ── Ancestry + enforcement ──────────────────────────────────────────────────
 
 
