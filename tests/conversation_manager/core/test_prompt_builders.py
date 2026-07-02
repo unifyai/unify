@@ -556,6 +556,9 @@ class TestCoordinatorVoicePrompt:
         assert "Two ways to accomplish org tasks" not in prompt
         assert "My onboarding flow (UI reference)" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
+        assert "My opening turn" not in prompt
+        assert "Onboarding checklist" not in prompt
+        assert "Step-by-step walkthrough pacing" not in prompt
 
 
 # ---------------------------------------------------------------------------
