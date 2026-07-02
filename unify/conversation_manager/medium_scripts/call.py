@@ -1457,67 +1457,6 @@ async def entrypoint(ctx: agents.JobContext):
         SESSION_DETAILS.assistant.user_desktop_for(call_acting_user_id) is not None
     )
 
-    # Server-derived onboarding progress for the Coordinator's opening
-    # line. Orchestra re-derives completed steps from durable state on
-    # every ``Coordinator/State`` read, so a workspace connected in an
-    # earlier session is visible here even though no transition event
-    # fired — without this, the fresh-history intro would pitch
-    # "connect your workspace" to a caller who already did. Best-effort:
-    # on any failure (or outside onboarding mode) the opener falls back
-    # to its generic copy.
-    # Precomputed onboarding picture from Orchestra: the valid next
-    # targets (with spoken nudge copy) and the active step. The opener
-    # pitches one of these instead of computing "next" locally. Stays
-    # ``None`` when not actively onboarding (working / deferred / fetch
-    # failure), in which case the opener greets without a setup pitch.
-    coordinator_onboarding_next_targets: list[dict] | None = None
-    coordinator_active_onboarding_step: str | None = None
-    coordinator_onboarding_deferred: bool = False
-    onboarding_catalog: dict | None = None
-    if (
-        SESSION_DETAILS.is_coordinator
-        and SESSION_DETAILS.assistant.agent_id is not None
-    ):
-        import httpx as _httpx
-
-        try:
-            async with _httpx.AsyncClient(timeout=5.0) as _state_http:
-                _state_resp = await _state_http.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/"
-                    f"{SESSION_DETAILS.assistant.agent_id}/state",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
-                )
-                _state_resp.raise_for_status()
-                _state_info = (_state_resp.json() or {}).get("info") or {}
-                # Static, deployment-gated onboarding catalog — the single
-                # source of truth for the flow-reference copy.
-                _cat_resp = await _state_http.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
-                )
-                _cat_resp.raise_for_status()
-                _catalog = (_cat_resp.json() or {}).get("info") or {}
-                onboarding_catalog = _catalog if isinstance(_catalog, dict) else None
-            coordinator_onboarding_deferred = bool(
-                _state_info.get("onboarding_deferred"),
-            )
-            _onboarding = _state_info.get("onboarding")
-            if isinstance(_onboarding, dict):
-                _targets = _onboarding.get("next_targets")
-                coordinator_onboarding_next_targets = (
-                    [t for t in _targets if isinstance(t, dict)]
-                    if isinstance(_targets, list)
-                    else []
-                )
-                _active_step = _onboarding.get("active_step_id")
-                coordinator_active_onboarding_step = (
-                    _active_step if isinstance(_active_step, str) else None
-                )
-        except Exception as exc:
-            _log.warning(
-                f"Coordinator state fetch failed; voice opener stays generic: {exc}",
-            )
-
     system_prompt = build_voice_agent_prompt(
         bio=assistant_bio,
         assistant_name=assistant_name or None,
@@ -1538,12 +1477,7 @@ async def entrypoint(ctx: agents.JobContext):
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
-        coordinator_onboarding_next_targets=coordinator_onboarding_next_targets,
-        coordinator_active_onboarding_step=coordinator_active_onboarding_step,
-        coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
-        onboarding_catalog=onboarding_catalog,
-        opening_mode=opening_config["mode"],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
