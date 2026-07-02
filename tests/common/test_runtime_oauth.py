@@ -173,6 +173,41 @@ def test_get_refresh_token_oauth_env_overlay_returns_proxy_endpoints(monkeypatch
     assert "GOOGLE_ACCESS_TOKEN" not in overlay
 
 
+def test_optimistic_returns_token_despite_stale_expiry(monkeypatch):
+    # Expiry metadata says expired, but the token is still usable: optimistic
+    # must return it (no pre-emptive gate) and not raise.
+    sm = _FakeSecretManager(
+        {
+            "MICROSOFT_ACCESS_TOKEN": "still-valid",
+            "MICROSOFT_TOKEN_EXPIRES_AT": _past_expiry(),
+        },
+    )
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.get_provider_access_token_optimistic("microsoft") == (
+        "still-valid"
+    )
+    # Token present => debounced (not forced) sync.
+    assert sm.sync_calls[-1]["force"] is False
+
+
+def test_optimistic_returns_none_when_missing_and_forces_sync(monkeypatch):
+    sm = _FakeSecretManager({})
+    _install_secret_manager(monkeypatch, sm)
+
+    assert runtime_oauth.get_provider_access_token_optimistic("microsoft") is None
+    assert sm.sync_calls[-1]["force"] is True
+
+
+def test_refresh_forces_sync_and_returns_new_token(monkeypatch):
+    sm = _FakeSecretManager({"MICROSOFT_ACCESS_TOKEN": "old"})
+    _install_secret_manager(monkeypatch, sm)
+    sm.on_sync = lambda: sm.secrets.__setitem__("MICROSOFT_ACCESS_TOKEN", "new")
+
+    assert runtime_oauth.refresh_provider_access_token("microsoft") == "new"
+    assert sm.sync_calls[-1]["force"] is True
+
+
 def test_refresh_token_oauth_token_names_are_sensitive_subset():
     names = runtime_oauth.refresh_token_oauth_token_names()
     assert names == {
