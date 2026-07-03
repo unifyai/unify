@@ -3396,8 +3396,12 @@ class TestFastBrainSmalltalk:
 
 
 class TestOutboundOpenerTrigger:
-    """The outbound opener is held until the callee speaks; the first turn is
-    consumed by the opener (no competing fast-brain filler)."""
+    """The outbound opener is held until the callee finishes their first turn.
+
+    That turn is persisted as an inbound utterance for the transcript. Slow-brain
+    scheduling stays off: llm_node emits nothing while _opening_pending, so no
+    FastBrainTurnCompleted is published for it.
+    """
 
     def _assistant(self, boss_contact, *, outbound: bool):
         from unify.conversation_manager.medium_scripts.call import Assistant
