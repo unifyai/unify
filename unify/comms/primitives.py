@@ -4237,10 +4237,10 @@ class CommsPrimitives:
         if method == "direct":
             if self._cm is not None and context:
                 self._cm.call_manager.initial_notification = context
-            event = WhatsAppCallSent(
-                contact=fresh_contact,
-                **self._onboarding_event_kwargs(Medium.WHATSAPP_CALL),
-            )
+            if self._cm is not None:
+                event = self._cm.build_whatsapp_call_sent_event(fresh_contact)
+            else:
+                event = WhatsAppCallSent(contact=fresh_contact)
             await self._event_broker.publish(
                 "app:comms:whatsapp_call_sent",
                 event.to_json(),
