@@ -1245,11 +1245,48 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                 cached=True,
             )
 
-        await cm.interject_or_run(
-            event.content,
-            triggering_contact_id=contact_id,
-            turn_id=getattr(event, "turn_id", None),
-        )
+
+@EventHandler.register(FastBrainTurnCompleted)
+async def _(
+    event: FastBrainTurnCompleted,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Start the slow-brain run after the Voice Agent finishes a user turn."""
+    from unify.conversation_manager.prompt_builders import (
+        build_fast_brain_turn_guidance,
+    )
+
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    note = build_fast_brain_turn_guidance(
+        classification=event.classification,
+        intended_speech=event.intended_speech,
+    )
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=_active_voice_thread_medium(cm),
+        message_content=note,
+        role="guidance",
+    )
+
+    user_content = (event.user_content or "").strip()
+    if not user_content:
+        return
+
+    await cm.interject_or_run(
+        user_content,
+        triggering_contact_id=contact_id,
+        turn_id=event.turn_id,
+    )
 
 
 @EventHandler.register(AssistantTurnInjected)
@@ -1365,22 +1402,6 @@ async def _(
         message_content=note,
         role="guidance",
     )
-
-
-@EventHandler.register(FastBrainContinued)
-async def _(
-    event: FastBrainContinued,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    """Cancel the slow-brain run for the turn the fast brain answered.
-
-    The fast brain resolved this turn itself (resumed the interrupted line or
-    answered small talk), so the slow-brain run that turn spawned must not also
-    answer it. Targets exactly that turn's run (no-op if already gone).
-    """
-    await cm.cancel_slow_brain_run(event.turn_id)
 
 
 @EventHandler.register(ProactiveSpeechControl)

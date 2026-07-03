@@ -1140,8 +1140,8 @@ class TestVoiceUtteranceHandlers:
         mock_cm.schedule_proactive_speech.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inbound_utterance_triggers_interject_or_run(self, mock_cm):
-        """Inbound utterances trigger interject_or_run."""
+    async def test_inbound_utterance_does_not_trigger_interject_or_run(self, mock_cm):
+        """Inbound utterances are logged; slow brain runs after fast brain completes."""
         event = InboundPhoneUtterance(
             contact={"contact_id": 2},
             content="What's the weather?",
@@ -1154,11 +1154,35 @@ class TestVoiceUtteranceHandlers:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_called_once_with(
-            "What's the weather?",
-            triggering_contact_id=2,
-            turn_id=3,
+        mock_cm.interject_or_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_triggers_interject_or_run(self, mock_cm):
+        """Slow brain runs after the Voice Agent finishes a user turn."""
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_SMALLTALK,
+            FastBrainTurnCompleted,
         )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="How are you?",
+            classification=FAST_BRAIN_TURN_SMALLTALK,
+            intended_speech="Doing great, thanks!",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.interject_or_run.assert_called_once_with(
+            "How are you?",
+            triggering_contact_id=2,
+            turn_id=7,
+        )
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        assert "Classification: SMALLTALK" in msgs[0].content
+        assert "Doing great, thanks!" in msgs[0].content
 
     @pytest.mark.asyncio
     async def test_outbound_utterance_resets_proactive_speech(self, mock_cm):
@@ -1263,16 +1287,23 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_fast_brain_continued_cancels_run_for_its_turn(self, mock_cm):
-        """The fast brain resolving a turn cancels exactly that turn's run."""
-        from unify.conversation_manager.events import FastBrainContinued
+    async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_SILENCE,
+            FastBrainTurnCompleted,
+        )
 
-        mock_cm.cancel_slow_brain_run = AsyncMock()
-        event = FastBrainContinued(contact={"contact_id": 2}, turn_id=7)
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="   ",
+            classification=FAST_BRAIN_TURN_SILENCE,
+            intended_speech="",
+        )
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.cancel_slow_brain_run.assert_awaited_once_with(7)
+        mock_cm.interject_or_run.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(

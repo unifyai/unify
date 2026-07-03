@@ -157,6 +157,56 @@ def build_opening_greeting_messages(
 SMALLTALK_DEFER_SENTINEL = "DEFER"
 SMALLTALK_SILENCE_SENTINEL = "SILENCE"
 
+
+def build_fast_brain_turn_guidance(
+    *,
+    classification: str,
+    intended_speech: str,
+) -> str:
+    """Guidance for the slow brain after the Voice Agent finishes a user turn."""
+    from unify.conversation_manager.events import (
+        FAST_BRAIN_TURN_CONTINUATION,
+        FAST_BRAIN_TURN_DEFER,
+        FAST_BRAIN_TURN_SILENCE,
+        FAST_BRAIN_TURN_SMALLTALK,
+    )
+
+    speech = (intended_speech or "").strip()
+    quoted = f'"{speech}"' if speech else "(none)"
+    if classification == FAST_BRAIN_TURN_SMALLTALK:
+        return (
+            "[Voice Agent turn completed. Classification: SMALLTALK. "
+            f"Intended speech (may still be playing or may have been "
+            f"interrupted): {quoted}. Do NOT repeat this line via "
+            "guide_voice_agent; call wait() unless you have something "
+            "additional and substantive beyond what the Voice Agent already "
+            "covered.]"
+        )
+    if classification == FAST_BRAIN_TURN_SILENCE:
+        return (
+            "[Voice Agent turn completed. Classification: SILENCE (bare "
+            "acknowledgement). The Voice Agent intentionally said nothing. "
+            "Call wait() unless you have something substantive to add.]"
+        )
+    if classification == FAST_BRAIN_TURN_CONTINUATION:
+        return (
+            "[Voice Agent turn completed. Classification: CONTINUATION. "
+            f"Resumed verbatim remainder: {quoted}. This was already your "
+            "prior line; call wait() unless the caller's new message requires "
+            "more.]"
+        )
+    if classification == FAST_BRAIN_TURN_DEFER:
+        return (
+            "[Voice Agent turn completed. Classification: DEFER (latency "
+            f"filler). Intended speech: {quoted}. Compose the substantive "
+            "reply via guide_voice_agent — the filler is not the answer.]"
+        )
+    return (
+        "[Voice Agent turn completed. Classification: "
+        f"{classification or 'unknown'}. Intended speech: {quoted}.]"
+    )
+
+
 _SMALLTALK_GUARDRAIL = (
     "[system] Small-talk rule. You are the fast, in-the-moment voice; a slower, "
     "smarter version of you is also about to answer this same turn. Decide: can "
@@ -432,7 +482,7 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**I own ALL substantive speech.** The Voice Agent never composes substantive replies. On each user turn it only emits a brief filler phrase (e.g. "Got it." / "One moment.") to cover the latency while I think. Everything the caller should actually hear — answers, acknowledgements, verbatim repeats of what I just said, action progress, action results, participant messages, cross-channel notifications — comes from me via `guide_voice_agent(message="...")`. If a user message expects any response and I call `wait()` without `guide_voice_agent`, the caller hears only the filler followed by silence. So whenever the caller says anything that wants a reply, I MUST SPEAK — including trivial acknowledgements ("Sure, will do.").
+**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes. A `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** or **SILENCE** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
 
 **Idle small-talk exception.** If absolutely nothing is happening — no in-flight action, no recent assistant comms, and no pending spoken line — the Voice Agent may directly answer a casual "what are you doing?" style question with a playful non-work aside about passing time on the laptop, such as playing Snake, Sudoku, Mario Kart, or Tetris. This is only social banter. If any real work, recent message, call, action, result, or status is involved, I own the answer via `guide_voice_agent`.
 

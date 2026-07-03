@@ -775,12 +775,11 @@ class TestVoiceUtteranceHandlers:
         initialized_cm,
         alice_contact,
     ):
-        """InboundPhoneUtterance should trigger interject_or_run for LLM processing."""
+        """InboundPhoneUtterance is logged; slow brain runs after fast brain completes."""
         # Start a call first
         started_event = PhoneCallStarted(contact=alice_contact)
         await initialized_cm.step(started_event)
 
-        # Mock interject_or_run to verify it's called
         with patch.object(
             initialized_cm.cm,
             "interject_or_run",
@@ -792,10 +791,7 @@ class TestVoiceUtteranceHandlers:
             )
             await initialized_cm.step(utterance_event)
 
-            mock_interject.assert_called_once_with(
-                "What's the weather like?",
-                triggering_contact_id=alice_contact["contact_id"],
-            )
+            mock_interject.assert_not_called()
 
 
 # =============================================================================

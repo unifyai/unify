@@ -209,8 +209,8 @@ class InboundPhoneUtterance(Event):
 
     contact: dict
     content: str
-    # Per-turn id from the voice agent, used to cancel exactly the slow-brain run
-    # this turn spawns if the fast brain resolves the turn itself.
+    # Per-turn id from the voice agent, correlated with the slow-brain run that
+    # starts after the fast brain completes this user turn.
     turn_id: int | None = None
 
 
@@ -251,22 +251,30 @@ class VoiceInterrupt(Event):
     unheard_remainder: str = ""
 
 
-@dataclass
-class FastBrainContinued(Event):
-    """The fast brain resolved this turn itself (CONTINUE or SMALLTALK).
+# Classifications the fast brain emits when a user turn completes.
+FAST_BRAIN_TURN_DEFER = "defer"
+FAST_BRAIN_TURN_SMALLTALK = "smalltalk"
+FAST_BRAIN_TURN_SILENCE = "silence"
+FAST_BRAIN_TURN_CONTINUATION = "continuation"
 
-    Emitted when the fast brain takes full ownership of the turn's reply - either
-    resuming an interrupted line verbatim (continuation) or fully answering a pure
-    small-talk turn. Signals the CM to cancel the slow-brain run that was eagerly
-    started for this user turn, so the slow brain does not also answer.
+
+@dataclass
+class FastBrainTurnCompleted(Event):
+    """The fast brain finished responding to a user turn.
+
+    Emitted after the Voice Agent classifies and emits its line (filler, small
+    talk, continuation, or silence). The CM then starts the slow-brain run for
+    this turn, with a guidance note carrying the classification and intended
+    speech so the slow brain does not duplicate what was already said.
     """
 
-    topic: ClassVar[str | None] = "app:comms:fast_brain_continued"
+    topic: ClassVar[str | None] = "app:comms:fast_brain_turn_completed"
 
     contact: dict
-    # The user turn the fast brain resolved; the CM cancels exactly that turn's
-    # slow-brain run (wherever it sits in the debouncer queue).
     turn_id: int | None = None
+    user_content: str = ""
+    classification: str = ""
+    intended_speech: str = ""
 
 
 @dataclass

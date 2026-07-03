@@ -3205,37 +3205,41 @@ class TestFastBrainContinuation:
         assert a._pending_continuation is None
 
     @pytest.mark.asyncio
-    async def test_llm_node_continue_marks_text_and_cancels_slow_brain(
+    async def test_llm_node_continue_marks_text_and_schedules_slow_brain(
         self,
         boss_contact,
         monkeypatch,
     ):
-        """On CONTINUE, llm_node yields the verbatim remainder as the reply, marks
-        it for interruption-stashing, and cancels the eager slow-brain run."""
+        """On CONTINUE, llm_node yields the verbatim remainder and schedules
+        the slow brain with a continuation note."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
+
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_CONTINUATION
 
         a = self._assistant(boss_contact)
         a.call_received = True
         resumed = "Sorry — as I was saying, Next, click Connect Slack."
         a._claim_interrupted_continuation = AsyncMock(return_value=resumed)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == resumed
-        # Marked so the speech_created observer registers the reply (recursion).
         assert a._continuation_full_text == resumed
-        # Cancels exactly this turn's slow-brain run (by turn id) so it cannot
-        # re-deliver.
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_CONTINUATION,
+            intended_speech=resumed,
+        )
 
 
 class TestFastBrainSmalltalk:
     """``llm_node`` small-talk branch: the fast brain fully answers a pure social
-    turn and cancels the slow brain; otherwise it defers with a filler."""
+    turn, then schedules the slow brain with the classification note."""
 
     def _assistant(self, boss_contact):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3249,7 +3253,7 @@ class TestFastBrainSmalltalk:
         )
 
     @pytest.mark.asyncio
-    async def test_smalltalk_answers_and_cancels_slow_brain(
+    async def test_smalltalk_answers_and_schedules_slow_brain(
         self,
         boss_contact,
         monkeypatch,
@@ -3258,6 +3262,7 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SMALLTALK
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
@@ -3265,7 +3270,7 @@ class TestFastBrainSmalltalk:
         a._capture_screenshots_for_llm = AsyncMock()
         reply = "Doing great, thanks for asking! How are you?"
         a._generate_smalltalk_reply = AsyncMock(return_value=reply)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         async def _filler(*args, **kwargs):
             return "One moment."
@@ -3274,14 +3279,17 @@ class TestFastBrainSmalltalk:
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
-        # The smalltalk reply is spoken (no filler), and this turn's slow-brain
-        # run is cancelled by turn id.
         assert len(chunks) == 1
         assert chunks[0].delta.content == reply
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_SMALLTALK,
+            intended_speech=reply,
+        )
 
     @pytest.mark.asyncio
-    async def test_defer_falls_back_to_filler_without_cancelling(
+    async def test_defer_falls_back_to_filler_and_schedules_slow_brain(
         self,
         boss_contact,
         monkeypatch,
@@ -3297,7 +3305,7 @@ class TestFastBrainSmalltalk:
         a._capture_screenshots_for_llm = AsyncMock()
         # Not small talk -> defer; the filler covers the gap, slow brain proceeds.
         a._generate_smalltalk_reply = AsyncMock(return_value=None)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         async def _filler(*args, **kwargs):
             return "One sec — pulling that up."
@@ -3308,8 +3316,14 @@ class TestFastBrainSmalltalk:
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == "One sec — pulling that up."
-        # Slow brain must NOT be cancelled - it produces the real answer.
-        a._publish_fast_brain_continued.assert_not_awaited()
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
+
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_DEFER,
+            intended_speech="One sec — pulling that up.",
+        )
 
     @pytest.mark.asyncio
     async def test_idle_status_gate_is_passed_to_smalltalk(
@@ -3328,7 +3342,7 @@ class TestFastBrainSmalltalk:
         a._capture_screenshots_for_llm = AsyncMock()
         a._request_idle_smalltalk_state = AsyncMock(return_value=True)
         a._generate_smalltalk_reply = AsyncMock(return_value=None)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         async def _filler(*args, **kwargs):
             return "One moment."
@@ -3350,12 +3364,12 @@ class TestFastBrainSmalltalk:
         boss_contact,
         monkeypatch,
     ):
-        """A bare ack ('okay') -> say nothing AND cancel the slow brain, so
-        neither brain speaks (no parroting, no filler)."""
+        """A bare ack ('okay') -> say nothing, then schedule slow brain with SILENCE."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
@@ -3364,7 +3378,7 @@ class TestFastBrainSmalltalk:
         a._generate_smalltalk_reply = AsyncMock(
             return_value=call_mod._SMALLTALK_STAY_SILENT,
         )
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         async def _filler(*args, **kwargs):
             return "One moment."
@@ -3373,9 +3387,13 @@ class TestFastBrainSmalltalk:
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
-        # Nothing spoken (no parrot, no filler), but the slow brain is cancelled.
         assert chunks == []
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_SILENCE,
+            intended_speech="",
+        )
 
 
 # =============================================================================
