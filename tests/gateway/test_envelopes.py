@@ -46,6 +46,7 @@ def test_known_threads_includes_every_thread_used_in_local_ingress() -> None:
         "whatsapp_call",
         "whatsapp_call_answered",
         "whatsapp_call_not_answered",
+        "whatsapp_call_sent",
         "discord",
         "teams_chat",
         "teams_channel",
