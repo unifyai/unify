@@ -515,3 +515,61 @@ async def test_time_across_sessions_with_filter() -> None:
     bus2.join_published()
     await asyncio.sleep(0.05)
     assert trig == [2]
+
+
+# --------------------------------------------------------------------------- #
+#  missing-context tolerance (baseline / hydration)                           #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_register_callback_tolerates_missing_context(monkeypatch) -> None:
+    """register_callback must survive Orchestra 404s on freshly created contexts."""
+    from unittest.mock import MagicMock
+
+    import unisdk
+    from unisdk.utils.http import RequestError
+
+    bus = EventBus()
+    triggered: list[int] = []
+
+    async def cb(events):  # noqa: ANN001
+        triggered.append(_get_seq(events[0].payload))
+
+    real_get_logs = unisdk.get_logs
+
+    def flaky_get_logs(**kwargs):
+        context = str(kwargs.get("context", ""))
+        if "/Events/ToolLoop" in context or "/Events/_callbacks" in context:
+            resp = MagicMock()
+            resp.status_code = 404
+            resp.text = "Context not found"
+            raise RequestError("http://test", "GET", resp)
+        return real_get_logs(**kwargs)
+
+    monkeypatch.setattr(unisdk, "get_logs", flaky_get_logs)
+
+    await bus.register_callback(
+        event_type="ToolLoop",
+        callback=cb,
+        every_n=1,
+    )
+
+    await bus.publish(
+        Event(
+            type="ToolLoop",
+            timestamp=ts(0),
+            payload=ToolLoopPayload(
+                kind=ToolLoopKind.REQUEST,
+                message={"role": "user", "content": "hello"},
+                method="test",
+                hierarchy=[],
+                hierarchy_label="",
+                seq=0,
+            ),
+        ),
+        blocking=True,
+    )
+    await bus.ajoin_callbacks()
+    assert triggered == [0]
