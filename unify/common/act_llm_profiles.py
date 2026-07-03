@@ -28,15 +28,15 @@ DEFAULT_ACT_LLM_PROFILE = "default"
 GPT_5_5_HIGH_ACT_LLM_PROFILE = "gpt_5_5_high"
 
 
-_DEEPSEEK_PRICE_BASELINE = (
+_MINIMAX_PRICE_BASELINE = (
     "Baseline profile. Uses the actor's configured model, normally "
-    "deepseek-v4-max@deepseek. The DeepSeek v4-max registry rate is about "
-    "$0.435/M input tokens and $0.87/M output tokens."
+    "minimax-v3@minimax. The MiniMax M3 registry rate is about "
+    "$0.30/M input tokens and $1.20/M output tokens."
 )
 _GPT_5_5_PRICE = (
     "Premium OpenAI profile. gpt-5.5@openai is about $5/M input tokens and "
-    "$30/M output tokens, roughly 11.5x the DeepSeek input-token rate and "
-    "34.5x the DeepSeek output-token rate before accounting for any extra "
+    "$30/M output tokens, roughly 17x the MiniMax input-token rate and "
+    "25x the MiniMax output-token rate before accounting for any extra "
     "reasoning/output tokens used by higher effort."
 )
 
@@ -51,7 +51,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
             "unless the user explicitly asks for extra thinking effort or the "
             "task is unusually ambiguous, high-stakes, or complex."
         ),
-        relative_price=_DEEPSEEK_PRICE_BASELINE,
+        relative_price=_MINIMAX_PRICE_BASELINE,
     ),
     "gpt_5_5_low": ActLLMProfile(
         name="gpt_5_5_low",

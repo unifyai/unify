@@ -2149,9 +2149,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
             SETTINGS.UNIFY_MODEL,
             origin="ConversationManager",
             # Slow brain stays at "high"; the system default is "max" (used by
-            # the CodeActActor). On deepseek-v4 "max" buys marginal gains on the
-            # hardest tasks at extra latency, which the live conversation loop
-            # cannot afford.
+            # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
+            # hardest tasks at extra latency; on MiniMax M3 all non-none effort
+            # levels enable the same adaptive thinking mode.
             reasoning_effort="high",
         )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000

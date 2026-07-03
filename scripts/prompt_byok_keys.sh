@@ -220,7 +220,9 @@ ensure_default_chat_model() {
   # would override Unity's built-in default — so pin a model that matches the
   # chat key the user actually provided.
   local model=""
-  if has_env_value DEEPSEEK_API_KEY; then
+  if has_env_value OPENROUTER_API_KEY; then
+    model="minimax-v3@minimax"
+  elif has_env_value DEEPSEEK_API_KEY; then
     model="deepseek-v4-max@deepseek"
   elif has_env_value ANTHROPIC_API_KEY; then
     model="claude-4.6-sonnet@anthropic"
