@@ -2064,15 +2064,120 @@ This also applies to anything visual or computer-based:
 I frame the offer naturally — "Want to hop on a quick call so you can share your screen? I can walk you through it." — not as a formal process. If my boss declines or indicates they'd prefer written instructions, I proceed helpfully over text."""
 
 
-def _build_base_concurrent_action_ack_block(*, contact_id: int) -> str:
+_OUTBOUND_ACK_TOOL_NAMES = frozenset(
+    {
+        "send_unify_message",
+        "send_sms",
+        "send_email",
+        "send_whatsapp",
+        "send_teams_message",
+        "send_discord_message",
+        "send_slack_message",
+    },
+)
+
+
+def _build_available_outbound_tool_names(
+    *,
+    assistant_has_phone: bool,
+    assistant_has_email: bool,
+    assistant_has_whatsapp: bool,
+    assistant_has_discord: bool,
+    assistant_has_slack: bool,
+    assistant_has_teams: bool,
+    is_coordinator: bool,
+    on_voice_call: bool,
+    outbound_voice_line_ready: bool,
+    onboarding_masked_tools: set[str] | frozenset[str],
+) -> list[str]:
+    """Return outbound comms tool names exposed this turn (matches comms guidelines)."""
+    available_tool_names = ["send_unify_message", "send_api_response"]
+    call_tools_listed = not on_voice_call and outbound_voice_line_ready
+    if assistant_has_phone:
+        trailing = ["make_call"] if call_tools_listed else []
+        available_tool_names = ["send_sms"] + available_tool_names + trailing
+    if assistant_has_whatsapp:
+        idx = (
+            available_tool_names.index("send_sms") + 1
+            if "send_sms" in available_tool_names
+            else 0
+        )
+        available_tool_names.insert(idx, "send_whatsapp")
+        if call_tools_listed:
+            if "make_call" in available_tool_names:
+                available_tool_names.insert(
+                    available_tool_names.index("make_call") + 1,
+                    "make_whatsapp_call",
+                )
+            else:
+                available_tool_names.append("make_whatsapp_call")
+    if assistant_has_email:
+        available_tool_names.insert(
+            available_tool_names.index("send_unify_message"),
+            "send_email",
+        )
+    if assistant_has_discord:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_discord_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_discord_channel_message")
+    if assistant_has_slack:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_slack_message")
+        if not is_coordinator:
+            available_tool_names.insert(idx + 1, "send_slack_channel_message")
+    if assistant_has_teams:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_teams_message")
+        if is_coordinator:
+            available_tool_names.insert(idx + 1, "create_teams_meet")
+        else:
+            available_tool_names.insert(idx + 1, "create_teams_channel")
+            available_tool_names.insert(idx + 2, "create_teams_meet")
+
+    if onboarding_masked_tools:
+        available_tool_names = [
+            name for name in available_tool_names if name not in onboarding_masked_tools
+        ]
+    return available_tool_names
+
+
+def _outbound_ack_tool_names(available_tool_names: list[str]) -> list[str]:
+    """Outbound message tools suitable for brief concurrent-action acknowledgments."""
+    return [name for name in available_tool_names if name in _OUTBOUND_ACK_TOOL_NAMES]
+
+
+def _build_base_concurrent_action_ack_block(
+    *,
+    contact_id: int,
+    ack_tools: list[str],
+) -> str:
     """Build concurrent-action / acknowledgment guidance."""
+    if not ack_tools:
+        ack_tools = ["send_unify_message"]
+    ack_tools_str = ", ".join(f"`{name}`" for name in ack_tools)
+    default_ack = (
+        "send_unify_message" if "send_unify_message" in ack_tools else ack_tools[0]
+    )
+    example_call = f'{default_ack}(contact_id={contact_id}, content="Let me check.")'
+    if len(ack_tools) == 1:
+        channel_guidance = (
+            f"The acknowledgment must use `{ack_tools[0]}` — it is the only outbound "
+            "message tool available on this turn."
+        )
+    else:
+        channel_guidance = (
+            f"Pick whichever tool matches the active conversation thread from: "
+            f"{ack_tools_str}. Do not call outbound message tools not listed here."
+        )
+
     return f"""Concurrent action and acknowledgment
 ------------------------------------
 **CRITICAL: When calling `act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`, call it IN THE SAME RESPONSE as a brief acknowledgment message.**
 
 I can and should call multiple tools in a single response. When my boss asks me to do something that requires an action, return BOTH tool calls together:
 1. The action tool (`act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`) to start the work.
-2. A brief acknowledgment via the channel matching the active conversation thread (`send_unify_message`, `send_sms`, `send_email`, `send_whatsapp`, `send_teams_message`, `send_discord_message`, etc.).
+2. A brief acknowledgment via the channel matching the active conversation thread using one of: {ack_tools_str}.
 
 **This is ONE action, not two steps.** Call both tools in my single response, then the next response should be `wait` or action monitoring.
 
@@ -2081,10 +2186,10 @@ My response should include BOTH tool calls in parallel:
 ```
 tool_calls: [
     ask_about_contacts(text="What is Sarah's phone number?"),
-    send_unify_message(contact_id={contact_id}, content="Let me check.")
+    {example_call}
 ]
 ```
-If the boss's active thread is SMS instead of Unify chat, the acknowledgment uses `send_sms(...)`; on Teams, `send_teams_message(...)`; and so on. Pick whichever channel the boss is currently using.
+{channel_guidance}
 
 NOT: first the action, then in a separate response the acknowledgment. That is inefficient.
 
@@ -2319,6 +2424,19 @@ def build_system_prompt(
         if coordinator_onboarding_active
         else set()
     )
+    available_tool_names = _build_available_outbound_tool_names(
+        assistant_has_phone=assistant_has_phone,
+        assistant_has_email=assistant_has_email,
+        assistant_has_whatsapp=assistant_has_whatsapp,
+        assistant_has_discord=assistant_has_discord,
+        assistant_has_slack=assistant_has_slack,
+        assistant_has_teams=assistant_has_teams,
+        is_coordinator=is_coordinator,
+        on_voice_call=on_voice_call,
+        outbound_voice_line_ready=outbound_voice_line_ready,
+        onboarding_masked_tools=onboarding_masked_tools,
+    )
+    outbound_ack_tool_names = _outbound_ack_tool_names(available_tool_names)
     comms_tool_listing = _build_comms_tool_listing(
         assistant_has_phone,
         assistant_has_email,
@@ -2584,7 +2702,10 @@ Messages from the current turn have **NEW** tag prepended:
     #    not dispatched at all in demo mode).
     if not demo_mode:
         parts.add(
-            _build_base_concurrent_action_ack_block(contact_id=contact_id),
+            _build_base_concurrent_action_ack_block(
+                contact_id=contact_id,
+                ack_tools=outbound_ack_tool_names,
+            ),
         )
 
     # Coordinator-only reactive narration rules for the gradual
@@ -2622,60 +2743,6 @@ Messages from the current turn have **NEW** tag prepended:
         + (f"\n{slack_guidelines}" if slack_guidelines else "")
         + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
-
-    available_tool_names = ["send_unify_message", "send_api_response"]
-    # Assistant-initiated call tools are listed only when actually offered: not
-    # on a live voice call AND the voice worker has a freshly prewarmed process
-    # ready. Inbound calls bypass this gate.
-    call_tools_listed = not on_voice_call and outbound_voice_line_ready
-    if assistant_has_phone:
-        # ``make_call`` is withheld while on a voice call (one at a time) and
-        # while the line is still re-warming after a prior session.
-        trailing = ["make_call"] if call_tools_listed else []
-        available_tool_names = ["send_sms"] + available_tool_names + trailing
-    if assistant_has_whatsapp:
-        idx = (
-            available_tool_names.index("send_sms") + 1
-            if "send_sms" in available_tool_names
-            else 0
-        )
-        available_tool_names.insert(idx, "send_whatsapp")
-        if call_tools_listed:
-            if "make_call" in available_tool_names:
-                available_tool_names.insert(
-                    available_tool_names.index("make_call") + 1,
-                    "make_whatsapp_call",
-                )
-            else:
-                available_tool_names.append("make_whatsapp_call")
-    if assistant_has_email:
-        available_tool_names.insert(
-            available_tool_names.index("send_unify_message"),
-            "send_email",
-        )
-    if assistant_has_discord:
-        idx = available_tool_names.index("send_unify_message")
-        available_tool_names.insert(idx, "send_discord_message")
-        if not is_coordinator:
-            available_tool_names.insert(idx + 1, "send_discord_channel_message")
-    if assistant_has_slack:
-        idx = available_tool_names.index("send_unify_message")
-        available_tool_names.insert(idx, "send_slack_message")
-        if not is_coordinator:
-            available_tool_names.insert(idx + 1, "send_slack_channel_message")
-    if assistant_has_teams:
-        idx = available_tool_names.index("send_unify_message")
-        available_tool_names.insert(idx, "send_teams_message")
-        if is_coordinator:
-            available_tool_names.insert(idx + 1, "create_teams_meet")
-        else:
-            available_tool_names.insert(idx + 1, "create_teams_channel")
-            available_tool_names.insert(idx + 2, "create_teams_meet")
-
-    if onboarding_masked_tools:
-        available_tool_names = [
-            name for name in available_tool_names if name not in onboarding_masked_tools
-        ]
 
     if is_coordinator:
         direct_tool_names_str = ", ".join(available_tool_names)
