@@ -369,10 +369,10 @@ class Assistant(Agent):
         # resumable), then cleared. ``None`` for ordinary buffer fillers, which
         # carry no substantive content worth re-surfacing.
         self._continuation_full_text: str | None = None
-        # Cancels the speculatively-started slow-brain run for this turn the
-        # instant the fast brain resolves it itself (CONTINUE or SMALLTALK), so
-        # the slow brain cannot also re-deliver / re-answer the same content.
-        self._publish_fast_brain_continued: Callable | None = None
+        # Schedules the slow-brain run after the fast brain finishes a user turn.
+        self._publish_fast_brain_turn_completed: Callable | None = None
+        # Latest user turn for which the slow brain was already scheduled.
+        self._fast_brain_completed_turn = -1
         # Fully answers a pure small-talk turn from persona + recent history, or
         # returns None to defer to the slow brain. Set in the entrypoint.
         self._generate_smalltalk_reply: Callable | None = None
@@ -408,6 +408,33 @@ class Assistant(Agent):
 
     def set_call_received(self):
         self.call_received = True
+
+    @staticmethod
+    def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
+        for item in reversed(chat_ctx.items):
+            if getattr(item, "role", None) == "user":
+                return item.text_content or ""
+        return ""
+
+    async def _finalize_fast_brain_user_turn(
+        self,
+        *,
+        turn_id: int,
+        user_content: str,
+        classification: str,
+        intended_speech: str,
+    ) -> None:
+        if turn_id <= self._fast_brain_completed_turn:
+            return
+        self._fast_brain_completed_turn = turn_id
+        if self._publish_fast_brain_turn_completed is None:
+            return
+        await self._publish_fast_brain_turn_completed(
+            turn_id=turn_id,
+            user_content=user_content,
+            classification=classification,
+            intended_speech=intended_speech,
+        )
 
     async def on_user_turn_completed(
         self,
@@ -457,6 +484,10 @@ class Assistant(Agent):
         # Stale-guard: only a continuation set below should be registered for
         # resumption; clear any leftover so an ordinary buffer reply is not.
         self._continuation_full_text = None
+        my_turn = self._user_turn_seq
+        user_text = self._latest_user_text(chat_ctx)
+        turn_classification: str | None = None
+        intended_speech = ""
         try:
             _log.info("Waiting for call to be received…")
             while not self.call_received:
@@ -477,6 +508,8 @@ class Assistant(Agent):
             )
             if credit_gate_state is not None and not credit_gate_state.allowed:
                 _log.info("Credit gate response served from cached state")
+                turn_classification = FAST_BRAIN_TURN_DEFER
+                intended_speech = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
                 yield ChatChunk(
                     id=f"credit-gate-{monotonic_ms()}",
                     delta=ChoiceDelta(
@@ -490,7 +523,6 @@ class Assistant(Agent):
             # already produced spoken output for this turn (e.g. this is a
             # notification-triggered re-generation, or its answer landed first),
             # emit nothing - a filler must never play AFTER the real answer.
-            my_turn = self._user_turn_seq
             if self._slow_brain_responded_turn >= my_turn:
                 _log.info("Buffer suppressed: slow brain already responded this turn")
                 return
@@ -504,15 +536,11 @@ class Assistant(Agent):
             # real reply landed) are marked as repeated deferrals so they reassure
             # rather than starting a fresh lookup.
             already_deferred = self._buffers_since_slow_reply >= 1
-            user_text = ""
             recent_assistant_text = ""
             for item in reversed(chat_ctx.items):
                 role = getattr(item, "role", None)
-                if role == "user" and not user_text:
-                    user_text = item.text_content or ""
-                elif role == "assistant" and not recent_assistant_text:
+                if role == "assistant" and not recent_assistant_text:
                     recent_assistant_text = item.text_content or ""
-                if user_text and recent_assistant_text:
                     break
 
             # If this barge-in cut off a slow-brain line, the fast brain may
@@ -528,11 +556,10 @@ class Assistant(Agent):
                 # Resume the slow brain's verbatim remainder AS the reply. Mark the
                 # full text so the ``speech_created`` observer registers this reply
                 # for interruption-stashing -> a barge-in mid-resume re-stashes a
-                # fresh candidate, making continuation recursive. Cancel the
-                # speculatively-started slow-brain run so it cannot re-deliver it.
+                # fresh candidate, making continuation recursive.
                 self._continuation_full_text = continuation
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
+                turn_classification = FAST_BRAIN_TURN_CONTINUATION
+                intended_speech = continuation
                 yield ChatChunk(
                     id=f"fast-brain-continuation-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=continuation),
@@ -546,10 +573,10 @@ class Assistant(Agent):
 
             # Race the small-talk reply against the lean filler. If this turn is
             # pure small talk (greeting, biographical, simple self-context,
-            # repeat), the fast brain answers it in full and cancels the eager
-            # slow-brain run; otherwise it defers and the filler covers the gap
-            # while the slow brain composes the real answer. Running both
-            # concurrently keeps DEFER turns at the filler's latency.
+            # repeat), the fast brain answers it in full; otherwise it defers and
+            # the filler covers the gap while the slow brain composes the real
+            # answer after this turn completes. Running both concurrently keeps
+            # DEFER turns at the filler's latency.
             _log.info("Selecting fast reply… (llm_node_start)")
             smalltalk_task = (
                 asyncio.create_task(
@@ -572,12 +599,10 @@ class Assistant(Agent):
 
             smalltalk = await smalltalk_task if smalltalk_task is not None else None
             if smalltalk is _SMALLTALK_STAY_SILENT:
-                # A bare acknowledgement ("okay") needs no reply: say nothing and
-                # cancel this turn's slow-brain run so neither brain speaks.
+                # A bare acknowledgement ("okay") needs no reply: say nothing.
                 buffer_task.cancel()
                 _log.info("Small talk: staying silent on bare acknowledgement")
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
+                turn_classification = FAST_BRAIN_TURN_SILENCE
                 return
             if smalltalk is not None:
                 buffer_task.cancel()  # the filler is not needed
@@ -585,10 +610,8 @@ class Assistant(Agent):
                     _log.info("Small talk suppressed: slow brain already responded")
                     return
                 self._buffers_since_slow_reply += 1
-                # The fast brain fully answered this turn; cancel the eager
-                # slow-brain run so it does not also answer the same thing.
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
+                turn_classification = FAST_BRAIN_TURN_SMALLTALK
+                intended_speech = smalltalk
                 yield ChatChunk(
                     id=f"fast-brain-smalltalk-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=smalltalk),
@@ -604,12 +627,21 @@ class Assistant(Agent):
                 return
 
             self._buffers_since_slow_reply += 1
+            turn_classification = FAST_BRAIN_TURN_DEFER
+            intended_speech = phrase
             yield ChatChunk(
                 id=f"fast-brain-buffer-{monotonic_ms()}",
                 delta=ChoiceDelta(role="assistant", content=phrase),
             )
         finally:
             self.user_turn_generating = False
+            if turn_classification is not None:
+                await self._finalize_fast_brain_user_turn(
+                    turn_id=my_turn,
+                    user_content=user_text,
+                    classification=turn_classification,
+                    intended_speech=intended_speech,
+                )
 
     async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
         """Decide the fate of an interrupted line - the fast brain's front-door job.
@@ -2266,8 +2298,8 @@ async def entrypoint(ctx: agents.JobContext):
                 nonlocal _meet_last_speaker_id
                 resolved_contact, speaker_label, dia_sid = _resolve_speaker()
                 _meet_last_speaker_id = None
-                # Stamp the current turn so the slow-brain run it spawns can be
-                # cancelled precisely if the fast brain resolves this turn itself.
+                # Stamp the current turn so the slow-brain run scheduled after
+                # the fast brain completes can be correlated precisely.
                 turn_id = assistant._user_turn_seq
                 if channel == "google_meet":
                     event = InboundGoogleMeetUtterance(
@@ -2501,22 +2533,26 @@ async def entrypoint(ctx: agents.JobContext):
     # can hand off when it decides not to resume an interrupted line itself.
     assistant._publish_voice_interrupt = _publish_voice_interrupt
 
-    async def _publish_fast_brain_continued(turn_id: int | None = None) -> None:
-        """Cancel the slow-brain run for ``turn_id`` when the fast brain answers.
-
-        The slow brain is triggered the moment the user's utterance lands; if the
-        fast brain then resolves that same turn itself - resuming the interrupted
-        line or fully answering a small-talk turn - its run would also answer, so
-        the CM cancels exactly that turn's run (wherever it sits in the queue).
-        The fast brain (~1s) always beats the slow brain (~8-12s), so the run is
-        still mid-flight and is dropped before producing speech.
-        """
+    async def _publish_fast_brain_turn_completed(
+        *,
+        turn_id: int,
+        user_content: str,
+        classification: str,
+        intended_speech: str,
+    ) -> None:
+        """Schedule the slow-brain run after the fast brain finishes a user turn."""
         await event_broker.publish(
-            FastBrainContinued.topic,
-            FastBrainContinued(contact=contact, turn_id=turn_id).to_json(),
+            FastBrainTurnCompleted.topic,
+            FastBrainTurnCompleted(
+                contact=contact,
+                turn_id=turn_id,
+                user_content=user_content,
+                classification=classification,
+                intended_speech=intended_speech,
+            ).to_json(),
         )
 
-    assistant._publish_fast_brain_continued = _publish_fast_brain_continued
+    assistant._publish_fast_brain_turn_completed = _publish_fast_brain_turn_completed
 
     def _register_interruptible_tts(
         handle: object,

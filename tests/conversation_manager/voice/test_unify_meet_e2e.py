@@ -352,13 +352,12 @@ class TestUnifyMeetUtteranceHandling:
         boss_contact,
     ):
         """
-        InboundUnifyMeetUtterance should trigger interject_or_run.
+        InboundUnifyMeetUtterance is logged; slow brain runs after fast brain completes.
         """
         # Start meet first
         started = UnifyMeetStarted(contact=boss_contact)
         await initialized_cm.step(started)
 
-        # Mock interject_or_run
         with patch.object(
             initialized_cm.cm,
             "interject_or_run",
@@ -370,10 +369,7 @@ class TestUnifyMeetUtteranceHandling:
             )
             await initialized_cm.step(utterance)
 
-            mock_interject.assert_called_once_with(
-                "What's the status of the project?",
-                triggering_contact_id=boss_contact["contact_id"],
-            )
+            mock_interject.assert_not_called()
 
     async def test_inbound_utterance_resets_proactive_speech(
         self,

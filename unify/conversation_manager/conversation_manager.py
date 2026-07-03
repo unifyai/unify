@@ -1142,13 +1142,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def cancel_slow_brain_run(self, turn_id) -> None:
         """Cancel exactly the slow-brain run spawned by ``turn_id``.
 
-        Invoked when the fast brain resolves that turn itself
-        (``FastBrainContinued`` - resuming an interrupted line or fully answering
-        a small-talk turn): the eagerly-started run for that turn would otherwise
-        also answer. Targets only that turn's run wherever it sits in the queue
-        (no-op if it was already debounced out), so a prior still-thinking run or
-        an unrelated act/SMS run is never cancelled. A run already in tool commit
-        (speaking) is spared.
+        Used when a voice turn must be dropped before it produces speech (e.g.
+        superseded by a newer user utterance). Targets only that turn's run
+        wherever it sits in the queue (no-op if already gone). A run already in
+        tool commit (speaking) is spared.
         """
         await self.debouncer.cancel_run_by_turn(turn_id)
 
