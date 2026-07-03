@@ -40,10 +40,12 @@ def test_workspace_demo_notification_requires_full_task_then_explicit_completion
     text = _coordinator_onboarding_notification_text(event)
     assert "workspace_demo_requested" in text
     assert "`workspace-mailbox`" in text
-    # The brain must do the whole task and then complete it explicitly — a
-    # summary alone must not be presented as completion.
+    # The brain delivers the summary and then completes the step explicitly —
+    # the checklist does not auto-detect the summary, and the completion call is
+    # what finishes the demo.
     assert "set_onboarding_task_state" in text
-    assert "summary alone must NOT complete it" in text
+    assert "does NOT" in text
+    assert "not finished until" in text
 
 
 def test_step_completed_notification_requires_no_action() -> None:
