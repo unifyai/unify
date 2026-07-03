@@ -1203,10 +1203,10 @@ def _neutral_onboarding_outbound(
     body omitted, or None when the event is not an onboarding-trigger
     outbound. The ``(not delivered directly)`` template marker is preserved.
 
-    ``UnifyMessageSent`` is deliberately excluded: the only onboarding-trigger
-    outbound that uses ``unify_message`` is a workspace demo, whose summary is
-    the deliverable the brain should be free to confirm and discuss (e.g. to
-    offer a follow-up reply) — not a secret to withhold.
+    ``UnifyMessageSent`` is deliberately excluded: clue-bearing outbounds only
+    ever go over the gated comms channels below (reference quizzes). A
+    ``unify_message`` never carries clue content to withhold, so its body stays
+    visible to the fast brain.
     """
     if not isinstance(
         event,
