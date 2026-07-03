@@ -2,11 +2,11 @@
 pytest tests for the async-tool loop helpers **using a real `unillm.AsyncUnify`
 client for every test** – no stubs, no scripted completions.
 
-Running these tests will make real requests to the model you pass to
-`unillm.AsyncUnify` (by default we use **GPT-5**).
-Make sure you have:
+Running these tests will make real requests to the model configured as
+``UNIFY_MODEL`` (via ``llm_config`` / ``new_llm_client``). Make sure you have:
 
-* a valid OpenAI (or Unify-proxy) API key in your environment, and
+* valid provider credentials in your environment (for example ``OPENROUTER_API_KEY``
+  when the default model routes through OpenRouter), and
 * internet connectivity while the suite runs.
 
 The tests still exercise exactly the same behaviours as before:
