@@ -35,6 +35,22 @@ LEARNING_EXPENSES_USER_CORRECTION_TEXT = (
     "monthly spend."
 )
 
+LEARNING_EXPENSES_GUIDANCE_TITLE = "Monthly bank export spend rules"
+LEARNING_EXPENSES_FUNCTION_NAME = "compute_monthly_spend_from_bank_exports"
+
+
+def learning_expenses_storage_check_nudge() -> str:
+    """Explicit StorageCheck mandate for the learning correction interjection."""
+    return (
+        "StorageCheck memoization (for the post-act review loop — do NOT call "
+        "GuidanceManager or FunctionManager store tools in the doing loop): "
+        f"persist Guidance titled {LEARNING_EXPENSES_GUIDANCE_TITLE!r} with the "
+        f"user's correction rule ({LEARNING_EXPENSES_CORRECTION_RULE_DESCRIPTION}) "
+        f"and Function {LEARNING_EXPENSES_FUNCTION_NAME!r} for the corrected "
+        "monthly spend pipeline from checking+card CSV exports."
+    )
+
+
 _BUNDLED_ASSET_PACKAGE = "unify.assets.onboarding.learning.expenses"
 _BUNDLED_FILENAMES: tuple[str, ...] = (
     f"checking-{LEARNING_EXPENSES_MONTH_N}.csv",
@@ -250,6 +266,7 @@ def learning_expenses_scenario_prompt_lines() -> tuple[str, ...]:
         "Corrected algorithm after the user sends this correction text:",
         f'"{LEARNING_EXPENSES_USER_CORRECTION_TEXT}"',
         *learning_expenses_corrected_algorithm_lines(),
+        learning_expenses_storage_check_nudge(),
         "Numbers are always computed from the files via act(persist=True), never "
         f"asserted — bundled fixtures guarantee naive vs corrected differ by at "
         f"least ${LEARNING_EXPENSES_NAIVE_MARGIN:.0f}.",
@@ -284,9 +301,9 @@ def learning_expenses_improved_act_query() -> str:
         f"Re-read `{checking}` and `{card}` under `{LEARNING_EXPENSES_BASE_DIR}/`.\n\n"
         f"Apply this corrected spend algorithm:\n{algo}\n\n"
         "1. Recompute corrected monthly spend via execute_code.\n\n"
-        "Return the corrected total and a short report summary. Do not store "
-        "Guidance or Functions — StorageCheck runs after this act and persists "
-        "reusable skills from the trajectory."
+        f"{learning_expenses_storage_check_nudge()}\n\n"
+        "Return the corrected total and a short report summary. Do not call "
+        "GuidanceManager or FunctionManager store tools in the doing loop."
     )
 
 

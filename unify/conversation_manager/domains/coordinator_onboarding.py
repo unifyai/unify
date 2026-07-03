@@ -369,6 +369,7 @@ def _coordinator_onboarding_notification_text(
     if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
         from unify.conversation_manager.domains.learning_expenses_fixtures import (
             learning_expenses_scenario_prompt_lines,
+            learning_expenses_storage_check_nudge,
         )
 
         details = event.details if isinstance(event.details, dict) else {}
@@ -389,13 +390,17 @@ def _coordinator_onboarding_notification_text(
             "INTERNAL XFER row on either file including card-side credits, ignore "
             "refunds), surface my own mistake, suggest the exact "
             "correction text, and WAIT — never send the correction or proceed "
-            "on the user's behalf. After their correction, act(persist=True) to "
-            "recompute with the corrected algorithm and tag the improved "
-            "deliverable. Do not store Guidance or Functions inside the act — "
-            "StorageCheck persists them after completion; tell the user to open "
-            "the Brain rail Guidance and Functions sections and cite what "
-            "StorageCheck stored — I have no tool to navigate the Console for "
-            "them — invite them to ask for next month's report, and WAIT again "
+            "on the user's behalf. After their correction, interject_* into the "
+            "running persist act with the corrected algorithm and include this "
+            f"StorageCheck memoization request verbatim: "
+            f"{learning_expenses_storage_check_nudge()} "
+            "Then tag the improved deliverable with "
+            "onboarding_learning_phase=improved. The doing loop must not call "
+            "GuidanceManager or FunctionManager store tools — StorageCheck "
+            "persists after completion; tell the user to open the Brain rail "
+            "Guidance and Functions sections and cite what StorageCheck stored — "
+            "I have no tool to navigate the Console for them — invite them to ask "
+            "for next month's report, and WAIT again "
             "before the replay act. Each phase "
             "deliverable (first attempt, improved version, replay) must be sent "
             "with send_unify_message using onboarding_learning_phase "
