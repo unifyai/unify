@@ -2862,7 +2862,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         import time as _time
 
         try:
-            async with _httpx.AsyncClient(timeout=5.0) as client:
+            async with _httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.patch(
                     f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
                     headers={
