@@ -46,6 +46,9 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user just reset a previously-completed onboarding step — it is "
         "no longer done."
     ),
+    "onboarding_step_completed": (
+        "An onboarding step you were working on is now marked complete."
+    ),
     "onboarding_session_started": (
         "The user just opened the onboarding session with you — they are "
         "waiting for you to open with one short turn."
@@ -68,6 +71,7 @@ _SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 _SUBTYPE_STEP_SKIPPED = "step_skipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_STEP_RESET = "onboarding_step_reset"
+_SUBTYPE_STEP_COMPLETED = "onboarding_step_completed"
 _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
@@ -354,6 +358,40 @@ def _coordinator_onboarding_notification_text(
         )
         return f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
 
+    if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id")
+        step_note = f" The demo step id is `{step_id}`." if step_id else ""
+        guidance = (
+            "The user clicked a workspace demo row: do the WHOLE task now with my "
+            "own tools, not just a summary. Read the relevant part of their "
+            "connected workspace and deliver one short unify_message summary; for "
+            "the mailbox demo I must ALSO send a reply to a notable thread. Only "
+            "once the entire task is genuinely finished do I mark it done by "
+            "calling set_onboarding_task_state(step_id, completed=True) — a "
+            "summary alone must NOT complete it. This notification is a poll, not "
+            "a request to repeat finished work: if the task is already done I just "
+            "confirm it and do not redo it or send a duplicate. If a voice call "
+            'is active I speak via guide_voice_agent(message="...") instead of a '
+            "chat message."
+        )
+        return f"{subtype_hint} {body}{step_note} {guidance}".strip()
+
+    if event.subtype == _SUBTYPE_STEP_COMPLETED:
+        # This event confirms a completion the brain itself just made via
+        # set_onboarding_task_state. It exists to refresh the render and log the
+        # milestone; the handler suppresses the follow-up run so the brain does
+        # not acknowledge its own tool call in a second turn. The text is only
+        # standing context for a later turn.
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id")
+        step_note = f" Completed step id: `{step_id}`." if step_id else ""
+        return (
+            f"{subtype_hint} {body}{step_note} No action needed now — this "
+            "confirms a step I just marked complete; the live progress block is "
+            "already updated."
+        ).strip()
+
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding step. "
@@ -417,16 +455,6 @@ async def _handle_coordinator_onboarding_event(
                 event.details,
                 origin_event_id=trace.get("event_id", ""),
             )
-        if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
-            # A workspace demo proves out via the assistant's unify_message
-            # summary. There is no paired reply and unify_message is not a
-            # gated channel, so we only arm the pending outbound so the next
-            # unify_message send is tagged and the step auto-completes.
-            trace = getattr(cm, "_current_event_trace", None) or {}
-            cm.set_pending_onboarding_outbound(
-                event.details,
-                origin_event_id=trace.get("event_id", ""),
-            )
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),
@@ -445,5 +473,12 @@ async def _handle_coordinator_onboarding_event(
         # The render refresh + standing notification above are the whole
         # point of this event; a reset must not make the brain spontaneously
         # message the user, so suppress the immediate run.
+        return False
+    if event.subtype == _SUBTYPE_STEP_COMPLETED:
+        # The completion originated from the brain's own set_onboarding_task_state
+        # call, so it already told the user (or will on its current turn). The
+        # event only exists to push the freshly-derived render; triggering a run
+        # here would make the brain acknowledge its own action in a redundant
+        # second turn. Refresh only, no run.
         return False
     return True
