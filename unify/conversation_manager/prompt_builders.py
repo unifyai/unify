@@ -153,7 +153,7 @@ def build_opening_greeting_messages(
 
 
 # Sentinels the small-talk sidecar emits. DEFER -> the slow brain handles the
-# turn; SILENCE -> say nothing at all (a bare acknowledgement needs no reply).
+# turn; SILENCE -> say nothing and skip the slow brain (bare ack needs no reply).
 SMALLTALK_DEFER_SENTINEL = "DEFER"
 SMALLTALK_SILENCE_SENTINEL = "SILENCE"
 
@@ -167,7 +167,6 @@ def build_fast_brain_turn_guidance(
     from unify.conversation_manager.events import (
         FAST_BRAIN_TURN_CONTINUATION,
         FAST_BRAIN_TURN_DEFER,
-        FAST_BRAIN_TURN_SILENCE,
         FAST_BRAIN_TURN_SMALLTALK,
     )
 
@@ -181,12 +180,6 @@ def build_fast_brain_turn_guidance(
             "guide_voice_agent; call wait() unless you have something "
             "additional and substantive beyond what the Voice Agent already "
             "covered.]"
-        )
-    if classification == FAST_BRAIN_TURN_SILENCE:
-        return (
-            "[Voice Agent turn completed. Classification: SILENCE (bare "
-            "acknowledgement). The Voice Agent intentionally said nothing. "
-            "Call wait() unless you have something substantive to add.]"
         )
     if classification == FAST_BRAIN_TURN_CONTINUATION:
         return (
@@ -482,7 +475,7 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes. A `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** or **SILENCE** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
+**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
 
 **Idle small-talk exception.** If absolutely nothing is happening — no in-flight action, no recent assistant comms, and no pending spoken line — the Voice Agent may directly answer a casual "what are you doing?" style question with a playful non-work aside about passing time on the laptop, such as playing Snake, Sudoku, Mario Kart, or Tetris. This is only social banter. If any real work, recent message, call, action, result, or status is involved, I own the answer via `guide_voice_agent`.
 

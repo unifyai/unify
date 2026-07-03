@@ -635,7 +635,10 @@ class Assistant(Agent):
             )
         finally:
             self.user_turn_generating = False
-            if turn_classification is not None:
+            if (
+                turn_classification is not None
+                and turn_classification != FAST_BRAIN_TURN_SILENCE
+            ):
                 await self._finalize_fast_brain_user_turn(
                     turn_id=my_turn,
                     user_content=user_text,
