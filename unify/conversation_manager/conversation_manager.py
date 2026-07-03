@@ -2012,6 +2012,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                pending_onboarding_outbound=self.active_pending_onboarding_outbound(),
             )
         finally:
             # render_state is synchronous, so the transient row is always the
@@ -3034,6 +3035,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "onboarding_learning_phase": phase,
         }
 
+    def active_pending_onboarding_outbound(self) -> dict[str, Any] | None:
+        """Return armed onboarding outbound metadata, or None if unset or expired."""
+        pending = self._pending_onboarding_outbound
+        if not pending:
+            return None
+        if self.loop.time() > float(pending.get("expires_at", 0)):
+            self._pending_onboarding_outbound = None
+            return None
+        return pending
+
     def set_pending_onboarding_outbound(
         self,
         details: dict[str, Any],
@@ -3416,6 +3427,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
+                pending_onboarding_outbound=self.active_pending_onboarding_outbound(),
             )
             brain_spec = build_brain_spec(self, snapshot_state=snapshot_state)
 
