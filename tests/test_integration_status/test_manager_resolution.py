@@ -6,14 +6,20 @@ import pytest
 from unify import integration_status as IS
 
 
-def _pkg(slug: str, label: str, required: list[str], function_names: list[str]) -> dict:
+def _pkg(
+    slug: str,
+    label: str,
+    required: list[str],
+    function_names: list[str],
+    guidance_titles: list[str] | None = None,
+) -> dict:
     return {
         "slug": slug,
         "label": label,
         "required_secrets": required,
         "optional_secrets": [],
         "function_names": function_names,
-        "guidance_titles": [],
+        "guidance_titles": guidance_titles or [],
     }
 
 
@@ -25,6 +31,71 @@ class FakeFunctionManager:
             {"function_id": 101, "name": "disabled_package_func"},
             {"function_id": 102, "name": "another_disabled_func"},
         ]
+
+
+class FakeGuidanceManager:
+    def filter(self, *, filter: str, limit: int):
+        assert "Disabled HubSpot Playbook" in filter
+        assert limit == 10000
+        return [
+            {"guidance_id": 201, "title": "Disabled HubSpot Playbook"},
+            {"guidance_id": 202, "title": "Disabled Salesforce SOP"},
+        ]
+
+
+def test_build_guidance_filter_scope_hides_disabled_package_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unify.integration_status import discovery
+    from unify.manager_registry import ManagerRegistry
+
+    packages = [
+        _pkg(
+            "hubspot",
+            "HubSpot",
+            ["HUBSPOT_TOKEN"],
+            ["enabled_func"],
+            guidance_titles=["Enabled HubSpot Playbook"],
+        ),
+        _pkg(
+            "salesforce",
+            "Salesforce",
+            ["SALESFORCE_TOKEN"],
+            ["disabled_func"],
+            guidance_titles=["Disabled HubSpot Playbook", "Disabled Salesforce SOP"],
+        ),
+    ]
+    monkeypatch.setattr(discovery, "discover_available_packages", lambda: packages)
+    monkeypatch.setattr(
+        IS,
+        "get_enabled_integrations",
+        lambda: {"hubspot": packages[0]},
+    )
+    monkeypatch.setattr(
+        ManagerRegistry,
+        "get_guidance_manager",
+        staticmethod(lambda: FakeGuidanceManager()),
+    )
+
+    assert IS.build_guidance_filter_scope() == "guidance_id not in (201, 202)"
+
+
+def test_build_guidance_filter_scope_preserves_personal_rows_when_no_disabled_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unify.integration_status import discovery
+
+    package = _pkg(
+        "hubspot",
+        "HubSpot",
+        ["HUBSPOT_TOKEN"],
+        ["enabled_func"],
+        guidance_titles=["HubSpot Playbook"],
+    )
+    monkeypatch.setattr(discovery, "discover_available_packages", lambda: [package])
+    monkeypatch.setattr(IS, "get_enabled_integrations", lambda: {"hubspot": package})
+
+    assert IS.build_guidance_filter_scope() is None
 
 
 def test_build_function_filter_scope_hides_disabled_package_functions(
