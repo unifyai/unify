@@ -1268,6 +1268,7 @@ async def log_message(
                     "onboarding_reply_step_id",
                     "onboarding_request_id",
                     "onboarding_origin_event_id",
+                    "onboarding_learning_phase",
                 )
                 if isinstance((value := getattr(event, key, None)), str) and value
             }

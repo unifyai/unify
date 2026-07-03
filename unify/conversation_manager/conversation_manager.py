@@ -443,6 +443,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # injected as call_manager.initial_notification.  Maps contact_id → context.
         self._pending_whatsapp_call_contexts: dict[int, str] = {}
         self._pending_onboarding_outbound: dict[str, Any] | None = None
+        self._active_learning_beat: dict[str, str] | None = None
         self._startup_wake_reasons: list[dict[str, Any]] = []
 
         # Hierarchical session logger for consistent nested logging
@@ -2988,6 +2989,48 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
         self._onboarding_clicked_trigger_steps.clear()
 
+    _LEARNING_BEAT_PHASES = frozenset({"first_attempt", "improved", "replay"})
+
+    def set_active_learning_beat(self, details: dict[str, Any]) -> None:
+        """Remember the active Learning beat so later phase sends can be tagged."""
+        trigger_step_id = details.get("trigger_step_id")
+        channel = details.get("channel")
+        if not isinstance(trigger_step_id, str) or not trigger_step_id.strip():
+            return
+        if not isinstance(channel, str) or not channel.strip():
+            channel = "learning_beat"
+        self._active_learning_beat = {
+            "trigger_step_id": trigger_step_id.strip(),
+            "channel": channel.strip(),
+        }
+
+    def clear_active_learning_beat(self, step_id: str | None = None) -> None:
+        if not self._active_learning_beat:
+            return
+        if step_id and self._active_learning_beat.get("trigger_step_id") != step_id:
+            return
+        self._active_learning_beat = None
+
+    def build_learning_beat_onboarding_kwargs(
+        self,
+        medium: str,
+        *,
+        learning_phase: str,
+    ) -> dict[str, str]:
+        """Tag improved/replay deliverables after the first pending arm is consumed."""
+        ctx = self._active_learning_beat
+        if not ctx or ctx.get("channel") != "learning_beat":
+            return {}
+        if medium != "unify_message":
+            return {}
+        phase = learning_phase.strip() if isinstance(learning_phase, str) else ""
+        if phase not in self._LEARNING_BEAT_PHASES:
+            return {}
+        return {
+            "onboarding_trigger_step_id": ctx["trigger_step_id"],
+            "onboarding_learning_phase": phase,
+        }
+
     def set_pending_onboarding_outbound(
         self,
         details: dict[str, Any],
@@ -3001,7 +3044,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
         if not isinstance(channel, str) or not channel.strip():
             return
-        self._pending_onboarding_outbound = {
+        learning_phase = details.get("onboarding_learning_phase")
+        if channel.strip() == "learning_beat" and not (
+            isinstance(learning_phase, str) and learning_phase.strip()
+        ):
+            learning_phase = "first_attempt"
+        pending: dict[str, Any] = {
             "onboarding_trigger_step_id": trigger_step_id.strip(),
             "onboarding_reply_step_id": (
                 details.get("reply_step_id").strip()
@@ -3014,6 +3062,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "tool_name": tool_name.strip() if isinstance(tool_name, str) else "",
             "expires_at": self.loop.time() + ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS,
         }
+        if isinstance(learning_phase, str) and learning_phase.strip():
+            pending["onboarding_learning_phase"] = learning_phase.strip()
+        self._pending_onboarding_outbound = pending
 
     def set_pending_onboarding_request_id(self, request_id: str) -> None:
         if self._pending_onboarding_outbound:
@@ -3114,6 +3165,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "workspace_mailbox": {"unify_message"},
             "workspace_drive": {"unify_message"},
             "workspace_calendar": {"unify_message"},
+            # Learning-beat deliverables land in coordinator chat.
+            "learning_beat": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None
@@ -3125,6 +3178,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "onboarding_reply_step_id",
                 "onboarding_request_id",
                 "onboarding_origin_event_id",
+                "onboarding_learning_phase",
             )
             if isinstance((value := pending.get(key)), str) and value
         }
