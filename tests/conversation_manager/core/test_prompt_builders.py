@@ -1164,3 +1164,54 @@ class TestOnboardingPromptLeakageGuard:
             or "does not count" in prompt.lower()
         )
         assert "Trigger ... from T-W1N" in prompt
+
+    def test_onboarding_progress_leads_with_whats_next_answer(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [
+                    {
+                        "id": "whatsapp-number",
+                        "title": "Add your WhatsApp number",
+                        "phase": "Communication",
+                        "status": "done",
+                    },
+                    {
+                        "id": "whatsapp-message-reference",
+                        "title": "Trigger WhatsApp message from T-W1N",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "trigger",
+                    },
+                    {
+                        "id": "phone-number",
+                        "title": "Add your phone number",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "setup",
+                    },
+                ],
+                "next_targets": [
+                    {
+                        "id": "whatsapp-message-reference",
+                        "title": "Trigger WhatsApp message from T-W1N",
+                        "nudge_chat": "Click the WhatsApp message row.",
+                    },
+                    {
+                        "id": "phone-number",
+                        "title": "Add your phone number",
+                        "nudge_chat": "Click the phone row.",
+                    },
+                ],
+            },
+        )
+        whats_next_pos = prompt.index("When they ask what to do next")
+        checklist_pos = prompt.index("Full checklist")
+        assert whats_next_pos < checklist_pos
+        assert "Primary answer: Trigger WhatsApp message from T-W1N" in prompt
+        assert "Do NOT volunteer next steps unprompted" in prompt
+        assert "collect all numbers first" in prompt
+        assert "Startable steps right now" in prompt
+        assert "1. Trigger WhatsApp message from T-W1N" in prompt
+        assert "2. Add your phone number" in prompt

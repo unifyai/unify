@@ -1269,18 +1269,9 @@ def _build_coordinator_onboarding_progress_block(
     block instead of inferring "what's next" from the flat checklist and
     the event stream.
 
-    Structure is breadth-then-depth so the prompt stays affordable as the
-    later sections fill in:
-
-    - Breadth: a one-line-per-step overview of the *whole* checklist with
-      each step's live status, so the brain can place any step and answer
-      "what's left?". Grows linearly and cheaply with the step count.
-    - Depth: full detail (description, time estimate, suggestion chips,
-      nudge copy, how-to-advance note) for *only* the currently startable
-      steps (``next_targets``) plus the in-flight ``active_step_id``. This
-      is the set the user can actually pick up now, so it is the set the
-      brain must be ready to discuss in detail; its size is bounded by the
-      frontier, not the total step count.
+    Structure leads with the answer to hold when the user asks what to do
+    next (primary ``next_targets`` entry), then the full startable frontier,
+    then the breadth checklist for orientation.
     """
     if not isinstance(render, dict):
         return ""
@@ -1300,77 +1291,6 @@ def _build_coordinator_onboarding_progress_block(
         if isinstance(phase, dict) and phase.get("phase")
     }
 
-    lines = [
-        "My onboarding progress (live)",
-        "-----------------------------",
-        "This is the authoritative, always-current picture of the user's "
-        "onboarding, computed server-side. I never re-derive what is done "
-        "or what comes next — I read it straight from here. A step's status "
-        "can also revert from done back to available if the user resets it, "
-        "so I never claim a step is done based on my own memory of having "
-        "completed it earlier — only the status shown here counts.",
-        "Each step line includes its ``step_id`` for "
-        "``set_onboarding_task_state(step_id, completed)`` when I need to "
-        "mark non-Communication work complete or undo a manual completion.",
-        "Workspace demo steps (``workspace-mailbox``, ``workspace-drive``, "
-        "``workspace-calendar``) are completed this way, explicitly: they never "
-        "auto-complete, so the checklist does not detect the work on its own. I "
-        "do the demo task — read the relevant area and deliver one short summary "
-        "as a single ``unify_message`` — and then call "
-        "``set_onboarding_task_state(step_id, completed=True)``; the demo is not "
-        "finished until I make that call. Any reply, tidy-up, or flag I offer "
-        "afterwards is an optional follow-up and never gates completion.",
-        "While the user is on an onboarding checklist step or asking where to "
-        "click in the onboarding UI, I answer from this block and the "
-        "onboarding UI reference — I do not dispatch ``act`` just to orient "
-        "them. Once they move into real work on an external resource "
-        "(connecting an app, validating live data, running a task), I use "
-        "``act`` as usual.",
-    ]
-
-    # Breadth: the whole checklist, one line per step, grouped by section.
-    # render.steps is already in graph order (phase-major), so emitting a
-    # section header whenever the phase changes preserves the canonical order.
-    overview_lines: list[str] = []
-    current_phase: Any = object()
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        phase_label = step.get("phase")
-        if phase_label != current_phase:
-            current_phase = phase_label
-            header = phase_title_by_label.get(phase_label, phase_label) or "Other"
-            overview_lines.append(f"  {header}:")
-        marker = _ONBOARDING_STATUS_MARKERS.get(
-            step.get("status"),
-            step.get("status") or "pending",
-        )
-        title = step.get("title") or step.get("id") or "step"
-        step_id = step.get("id")
-        if isinstance(step_id, str) and step_id:
-            overview_lines.append(
-                f"    - [{marker}] {title} (step_id: {step_id})",
-            )
-        else:
-            overview_lines.append(f"    - [{marker}] {title}")
-    if overview_lines:
-        lines.append("Full checklist (every step, with its live status):")
-        lines.extend(overview_lines)
-
-    phase_framing_lines = []
-    for phase in phases:
-        if not isinstance(phase, dict):
-            continue
-        title = phase.get("title") or phase.get("phase")
-        framing = phase.get("framing")
-        if isinstance(title, str) and isinstance(framing, str) and framing.strip():
-            phase_framing_lines.append(f"  - {title}: {framing}")
-    if phase_framing_lines:
-        lines.append("Section framing supplied by Orchestra:")
-        lines.extend(phase_framing_lines)
-
-    # Depth: rich detail for the startable frontier only. The brain must be
-    # ready to answer specific questions about any of these.
     def _detail_lines(step_id: str, nudge: str = "") -> list[str]:
         step = step_by_id.get(step_id)
         detail: list[str] = []
@@ -1401,49 +1321,58 @@ def _build_coordinator_onboarding_progress_block(
             detail.append(f"      Suggestion chips the user sees: {chips}")
         return detail
 
+    lines = [
+        "My onboarding progress (live)",
+        "-----------------------------",
+        "Authoritative server-side picture of onboarding — I never re-derive "
+        "order or completion from memory or the transcript. Only statuses "
+        "shown here count.",
+    ]
+
     if next_targets:
         primary = next_targets[0] if isinstance(next_targets[0], dict) else {}
         primary_id = primary.get("id") or ""
         primary_title = primary.get("title") or primary_id or "next step"
-        lines.append(
-            f"Current default onboarding action: {primary_title}. This is the "
-            "step I should name first when the user asks what to do next, and "
-            "a recommendation first: explain why it is next, then ask whether "
-            "they want to start it — which means clicking its row in the "
-            "Onboarding checklist (for communication triggers, the click is "
-            "required before I can send; a verbal 'go ahead' does not count). "
-            "A question like 'what should I do?' or 'what is onboarding?' is not "
-            "permission to send a message, start a call, or change state.",
+        lines.extend(
+            [
+                "",
+                "When they ask what to do next",
+                "('what's next?', 'what should I do?', 'where do I click?', etc.):",
+                f"  Primary answer: {primary_title}"
+                + (f" (step_id: {primary_id})" if primary_id else ""),
+            ],
         )
-        lines.append(
-            "During active onboarding, my first user-facing instruction for a "
-            "startable checklist step is to click that step's row in the "
-            "Onboarding checklist. I do not skip straight to Account, "
-            "Integrations, Tasks, OAuth, or Contact Manager unless the user is "
-            "already there or explicitly asks for an alternate route.",
+        lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
+        lines.extend(
+            [
+                "  - Give THIS step when they ask — one or two plain sentences, "
+                "pointing to its row in the Onboarding checklist. For "
+                "communication triggers, the click on that row is required "
+                "before I can send; a verbal 'go ahead' does not count.",
+                "  - Do NOT volunteer next steps unprompted. They may explore "
+                "any checklist section or choose another valid step below if "
+                "they prefer — I follow their lead unless they ask me to pick.",
+                "  - Never invent a step that is not listed under 'Startable "
+                "steps' below. Never skip to a parallel contact-setup row "
+                "(e.g. phone number) when the primary is a communication "
+                "trigger on another channel — several setup rows can show "
+                "[available] at once, but priority order here is what 'next' "
+                "means, not 'collect all numbers first'.",
+            ],
         )
         primary_step = step_by_id.get(primary_id)
         if isinstance(primary_step, dict) and primary_step.get("kind") == "trigger":
             lines.append(
-                "For this communication trigger (and every reference-quiz channel "
-                "— email, SMS, WhatsApp message, phone call, WhatsApp call, etc.), "
-                'the user must click the matching "Trigger ... from T-W1N" row '
-                "in the Onboarding checklist before I can send — my outbound tool "
-                'stays unavailable until that click, and a verbal ask or "go ahead" '
-                "on a call does not substitute for it. After they click, I send my "
-                "sci-fi quote clue once; user-facing setup is one plain sentence (no "
-                "genre lists). If I have already sent the clue on this channel, the "
-                "click is just a poll and I confirm rather than duplicate. The "
-                "checklist turns it done only after the backend detects my outbound "
-                "transcript row; I must not call it complete early.",
+                "  - This primary is a reference-quiz trigger: after they click "
+                'the "Trigger ... from T-W1N" row I send the clue once on that '
+                "channel; I do not mark it done until my outbound appears in the "
+                "transcript.",
             )
-        lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
+        lines.append("")
         lines.append(
-            "Valid next steps right now (priority-ordered — the first is my "
-            'default when the user just asks "what should I do now?"; I pick a '
-            "lower one only when the live channel or conversation makes it "
-            "clearly more natural, and I never push a step that isn't listed "
-            "here):",
+            "Startable steps right now (priority-ordered — #1 is the primary "
+            "answer above; I only suggest a lower number when the live channel "
+            "or conversation clearly makes it more natural):",
         )
         for index, target in enumerate(next_targets, start=1):
             if not isinstance(target, dict):
@@ -1453,14 +1382,15 @@ def _build_coordinator_onboarding_progress_block(
             lines.append(f"  {index}. {title}")
             lines.extend(_detail_lines(target_id, target.get("nudge_chat") or ""))
     else:
-        lines.append(
-            "No onboarding steps are available right now — if everything is "
-            "done, congratulate the user and stand down; otherwise just help "
-            "with whatever they ask.",
+        lines.extend(
+            [
+                "",
+                "When they ask what to do next: no steps are startable right "
+                "now — if everything is done, congratulate them; otherwise help "
+                "with whatever they ask.",
+            ],
         )
 
-    # The in-flight step the user clicked/resumed may not be a fresh next
-    # target; surface its detail too so the brain can guide it.
     if (
         isinstance(active_step_id, str)
         and active_step_id
@@ -1471,8 +1401,76 @@ def _build_coordinator_onboarding_progress_block(
         active_title = (
             active_step.get("title") if isinstance(active_step, dict) else None
         ) or active_step_id
+        lines.append("")
         lines.append(f"In-flight step the user is on right now: {active_title}.")
         lines.extend(_detail_lines(active_step_id))
+
+    overview_lines: list[str] = []
+    current_phase: Any = object()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        phase_label = step.get("phase")
+        if phase_label != current_phase:
+            current_phase = phase_label
+            header = phase_title_by_label.get(phase_label, phase_label) or "Other"
+            overview_lines.append(f"  {header}:")
+        marker = _ONBOARDING_STATUS_MARKERS.get(
+            step.get("status"),
+            step.get("status") or "pending",
+        )
+        title = step.get("title") or step.get("id") or "step"
+        step_id = step.get("id")
+        if isinstance(step_id, str) and step_id:
+            overview_lines.append(
+                f"    - [{marker}] {title} (step_id: {step_id})",
+            )
+        else:
+            overview_lines.append(f"    - [{marker}] {title}")
+    if overview_lines:
+        lines.append("")
+        lines.append("Full checklist (every step, with its live status):")
+        lines.extend(overview_lines)
+
+    phase_framing_lines = []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = phase.get("title") or phase.get("phase")
+        framing = phase.get("framing")
+        if isinstance(title, str) and isinstance(framing, str) and framing.strip():
+            phase_framing_lines.append(f"  - {title}: {framing}")
+    if phase_framing_lines:
+        lines.append("Section framing supplied by Orchestra:")
+        lines.extend(phase_framing_lines)
+
+    lines.extend(
+        [
+            "",
+            "Each step line includes its ``step_id`` for "
+            "``set_onboarding_task_state(step_id, completed)`` when I need to "
+            "mark non-Communication work complete or undo a manual completion.",
+            "Workspace demo steps (``workspace-mailbox``, ``workspace-drive``, "
+            "``workspace-calendar``) are completed this way, explicitly: they never "
+            "auto-complete, so the checklist does not detect the work on its own. I "
+            "do the demo task — read the relevant area and deliver one short summary "
+            "as a single ``unify_message`` — and then call "
+            "``set_onboarding_task_state(step_id, completed=True)``; the demo is not "
+            "finished until I make that call. Any reply, tidy-up, or flag I offer "
+            "afterwards is an optional follow-up and never gates completion.",
+            "While the user is on an onboarding checklist step or asking where to "
+            "click in the onboarding UI, I answer from this block and the "
+            "onboarding UI reference — I do not dispatch ``act`` just to orient "
+            "them. Once they move into real work on an external resource "
+            "(connecting an app, validating live data, running a task), I use "
+            "``act`` as usual.",
+            "During active onboarding, my user-facing instruction for a startable "
+            "checklist step is to click that step's row in the Onboarding "
+            "checklist. I do not skip straight to Account, Integrations, Tasks, "
+            "OAuth, or Contact Manager unless the user is already there or "
+            "explicitly asks for an alternate route.",
+        ],
+    )
 
     return "\n".join(lines)
 
