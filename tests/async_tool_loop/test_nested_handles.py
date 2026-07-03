@@ -1430,7 +1430,11 @@ async def test_outer_stop_calls_inner_stop_on_cancel(llm_config):
         return inner_handle
 
     client = new_llm_client(**llm_config)
-    client.set_system_message("Call outer_tool then wait.")
+    client.set_system_message(
+        "You are running inside an automated test.\n"
+        "1️⃣  Call `outer_tool` with no arguments.\n"
+        "2️⃣  Wait for it to complete or be stopped.",
+    )
 
     handle = start_async_tool_loop(
         client,
