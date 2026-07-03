@@ -782,7 +782,7 @@ class TestVoiceUtteranceHandlers:
 
         with patch.object(
             initialized_cm.cm,
-            "interject_or_run",
+            "handle_voice_user_turn",
             new_callable=AsyncMock,
         ) as mock_interject:
             utterance_event = InboundPhoneUtterance(

@@ -50,10 +50,11 @@ verify the fix for this issue.
 
 Known Issue (rapid utterance cancellation):
 -------------------------------------------
-When user turns occur faster than the slow brain can think, every new utterance
-cancels the in-flight LLM run (because interject_or_run uses cancel_running=True).
-This means the slow brain NEVER completes thinking if the user keeps talking.
-Tests in this file document and verify the fix for this issue.
+When user turns occur faster than the slow brain can think, cancelling the
+running slow-brain head on each new utterance prevents any run from completing.
+Voice user turns must use queue-of-2 debouncing (``cancel_running=False`` via
+``handle_voice_user_turn``). Tests in this file document and verify that
+behavior.
 
 Known Issue (stale guidance after topic change):
 ------------------------------------------------
@@ -421,7 +422,7 @@ class TestRapidUtteranceHandling:
     thinking, which breaks any functionality that depends on slow brain output
     (action completion, cross-channel notifications, etc.).
 
-    The bug: interject_or_run() uses cancel_running=True, which cancels
+    The bug: cancel_running=True on voice user turns cancels
     even the in-flight LLM call. With rapid utterances, none ever complete.
     """
 
@@ -442,16 +443,16 @@ class TestRapidUtteranceHandling:
         - User is on a voice call
         - User speaks rapidly (multiple utterances while LLM is thinking)
         - LLM takes ~10-15 seconds per thinking step (realistic timing)
-        - Each utterance triggers the slow brain via interject_or_run()
+        - Each utterance triggers the slow brain via handle_voice_user_turn()
 
         THE BUG (without fix):
-        - interject_or_run uses cancel_running=True for all modes
+        - handle_voice_user_turn uses cancel_running=False (queue of 2)
         - Each new utterance CANCELS the in-flight LLM run
         - With rapid speech, NO LLM runs ever complete
         - The slow brain becomes completely non-functional
 
         THE FIX:
-        - interject_or_run uses cancel_running=False for voice mode
+        - handle_voice_user_turn always uses cancel_running=False
         - Debouncer uses asyncio.shield() to protect running tasks
         - Running LLM completes, only pending tasks are debounced
         - "Queue of 2" behavior: 1 running + 1 pending
@@ -529,7 +530,7 @@ class TestRapidUtteranceHandling:
             for i, text in enumerate(utterances):
                 event = InboundPhoneUtterance(contact=boss_contact, content=text)
 
-                # Handle the event (triggers interject_or_run -> request_llm_run)
+                # Handle the event (triggers handle_voice_user_turn -> request_llm_run)
                 await EventHandler.handle_event(
                     event,
                     cm,
@@ -605,7 +606,7 @@ class TestRapidUtteranceHandling:
                 f"LLM tasks instead of just debouncing pending tasks.\n"
                 f"\n"
                 f"Required fixes:\n"
-                f"1. interject_or_run must use cancel_running=False for voice mode\n"
+                f"1. handle_voice_user_turn must use cancel_running=False\n"
                 f"2. Debouncer must use asyncio.shield() to protect running tasks"
             )
 

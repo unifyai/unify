@@ -204,7 +204,7 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.request_llm_run = AsyncMock()
     cm.cancel_proactive_speech = AsyncMock()
     cm.schedule_proactive_speech = AsyncMock()
-    cm.interject_or_run = AsyncMock()
+    cm.handle_voice_user_turn = AsyncMock()
     cm.get_active_contact = MagicMock(return_value=sample_contacts[1])
 
     return cm
@@ -1207,7 +1207,10 @@ class TestVoiceUtteranceHandlers:
         mock_cm.schedule_proactive_speech.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inbound_utterance_does_not_trigger_interject_or_run(self, mock_cm):
+    async def test_inbound_utterance_does_not_trigger_voice_user_turn_handler(
+        self,
+        mock_cm,
+    ):
         """Inbound utterances are logged; slow brain runs after fast brain completes."""
         event = InboundPhoneUtterance(
             contact={"contact_id": 2},
@@ -1221,10 +1224,13 @@ class TestVoiceUtteranceHandlers:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.handle_voice_user_turn.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fast_brain_turn_completed_triggers_interject_or_run(self, mock_cm):
+    async def test_fast_brain_turn_completed_triggers_voice_user_turn_handler(
+        self,
+        mock_cm,
+    ):
         """Slow brain runs after the Voice Agent finishes a user turn."""
         from unify.conversation_manager.events import (
             FAST_BRAIN_TURN_SMALLTALK,
@@ -1241,7 +1247,7 @@ class TestVoiceUtteranceHandlers:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_called_once_with(
+        mock_cm.handle_voice_user_turn.assert_called_once_with(
             "How are you?",
             triggering_contact_id=2,
             turn_id=7,
@@ -1370,7 +1376,7 @@ class TestVoiceUtteranceHandlers:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.handle_voice_user_turn.assert_not_called()
         msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
         assert len(msgs) == 0
 
@@ -1391,7 +1397,7 @@ class TestVoiceUtteranceHandlers:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.handle_voice_user_turn.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(
@@ -1418,7 +1424,7 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 1
         assert msgs[0].role == "assistant"
         assert msgs[0].content == "I just gave the onboarding intro."
-        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.handle_voice_user_turn.assert_not_called()
         mock_cm.request_llm_run.assert_not_called()
         mock_cm.schedule_proactive_speech.assert_not_called()
         mock_socket.queue_for_clients.assert_called_once()

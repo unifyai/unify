@@ -1286,7 +1286,7 @@ async def _(
     if not user_content:
         return
 
-    await cm.interject_or_run(
+    await cm.handle_voice_user_turn(
         user_content,
         triggering_contact_id=contact_id,
         turn_id=event.turn_id,

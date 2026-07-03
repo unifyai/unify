@@ -676,7 +676,7 @@ async def test_ask_path2_asks_when_ambiguous(initialized_cm):
 @_handle_project
 async def test_ask_path2_routes_user_input_via_active_ask_handle(initialized_cm):
     """
-    PATH 2: User input is routed to active_ask_handle via interject_or_run.
+    PATH 2: User input is routed to active_ask_handle via handle_voice_user_turn.
 
     When active_ask_handle is set, user utterances should be routed to it
     instead of triggering the Main CM Brain.
@@ -705,7 +705,7 @@ async def test_ask_path2_routes_user_input_via_active_ask_handle(initialized_cm)
     assert cm.cm.active_ask_handle is ask_handle
 
     # Simulate user input - should route to ask_handle
-    await cm.cm.interject_or_run("My favorite color is blue")
+    await cm.cm.handle_voice_user_turn("My favorite color is blue")
 
     # Result should now be available
     result = await asyncio.wait_for(ask_handle.result(), timeout=30)

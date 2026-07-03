@@ -70,13 +70,13 @@ tests/parallel_run.sh tests/conversation_manager/
 The central orchestrator that:
 - Maintains live conversation state (`ContactIndex`, `NotificationBar`)
 - Runs the "Main CM Brain" async tool loop to decide responses and actions
-- Routes user input to either the Main Brain or active nested handles
+- Routes voice user turns to the active `ask` handle or slow brain; text/comms events call `request_llm_run()` directly
 - Manages voice call lifecycle via `CallManager`
 
 Key methods:
 - `wait_for_events()` — Main event loop, subscribes to event broker channels
 - `run_llm()` — Triggers the Main CM Brain to process state and generate responses
-- `interject_or_run(content)` — Routes user input to active `ask` handle or Main Brain
+- `handle_voice_user_turn(content)` — After a voice user turn completes, routes to active `ask` handle or enqueues slow brain (queue-of-2, never cancels running head)
 
 ### `ConversationManagerHandle` (`handle.py`)
 
@@ -141,7 +141,7 @@ When the Actor or another manager needs to ask the user a question:
 │  │      → Call ask_question(text) tool                                 │  │
 │  │      → Publishes DirectMessageEvent → voice speaks question         │  │
 │  │      → Blocks waiting for user_reply_future                         │  │
-│  │      → User reply routes via cm.interject_or_run()                  │  │
+│  │      → User reply routes via cm.handle_voice_user_turn()            │  │
 │  │      → Future resolves, tool returns "User replied: ..."            │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────┘

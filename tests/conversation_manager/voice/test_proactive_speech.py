@@ -691,7 +691,7 @@ class TestEventHandlerProactiveSpeechIntegration:
         from unify.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
-        mock_cm.interject_or_run = AsyncMock()
+        mock_cm.handle_voice_user_turn = AsyncMock()
 
         event = InboundPhoneUtterance(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
@@ -968,7 +968,7 @@ class TestProactiveSpeechBlindSpots:
         from unify.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
-        mock_cm.interject_or_run = AsyncMock()
+        mock_cm.handle_voice_user_turn = AsyncMock()
 
         event = InboundUnifyMeetUtterance(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
