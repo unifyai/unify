@@ -3398,9 +3398,9 @@ class TestFastBrainSmalltalk:
 class TestOutboundOpenerTrigger:
     """The outbound opener is held until the callee finishes their first turn.
 
-    That turn is persisted as an inbound utterance for the transcript. Slow-brain
-    scheduling stays off: llm_node emits nothing while _opening_pending, so no
-    FastBrainTurnCompleted is published for it.
+    A minimal "Hello" seed is spoken before that turn so a substantive first
+    turn can defer the held opener through the standard continuation path.
+    Short first turns still play the opener immediately after the turn completes.
     """
 
     def _assistant(self, boss_contact, *, outbound: bool):
@@ -3425,6 +3425,7 @@ class TestOutboundOpenerTrigger:
 
         await a.on_user_turn_completed(None, SimpleNamespace(text_content="Hello?"))
         assert a._first_user_turn.is_set()
+        assert a._first_turn_duration_s == 0.0
 
     @pytest.mark.asyncio
     async def test_first_user_turn_not_signalled_when_not_pending(self, boss_contact):
@@ -3444,3 +3445,20 @@ class TestOutboundOpenerTrigger:
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
         # The opener is the reply to the triggering turn; no filler is emitted.
         assert chunks == []
+
+
+class TestDeferredOutboundOpenerContinuation:
+    def test_builds_standard_continuation_candidate(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            OUTBOUND_OPENING_SEED_PREFIX,
+            build_deferred_outbound_opener_continuation,
+        )
+
+        pending = build_deferred_outbound_opener_continuation(
+            "I'm calling about your appointment tomorrow.",
+        )
+        assert pending["spoken_prefix"] == OUTBOUND_OPENING_SEED_PREFIX
+        assert pending["remainder"] == "I'm calling about your appointment tomorrow."
+        assert pending["resume_text"] == pending["remainder"]
+        assert pending["source"] == "opening"
+        assert pending["consumed"] is False

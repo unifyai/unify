@@ -4,6 +4,7 @@ import json
 import queue
 import asyncio
 import threading
+import time
 from dataclasses import dataclass
 from importlib import resources
 
@@ -335,6 +336,8 @@ class Assistant(Agent):
         # suppressed for it. Cleared once the opener has been dispatched.
         self._opening_pending = outbound
         self._first_user_turn = asyncio.Event()
+        self._first_turn_speaking_started_at: float | None = None
+        self._first_turn_duration_s: float | None = None
         # Optional short note the slow brain bundles with a spoken line for the
         # fast brain to use on the caller's next message (e.g. confirm a fact).
         # Replaced/cleared on each slow-brain spoken turn; never spoken aloud.
@@ -458,6 +461,8 @@ class Assistant(Agent):
         # held opener (the opener answers it). Signalling on turn-completed means
         # we respond after their "Hello?", never over it.
         if self._opening_pending and not self._first_user_turn.is_set():
+            if self._first_turn_duration_s is None:
+                self._first_turn_duration_s = 0.0
             self._first_user_turn.set()
         if self._pending_opening_bridge is not None:
             schedule_bridge = self._pending_opening_bridge
@@ -851,6 +856,36 @@ _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 # their speech ensures the opener lands when they are actually listening, instead
 # of into dead air right after the line connects.
 OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
+
+# Minimal assistant prefix spoken before the callee's first turn on outbound calls.
+# Establishes a spoken prefix so a substantive first turn can defer the held opener
+# through the standard continuation path (Hello + unheard briefing tail).
+OUTBOUND_OPENING_SEED_PREFIX = "Hello"
+
+# Callee first-turn speaking duration at or above this threshold is treated as
+# substantive: the held opener is stashed as an unheard continuation tail instead
+# of playing immediately as though they had only said hello.
+OUTBOUND_OPENING_LONG_TURN_THRESHOLD_S = 5.0
+
+
+def build_deferred_outbound_opener_continuation(
+    opener_text: str,
+    *,
+    seed: str = OUTBOUND_OPENING_SEED_PREFIX,
+) -> dict:
+    """Build a continuation candidate for a held opener after a long first turn."""
+    full = f"{seed} {opener_text}".strip()
+    spoken = seed.strip()
+    remainder = opener_text.strip()
+    resume_text = compute_resume_text(full, spoken) or remainder
+    return {
+        "resume_text": resume_text,
+        "remainder": remainder,
+        "spoken_prefix": spoken,
+        "source": "opening",
+        "consumed": False,
+    }
+
 
 # Ceiling on a fast-brain small-talk reply. A social / biographical / self-context
 # answer is a sentence or two; anything longer means the model overreached into a
@@ -1711,6 +1746,13 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:  # noqa: BLE001
             _log.llm_error(str(exc))
 
+    def _say_opening_seed(text: str = OUTBOUND_OPENING_SEED_PREFIX) -> None:
+        session.say(
+            text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+
     def _say_opening(text: str) -> None:
         speech_handle = session.say(
             text,
@@ -2402,6 +2444,20 @@ async def entrypoint(ctx: agents.JobContext):
             print(f"[llm_node] screenshot capture error (non-fatal): {e}")
 
     assistant._capture_screenshots_for_llm = _capture_screenshots_for_llm
+
+    @session.on("user_state_changed")
+    def _on_outbound_first_turn_speaking_duration(ev) -> None:
+        if not outbound or not assistant._opening_pending:
+            return
+        if assistant._first_user_turn.is_set():
+            return
+        if ev.new_state == "speaking":
+            if assistant._first_turn_speaking_started_at is None:
+                assistant._first_turn_speaking_started_at = time.monotonic()
+        elif assistant._first_turn_speaking_started_at is not None:
+            assistant._first_turn_duration_s = (
+                time.monotonic() - assistant._first_turn_speaking_started_at
+            )
 
     rio = RoomInputOptions(
         noise_cancellation=(
@@ -3235,6 +3291,10 @@ async def entrypoint(ctx: agents.JobContext):
     speech_gate_open = True
 
     if outbound:
+        # Seed a minimal assistant prefix before the callee speaks so a
+        # substantive first turn can route the held opener through the standard
+        # continuation machinery (spoken "Hello" + unheard briefing tail).
+        _say_opening_seed()
         # Hold the opener until the callee's first completed utterance (their
         # "Hello?") or a fallback timeout — so it lands when they are actually
         # listening, not into dead air right after the line connects. The first
@@ -3258,7 +3318,53 @@ async def entrypoint(ctx: agents.JobContext):
         _log.llm_error(f"opening preload failed: {exc}")
         prepared_mode, prepared_payload = "speak", "Hello — I'm here."
 
-    if prepared_mode == "speak":
+    defer_opener_to_continuation = (
+        outbound
+        and assistant._first_user_turn.is_set()
+        and (assistant._first_turn_duration_s or 0.0)
+        >= OUTBOUND_OPENING_LONG_TURN_THRESHOLD_S
+    )
+
+    def _outbound_opener_text() -> str:
+        if prepared_mode == "speak":
+            return str(prepared_payload or "Hello — I'm here.").strip()
+        if prepared_mode == "simulated":
+            return str(prepared_payload or "").strip()
+        if prepared_mode == "recorded":
+            payload = prepared_payload or opening_config
+            if isinstance(payload, dict) and "config" in payload:
+                recorded_config = payload["config"]
+            else:
+                recorded_config = payload
+            return _recorded_opening_transcript(recorded_config).strip()
+        return ""
+
+    if defer_opener_to_continuation:
+        opener_text = _outbound_opener_text()
+        await _publish_ready_to_speak()
+        assistant._opening_pending = False
+        if opener_text:
+            pending = build_deferred_outbound_opener_continuation(opener_text)
+            pending["seq"] = assistant._tts_seq
+            assistant._pending_continuation = pending
+            _log.info(
+                "Outbound opener deferred to continuation after substantive "
+                f"first turn ({assistant._first_turn_duration_s:.1f}s)",
+            )
+            trigger_generate_reply(
+                reason="outbound_long_first_turn",
+                source_id="deferred_opener",
+            )
+        else:
+            _log.info(
+                "Outbound substantive first turn with no opener text; resuming "
+                "normal fast-brain handling",
+            )
+            trigger_generate_reply(
+                reason="outbound_long_first_turn",
+                source_id="deferred_opener",
+            )
+    elif prepared_mode == "speak":
         await _publish_ready_to_speak()
         _say_opening(str(prepared_payload or "Hello — I'm here."))
     elif prepared_mode == "recorded":
@@ -3292,8 +3398,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     _schedule_deferred_desktop_binding()
 
-    # The opener has been dispatched; resume normal turn handling (fast-brain
-    # fillers and slow-brain turns) for any subsequent user speech.
+    # The opener has been dispatched or deferred; resume normal turn handling
+    # (fast-brain fillers and slow-brain turns) for any subsequent user speech.
     assistant._opening_pending = False
 
     if pending_notifications:
