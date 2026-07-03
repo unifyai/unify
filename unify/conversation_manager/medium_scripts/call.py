@@ -794,6 +794,8 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         parts = meta["assistant_name"].split(None, 1)
         SESSION_DETAILS.assistant.first_name = parts[0] if parts else ""
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
+    if meta.get("unify_key"):
+        SESSION_DETAILS.unify_key = str(meta["unify_key"])
 
 
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
