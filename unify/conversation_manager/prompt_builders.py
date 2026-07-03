@@ -12,6 +12,7 @@ from unify.common import console_ui
 from unify.common.accessible_teams_block import build_accessible_teams_block
 from unify.conversation_manager.domains.learning_expenses_fixtures import (
     learning_expenses_scenario_prompt_lines,
+    learning_expenses_storage_check_nudge,
 )
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -1199,14 +1200,17 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  4. Surface my own mistake with the real numbers, suggest the exact "
             "correction text for the user to send, and WAIT — never send the "
             "correction or proceed on their behalf.",
-            "  5. After the user's correction, act(persist=True) to recompute with "
-            "the corrected algorithm and tag the improved deliverable with "
-            "onboarding_learning_phase=`improved`. Do not store Guidance or "
-            "Functions inside the act — StorageCheck runs after completion and "
-            "persists them from the trajectory; once the act finishes, tell the "
-            "user to open the Brain rail **Guidance** and **Functions** sections "
-            "and point at what StorageCheck stored — I have no tool to navigate "
-            "the Console for them (not a generic Memory tab).",
+            "  5. After the user's correction, interject_* into the running "
+            "persist act (do not start a new act) with the corrected algorithm "
+            "from scenario context and include this StorageCheck memoization "
+            f"request verbatim: {learning_expenses_storage_check_nudge()} "
+            "Then tag the improved deliverable with "
+            "onboarding_learning_phase=`improved`. The doing loop must not call "
+            "GuidanceManager or FunctionManager store tools — StorageCheck runs "
+            "after completion; once the act finishes, tell the user to open the "
+            "Brain rail **Guidance** and **Functions** sections and point at what "
+            "StorageCheck stored — I have no tool to navigate the Console for "
+            "them (not a generic Memory tab).",
             "  6. Invite the user to ask for next month's report and WAIT; the "
             "replay only runs once they ask.",
             "  7. Replay via a second act(persist=True) over the month-N+1 files "
