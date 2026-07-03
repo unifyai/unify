@@ -281,7 +281,7 @@ class TestUnifyMeetUtteranceHandling:
 
     Utterances should be:
     1. Pushed to the correct thread (UNIFY_MEET, not PHONE_CALL)
-    2. Trigger interject_or_run for inbound utterances
+    2. Wake the slow brain only after FastBrainTurnCompleted (not on raw inbound utterance)
     3. Be logged via transcript manager
     """
 
@@ -360,7 +360,7 @@ class TestUnifyMeetUtteranceHandling:
 
         with patch.object(
             initialized_cm.cm,
-            "interject_or_run",
+            "handle_voice_user_turn",
             new_callable=AsyncMock,
         ) as mock_interject:
             utterance = InboundUnifyMeetUtterance(

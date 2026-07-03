@@ -2378,7 +2378,7 @@ async def entrypoint(ctx: agents.JobContext):
             # Opener-pending turns are still published for the durable transcript.
             # Slow-brain scheduling is gated separately: llm_node returns before
             # classification while _opening_pending, so no FastBrainTurnCompleted
-            # is emitted and the utterance handler never calls interject_or_run.
+            # is emitted and the utterance handler never calls handle_voice_user_turn.
             asyncio.create_task(
                 _publish_user_utterance(text),
             )

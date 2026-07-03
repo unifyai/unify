@@ -1145,14 +1145,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         except Exception:
             return messages
 
-    _USER_ORIGIN_EVENTS = frozenset(
-        {
-            "InboundPhoneUtterance",
-            "InboundUnifyMeetUtterance",
-            "InboundWhatsAppCallUtterance",
-        },
-    )
-
     async def cancel_slow_brain_run(self, turn_id) -> None:
         """Cancel exactly the slow-brain run spawned by ``turn_id``.
 
@@ -1163,64 +1155,41 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         await self.debouncer.cancel_run_by_turn(turn_id)
 
-    async def interject_or_run(
+    async def handle_voice_user_turn(
         self,
         content: str,
         triggering_contact_id: int | None = None,
         turn_id: int | None = None,
     ):
-        """Interject the ask handle or run the LLM"""
+        """Route a completed voice user turn to the active ask handle or slow brain."""
         prev_utterance = getattr(self, "_last_inbound_utterance", None)
         self._last_inbound_utterance = content
 
         if self.active_ask_handle and not self.active_ask_handle.done():
             await self.active_ask_handle.interject(content)
-        else:
-            if self.mode.is_voice:
-                running_origin = self.debouncer.running_task_trace_meta.get(
-                    "origin_event_name",
-                    "",
-                )
-                running_is_known_non_user = (
-                    running_origin != ""
-                    and running_origin not in self._USER_ORIGIN_EVENTS
-                )
-                has_running = (
-                    self.debouncer.running_task is not None
-                    and not self.debouncer.running_task.done()
-                )
-                # Deterministically preempt non-user slow-brain runs.
-                # Only cancel when the running task is *known* to be a
-                # non-user event. Unknown origin (empty) defaults to the
-                # safe queue-of-2 behavior.
-                cancel_running = has_running and running_is_known_non_user
-            else:
-                # Text mode: rapid messages should get fresh responses.
-                cancel_running = True
+            return
 
-            await self.request_llm_run(
-                delay=0,
-                cancel_running=cancel_running,
-                triggering_contact_id=triggering_contact_id,
-                is_user_origin=True,
-                turn_id=turn_id,
+        await self.request_llm_run(
+            delay=0,
+            cancel_running=False,
+            triggering_contact_id=triggering_contact_id,
+            is_user_origin=True,
+            turn_id=turn_id,
+        )
+
+        if (
+            SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
+            and self.debouncer.running_task
+            and not self.debouncer.running_task.done()
+        ):
+            stale_task = self.debouncer.running_task
+            asyncio.create_task(
+                self._evaluate_speech_urgency(
+                    content,
+                    stale_task,
+                    prev_utterance,
+                ),
             )
-
-            if (
-                self.mode.is_voice
-                and not cancel_running
-                and SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
-                and self.debouncer.running_task
-                and not self.debouncer.running_task.done()
-            ):
-                stale_task = self.debouncer.running_task
-                asyncio.create_task(
-                    self._evaluate_speech_urgency(
-                        content,
-                        stale_task,
-                        prev_utterance,
-                    ),
-                )
 
     async def _evaluate_speech_urgency(
         self,
