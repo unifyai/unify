@@ -12,6 +12,7 @@ monkeypatch it to return a dummy handle for routing verification.
 """
 
 import functools
+import re
 
 import pytest
 
@@ -19,6 +20,7 @@ from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
     assert_efficient,
+    normalize_identifier_tokens,
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
@@ -42,6 +44,10 @@ def _assert_contact_update_triggered(
     """Assert ``update_contacts`` was called with no preemptive
     ``ask_about_contacts``, and each expected substring appears in
     the query text OR in the ``response_format`` keys.
+
+    Text matching is case-insensitive and treats spaces and underscores
+    as equivalent. Phone-style substrings still match across formatting
+    variants via digit-only fallback.
     """
     events = filter_events_by_type(result.output_events, ActorHandleStarted)
     contact_events = [e for e in events if e.action_name == "update_contacts"]
@@ -58,25 +64,20 @@ def _assert_contact_update_triggered(
     )
 
     evt = contact_events[0]
-    query = evt.query.lower()
-    rf_keys = " ".join((evt.response_format or {}).keys()).lower()
-    searchable = f"{query} {rf_keys}"
+    query = evt.query
+    rf_keys = " ".join((evt.response_format or {}).keys())
+    searchable = normalize_identifier_tokens(f"{query} {rf_keys}")
     # Also build a digits-only view so phone-number substrings like
     # "8005551234" match even when the LLM produces "800-555-1234",
     # "(800) 555-1234", or "+1 800 555 1234" — semantic equivalence
     # without forcing the test to enumerate every formatting variant.
-    import re as _re
-
-    searchable_digits = _re.sub(r"\D", "", searchable)
+    searchable_digits = re.sub(r"\D", "", searchable)
     for substr in expected_substrings:
-        sl = substr.lower()
-        substr_digits = _re.sub(r"\D", "", sl)
-        # Match either as a literal substring (text) or as a digit-only
-        # substring (phone numbers, account numbers, etc.) — at least
-        # one form must hit. We require >= 4 digits before applying the
-        # digit-form match so short-token substrings like "ok" don't
-        # collide with "okok" via the empty-digit-string degenerate case.
-        if sl in searchable:
+        normalized_substr = normalize_identifier_tokens(substr)
+        substr_digits = re.sub(r"\D", "", normalized_substr)
+        # Match either as a normalized token substring (text) or as a
+        # digit-only substring (phone numbers, account numbers, etc.).
+        if normalized_substr in searchable:
             continue
         if (
             substr_digits
