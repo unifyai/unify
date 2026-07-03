@@ -649,6 +649,21 @@ def _build_channels_str(
     return ", ".join(available_channels)
 
 
+def _format_outbound_share_tool_names(
+    *,
+    assistant_has_phone: bool,
+    assistant_has_email: bool,
+    include: list[str],
+) -> str:
+    """Format ``send_*`` tool names for prose about sharing links or invites."""
+    names = list(include)
+    if assistant_has_email and "send_email" not in names:
+        names.append("send_email")
+    if assistant_has_phone and "send_sms" not in names:
+        names.append("send_sms")
+    return " / ".join(f"`{name}`" for name in names)
+
+
 def _build_comms_tool_listing(
     assistant_has_phone: bool,
     assistant_has_email: bool,
@@ -835,8 +850,8 @@ def _build_comms_tool_listing(
             "(`start`/`duration_minutes`/`attendee_contact_ids` are ignored "
             "in that mode). In both modes the returned `join_web_url` can "
             "be passed straight to `join_teams_meet` to join the meeting "
-            "myself, or shared via `send_teams_message` / `send_email` / "
-            "`send_sms`.",
+            "myself, or shared via "
+            f"{_format_outbound_share_tool_names(assistant_has_phone=assistant_has_phone, assistant_has_email=assistant_has_email, include=['send_teams_message'])}.",
         )
     lines.append(
         "- `send_api_response`: Reply to a programmatic API message (use when the inbound medium is `api_message`). Supports optional `attachment_filepaths` and `tags`.",

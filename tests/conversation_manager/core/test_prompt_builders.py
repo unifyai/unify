@@ -699,6 +699,33 @@ class TestConcurrentActionAckBlock:
         assert 'send_unify_message(contact_id=1, content="Let me check.")' in block
 
 
+class TestCreateTeamsMeetShareTools:
+    """create_teams_meet share guidance names only configured outbound tools."""
+
+    def test_teams_only_omits_send_sms_and_send_email(self):
+        prompt = _build(
+            assistant_has_phone=False,
+            assistant_has_email=False,
+            assistant_has_teams=True,
+        )
+        idx = prompt.find("create_teams_meet")
+        assert idx >= 0
+        snippet = prompt[idx : idx + 900]
+        assert "shared via `send_teams_message`" in snippet
+        assert "send_sms" not in snippet
+        assert "send_email" not in snippet
+
+    def test_teams_with_phone_and_email_lists_all_share_tools(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_teams=True,
+        )
+        idx = prompt.find("create_teams_meet")
+        snippet = prompt[idx : idx + 900]
+        assert "shared via `send_teams_message` / `send_email` / `send_sms`" in snippet
+
+
 # ---------------------------------------------------------------------------
 # Tests – external app integration
 # ---------------------------------------------------------------------------
