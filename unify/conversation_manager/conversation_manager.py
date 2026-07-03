@@ -236,7 +236,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_discord_bot_id: str = "",
         assistant_email_provider: str = "",
         assistant_slack_bot_user_id: str = "",
-        assistant_is_coordinator: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -263,7 +262,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_whatsapp_number = assistant_whatsapp_number
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
-        self.is_coordinator = assistant_is_coordinator
         # Global onboarding scaffolding gate, mirrored from Orchestra's
         # ``Coordinator/State`` and refreshed on a short TTL. When False the
         # slow-brain drops all onboarding scaffolding. Defaults to True until
@@ -601,6 +599,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             if generation < self._llm_gen - 1:
                 del self._recent_commissioning_successes[fingerprint]
+
+    @property
+    def is_coordinator(self) -> bool:
+        """Whether this session is the workspace Coordinator.
+
+        Delegates to ``SESSION_DETAILS`` so there is a single source of truth
+        for the Coordinator role. Tool registration reads
+        ``SESSION_DETAILS.is_coordinator``; if this returned a separately-stored
+        attribute the two could disagree — offering a Coordinator-only tool that
+        the runtime guards then reject.
+        """
+        return SESSION_DETAILS.is_coordinator
+
+    @is_coordinator.setter
+    def is_coordinator(self, value: bool) -> None:
+        SESSION_DETAILS.is_coordinator = bool(value)
 
     @property
     def assistant_has_teams(self) -> bool:
@@ -2605,7 +2619,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_bot_user_id",
             "",
         )
-        self.is_coordinator = bool(payload.get("assistant_is_coordinator", False))
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -2625,7 +2638,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
-        is_coordinator = payload.get("is_coordinator", False)
+        is_coordinator = bool(payload.get("is_coordinator", False))
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -2646,7 +2659,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
-            assistant_is_coordinator=self.is_coordinator,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,

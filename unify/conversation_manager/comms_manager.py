@@ -822,9 +822,6 @@ class CommsManager:
                         "assistant_slack_bot_user_id",
                         "",
                     ),
-                    "assistant_is_coordinator": bool(
-                        event.get("assistant_is_coordinator", False),
-                    ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
                     "user_number": event["user_number"],
@@ -2284,9 +2281,6 @@ class CommsManager:
                     "assistant_slack_bot_user_id": event.get(
                         "assistant_slack_bot_user_id",
                         "",
-                    ),
-                    "assistant_is_coordinator": bool(
-                        event.get("assistant_is_coordinator", False),
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
