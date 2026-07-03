@@ -39,9 +39,6 @@ CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "workspace_mailbox": frozenset({"unify_message"}),
     "workspace_drive": frozenset({"unify_message"}),
     "workspace_calendar": frozenset({"unify_message"}),
-    "workspace_contacts": frozenset({"unify_message"}),
-    "workspace_tasks": frozenset({"unify_message"}),
-    "workspace_teams": frozenset({"unify_message"}),
 }
 
 _ALL_MEDIA: frozenset[str] = frozenset(
