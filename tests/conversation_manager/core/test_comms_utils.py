@@ -478,6 +478,34 @@ class TestSendEmailViaAddress:
             assert call_args.kwargs["json"]["attachment"] == attachment
 
     @pytest.mark.asyncio
+    async def test_send_includes_agent_id_when_configured(self):
+        mock_session = _mock_aiohttp_session(
+            response_json={"success": True, "id": "email-123"},
+        )
+
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session_details,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_session_details.assistant.email = "assistant@test.com"
+            mock_session_details.assistant.agent_id = 7316
+            mock_settings.conversation.COMMS_URL = COMMS_URL
+
+            result = await comms_utils.send_email_via_address(
+                to=["user@example.com"],
+                subject="Report",
+                body="Please see attached.",
+            )
+
+            assert result["success"] is True
+            assert mock_session.post.call_args.kwargs["json"]["agent_id"] == 7316
+
+    @pytest.mark.asyncio
     async def test_send_with_cc_and_bcc(self):
         """Sends email with cc and bcc to /email/send on COMMS_URL."""
         mock_session = _mock_aiohttp_session(

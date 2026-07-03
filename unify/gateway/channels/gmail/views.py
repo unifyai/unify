@@ -211,9 +211,28 @@ def get_admin_service(credentials: CredentialStore | None = None) -> Any:
     return build("admin", "directory_v1", credentials=creds)
 
 
+def _gmail_service_from_assistant(
+    sender_email: str,
+    assistant: dict,
+    credentials: CredentialStore,
+) -> Any:
+    access_token = assistant.get("secrets", {}).get("GOOGLE_ACCESS_TOKEN")
+    if access_token:
+        return build("gmail", "v1", credentials=OAuthCredentials(token=access_token))
+
+    creds = _service_account_credentials(
+        scopes=_GMAIL_SCOPES,
+        subject=sender_email,
+        credentials=credentials,
+    )
+    return build("gmail", "v1", credentials=creds)
+
+
 async def get_gmail_service_async(
     sender_email: str,
     credentials: CredentialStore | None = None,
+    *,
+    assistant: dict | None = None,
 ) -> Any:
     """Build a Gmail API client, preferring BYOD OAuth tokens.
 
@@ -222,11 +241,17 @@ async def get_gmail_service_async(
     managed Workspace mailboxes fall back to service-account
     delegation against ``sender_email``.
 
+    When ``assistant`` is already resolved (for example by the email
+    dispatcher), Orchestra is not queried again.
+
     Assistant lookup failures with 4xx status are non-fatal -- we
     fall back to SA delegation -- but 5xx propagates so transient
     Orchestra outages don't silently switch to the wrong credential.
     """
     credentials = credentials or EnvCredentialStore()
+    if assistant is not None:
+        return _gmail_service_from_assistant(sender_email, assistant, credentials)
+
     try:
         assistant = await lookup_assistant(sender_email, credentials)
     except HTTPException as exc:
@@ -255,16 +280,7 @@ async def get_gmail_service_async(
         )
         return build("gmail", "v1", credentials=creds)
 
-    access_token = assistant.get("secrets", {}).get("GOOGLE_ACCESS_TOKEN")
-    if access_token:
-        return build("gmail", "v1", credentials=OAuthCredentials(token=access_token))
-
-    creds = _service_account_credentials(
-        scopes=_GMAIL_SCOPES,
-        subject=sender_email,
-        credentials=credentials,
-    )
-    return build("gmail", "v1", credentials=creds)
+    return _gmail_service_from_assistant(sender_email, assistant, credentials)
 
 
 def get_gmail_service(
@@ -324,7 +340,7 @@ async def delete_email_user(request: Request):
 
 
 @router.post("/send")
-async def send_email(request: Request):
+async def send_email(request: Request, *, assistant: dict | None = None):
     """Send an email via Gmail.
 
     Required body: ``from``, ``to`` (str or list), ``body``.
@@ -387,7 +403,7 @@ async def send_email(request: Request):
         msg["References"] = reply_id
 
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service = await get_gmail_service_async(sender)
+    service = await get_gmail_service_async(sender, assistant=assistant)
     send_body = {"raw": raw_msg}
     if thread_id:
         send_body["threadId"] = thread_id
