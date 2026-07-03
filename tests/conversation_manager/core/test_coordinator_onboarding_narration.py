@@ -77,5 +77,6 @@ def test_reference_quiz_notification_stays_minimal() -> None:
     assert "reference_quiz_clue_requested" in text
     assert "sci-fi quote clue" in text
     assert "never list genres or franchises" in text
+    assert "clicked the trigger row" in text
     assert "Star Wars" not in text
     assert "pop-culture" not in text

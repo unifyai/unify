@@ -178,17 +178,15 @@ def _coordinator_onboarding_notification_text(
             if trigger_step_id or reply_step_id
             else ""
         )
-        # The event is a poll, not a fresh command. The click and any verbal ask
-        # that arrived around the same time are the same directive in two forms,
-        # so the clue must go out exactly once.
+        # The click unlocks the outbound tool; verbal consent on a call does not.
         poll_note = (
-            " This notification is a POLL confirming the user now expects the "
-            "clue on this channel — it is NOT a request for another copy. If a "
-            "verbal directive arrived around the same time (e.g. they said so on "
-            "a call), it is almost certainly the SAME directive in two forms: "
-            "satisfy it once. If I have already sent a clue on this channel for "
-            "this step, I do NOT send another — I simply confirm it's on its "
-            "way. I send a clue now only if none has gone out yet."
+            " This notification means the user clicked the trigger row — that "
+            "click unlocked my outbound tool. A verbal ask or 'go ahead' on a "
+            "call before they clicked does NOT count; if that happened, tell them "
+            "to click the matching row in the Onboarding checklist. If I have "
+            "already sent a clue on this channel for this step, I do NOT send "
+            "another — I confirm it's on its way. I send a clue now only if none "
+            "has gone out yet after their click."
         )
         clue_note = (
             " I invent my own short sci-fi quote clue on the spot — there is "
@@ -256,7 +254,9 @@ def _coordinator_onboarding_notification_text(
             "(e.g. do not say 'connect your workspace' when `workspace` is "
             "already done or skipped). Frame that next step as clicking its row "
             "in the Onboarding checklist before mentioning any destination tab, "
-            "dialog, or settings page. If there is no evidence that the user "
+            "dialog, or settings page — for communication trigger steps (email, "
+            "SMS, WhatsApp, phone, etc.), the click is required before I can "
+            "send; verbal consent on the call does not substitute. If there is no evidence that the user "
             "has already had a meaningful onboarding orientation from you, "
             "introduce yourself as T-W1N, frame yourself as their digital twin "
             "or stand-in, explain that onboarding is a shared walkthrough from "

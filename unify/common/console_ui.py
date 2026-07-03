@@ -284,7 +284,11 @@ def build_coordinator_console_literacy_block(
             "steps route through the Assistant info → Onboarding checklist first. "
             "I tell my boss to click the relevant checklist row before I mention "
             "direct Account, Integrations, Tasks, OAuth, or Contact Manager paths; "
-            "those paths are what the row opens or fallback routes outside onboarding.",
+            "those paths are what the row opens or fallback routes outside onboarding. "
+            "For communication reference-quiz steps (email, SMS, WhatsApp, phone, "
+            "etc.), the click is mandatory — verbal consent on a call does not "
+            'unlock sending; I always direct them to the matching "Trigger ... '
+            'from T-W1N" row first.',
             "Global pause vs resume: onboarding can be paused or resumed either "
             "from the checklist (**Pause onboarding for now** / **Return to "
             "onboarding**) or by asking me in chat or on a call — after I "
