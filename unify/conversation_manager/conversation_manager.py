@@ -3189,6 +3189,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if isinstance((value := pending.get(key)), str) and value
         }
 
+    def build_whatsapp_call_sent_event(self, contact: dict) -> WhatsAppCallSent:
+        """Publish-ready outbound WhatsApp call event with onboarding metadata."""
+        kwargs = self.consume_pending_onboarding_outbound("whatsapp_call") or {}
+        return WhatsAppCallSent(contact=contact, **kwargs)
+
     async def store_chat_history(self):
         if len(self.chat_history) >= 2:
             await self.event_broker.publish(

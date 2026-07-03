@@ -967,6 +967,73 @@ class TestPhoneCallHandlers:
         )
 
     @pytest.mark.asyncio
+    async def test_whatsapp_permission_acceptance_tags_onboarding_outbound(
+        self,
+        mock_cm,
+    ):
+        """Permission-granted auto-calls must consume pending onboarding metadata."""
+        from unify.conversation_manager.conversation_manager import (
+            ConversationManager,
+        )
+        from unify.conversation_manager.events import WhatsAppCallSent
+
+        mock_cm._pending_whatsapp_call_contexts = {2: "Call briefing"}
+        mock_cm._pending_onboarding_outbound = {
+            "onboarding_trigger_step_id": "whatsapp-call-reference",
+            "onboarding_reply_step_id": "whatsapp-call",
+            "onboarding_request_id": "req-1",
+            "onboarding_origin_event_id": "evt-1",
+            "channel": "whatsapp_call",
+            "tool_name": "make_whatsapp_call_to_boss",
+            "expires_at": 1_000_000.0,
+        }
+        mock_cm.loop.time.return_value = 0.0
+        mock_cm.consume_pending_onboarding_outbound = (
+            ConversationManager.consume_pending_onboarding_outbound.__get__(
+                mock_cm,
+                ConversationManager,
+            )
+        )
+        mock_cm.build_whatsapp_call_sent_event = (
+            ConversationManager.build_whatsapp_call_sent_event.__get__(
+                mock_cm,
+                ConversationManager,
+            )
+        )
+        mock_cm.assistant_whatsapp_number = "+15550000000"
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=True,
+        )
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils.start_whatsapp_call",
+                new_callable=AsyncMock,
+                return_value={"success": True},
+            ),
+            patch(
+                "unify.conversation_manager.domains.event_handlers.SESSION_DETAILS",
+            ) as mock_session_details,
+        ):
+            mock_session_details.assistant.agent_id = 7
+            mock_session_details.assistant.name = "Test Assistant"
+
+            await EventHandler.handle_event(event, mock_cm)
+
+        published_event = WhatsAppCallSent.from_json(
+            mock_cm.event_broker.publish.await_args.args[1],
+        )
+        assert published_event.onboarding_trigger_step_id == "whatsapp-call-reference"
+        assert published_event.onboarding_reply_step_id == "whatsapp-call"
+        assert mock_cm._pending_onboarding_outbound is None
+
+    @pytest.mark.asyncio
     async def test_whatsapp_permission_unknown_does_not_clear_pending_context(
         self,
         mock_cm,

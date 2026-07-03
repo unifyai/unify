@@ -1083,7 +1083,7 @@ async def _(
                     LOGGER.error(
                         f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
                     )
-            call_event = WhatsAppCallSent(contact=contact)
+            call_event = cm.build_whatsapp_call_sent_event(contact)
             await cm.event_broker.publish(
                 "app:comms:whatsapp_call_sent",
                 call_event.to_json(),
