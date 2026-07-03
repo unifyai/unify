@@ -1254,9 +1254,13 @@ async def _(
     **kwargs,
 ):
     """Start the slow-brain run after the Voice Agent finishes a user turn."""
+    from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
     from unify.conversation_manager.prompt_builders import (
         build_fast_brain_turn_guidance,
     )
+
+    if event.classification == FAST_BRAIN_TURN_SILENCE:
+        return
 
     contact_id = event.contact.get("contact_id") if event.contact else None
     contact = (

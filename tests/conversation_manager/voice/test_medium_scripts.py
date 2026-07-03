@@ -3364,12 +3364,11 @@ class TestFastBrainSmalltalk:
         boss_contact,
         monkeypatch,
     ):
-        """A bare ack ('okay') -> say nothing, then schedule slow brain with SILENCE."""
+        """A bare ack ('okay') -> say nothing and do not schedule the slow brain."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
 
-        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
@@ -3388,12 +3387,7 @@ class TestFastBrainSmalltalk:
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert chunks == []
-        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
-            turn_id=a._user_turn_seq,
-            user_content="",
-            classification=FAST_BRAIN_TURN_SILENCE,
-            intended_speech="",
-        )
+        a._publish_fast_brain_turn_completed.assert_not_awaited()
 
 
 # =============================================================================

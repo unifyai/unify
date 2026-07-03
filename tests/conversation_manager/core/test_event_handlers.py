@@ -1354,7 +1354,7 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
+    async def test_fast_brain_turn_completed_skips_silence(self, mock_cm):
         from unify.conversation_manager.events import (
             FAST_BRAIN_TURN_SILENCE,
             FastBrainTurnCompleted,
@@ -1363,9 +1363,30 @@ class TestVoiceUtteranceHandlers:
         event = FastBrainTurnCompleted(
             contact={"contact_id": 2},
             turn_id=7,
-            user_content="   ",
+            user_content="Okay.",
             classification=FAST_BRAIN_TURN_SILENCE,
             intended_speech="",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.interject_or_run.assert_not_called()
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 0
+
+    @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_DEFER,
+            FastBrainTurnCompleted,
+        )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="   ",
+            classification=FAST_BRAIN_TURN_DEFER,
+            intended_speech="One moment.",
         )
 
         await EventHandler.handle_event(event, mock_cm)
