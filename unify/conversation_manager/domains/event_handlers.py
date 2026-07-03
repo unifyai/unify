@@ -2574,6 +2574,16 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
             *contact_sync_args,
         )
 
+    from unify.settings import SETTINGS
+
+    if (
+        cm.is_coordinator
+        and cm.coordinator_onboarding_active
+        and SETTINGS.UNITY_CONSOLE_UI
+    ):
+        cm._coordinator_state_checked_at = 0.0
+        await cm._refresh_coordinator_onboarding_state()
+
 
 @EventHandler.register(GetChatHistory)
 async def _(event: GetChatHistory, cm: "ConversationManager", *args, **kwargs):
