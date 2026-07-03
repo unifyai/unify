@@ -2367,7 +2367,7 @@ class CommsManager:
                     Ping(kind="keepalive").to_json(),
                 )
 
-                # Wait 30 seconds before next ping (half the inactivity timeout)
+                # Wait 30 seconds before next ping (pre-startup keepalive)
                 await asyncio.sleep(30)
 
                 # Check if we've received a startup message (indicated by assistant_id changed)
