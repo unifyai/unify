@@ -472,6 +472,11 @@ def test_console_can_create_whatsapp_sender_with_snake_case_body(
     assert response.status_code == 200
     assert response.json()["sid"] == "XE_sender"
 
+    profile = httpx_client.post.call_args.kwargs["json"]["profile"]
+    assert profile["name"] == "Unify T-W1N"
+    assert profile["logo_url"] == "https://console.unify.ai/brand/twin-logo.png"
+    assert profile["about"] == "Your digital twin."
+
 
 def test_console_can_delete_whatsapp_sender(client: TestClient) -> None:
     delete_response = MagicMock(status_code=204, text="")

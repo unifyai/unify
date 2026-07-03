@@ -5,13 +5,18 @@ tests/conversation_manager/core/test_onboarding_outbound_media.py
 Drift-guard for the onboarding outbound-medium table baked into
 ``ConversationManager.consume_pending_onboarding_outbound``.
 
-Orchestra derives onboarding step completion from durable, assistant-authored
+Orchestra derives reference-quiz step completion from durable, assistant-authored
 transcript rows on a specific set of mediums per channel (onboarding_graph's
-``_CHANNEL_TO_OUTBOUND_MEDIUMS`` merged with ``DEMO_TO_OUTBOUND_MEDIUMS``). Unity
-must stamp its onboarding metadata onto exactly those mediums and no others, or a
-channel silently stops auto-completing (metadata never lands on the row Orchestra
-reads). Unify cannot import Orchestra, so the canonical mapping is mirrored here as
-a golden constant; a change on either side must be applied to both.
+``_CHANNEL_TO_OUTBOUND_MEDIUMS``). Unity must stamp its onboarding metadata onto
+exactly those mediums and no others, or a channel silently stops auto-completing
+(metadata never lands on the row Orchestra reads). Unify cannot import Orchestra,
+so the canonical mapping is mirrored here as a golden constant; a change on either
+side must be applied to both.
+
+Workspace demos are deliberately absent: they are multi-part tasks that never
+auto-complete from an outbound. The assistant finishes the task and then marks
+the step done explicitly via ``set_onboarding_task_state``, so no outbound
+tagging is armed for them.
 """
 
 from __future__ import annotations
@@ -25,9 +30,10 @@ from unify.conversation_manager.conversation_manager import ConversationManager
 # Canonical channel -> accepted outbound mediums. Source of truth:
 #   orchestra/services/onboarding_graph.py
 #     _CHANNEL_TO_OUTBOUND_MEDIUMS   (reference-quiz comms channels)
-#   + DEMO_TO_OUTBOUND_MEDIUMS       (workspace demo rows, proved over unify_message)
-# Keep this mirror in lockstep with that mapping and with the expected_media
-# table in ConversationManager.consume_pending_onboarding_outbound.
+#     BEAT_CHANNEL_TO_OUTBOUND_MEDIUMS   (non-quiz onboarding beats)
+# Keep this mirror in lockstep with those mappings and with the expected_media
+# table in ConversationManager.consume_pending_onboarding_outbound. Workspace
+# demos are intentionally excluded — they complete explicitly, not via outbound.
 CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "email": frozenset({"email"}),
     "sms_message": frozenset({"sms_message"}),
@@ -36,9 +42,7 @@ CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "phone_call": frozenset({"phone_call"}),
     "slack_message": frozenset({"slack_message", "slack_channel_message"}),
     "discord_message": frozenset({"discord_message", "discord_channel_message"}),
-    "workspace_mailbox": frozenset({"unify_message"}),
-    "workspace_drive": frozenset({"unify_message"}),
-    "workspace_calendar": frozenset({"unify_message"}),
+    "learning_beat": frozenset({"unify_message"}),
 }
 
 _ALL_MEDIA: frozenset[str] = frozenset(
