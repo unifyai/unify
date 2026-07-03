@@ -21,7 +21,10 @@ class ManagerMethodPayload(BaseModel):
     source: Optional[str] = Field(default=None, description="Caller source identifier")
     phase: Optional[str] = Field(
         default=None,
-        description="Event phase: 'incoming' or 'outgoing'",
+        description=(
+            "Event phase: 'incoming', 'outgoing', 'awaiting_input' (persist yield), "
+            "or 'resumed' (persist interjection resume)"
+        ),
     )
     action: Optional[str] = Field(
         default=None,
