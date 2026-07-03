@@ -1526,6 +1526,13 @@ The following are my boss's details:
 {boss_details}"""
 
 
+def _build_tool_call_reasoning_block() -> str:
+    """Build guidance for optional per-tool-call reasoning."""
+    return """Tool-call reasoning
+-------------------
+Each tool accepts an optional `thoughts` argument: freeform text explaining why I chose that tool. I should use it to justify non-obvious choices. It is never required, and it is never shown to the user."""
+
+
 def _build_demo_output_format(
     *,
     voice_output_block: str,
@@ -1534,12 +1541,7 @@ def _build_demo_output_format(
     contact_id: int,
 ) -> str:
     """Build output format block for demo mode."""
-    return f"""Output format
--------------
-My output will be in the following format:
-{{
-    "thoughts": [my concise thoughts before taking actions]
-}}
+    return f"""{_build_tool_call_reasoning_block()}
 
 {voice_output_block}
 
@@ -1583,12 +1585,7 @@ def _build_base_output_format(
 - `query_past_transcripts`: Search and analyse past messages and conversation history directly. Faster than `act` for purely transcript-related questions.
 - `wait(delay=None)`: Wait for more input. Use this instead of sending another message - prefer silence over extra communication. Optionally pass `delay=<seconds>` to wake up after that many seconds for another thinking turn (e.g., to probe a long-running action). Omit `delay` to wait indefinitely until the next event."""
     )
-    return f"""Output format
--------------
-My output will be in the following format:
-{{
-    "thoughts": [my concise thoughts before taking actions]
-}}
+    return f"""{_build_tool_call_reasoning_block()}
 
 {voice_output_block}
 

@@ -38,7 +38,7 @@ from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
 from unify.common.llm_client import new_llm_client
-from unify.common.single_shot import single_shot_tool_decision
+from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.domains.utils import Debouncer, log_task_exc
@@ -148,6 +148,15 @@ def _log_slow_brain_single_shot_failure(
         "Slow-brain single-shot traceback text:\n%s",
         traceback.format_exc(),
     )
+
+
+def _format_tool_thoughts_for_log(tools: list[ToolExecution]) -> str:
+    parts: list[str] = []
+    for tool_exec in tools:
+        thoughts = getattr(tool_exec, "thoughts", None)
+        if isinstance(thoughts, str) and thoughts.strip():
+            parts.append(f"[{tool_exec.name}] {thoughts.strip()}")
+    return " | ".join(parts)
 
 
 def _append_context_to_state_message(message: dict, context: str) -> dict:
@@ -2060,8 +2069,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             f"LLM thinking... ({reason})" if reason else "LLM thinking...",
         )
 
-        response_model = brain_spec.response_model
-
         _t0 = _rl_time.perf_counter()
         _tools_step_t0 = _t0
         brain_tools = ConversationManagerBrainTools(self)
@@ -2221,7 +2228,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     messages,
                     tools,
                     tool_choice="required" if tools else "auto",
-                    response_format=response_model,
+                    inject_tool_thoughts=True,
                     exclusive_tools={
                         "make_call",
                         "make_whatsapp_call",
@@ -2265,11 +2272,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             trace_meta=trace_meta or {},
         )
 
-        # Extract structured output (thoughts)
-        structured = result.structured_output
-        thoughts = ""
-        if structured is not None:
-            thoughts = getattr(structured, "thoughts", "")
+        thoughts_summary = _format_tool_thoughts_for_log(result.tools)
 
         # Handle guide_voice_agent tool calls for voice modes. The slow brain
         # either SPEAKs (guide_voice_agent with a message, spoken verbatim by the
@@ -2322,15 +2325,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     awaiting_speech=bool(guidance_message),
                 )
 
-        self._session_logger.debug(
-            "llm_response",
-            (
-                f"run_id={run_id} thoughts: {thoughts[:100]}..."
-                if len(thoughts) > 100
-                else f"run_id={run_id} thoughts: {thoughts}"
+        llm_response_msg = f"run_id={run_id}"
+        if thoughts_summary:
+            preview = (
+                f"{thoughts_summary[:100]}..."
+                if len(thoughts_summary) > 100
+                else thoughts_summary
             )
-            + (f" | actions: {tool_names}" if tool_names else ""),
-        )
+            llm_response_msg += f" thoughts: {preview}"
+        if tool_names:
+            llm_response_msg += f" | actions: {tool_names}"
+        self._session_logger.debug("llm_response", llm_response_msg)
 
         self._session_logger.debug(
             "perf",
@@ -2363,9 +2368,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
 
         # Build assistant message for chat history
-        assistant_content = (
-            structured.model_dump_json() if structured else result.text_response or ""
-        )
+        assistant_content = result.text_response or ""
         self.chat_history.append(input_message)
         self.chat_history.append({"role": "assistant", "content": assistant_content})
 

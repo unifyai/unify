@@ -764,6 +764,34 @@ def method_to_schema(
     return schema
 
 
+TOOL_CALL_THOUGHTS_PARAM = "thoughts"
+TOOL_CALL_THOUGHTS_DESCRIPTION = (
+    "Optional freeform text explaining why you chose this tool. "
+    "Populate when the choice is non-obvious; omit when the action is self-explanatory."
+)
+
+
+def inject_tool_call_thoughts(schema: dict) -> dict:
+    """Add optional ``thoughts`` to a function-tool schema's parameters."""
+    fn = schema.get("function") or {}
+    params = fn.get("parameters") or {}
+    props = params.get("properties") or {}
+    if TOOL_CALL_THOUGHTS_PARAM in props:
+        return schema
+    props[TOOL_CALL_THOUGHTS_PARAM] = {
+        "type": "string",
+        "description": TOOL_CALL_THOUGHTS_DESCRIPTION,
+    }
+    required = params.get("required") or []
+    if TOOL_CALL_THOUGHTS_PARAM in required:
+        required = [name for name in required if name != TOOL_CALL_THOUGHTS_PARAM]
+        params["required"] = required
+    params["properties"] = props
+    fn["parameters"] = params
+    schema["function"] = fn
+    return schema
+
+
 def make_request_clarification_tool(
     up_q: "asyncio.Queue[str]" | None,
     down_q: "asyncio.Queue[str]" | None,

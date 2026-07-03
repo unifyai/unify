@@ -24,7 +24,11 @@ from pydantic import BaseModel
 
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
 
-from .llm_helpers import method_to_schema
+from .llm_helpers import (
+    TOOL_CALL_THOUGHTS_PARAM,
+    inject_tool_call_thoughts,
+    method_to_schema,
+)
 from .llm_client import pydantic_to_json_schema_response_format
 from .tool_spec import ToolSpec, normalise_tools
 
@@ -38,14 +42,17 @@ class ToolExecution:
     name : str
         Name of the tool that was called.
     args : dict[str, Any]
-        Arguments passed to the tool.
+        Arguments passed to the tool (schema-injected ``thoughts`` excluded).
     result : Any
         Return value from executing the tool.
+    thoughts : str | None
+        Optional per-tool reasoning stripped from args before execution.
     """
 
     name: str
     args: dict[str, Any]
     result: Any
+    thoughts: str | None = None
 
 
 @dataclass
@@ -100,6 +107,7 @@ async def single_shot_tool_decision(
     tool_choice: str = "auto",
     include_class_name: bool = False,
     response_format: Type[BaseModel] | None = None,
+    inject_tool_thoughts: bool = False,
     exclusive_tools: set[str] | None = None,
     on_tool_execution_start: Callable[[], None] | None = None,
 ) -> SingleShotResult:
@@ -138,6 +146,10 @@ async def single_shot_tool_decision(
         response content will be parsed into this model and returned in
         `structured_output`. This can be combined with tools - the model can
         return structured JSON AND call tools in the same turn.
+    inject_tool_thoughts : bool, default False
+        When True, each tool schema gains an optional ``thoughts`` string
+        parameter. The value is stripped before invocation and returned on
+        ``ToolExecution.thoughts`` instead of in ``ToolExecution.args``.
     exclusive_tools : set[str] | None, default None
         Tool names that must appear at most once per LLM turn. If the LLM calls
         an exclusive tool more than once, ALL instances are rejected without
@@ -181,6 +193,8 @@ async def single_shot_tool_decision(
             tool_name=name,
             include_class_name=include_class_name,
         )
+        if inject_tool_thoughts:
+            inject_tool_call_thoughts(schema)
         schemas.append(schema)
 
     # Normalise message to list format
@@ -277,11 +291,20 @@ async def single_shot_tool_decision(
             return json.loads(raw) if raw else {}
         return raw or {}
 
+    def _split_tool_args(fn_args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        if not inject_tool_thoughts:
+            return fn_args, None
+        tool_thoughts = fn_args.pop(TOOL_CALL_THOUGHTS_PARAM, None)
+        if isinstance(tool_thoughts, str) and tool_thoughts.strip():
+            return fn_args, tool_thoughts
+        return fn_args, None
+
     async def execute_tool_call(call: dict) -> ToolExecution:
         """Execute a single tool call and return the result."""
         fn_info = call.get("function", {})
         fn_name = fn_info.get("name")
         fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+        fn_args, tool_thoughts = _split_tool_args(dict(fn_args))
 
         # Get the callable
         if not fn_name or fn_name not in normalised:
@@ -295,7 +318,12 @@ async def single_shot_tool_decision(
         else:
             result = fn(**fn_args)
 
-        return ToolExecution(name=fn_name, args=fn_args, result=result)
+        return ToolExecution(
+            name=fn_name,
+            args=fn_args,
+            result=result,
+            thoughts=tool_thoughts,
+        )
 
     # Execute all tool calls concurrently
     _tool_names = [(c.get("function") or {}).get("name", "?") for c in tool_calls_list]
@@ -326,11 +354,13 @@ async def single_shot_tool_decision(
                 fn_info = call.get("function", {})
                 fn_name = fn_info.get("name")
                 fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+                fn_args, tool_thoughts = _split_tool_args(dict(fn_args))
                 if fn_name in violated_tools:
                     return ToolExecution(
                         name=fn_name,
                         args=fn_args,
                         result={"error": error_msg},
+                        thoughts=tool_thoughts,
                     )
                 return await execute_tool_call(call)
 

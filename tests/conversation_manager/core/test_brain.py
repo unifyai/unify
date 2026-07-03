@@ -37,20 +37,12 @@ def _make_brain_spec(
     screenshots: list[ScreenshotEntry] | None = None,
 ) -> BrainSpec:
     """Create a minimal BrainSpec for testing."""
-    from pydantic import Field, create_model
-
-    DummyResponse = create_model(
-        "DummyResponse",
-        thoughts=(str, Field(..., description="Reasoning")),
-    )
-
     parts = PromptParts()
     parts.add("You are a helpful assistant.")
 
     return BrainSpec(
         system_prompt=parts,
         state_prompt=state_prompt,
-        response_model=DummyResponse,
         screenshots=screenshots or [],
     )
 
@@ -83,6 +75,8 @@ def _make_cm():
         mode=Mode.TEXT,
         get_active_contact=lambda: None,
         initialized=True,
+        in_voice_session=False,
+        call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
         assistant_job_title="",
         assistant_about="Operations assistant.",
         computer_fast_path_eligible=False,
@@ -95,6 +89,8 @@ def _make_cm():
         team_summaries=[],
         coordinator_onboarding_active=True,
         coordinator_onboarding_render=None,
+        onboarding_clicked_trigger_steps=[],
+        onboarding_catalog=None,
     )
 
 
@@ -153,6 +149,8 @@ class TestBrainSpecStateMessage:
             mode=Mode.TEXT,
             get_active_contact=lambda: {},
             initialized=True,
+            in_voice_session=False,
+            call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
             assistant_job_title="",
             assistant_about="",
             computer_fast_path_eligible=False,
@@ -165,6 +163,8 @@ class TestBrainSpecStateMessage:
             team_summaries=[],
             coordinator_onboarding_active=True,
             coordinator_onboarding_render=None,
+            onboarding_clicked_trigger_steps=[],
+            onboarding_catalog=None,
         )
         snapshot_state = SimpleNamespace(full_render="<state>ready</state>")
 
