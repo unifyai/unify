@@ -161,30 +161,29 @@ class TestPersistentWorkerStartup:
             assert call_manager._worker_proc is new_proc
 
     @pytest.mark.asyncio
-    async def test_refresh_restarts_worker_when_unify_key_changes(self, call_manager):
-        with patch(
-            "unify.conversation_manager.domains.call_manager.run_script",
-        ) as mock_run:
+    async def test_refresh_keeps_worker_warm_when_unify_key_changes(self, call_manager):
+        with (
+            patch(
+                "unify.conversation_manager.domains.call_manager.run_script",
+            ) as mock_run,
+            patch.object(
+                call_manager,
+                "cleanup_persistent_worker",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+        ):
             mock_proc = MagicMock()
             mock_proc.poll.return_value = None
             mock_run.return_value = mock_proc
             call_manager.start_persistent_worker()
 
-            async def _terminate_worker():
-                call_manager._worker_proc = None
+            await call_manager.refresh_persistent_worker_after_key_change(
+                "old-build-key",
+                "new-org-key",
+            )
 
-            with patch.object(
-                call_manager,
-                "cleanup_persistent_worker",
-                side_effect=_terminate_worker,
-            ) as mock_cleanup:
-                await call_manager.refresh_persistent_worker_after_key_change(
-                    "old-build-key",
-                    "new-org-key",
-                )
-
-            mock_cleanup.assert_awaited_once()
-            assert mock_run.call_count == 2
+            mock_cleanup.assert_not_awaited()
+            mock_run.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_refresh_skips_restart_when_key_unchanged(self, call_manager):
@@ -212,7 +211,7 @@ class TestPersistentWorkerStartup:
             mock_run.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_refresh_skips_restart_during_active_call(self, call_manager):
+    async def test_refresh_keeps_worker_warm_during_active_call(self, call_manager):
         call_manager._active_job = True
         with (
             patch(
@@ -293,28 +292,33 @@ class TestJobDispatch:
         from unify.conversation_manager.medium_scripts.worker import (
             WORKER_REGISTERED_PATH,
         )
+        from unify.session_details import SESSION_DETAILS
 
-        with (
-            patch(
-                "unify.conversation_manager.domains.call_manager.LiveKitAPI",
-                return_value=mock_lk,
-            ),
-            patch.object(
-                call_manager,
-                "_ensure_socket_server",
-                new_callable=AsyncMock,
-                return_value="/tmp/test.sock",
-            ),
-        ):
-            with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
-                pass
-            dispatched = await call_manager._dispatch_job(
-                "unity_42_phone",
-                "phone",
-                sample_contact,
-                boss_contact,
-                False,
-            )
+        SESSION_DETAILS.unify_key = "tenant-assigned-key"
+        try:
+            with (
+                patch(
+                    "unify.conversation_manager.domains.call_manager.LiveKitAPI",
+                    return_value=mock_lk,
+                ),
+                patch.object(
+                    call_manager,
+                    "_ensure_socket_server",
+                    new_callable=AsyncMock,
+                    return_value="/tmp/test.sock",
+                ),
+            ):
+                with open(WORKER_REGISTERED_PATH, "w", encoding="utf-8"):
+                    pass
+                dispatched = await call_manager._dispatch_job(
+                    "unity_42_phone",
+                    "phone",
+                    sample_contact,
+                    boss_contact,
+                    False,
+                )
+        finally:
+            SESSION_DETAILS.reset()
 
         assert dispatched is True
         mock_lk.agent_dispatch.create_dispatch.assert_called_once()
@@ -331,6 +335,7 @@ class TestJobDispatch:
         assert meta["boss"] == boss_contact
         assert meta["is_coordinator"] is is_coordinator
         assert meta["ipc_socket_path"] == "/tmp/test.sock"
+        assert meta["unify_key"] == "tenant-assigned-key"
         assert call_manager._active_job is True
 
     @pytest.mark.asyncio
@@ -769,6 +774,25 @@ class TestEntrypointMetadata:
             assert SESSION_DETAILS.user.id == "user_abc"
             assert SESSION_DETAILS.assistant.name == "Avery Coordinator"
             assert SESSION_DETAILS.is_coordinator is True
+        finally:
+            SESSION_DETAILS.reset()
+
+    def test_hydrate_session_details_from_metadata_sets_unify_key(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _hydrate_session_details_from_metadata,
+        )
+        from unify.session_details import SESSION_DETAILS
+
+        SESSION_DETAILS.reset()
+        try:
+            _hydrate_session_details_from_metadata(
+                {
+                    "assistant_bio": "Bio",
+                    "unify_key": "assigned-tenant-key",
+                },
+            )
+
+            assert SESSION_DETAILS.unify_key == "assigned-tenant-key"
         finally:
             SESSION_DETAILS.reset()
 

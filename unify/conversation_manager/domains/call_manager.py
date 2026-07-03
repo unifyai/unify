@@ -290,33 +290,20 @@ class LivekitCallManager:
         previous_key: str,
         current_key: str,
     ) -> None:
-        """Respawn the LiveKit worker when UNIFY_KEY changes after idle-pool pre-warm.
+        """Ensure the persistent worker is running after UNIFY_KEY changes.
 
-        Idle containers start the persistent worker at boot with the image-baked
-        UNIFY_KEY. Assignment updates os.environ in this process, but the worker
-        subprocess tree keeps the stale key until it is restarted.
+        Idle containers start the worker at boot with an image-baked UNIFY_KEY.
+        Assignment updates this process's environment, but each LiveKit job carries
+        the assigned key in dispatch metadata so entrypoints authenticate as the
+        tenant without restarting the pre-warmed worker pool.
         """
         if not os.environ.get("LIVEKIT_URL"):
             return
-
-        worker_running = (
-            self._worker_proc is not None and self._worker_proc.poll() is None
-        )
-        key_changed = bool(current_key) and current_key != previous_key
-
-        if key_changed and worker_running:
-            if self.has_active_call:
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] Skipping persistent "
-                    "worker restart while a voice call is active",
-                )
-            else:
-                LOGGER.info(
-                    f"{ICONS['ipc']} [LivekitCallManager] Restarting persistent "
-                    "worker so voice subprocesses inherit updated UNIFY_KEY",
-                )
-                await self.cleanup_persistent_worker()
-
+        if current_key and current_key != previous_key:
+            LOGGER.debug(
+                f"{ICONS['ipc']} [LivekitCallManager] UNIFY_KEY changed; "
+                "keeping persistent worker warm (key passed via dispatch metadata)",
+            )
         self.start_persistent_worker()
 
     def _is_idle_pending_rewarm(self) -> bool:
@@ -521,6 +508,8 @@ class LivekitCallManager:
 
             socket_path = await self._ensure_socket_server()
 
+            from unify.session_details import SESSION_DETAILS
+
             meta_dict = {
                 "voice_provider": self.voice_provider or "cartesia",
                 "voice_id": self.voice_id or "",
@@ -534,6 +523,7 @@ class LivekitCallManager:
                 "assistant_name": self.assistant_name,
                 "is_coordinator": self.is_coordinator,
                 "ipc_socket_path": socket_path or "",
+                "unify_key": SESSION_DETAILS.unify_key,
             }
             if extra_metadata:
                 meta_dict.update(extra_metadata)
