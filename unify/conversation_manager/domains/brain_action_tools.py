@@ -1994,19 +1994,28 @@ class ConversationManagerBrainActionTools:
         """Mark one onboarding checklist step complete or incomplete.
 
         Use the ``step_id`` values from my live onboarding progress block
-        (for example ``apps``, ``create-scheduled-task``). Communication
-        rows and auto-triggered checklist actions complete on their own —
-        if this tool returns an error, relay that explanation rather than
-        guessing which steps are settable.
+        (for example ``apps``, ``create-scheduled-task``, and the workspace
+        demos ``workspace-mailbox`` / ``workspace-drive`` /
+        ``workspace-calendar``). Communication rows still complete on their own
+        when messages are sent and received — if this tool returns an error,
+        relay that explanation rather than guessing which steps are settable.
 
-        **Call when:** I have finished onboarding work that the checklist
-        cannot detect yet (semantic setup, guided walkthroughs outside
-        Communication) and the user agrees the step is done — or when I need
-        to undo a manual completion I set earlier.
+        **Workspace demos are completed here, explicitly.** A demo never
+        auto-completes, so the checklist cannot detect it on its own. I do the
+        demo task — read the relevant area and deliver one short summary as a
+        single ``unify_message`` (e.g. for ``workspace-mailbox`` I summarise the
+        recent mail) — and then call this with ``completed=True``; the demo is
+        not finished until I make that call. Any reply, tidy-up, or flag I offer
+        afterwards is an optional follow-up and never gates completion.
+
+        **Call when:** I have finished onboarding work the checklist cannot
+        detect yet (a workspace demo task, semantic setup, or a guided
+        walkthrough outside Communication) and it is genuinely done — or when I
+        need to undo a manual completion I set earlier.
 
         **Do not call when:** onboarding is inactive; the step is in the
-        Communication section; the user only clicked a checklist row that
-        auto-starts an action; or I have not actually done the work.
+        Communication section; or I have not actually finished the work yet
+        (e.g. I've not yet delivered the workspace demo summary).
 
         After success: confirm briefly and continue from the refreshed
         onboarding progress block.

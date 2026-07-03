@@ -126,6 +126,10 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "assistant_number": assistant["phone"] or "",
         "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number") or "",
         "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id", ""),
+        "assistant_slack_bot_user_id": assistant.get(
+            "assistant_slack_bot_user_id",
+            "",
+        ),
         "assistant_email": assistant["email"] or "",
         "assistant_email_provider": assistant.get("email_provider")
         or "google_workspace",

@@ -3161,11 +3161,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
-            # Workspace demo rows deliver their proof-of-completion summary over the unify_message medium.
-            "workspace_mailbox": {"unify_message"},
-            "workspace_drive": {"unify_message"},
-            "workspace_calendar": {"unify_message"},
-            # Learning-beat deliverables land in coordinator chat.
             "learning_beat": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:

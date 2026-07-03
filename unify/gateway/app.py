@@ -334,9 +334,6 @@ def create_app(
             "phone": twilio,
             # Assistant WhatsApp (Twilio WhatsApp sender).
             "whatsapp": twilio_wa,
-            # Assistant Discord (interaction verification key; bot pool lives in
-            # Orchestra, but without this key the deployment can't run Discord).
-            "discord": configured("DISCORD_PUBLIC_KEY"),
             # Slack Events ingress.
             "slack": configured("SLACK_SIGNING_SECRET"),
             # User-side phone / WhatsApp verification codes (Twilio social verify).
