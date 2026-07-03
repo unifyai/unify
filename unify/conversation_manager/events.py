@@ -1021,6 +1021,7 @@ class UnifyMessageSent(Event):
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None
     onboarding_origin_event_id: str | None = None
+    onboarding_learning_phase: str | None = None
 
 
 @dataclass
