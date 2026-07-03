@@ -1480,6 +1480,8 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         contact_index=_ContactIndex(),
         mode=scenario.mode,
         get_active_contact=lambda: _BOSS_CONTACT,
+        in_voice_session=False,
+        call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
         assistant_job_title=(
             "Coordinator" if scenario.is_coordinator else "Customer Success"
         ),
@@ -1496,6 +1498,10 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         assistant_slack_bot_user_id="",
         assistant_has_teams=False,
         team_summaries=list(scenario.team_summaries),
+        coordinator_onboarding_active=False,
+        coordinator_onboarding_render=None,
+        onboarding_clicked_trigger_steps=[],
+        onboarding_catalog=None,
     )
 
 
@@ -1545,6 +1551,15 @@ def _build_brain_spec(scenario: CoordinatorScenario):
         return build_brain_spec(cm, snapshot_state=snapshot_state)
 
 
+def _aggregate_tool_thoughts(result) -> str:
+    parts: list[str] = []
+    for tool in result.tools:
+        thoughts = getattr(tool, "thoughts", None)
+        if isinstance(thoughts, str) and thoughts.strip():
+            parts.append(f"[{tool.name}] {thoughts.strip()}")
+    return " | ".join(parts)
+
+
 def _tool_payloads(result) -> list[dict[str, Any]]:
     return [
         {
@@ -1584,7 +1599,7 @@ async def _run_target_decision(
         brain_spec.state_message(),
         tools,
         tool_choice="required",
-        response_format=brain_spec.response_model,
+        inject_tool_thoughts=True,
         exclusive_tools={
             "make_call",
             "make_whatsapp_call",
@@ -1615,11 +1630,7 @@ async def _verify_scenario(
             sorted(alternative) for alternative in scenario.required_tool_alternatives
         ],
         "candidate_user_visible_text": _user_visible_text(result),
-        "candidate_structured_thoughts": (
-            getattr(result.structured_output, "thoughts", "")
-            if result.structured_output is not None
-            else ""
-        ),
+        "candidate_tool_thoughts": _aggregate_tool_thoughts(result),
         "candidate_tool_calls": _tool_payloads(result),
     }
     return await query_llm(
@@ -1672,11 +1683,7 @@ def _format_failure(
             _coordinator_primitive_mentions(act_queries),
         ),
         "user_visible_text": _user_visible_text(result),
-        "structured_thoughts": (
-            getattr(result.structured_output, "thoughts", "")
-            if result.structured_output is not None
-            else ""
-        ),
+        "tool_thoughts": _aggregate_tool_thoughts(result),
         "verdict": verdict.model_dump() if verdict is not None else None,
     }
     return json.dumps(payload, indent=2)

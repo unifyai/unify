@@ -10,6 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from tests.helpers import _handle_project
+from unify.common.llm_helpers import inject_tool_call_thoughts, method_to_schema
 from unify.common.single_shot import (
     single_shot_tool_decision,
     SingleShotResult,
@@ -224,6 +225,56 @@ def test_single_shot_result_with_structured_output():
     assert result.tool_name == "greet"
     assert result.structured_output is not None
     assert result.structured_output.thoughts == "This is my reasoning"
+
+
+def test_inject_tool_call_thoughts_schema():
+    """Injected tool schemas expose optional thoughts, not required."""
+    schema = inject_tool_call_thoughts(
+        method_to_schema(greet, tool_name="greet", include_class_name=False),
+    )
+    params = schema["function"]["parameters"]
+    assert "thoughts" in params["properties"]
+    assert "thoughts" not in params["required"]
+
+
+@pytest.mark.asyncio
+async def test_single_shot_strips_tool_thoughts_before_execution():
+    """Per-tool thoughts are stripped before invocation and stored separately."""
+
+    def strict_greet(*, name: str) -> str:
+        return f"Hello, {name}!"
+
+    async def fake_generate(**_kwargs):
+        client.messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "greet",
+                            "arguments": (
+                                '{"name": "Alice", "thoughts": "User asked for a greeting"}'
+                            ),
+                        },
+                    },
+                ],
+            },
+        ]
+
+    client = SimpleNamespace(messages=[], generate=fake_generate)
+
+    result = await single_shot_tool_decision(
+        client,
+        "hello",
+        {"greet": strict_greet},
+        inject_tool_thoughts=True,
+    )
+
+    assert result.tools[0].args == {"name": "Alice"}
+    assert result.tools[0].thoughts == "User asked for a greeting"
+    assert result.tools[0].result == "Hello, Alice!"
 
 
 @pytest.mark.asyncio

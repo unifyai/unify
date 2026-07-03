@@ -5,66 +5,19 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field, create_model
-
 from unify.common.startup_timing import log_startup_timing
 from unify.common.prompt_helpers import PromptParts
 from unify.conversation_manager.prompt_builders import build_system_prompt
 from unify.conversation_manager.runtime_status import (
     deployment_runtime_reconcile_prompt_note,
 )
-from unify.conversation_manager.cm_types import Mode, ScreenshotEntry
+from unify.conversation_manager.cm_types import ScreenshotEntry
 from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
     from unify.conversation_manager.domains.renderer import SnapshotState
-
-
-def _build_response_models() -> dict[Mode, type[BaseModel]]:
-    """
-    Create response models for ConversationManager's main brain.
-
-    All actions (comms, task steering, etc.) are now tool calls.
-    The response model only captures the LLM's reasoning.
-
-    Returns:
-        dict: Response models for different modes (Mode.CALL, Mode.MEET, Mode.TEXT)
-    """
-    # Text mode: just thoughts
-    TextResponse = create_model(
-        "TextResponse",
-        thoughts=(
-            str,
-            Field(..., description="Your concise reasoning before taking actions"),
-        ),
-        __base__=BaseModel,
-    )
-
-    # Voice mode uses the same response model as text mode.
-    # Guidance is delivered via the standalone guide_voice_agent tool (called in
-    # parallel with the action tool) rather than the response content, because
-    # the model reliably populates tool arguments but intermittently skips the
-    # content field when tool_choice is required.
-    return {
-        Mode.CALL: TextResponse,
-        Mode.MEET: TextResponse,
-        Mode.TEXT: TextResponse,
-    }
-
-
-# Cache the response models since they don't change
-_RESPONSE_MODELS = _build_response_models()
-
-
-def build_response_models() -> dict[Mode, type[BaseModel]]:
-    """
-    Public accessor for response models used by ConversationManager's brain.
-
-    Returns cached models for different modes (Mode.CALL, Mode.MEET, Mode.TEXT).
-    """
-    return _RESPONSE_MODELS
 
 
 @dataclass(frozen=True)
@@ -79,7 +32,6 @@ class BrainSpec:
 
     system_prompt: PromptParts
     state_prompt: str
-    response_model: type["BaseModel"]
     # Buffered screenshots captured during screen sharing, aligned with user turns.
     screenshots: list[ScreenshotEntry] = field(default_factory=list)
     # Relative file paths for each screenshot (parallel to screenshots list).
@@ -191,7 +143,7 @@ def build_brain_spec(
     acting_user_id: str | None = None,
 ) -> BrainSpec:
     """
-    Build the prompt + response model inputs for a single Main CM Brain run.
+    Build the prompt inputs for a single Main CM Brain run.
 
     The returned spec is *pure* (no side effects) and can be used by either the
     legacy single-shot generate path or the async tool loop path.
@@ -298,9 +250,6 @@ def build_brain_spec(
     )
     _system_prompt_ms = _mark_step()
 
-    response_model = _RESPONSE_MODELS[cm.mode]
-    _response_model_ms = _mark_step()
-
     # Validate we can JSON-encode state prompt early (helps catch accidental objects)
     json.dumps({"state_prompt": prompt})
     _json_validate_ms = _mark_step()
@@ -308,7 +257,6 @@ def build_brain_spec(
     spec = BrainSpec(
         system_prompt=system_prompt,
         state_prompt=prompt,
-        response_model=response_model,
         screenshots=screenshots or [],
         screenshot_paths=screenshot_paths or [],
     )
@@ -320,7 +268,7 @@ def build_brain_spec(
             "⏱️ [StartupTiming] llm_preamble.brain_spec.detail "
             "total=%.0fms prompt_ref=%.0fms boss_contact=%.0fms "
             "active_contact=%.0fms bio=%.0fms runtime_status=%.0fms "
-            "system_prompt=%.0fms response_model=%.0fms json_validate=%.0fms "
+            "system_prompt=%.0fms json_validate=%.0fms "
             "spec=%.0fms state_chars=%d system_chars=%d system_parts=%d "
             "screenshots=%d runtime_note=%s mode=%s"
         ),
@@ -331,7 +279,6 @@ def build_brain_spec(
         _bio_ms,
         _runtime_status_ms,
         _system_prompt_ms,
-        _response_model_ms,
         _json_validate_ms,
         _spec_ms,
         len(prompt),

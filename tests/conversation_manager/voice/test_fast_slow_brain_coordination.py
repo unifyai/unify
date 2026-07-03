@@ -268,15 +268,14 @@ class TestSlowBrainDecisionBoundaries:
         a parameter on wait/send_sms/act, and not via the response content field.
 
         Verify: guide_voice_agent exists as a standalone method with the expected
-        signature, wait() does NOT have call_guidance params, and the response
-        model for voice modes does NOT have a call_guidance field.
+        signature, wait() does NOT have call_guidance params, and injected tool
+        schemas expose optional per-call thoughts without call_guidance.
         """
         import inspect
-        from unify.conversation_manager.domains.brain import build_response_models
+        from unify.common.llm_helpers import inject_tool_call_thoughts, method_to_schema
         from unify.conversation_manager.domains.brain_action_tools import (
             ConversationManagerBrainActionTools,
         )
-        from unify.conversation_manager.cm_types import Mode
 
         # guide_voice_agent should exist as a standalone method
         guide_sig = inspect.signature(
@@ -301,15 +300,19 @@ class TestSlowBrainDecisionBoundaries:
             "it is now a standalone guide_voice_agent tool"
         )
 
-        # The response model for voice modes should NOT contain call_guidance
-        models = build_response_models()
-        voice_model = models[Mode.CALL]
-        schema = voice_model.model_json_schema()
-        props = schema.get("properties", {})
-        assert "call_guidance" not in props, (
-            "call_guidance should NOT be in the response model — "
-            "it is delivered via the standalone guide_voice_agent tool"
+        # Injected tool schemas expose optional thoughts, not call_guidance
+        guide_schema = inject_tool_call_thoughts(
+            method_to_schema(
+                ConversationManagerBrainActionTools.guide_voice_agent,
+                tool_name="guide_voice_agent",
+                include_class_name=False,
+            ),
         )
+        props = guide_schema["function"]["parameters"]["properties"]
+        required = guide_schema["function"]["parameters"]["required"]
+        assert "thoughts" in props
+        assert "thoughts" not in required
+        assert "call_guidance" not in props
 
 
 @pytest.mark.asyncio

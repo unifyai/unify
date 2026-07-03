@@ -56,6 +56,12 @@ def _build_voice(**overrides: object) -> str:
 class TestCommsToolListing:
     """The output-format section lists only the comms tools the assistant can use."""
 
+    def test_slow_brain_prompt_documents_per_tool_call_thoughts(self):
+        prompt = _build()
+        assert "Tool-call reasoning" in prompt
+        assert "optional `thoughts` argument" in prompt
+        assert '"thoughts": [my concise thoughts before taking actions]' not in prompt
+
     def test_all_tools_listed_when_fully_configured(self):
         prompt = _build(assistant_has_phone=True, assistant_has_email=True)
         assert "`send_sms`" in prompt

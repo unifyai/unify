@@ -1747,7 +1747,6 @@ class TestProactiveSpeechVisualContext:
         brain_spec = BrainSpec(
             system_prompt=_default_prompt_parts(),
             state_prompt="<state>test</state>",
-            response_model=ProactiveDecision,
             screenshots=screenshots,
         )
         main_brain_msg = brain_spec.state_message()
