@@ -2399,6 +2399,13 @@ class FunctionManager(BaseFunctionManager):
             tree.body[0],
             (ast.FunctionDef, ast.AsyncFunctionDef),
         ):
+            if any(
+                isinstance(node, (ast.Import, ast.ImportFrom)) for node in tree.body
+            ):
+                raise ValueError(
+                    "Implementation must be a single top-level function definition "
+                    "with no module-level imports or other statements.",
+                )
             raise ValueError(
                 "Each implementation must contain exactly one top-level function.",
             )
