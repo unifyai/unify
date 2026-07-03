@@ -105,7 +105,7 @@ def new_vision_llm_client(
 
     Uses UNIFY_VISION_MODEL and UNIFY_VISION_REASONING_EFFORT from settings so
     image Q&A stays on a vision-capable endpoint even when UNIFY_MODEL is
-    text-only (for example deepseek-v4-max@deepseek).
+    text-only (for example minimax-v3@minimax).
     """
     config = {
         "reasoning_effort": SETTINGS.UNIFY_VISION_REASONING_EFFORT,

@@ -1267,14 +1267,14 @@ class ConversationManagerBrainActionTools:
                 (interject, ask) on this action will also skip context forwarding.
             llm_profile: Optional curated LLM profile for this action. Leave
                 unset for the default actor profile, normally
-                ``deepseek-v4-max@deepseek``. Use ``gpt_5_5_low``,
+                ``minimax-v3@minimax``. Use ``gpt_5_5_low``,
                 ``gpt_5_5_medium``, or ``gpt_5_5_high`` only when the task or
                 the user's wording warrants premium GPT-5.5 reasoning. If the
                 user explicitly asks you to "use all of your thinking effort",
                 "think as hard as possible", or similar, choose
                 ``gpt_5_5_high``. GPT-5.5 profiles are substantially more
-                expensive than the DeepSeek default: about 11.5x the
-                input-token rate and 34.5x the output-token rate before any
+                expensive than the MiniMax default: about 17x the
+                input-token rate and 25x the output-token rate before any
                 extra reasoning/output tokens from higher effort.
 
                 Escalate the profile when retrying an action that shows

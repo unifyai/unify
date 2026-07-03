@@ -74,8 +74,8 @@ jobs:
       # through OpenRouter, so the CI-local Orchestra needs this key too.
       ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      # Brain default model is deepseek-v4-max@deepseek, which litellm calls
-      # directly; without this the slow-brain turns fail auth and no reply lands.
+      # Brain default model is minimax-v3@minimax (OpenRouter). OPENROUTER_API_KEY
+      # above covers slow-brain auth; DEEPSEEK remains for DeepSeek-specific tests.
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_CI_API_KEY }}
       # Communication service URL (org secret is still named UNITY_COMMS_URL).
       UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
