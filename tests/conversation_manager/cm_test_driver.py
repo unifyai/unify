@@ -45,7 +45,7 @@ class StepResult:
 
 
 # Context variable to track LLM run requests during stepping
-_step_llm_requests: contextvars.ContextVar[list[tuple[float, bool, bool]] | None] = (
+_step_llm_requests: contextvars.ContextVar[list[tuple[float, bool]] | None] = (
     contextvars.ContextVar("_step_llm_requests", default=None)
 )
 
@@ -122,7 +122,7 @@ class CMStepDriver:
             # (running as a background task) also subscribes to these channels.
             return 0
 
-        step_requests: list[tuple[float, bool, bool]] = []
+        step_requests: list[tuple[float, bool]] = []
         token = _step_llm_requests.set(step_requests)
 
         # Patch request_llm_run to use our context var
@@ -130,17 +130,16 @@ class CMStepDriver:
 
         async def patched_request(
             delay=0,
-            cancel_running=False,
             is_user_origin=False,
             **kwargs,
         ) -> None:
             requests = _step_llm_requests.get()
             if requests is not None:
-                requests.append((delay, cancel_running, is_user_origin))
+                requests.append((delay, is_user_origin))
                 return
             # Fall back to normal behavior if not in step context
             self._cm._pending_llm_requests.append(
-                (delay, cancel_running, is_user_origin),
+                (delay, is_user_origin),
             )
 
         try:
@@ -252,7 +251,7 @@ class CMStepDriver:
                 )
             return 0
 
-        step_requests: list[tuple[float, bool, bool]] = []
+        step_requests: list[tuple[float, bool]] = []
         token = _step_llm_requests.set(step_requests)
 
         # Patch request_llm_run to use our context var
@@ -260,16 +259,15 @@ class CMStepDriver:
 
         async def patched_request(
             delay=0,
-            cancel_running=False,
             is_user_origin=False,
             **kwargs,
         ) -> None:
             requests = _step_llm_requests.get()
             if requests is not None:
-                requests.append((delay, cancel_running, is_user_origin))
+                requests.append((delay, is_user_origin))
                 return
             self._cm._pending_llm_requests.append(
-                (delay, cancel_running, is_user_origin),
+                (delay, is_user_origin),
             )
 
         try:

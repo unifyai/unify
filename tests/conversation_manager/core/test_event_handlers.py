@@ -786,7 +786,6 @@ class TestPhoneCallHandlers:
         mock_cm.cancel_proactive_speech.assert_called_once()
         mock_cm.request_llm_run.assert_called_once_with(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=2,
         )
 
@@ -824,7 +823,6 @@ class TestPhoneCallHandlers:
         assert 42 not in mock_cm.completed_actions
         mock_cm.request_llm_run.assert_called_once_with(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=2,
         )
 
@@ -2365,7 +2363,7 @@ class TestNotificationEventHandlers:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.request_llm_run.assert_called_once_with(delay=0, cancel_running=True)
+        mock_cm.request_llm_run.assert_called_once_with(delay=0)
 
     @pytest.mark.asyncio
     async def test_notification_unpinned_removes_from_bar(self, mock_cm, static_now):

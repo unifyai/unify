@@ -570,7 +570,6 @@ async def _(
         )
         await cm.request_llm_run(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=contact_id,
         )
 
@@ -650,7 +649,6 @@ async def _(
         )
         await cm.request_llm_run(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=contact_id,
         )
 
@@ -903,7 +901,6 @@ async def _(
     # Trigger LLM run so the brain can decide next steps
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -962,7 +959,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -1055,7 +1051,6 @@ async def _(
         if context is None:
             await cm.request_llm_run(
                 delay=0,
-                cancel_running=True,
                 triggering_contact_id=contact_id,
             )
             return
@@ -1103,7 +1098,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -1583,7 +1577,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -2620,7 +2613,7 @@ async def _(
     )
 
     await cm.schedule_proactive_speech()
-    await cm.request_llm_run(delay=0, cancel_running=True)
+    await cm.request_llm_run(delay=0)
 
 
 @EventHandler.register(TaskDue)
