@@ -29,6 +29,36 @@ def test_reset_notification_marks_step_not_done_and_names_it() -> None:
     assert "live" in text
 
 
+def test_workspace_demo_notification_requires_full_task_then_explicit_completion() -> (
+    None
+):
+    event = CoordinatorOnboardingEvent(
+        subtype="workspace_demo_requested",
+        message="The user just clicked 'Summarise my mailbox'.",
+        details={"step_id": "workspace-mailbox"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "workspace_demo_requested" in text
+    assert "`workspace-mailbox`" in text
+    # The brain must do the whole task and then complete it explicitly — a
+    # summary alone must not be presented as completion.
+    assert "set_onboarding_task_state" in text
+    assert "summary alone must NOT complete it" in text
+
+
+def test_step_completed_notification_requires_no_action() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_step_completed",
+        message="The 'workspace-mailbox' onboarding step is now complete.",
+        details={"step_id": "workspace-mailbox"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "onboarding_step_completed" in text
+    assert "`workspace-mailbox`" in text
+    # This confirms the brain's own completion; it must not prompt a second turn.
+    assert "No action needed now" in text
+
+
 def test_reference_quiz_notification_stays_minimal() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="reference_quiz_clue_requested",

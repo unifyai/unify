@@ -1187,6 +1187,13 @@ def _build_coordinator_onboarding_progress_block(
         "Each step line includes its ``step_id`` for "
         "``set_onboarding_task_state(step_id, completed)`` when I need to "
         "mark non-Communication work complete or undo a manual completion.",
+        "Workspace demo steps (``workspace-mailbox``, ``workspace-drive``, "
+        "``workspace-calendar``) are completed this way, explicitly: they are "
+        "multi-part tasks that do NOT auto-complete from a summary. I finish the "
+        "whole task first — for the mailbox that means summarising it AND sending "
+        "the reply — and only then call "
+        "``set_onboarding_task_state(step_id, completed=True)``. Sending the "
+        "summary alone must not mark the step done.",
         "While the user is on an onboarding checklist step or asking where to "
         "click in the onboarding UI, I answer from this block and the "
         "onboarding UI reference — I do not dispatch ``act`` just to orient "
