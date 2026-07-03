@@ -5,7 +5,7 @@ tests/conversation_manager/core/test_inactivity_lifecycle.py
 Tests for container inactivity detection and lifecycle management.
 
 These tests verify the critical production behavior documented in INFRA.md:
-- Containers shut down after 7 minutes (420s) of inactivity
+- Containers shut down after 1 hour (3600s) of inactivity
 - Idle containers ping every 30 seconds to stay alive
 - Cleanup is called properly on shutdown
 - Jobs are marked as done in AssistantJobs
@@ -23,7 +23,7 @@ What This File Tests:
 
 Production Context (from INFRA.md):
 -----------------------------------
-- Inactivity timeout: 7 minutes (420 seconds)
+- Inactivity timeout: 1 hour (3600 seconds)
 - Ping interval: 30 seconds
 - Idle containers use assistant_id=None
 - Live containers have a real assistant_id
