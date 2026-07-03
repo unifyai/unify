@@ -815,3 +815,20 @@ class TestAddEmailAttachmentsRouting:
             assert params["receiver_email"] == "assistant@unify.ai"
             assert params["message_id"] == "msg-123"
             assert params["attachment_id"] == "att-1"
+
+
+@pytest.mark.asyncio
+async def test_request_deferred_desktop_binding_posts_to_comms_runtime():
+    mock_session = _mock_aiohttp_session(response_json={"accepted": True})
+
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_session),
+        patch(
+            "unify.conversation_manager.domains.comms_utils.SETTINGS",
+        ) as mock_settings,
+    ):
+        mock_settings.conversation.COMMS_URL = COMMS_URL
+        await comms_utils.request_deferred_desktop_binding(7315)
+
+    post_url = mock_session.post.call_args[0][0]
+    assert post_url == f"{COMMS_URL}/infra/runtime/7315/request-desktop"

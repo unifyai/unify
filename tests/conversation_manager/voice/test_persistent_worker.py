@@ -796,6 +796,16 @@ class TestEntrypointMetadata:
         finally:
             SESSION_DETAILS.reset()
 
+    def test_voice_call_channel_defers_desktop_binding(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _voice_call_channel_defers_desktop_binding,
+        )
+
+        assert _voice_call_channel_defers_desktop_binding("unify_meet")
+        assert _voice_call_channel_defers_desktop_binding("phone_call")
+        assert _voice_call_channel_defers_desktop_binding("whatsapp_call")
+        assert not _voice_call_channel_defers_desktop_binding("email")
+
 
 # ---------------------------------------------------------------------------
 # IPC socket initialisation from metadata
