@@ -1171,6 +1171,9 @@ async def send_email_via_address(
         "body": body,
         "in_reply_to": email_id,
     }
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
     if from_name:
         payload["from_name"] = from_name
     if thread_id:

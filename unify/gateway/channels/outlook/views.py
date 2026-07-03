@@ -113,7 +113,7 @@ async def delete_outlook_user(request: Request):
 
 
 @router.post("/send")
-async def send_outlook_email(request: Request):
+async def send_outlook_email(request: Request, *, assistant: dict | None = None):
     """Send an email via Microsoft Graph.
 
     Required body fields: ``from``, ``to`` (str or list), ``body``.
@@ -147,7 +147,8 @@ async def send_outlook_email(request: Request):
     bcc_list = [bcc] if isinstance(bcc, str) and bcc else (bcc or [])
 
     try:
-        assistant = await lookup_assistant(sender, credentials)
+        if assistant is None:
+            assistant = await lookup_assistant(sender, credentials)
         graph = graph_client_from_assistant(assistant, sender, credentials)
         user = _get_user_node(graph, sender, assistant)
 
