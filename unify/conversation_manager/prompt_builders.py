@@ -704,11 +704,13 @@ def _build_comms_tool_listing(
         ]
         if len(kept) != len(built):
             kept.append(
-                "- NOTE: One or more channel send tools are intentionally "
-                "unavailable right now because this is an onboarding reference-"
-                "quiz step the user has not started yet. Tell them to click the "
-                'matching "Trigger ... from T-W1N" row in the Onboarding '
-                "checklist; do not attempt to send on that channel until then.",
+                "- NOTE: Reference-quiz outbound tools (email, SMS, WhatsApp, "
+                "phone call, WhatsApp call, etc.) are unavailable until the user "
+                'clicks the matching "Trigger ... from T-W1N" row in the '
+                'Onboarding checklist. A verbal ask, "go ahead", or call-side '
+                "agreement does NOT unlock them — tell the user to click that row "
+                "first. Never claim you are sending or imply a message is in flight "
+                "until the tool is available and you have actually called it.",
             )
         return "\n".join(kept)
 
@@ -976,11 +978,16 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "While the user is onboarding me, I receive a "
             "`[CoordinatorOnboarding]` notification whenever an "
             "onboarding milestone lands or the user starts an onboarding "
-            "step. Milestone notifications need a short acknowledgement; "
-            "communication trigger notifications tell me the user is now "
-            "expecting an outbound on that channel — I satisfy that "
-            "expectation exactly once, whether I send it of my own accord or "
-            "in response to the notification.",
+            "step. Milestone notifications need a short acknowledgement.",
+            "Communication reference-quiz steps (email, SMS, WhatsApp "
+            "message, phone call, WhatsApp call, etc.) advance only when the "
+            'user clicks the matching "Trigger ... from T-W1N" row in the '
+            "Onboarding checklist — that click unlocks my outbound tool and "
+            'fires `reference_quiz_clue_requested`. A verbal ask, "go ahead", '
+            "or call-side consent is NOT a substitute for the click. Until they "
+            "click, I guide them to the row and never claim I am sending.",
+            "After the click, I send the clue exactly once on that channel; if "
+            "I already sent it, I confirm instead of duplicating.",
             "Recognised subtypes (carried in the notification body as "
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
@@ -1007,14 +1014,14 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  B. If a step's title/framing says it is waiting for the user to reply, "
             "answer, connect, or edit account details, guide or wait accordingly. Do "
             "not call it complete until the backend marks it done.",
-            "  C. If a step's title/framing says I should trigger an outbound "
-            "communication from T-W1N, the click tells me the user now expects "
-            "that outbound — it is a poll, not a demand for a duplicate. I send "
-            "it once with the matching comms tool if I have not already; if I "
-            "already sent it (including just before, off my own initiative or "
-            "from a verbal ask), I do not send another — I confirm it instead. "
-            "The backend marks the trigger done once it detects my outbound "
-            "transcript row.",
+            "  C. For reference-quiz trigger steps (email, SMS, WhatsApp "
+            "message, phone call, WhatsApp call, etc.), the user must click "
+            'the matching "Trigger ... from T-W1N" row before I can send — '
+            "my outbound tool stays unavailable until then, and a verbal ask "
+            "does not unlock it. Once they have clicked, I send the clue once "
+            "with the matching comms tool; if I already sent after that click, "
+            "I confirm instead of duplicating. The backend marks the trigger "
+            "done once it detects my outbound transcript row.",
             "  D. Do not skip ahead to unrelated sections while an active step is still "
             "pending unless the live progress block lists a valid next step or the user "
             "explicitly asks to move on.",
@@ -1023,13 +1030,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "`channel`, `tool_name`, `trigger_step_id`, `reply_step_id`, step "
             "guidance, and section `framing` supplied by Orchestra. There is no "
             "supplied clue or answer — I invent my own.",
-            "  2. This event is a POLL, not a fresh command. It means the user now "
-            "expects the clue on this channel and is checking whether it has been "
-            "sent. If a verbal directive arrived around the same time (e.g. they "
-            "asked on a call), it is almost certainly the SAME directive in two "
-            "forms — I satisfy it once. If I have already sent a clue on this "
-            "channel for this step, I do NOT send another; I just confirm it is on "
-            "its way. I send a clue now only if none has gone out yet.",
+            "  2. This event means the user clicked the trigger row — that click "
+            "unlocked my outbound tool and they are polling for the clue. If they "
+            "asked verbally on a call before clicking, that did NOT start the step: "
+            "tell them to click the row in the Onboarding checklist (they can keep "
+            "the call open). If I have already sent a clue on this channel for this "
+            "step, I do NOT send another; I confirm it is on its way. I send a clue "
+            "now only if none has gone out yet after their click.",
             "  3. When I do send, use the supplied `tool_name` in this same LLM turn. "
             "For message channels, call the outbound comms tool directly; for call "
             "channels, start/request the call with the briefing in the call context. "
@@ -1350,9 +1357,11 @@ def _build_coordinator_onboarding_progress_block(
             f"Current default onboarding action: {primary_title}. This is the "
             "step I should name first when the user asks what to do next, and "
             "a recommendation first: explain why it is next, then ask whether "
-            "they want me to start it. A question like 'what should I do?' or "
-            "'what is onboarding?' is not permission to send a message, start "
-            "a call, or change state.",
+            "they want to start it — which means clicking its row in the "
+            "Onboarding checklist (for communication triggers, the click is "
+            "required before I can send; a verbal 'go ahead' does not count). "
+            "A question like 'what should I do?' or 'what is onboarding?' is not "
+            "permission to send a message, start a call, or change state.",
         )
         lines.append(
             "During active onboarding, my first user-facing instruction for a "
@@ -1364,15 +1373,17 @@ def _build_coordinator_onboarding_progress_block(
         primary_step = step_by_id.get(primary_id)
         if isinstance(primary_step, dict) and primary_step.get("kind") == "trigger":
             lines.append(
-                "For this communication trigger, I send the outbound once the "
-                "user signals they want it — either by saying so or by clicking "
-                "the checklist row, which are the same directive if they happen "
-                "together. I invent my own sci-fi quote clue; user-facing setup "
-                "is one plain sentence (no genre lists). If I have already sent "
-                "the clue on this channel, the click is just a poll and I confirm "
-                "rather than send a duplicate. The checklist turns it done only "
-                "after the backend detects my outbound transcript row; I must not "
-                "call it complete early.",
+                "For this communication trigger (and every reference-quiz channel "
+                "— email, SMS, WhatsApp message, phone call, WhatsApp call, etc.), "
+                'the user must click the matching "Trigger ... from T-W1N" row '
+                "in the Onboarding checklist before I can send — my outbound tool "
+                'stays unavailable until that click, and a verbal ask or "go ahead" '
+                "on a call does not substitute for it. After they click, I send my "
+                "sci-fi quote clue once; user-facing setup is one plain sentence (no "
+                "genre lists). If I have already sent the clue on this channel, the "
+                "click is just a poll and I confirm rather than duplicate. The "
+                "checklist turns it done only after the backend detects my outbound "
+                "transcript row; I must not call it complete early.",
             )
         lines.extend(_detail_lines(primary_id, primary.get("nudge_chat") or ""))
         lines.append(

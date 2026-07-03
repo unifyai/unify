@@ -1130,3 +1130,37 @@ class TestOnboardingPromptLeakageGuard:
         assert "Blade Runner" not in prompt
         assert "quick sci-fi quiz" in prompt
         assert "I NEVER list genres, franchises" in prompt
+
+    def test_reference_quiz_requires_checklist_click_not_verbal_consent(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [
+                    {
+                        "id": "email-reference",
+                        "title": "Trigger email from T-W1N",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "trigger",
+                        "interaction": {
+                            "type": "reference_quiz",
+                            "tool_name": "send_email",
+                        },
+                    },
+                ],
+                "next_targets": [
+                    {
+                        "id": "email-reference",
+                        "title": "Trigger email from T-W1N",
+                        "nudge_chat": "Click the email row.",
+                    },
+                ],
+            },
+        )
+        assert "verbal ask" in prompt.lower() or "verbal consent" in prompt.lower()
+        assert (
+            "does not substitute" in prompt.lower()
+            or "does not count" in prompt.lower()
+        )
+        assert "Trigger ... from T-W1N" in prompt
