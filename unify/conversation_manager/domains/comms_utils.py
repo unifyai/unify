@@ -529,6 +529,32 @@ async def publish_assistant_desktop_ready(
         )
 
 
+async def request_deferred_desktop_binding(assistant_id: int | str) -> None:
+    """Promote a voice-only activation so the session controller binds desktop."""
+    base_url = SETTINGS.conversation.COMMS_URL.strip()
+    if not base_url:
+        return
+    url = f"{base_url.rstrip('/')}/infra/runtime/{assistant_id}/request-desktop"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    LOGGER.warning(
+                        f"{ICONS['comms_outbound']} request-desktop failed "
+                        f"({resp.status}): {body[:200]}",
+                    )
+    except Exception as e:
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} request-desktop error for "
+            f"assistant {assistant_id}: {e}",
+        )
+
+
 async def upload_unify_attachment(
     file_content: bytes,
     filename: str,

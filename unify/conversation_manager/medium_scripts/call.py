@@ -798,6 +798,17 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.unify_key = str(meta["unify_key"])
 
 
+def _voice_call_channel_defers_desktop_binding(channel: str) -> bool:
+    """Return whether this LiveKit call channel uses deferred desktop binding."""
+    return channel in (
+        "phone_call",
+        "whatsapp_call",
+        "unify_meet",
+        "google_meet",
+        "teams_meet",
+    )
+
+
 _CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
 
 # On an outbound call, hold the opener until the earliest of the callee's first
@@ -3041,6 +3052,18 @@ async def entrypoint(ctx: agents.JobContext):
             reliable=True,
         )
 
+    def _schedule_deferred_desktop_binding() -> None:
+        if not _voice_call_channel_defers_desktop_binding(channel):
+            return
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return
+        from unify.conversation_manager.domains import comms_utils
+
+        asyncio.create_task(
+            comms_utils.request_deferred_desktop_binding(agent_id),
+        )
+
     async def _generate_opening_greeting(*, authoritative_briefing: bool) -> str:
         """Pre-generate the opening line via a sidecar LLM call.
 
@@ -3227,6 +3250,8 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
+
+    _schedule_deferred_desktop_binding()
 
     # The opener has been dispatched; resume normal turn handling (fast-brain
     # fillers and slow-brain turns) for any subsequent user speech.
