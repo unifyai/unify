@@ -546,58 +546,12 @@ def build_function_filter_scope() -> str | None:
     return "function_id not in (" + ", ".join(str(i) for i in sorted(ids)) + ")"
 
 
-def enabled_guidance_ids() -> set[int]:
-    """Resolve enabled integrations' guidance titles → GuidanceManager ids.
+def enabled_summary_for_prompt() -> str:
+    """Return a GuidanceManager filter that hides disabled package guidance.
 
-    Used to set ``GuidanceManager.filter_scope`` to a guidance-id
-    predicate that hides entries belonging to disabled integrations.
-    Returns an empty set when nothing is enabled or the GuidanceManager
-    isn't available.
-    """
-    enabled = get_enabled_integrations()
-    if not enabled:
-        return set()
-
-    titles: set[str] = set()
-    for pkg in enabled.values():
-        titles.update(pkg.get("guidance_titles", []))
-
-    if not titles:
-        return set()
-
-    try:
-        from unify.manager_registry import ManagerRegistry
-
-        gm = ManagerRegistry.get_guidance_manager()
-    except Exception:
-        return set()
-
-    quoted = ", ".join(repr(t) for t in sorted(titles))
-    try:
-        rows = gm.filter(filter=f"title in ({quoted})", limit=10000)
-    except Exception:
-        return set()
-
-    ids: set[int] = set()
-    for r in rows or []:
-        gid = (
-            r.guidance_id
-            if hasattr(r, "guidance_id")
-            else (r.get("guidance_id") if isinstance(r, dict) else None)
-        )
-        if isinstance(gid, int):
-            ids.add(gid)
-    return ids
-
-
-def build_guidance_filter_scope() -> str | None:
-    """Return a ``guidance_id in (...)`` filter scope, or ``None`` to disable.
-
-    Convention: when there are no integration packages on disk at all,
-    return ``None`` so non-integration callers see existing behaviour.
-    When packages exist but none are enabled, return a never-matching
-    filter so disabled-integration guidance is hidden.  When some are
-    enabled, return a positive filter naming their guidance ids.
+    User-authored guidance must remain searchable. Exclude guidance rows
+    belonging to disabled integration packages instead of positively
+    allowing only enabled package IDs (mirrors ``build_function_filter_scope``).
     """
     try:
         from unify.integration_status.discovery import discover_available_packages
@@ -610,13 +564,36 @@ def build_guidance_filter_scope() -> str | None:
         return None
 
     enabled = get_enabled_integrations()
-    if not enabled:
-        return "guidance_id in ()"
+    disabled_guidance_titles: set[str] = set()
+    for pkg in packages:
+        slug = pkg.get("slug")
+        if slug and slug not in enabled:
+            disabled_guidance_titles.update(pkg.get("guidance_titles", []))
 
-    ids = enabled_guidance_ids()
+    if not disabled_guidance_titles:
+        return None
+
+    try:
+        from unify.manager_registry import ManagerRegistry
+
+        gm = ManagerRegistry.get_guidance_manager()
+        quoted = ", ".join(repr(t) for t in sorted(disabled_guidance_titles))
+        rows = gm.filter(filter=f"title in ({quoted})", limit=10000)
+    except Exception:
+        return None
+
+    ids: set[int] = set()
+    for row in rows or []:
+        gid = (
+            row.get("guidance_id")
+            if isinstance(row, dict)
+            else getattr(row, "guidance_id", None)
+        )
+        if isinstance(gid, int):
+            ids.add(gid)
     if not ids:
-        return "guidance_id in ()"
-    return "guidance_id in (" + ", ".join(str(i) for i in sorted(ids)) + ")"
+        return None
+    return "guidance_id not in (" + ", ".join(str(i) for i in sorted(ids)) + ")"
 
 
 def enabled_summary_for_prompt() -> str:
@@ -706,7 +683,6 @@ __all__ = [
     "build_guidance_filter_scope",
     "build_function_filter_scope",
     "enabled_function_ids",
-    "enabled_guidance_ids",
     "enabled_summary_for_prompt",
     "get_enabled_integrations",
     "get_setup_completeness",
