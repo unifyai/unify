@@ -1853,6 +1853,25 @@ class CommsManager:
                                 message_preview="Incoming phone call",
                             ).to_json(),
                         )
+                elif thread == "whatsapp_call_sent":
+                    number = event.get("user_number")
+                    if number and number.startswith("whatsapp:"):
+                        number = number[len("whatsapp:") :]
+                    contact = next(
+                        (c for c in contacts if c.get("whatsapp_number") == number),
+                        None,
+                    )
+                    if contact is None:
+                        contact = event.get("contact")
+                    if contact is None:
+                        contact = next(
+                            (c for c in contacts if c.get("phone_number") == number),
+                            None,
+                        )
+                    if contact is None:
+                        contact = next(c for c in contacts if c["contact_id"] == 1)
+                    call_event = WhatsAppCallSent(contact=contact)
+                    event_topic = "app:comms:whatsapp_call_sent"
                 elif thread == "whatsapp_call_answered":
                     number = event.get("user_number")
                     if number and number.startswith("whatsapp:"):

@@ -413,6 +413,45 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         if stashed_context:
             cm.call_manager.initial_notification = stashed_context
 
+    if isinstance(event, WhatsAppCallSent) and contact_id is not None:
+        if not cm.call_manager.initial_notification:
+            stashed_context = cm._pending_whatsapp_call_contexts.pop(contact_id, None)
+            if stashed_context:
+                cm.call_manager.initial_notification = stashed_context
+            else:
+                from unify.conversation_manager.domains import comms_utils
+
+                pool_number = (
+                    getattr(cm, "assistant_whatsapp_number", "")
+                    or getattr(SESSION_DETAILS.assistant, "whatsapp_number", "")
+                    or ""
+                )
+                whatsapp_number = (contact or {}).get("whatsapp_number") or ""
+                if pool_number and whatsapp_number:
+                    try:
+                        intent = await comms_utils.get_pending_whatsapp_call_intent(
+                            pool_number=pool_number,
+                            contact_number=whatsapp_number,
+                        )
+                    except Exception as exc:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
+                        )
+                        intent = None
+                    context = (intent or {}).get("context")
+                    if context:
+                        cm.call_manager.initial_notification = context
+                        try:
+                            await comms_utils.clear_pending_whatsapp_call_intent(
+                                pool_number=pool_number,
+                                contact_number=whatsapp_number,
+                            )
+                        except Exception as exc:
+                            LOGGER.error(
+                                f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                            )
+        cm.call_manager._whatsapp_call_joining = True
+
     match event:
         case PhoneCallReceived() as e:
             cm.call_manager.conference_name = e.conference_name

@@ -47,9 +47,15 @@ from livekit.api import (
     SIPInboundTrunkInfo,
 )
 
+from unify.gateway.adapters.common import (
+    default_contacts,
+    get_assistant,
+    publish_runtime_event,
+)
 from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL, twilio_callback_url
 from unify.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
 from unify.gateway.common.twilio import build_twilio_wa_client
+from unify.gateway.context import GatewayContext
 from unify.gateway.credentials import (
     CredentialNotFoundError,
     CredentialStore,
@@ -131,6 +137,7 @@ async def _resolve_route(assistant_id: int, contact_number: str) -> dict:
 
 @unauth_router.post("/status")
 async def check_whatsapp_status(
+    request: Request,
     MessageStatus: str = Form(...),
     To: str = Form(...),
     From: str = Form(...),
@@ -152,11 +159,13 @@ async def check_whatsapp_status(
     if callback_id:
         await _forward_notification_status(callback_id, To, MessageSid, MessageStatus)
     elif MessageStatus == "failed":
+        gateway_context = getattr(request.app.state, "gateway_context", None)
         await _recover_permanent_permission_from_failed_invite_status(
             pool_number=_normalize_whatsapp_number(From),
             contact_number=_normalize_whatsapp_number(To),
             message_sid=MessageSid,
             error_code=ErrorCode,
+            gateway_context=gateway_context,
         )
     return {"status": True, "message_status": MessageStatus}
 
@@ -206,6 +215,8 @@ TWILIO_PERMANENT_CALL_PERMISSION_ERROR = 37010
 PERMANENT_CALL_PERMISSION_SOURCE = "twilio_permanent_permission"
 CALL_PERMISSION_PENDING_SUPPRESSION = timedelta(minutes=10)
 CALL_PERMISSION_PROBE_STATUSES = {"pending", "unknown_interaction"}
+PERMANENT_PERMISSION_INVITE_POLL_INTERVAL_S = 0.25
+PERMANENT_PERMISSION_INVITE_POLL_MAX_S = 1.0
 
 
 def render_greeting_template_text(user_name: str, agent_name: str) -> str:
@@ -488,7 +499,10 @@ async def _upsert_outbound_whatsapp_call_session(
     return response.json()
 
 
-async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
+async def _fetch_pending_call_intent(
+    pool_number: str,
+    contact_number: str,
+) -> dict | None:
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
@@ -500,9 +514,14 @@ async def _has_pending_call_intent(pool_number: str, contact_number: str) -> boo
             timeout=10.0,
         )
     if response.status_code == 404:
-        return False
+        return None
     response.raise_for_status()
-    return True
+    return response.json()
+
+
+async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
+    intent = await _fetch_pending_call_intent(pool_number, contact_number)
+    return intent is not None
 
 
 async def _clear_pending_call_intent(pool_number: str, contact_number: str) -> None:
@@ -607,7 +626,69 @@ async def _attempt_call_permission_invite(
     fetched = await asyncio.to_thread(_fetch_twilio_message, wa_client, message.sid)
     if _message_indicates_permanent_permission(fetched):
         return "permanent_permission"
+
+    deadline = time.monotonic() + PERMANENT_PERMISSION_INVITE_POLL_MAX_S
+    while time.monotonic() < deadline:
+        if _message_indicates_permanent_permission(fetched):
+            return "permanent_permission"
+        status = str(getattr(fetched, "status", "") or "").lower()
+        if status == "failed":
+            if _message_indicates_permanent_permission(fetched):
+                return "permanent_permission"
+            return "sent"
+        if status in {"delivered", "read"}:
+            return "sent"
+        await asyncio.sleep(PERMANENT_PERMISSION_INVITE_POLL_INTERVAL_S)
+        fetched = await asyncio.to_thread(_fetch_twilio_message, wa_client, message.sid)
+
+    if _message_indicates_permanent_permission(fetched):
+        return "permanent_permission"
     return "sent"
+
+
+async def _wake_and_publish_outbound_whatsapp_call_sent(
+    *,
+    gateway_context: GatewayContext,
+    assistant_id: int | str,
+    pool_number: str,
+    contact_number: str,
+    room_name: str,
+) -> None:
+    """Wake the assistant runtime and tell CM to start the outbound voice agent.
+
+    Gateway-side direct call placement (Twilio conference + LiveKit SIP) must
+    stay paired with the ConversationManager ``WhatsAppCallSent`` lifecycle.
+    Without this publish, telephony rings while no voice worker is dispatched.
+    """
+    assistant_data = await get_assistant(assistant_id=str(assistant_id))
+    resolved_id = str(assistant_data.get("assistant_id") or assistant_id)
+    await gateway_context.runtime_activator.activate(
+        resolved_id,
+        reason="whatsapp_call_sent",
+        medium="whatsapp_call",
+        metadata={"assistant": assistant_data},
+    )
+    contacts = default_contacts(assistant_data)
+    contact = next(
+        (c for c in contacts if c.get("whatsapp_number") == contact_number),
+        None,
+    )
+    if contact is None:
+        contact = contacts[-1] if contacts else {"whatsapp_number": contact_number}
+
+    await publish_runtime_event(
+        gateway_context,
+        assistant_id=resolved_id,
+        thread="whatsapp_call_sent",
+        event={
+            "contacts": contacts,
+            "assistant_id": resolved_id,
+            "user_number": contact_number,
+            "assistant_number": pool_number,
+            "livekit_room": room_name,
+            "contact": contact,
+        },
+    )
 
 
 async def _recover_permanent_call_permission_and_place_call(
@@ -618,6 +699,8 @@ async def _recover_permanent_call_permission_and_place_call(
     contact_number: str,
     room_name: str,
     wa_client,
+    gateway_context: GatewayContext | None = None,
+    notify_runtime: bool = False,
 ) -> dict:
     accepted = await _record_call_permission_accepted(
         pool_number,
@@ -636,6 +719,18 @@ async def _recover_permanent_call_permission_and_place_call(
             "failed to clear pending WhatsApp call intent for %s",
             contact_number,
         )
+    if notify_runtime:
+        if gateway_context is None:
+            raise RuntimeError(
+                "notify_runtime requires gateway_context for outbound WhatsApp calls",
+            )
+        await _wake_and_publish_outbound_whatsapp_call_sent(
+            gateway_context=gateway_context,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=contact_number,
+            room_name=room_name,
+        )
     return await _place_direct_whatsapp_call(
         credentials=credentials,
         assistant_id=assistant_id,
@@ -652,6 +747,7 @@ async def _recover_permanent_permission_from_failed_invite_status(
     contact_number: str,
     message_sid: str | None,
     error_code: str | None,
+    gateway_context: GatewayContext | None = None,
 ) -> None:
     if not _is_permanent_call_permission_error(error_code):
         if not message_sid:
@@ -701,6 +797,8 @@ async def _recover_permanent_permission_from_failed_invite_status(
             contact_number=contact_number,
             room_name=_whatsapp_call_room_name(assistant_id),
             wa_client=wa_client,
+            gateway_context=gateway_context,
+            notify_runtime=gateway_context is not None,
         )
     except Exception:
         logger.exception(
