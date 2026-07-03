@@ -2333,14 +2333,13 @@ async def entrypoint(ctx: agents.JobContext):
                     event.to_json(),
                 )
 
-            # While the outbound opener is pending, the callee's first utterance
-            # (their "Hello?") only triggers the opener — do not publish it as a
-            # turn to the slow brain, which would otherwise compose a competing
-            # reply alongside the opener. It carries no content the opener needs.
-            if not assistant._opening_pending:
-                asyncio.create_task(
-                    _publish_user_utterance(text),
-                )
+            # Opener-pending turns are still published for the durable transcript.
+            # Slow-brain scheduling is gated separately: llm_node returns before
+            # classification while _opening_pending, so no FastBrainTurnCompleted
+            # is emitted and the utterance handler never calls interject_or_run.
+            asyncio.create_task(
+                _publish_user_utterance(text),
+            )
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
         _enqueue_mood_classification(role, text, utterance_id)
@@ -3239,8 +3238,9 @@ async def entrypoint(ctx: agents.JobContext):
         # Hold the opener until the callee's first completed utterance (their
         # "Hello?") or a fallback timeout — so it lands when they are actually
         # listening, not into dead air right after the line connects. The first
-        # turn is consumed by the opener (filler + slow-brain turn suppressed via
-        # _opening_pending); a later turn is a normal barge-in.
+        # turn is logged to the transcript but does not schedule the slow brain
+        # (filler suppressed via _opening_pending in llm_node); a later turn is a
+        # normal barge-in.
         try:
             await asyncio.wait_for(
                 assistant._first_user_turn.wait(),
