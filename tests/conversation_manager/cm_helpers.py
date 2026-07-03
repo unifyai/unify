@@ -13,6 +13,7 @@ and don't need these helpers.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from tests.assertion_helpers import assertion_failed
@@ -21,6 +22,11 @@ if TYPE_CHECKING:
     from tests.conversation_manager.cm_test_driver import CMStepDriver, StepResult
 
 T = TypeVar("T")
+
+
+def normalize_identifier_tokens(text: str) -> str:
+    """Lowercase and treat spaces/underscores as equivalent (``email_id`` ≈ ``email id``)."""
+    return re.sub(r"[\s_]+", "", text.lower())
 
 
 # =============================================================================
