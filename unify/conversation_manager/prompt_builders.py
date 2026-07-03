@@ -1666,7 +1666,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Just sent a message → `wait`
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
-- Completed an action (text) → `wait` (do not announce completion unless asked)
+- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn.
 - Completed an action (voice call) → call `guide_voice_agent(message="...")` to relay results, then `wait`
 - Unsure what to *say* → `wait`
 
