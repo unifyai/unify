@@ -1038,7 +1038,6 @@ def parse_cm_log(path: Path, *, log_date: str = "") -> CMLogData:
                     "dropped_requests",
                 ),
                 "dispatch_utc": _ts(line),
-                "cancel_running": "cancel_running=True" in line,
             }
 
         # Slow-brain run started: captures was_queued per run_id
@@ -1073,7 +1072,6 @@ def parse_cm_log(path: Path, *, log_date: str = "") -> CMLogData:
                     dispatch_utc=meta.get("dispatch_utc", ""),
                     llm_log_path=llm_path,
                     was_queued=bool(meta.get("was_queued")),
-                    preempted=bool(meta.get("cancel_running")),
                 ),
             )
 

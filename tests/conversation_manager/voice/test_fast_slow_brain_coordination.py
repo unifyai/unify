@@ -52,8 +52,8 @@ Known Issue (rapid utterance cancellation):
 -------------------------------------------
 When user turns occur faster than the slow brain can think, cancelling the
 running slow-brain head on each new utterance prevents any run from completing.
-Voice user turns must use queue-of-2 debouncing (``cancel_running=False`` via
-``handle_voice_user_turn``). Tests in this file document and verify that
+The debouncer uses queue-of-2 semantics (running head never cancelled; only
+the pending slot is replaced). Tests in this file document and verify that
 behavior.
 
 Known Issue (stale guidance after topic change):
@@ -421,9 +421,6 @@ class TestRapidUtteranceHandling:
     Without this, rapid speech causes the slow brain to NEVER complete
     thinking, which breaks any functionality that depends on slow brain output
     (action completion, cross-channel notifications, etc.).
-
-    The bug: cancel_running=True on voice user turns cancels
-    even the in-flight LLM call. With rapid utterances, none ever complete.
     """
 
     @pytest.fixture
@@ -445,16 +442,15 @@ class TestRapidUtteranceHandling:
         - LLM takes ~10-15 seconds per thinking step (realistic timing)
         - Each utterance triggers the slow brain via handle_voice_user_turn()
 
-        THE BUG (without fix):
-        - handle_voice_user_turn uses cancel_running=False (queue of 2)
-        - Each new utterance CANCELS the in-flight LLM run
+        THE BUG (without queue-of-2):
+        - Each new utterance cancels the in-flight LLM run
         - With rapid speech, NO LLM runs ever complete
         - The slow brain becomes completely non-functional
 
         THE FIX:
-        - handle_voice_user_turn always uses cancel_running=False
-        - Debouncer uses asyncio.shield() to protect running tasks
-        - Running LLM completes, only pending tasks are debounced
+        - Debouncer never cancels the running head
+        - asyncio.shield() protects running tasks from pending cancellation
+        - Running LLM completes; only pending tasks are debounced
         - "Queue of 2" behavior: 1 running + 1 pending
 
         Expected results:
@@ -466,8 +462,8 @@ class TestRapidUtteranceHandling:
         # Disable the speech urgency evaluator for this test. The urgency
         # evaluator is a separate sidecar that can legitimately preempt
         # stale slow-brain runs — tested independently in test_speech_urgency.
-        # Here we isolate the base debouncing guarantee: cancel_running=False
-        # plus asyncio.shield() protect running tasks from being replaced.
+        # Here we isolate the base debouncing guarantee: queue-of-2 plus
+        # asyncio.shield() protect running tasks from being replaced.
         from unify.settings import SETTINGS
 
         orig = SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
@@ -544,7 +540,7 @@ class TestRapidUtteranceHandling:
                     await asyncio.sleep(UTTERANCE_INTERVAL)
 
             # Wait for LLM runs to complete
-            # Timeline with fix (cancel_running=False + shield):
+            # Timeline with queue-of-2 + shield:
             #   t=0.0: U1 -> run 1 starts (2s duration)
             #   t=0.1: U2 -> pending waits for run 1
             #   t=0.2: U3 -> pending replaced
@@ -554,13 +550,10 @@ class TestRapidUtteranceHandling:
             #   t=4.0: run 5 COMPLETES
             #   Result: 0 cancelled, 2 completed
             #
-            # Timeline with bug (cancel_running=True, no shield):
+            # Timeline if running head were cancelled on each utterance:
             #   t=0.0: U1 -> run 1 starts
             #   t=0.1: U2 -> run 1 CANCELLED, run 2 starts
-            #   t=0.2: U3 -> run 2 CANCELLED, run 3 starts
-            #   t=0.3: U4 -> run 3 CANCELLED, run 4 starts
-            #   t=0.4: U5 -> run 4 CANCELLED, run 5 starts
-            #   t=2.4: run 5 COMPLETES (if we wait)
+            #   ... repeated ...
             #   Result: 4 cancelled, 1 completed
 
             # Wait for all LLM runs to resolve (completed or cancelled).
@@ -606,7 +599,7 @@ class TestRapidUtteranceHandling:
                 f"LLM tasks instead of just debouncing pending tasks.\n"
                 f"\n"
                 f"Required fixes:\n"
-                f"1. handle_voice_user_turn must use cancel_running=False\n"
+                f"1. Debouncer must never cancel the running head\n"
                 f"2. Debouncer must use asyncio.shield() to protect running tasks"
             )
 

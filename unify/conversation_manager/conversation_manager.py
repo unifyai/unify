@@ -1171,7 +1171,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         await self.request_llm_run(
             delay=0,
-            cancel_running=False,
             triggering_contact_id=triggering_contact_id,
             is_user_origin=True,
             turn_id=turn_id,
@@ -1251,7 +1250,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def run_llm(
         self,
         delay: float = 0,
-        cancel_running: bool = False,
         trace_meta: dict[str, str] | None = None,
         is_user_origin: bool = False,
     ):
@@ -1259,7 +1257,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self._run_llm_with_failure_notification,
             kwargs={"trace_meta": trace_meta or {}},
             delay=delay,
-            cancel_running=cancel_running,
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
             is_user_origin=is_user_origin,
@@ -1658,7 +1655,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def request_llm_run(
         self,
         delay=0,
-        cancel_running=False,
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         credit_gate_reply_context: dict[str, Any] | None = None,
@@ -1685,19 +1681,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
         }
         if credit_gate_reply_context is not None:
             request_meta["credit_gate_reply_context"] = credit_gate_reply_context
-        self._pending_llm_requests.append((delay, cancel_running, is_user_origin))
+        self._pending_llm_requests.append((delay, is_user_origin))
         self._pending_llm_request_meta.append(request_meta)
         log_startup_timing(
             LOGGER,
             (
                 "⏱️ [StartupTiming] first_reply.request_llm_run queued "
-                "request_id=%s origin_event=%s delay=%s cancel_running=%s "
+                "request_id=%s origin_event=%s delay=%s "
                 "is_user_origin=%s pending=%d ready_for_brain=%s"
             ),
             request_id,
             request_meta["origin_event_name"] or "-",
             delay,
-            cancel_running,
             is_user_origin,
             len(self._pending_llm_requests),
             self.ready_for_brain,
@@ -1708,8 +1703,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"Queued slow-brain run request_id={request_id} "
                 f"origin_event_id={request_meta['origin_event_id'] or '-'} "
                 f"origin_event={request_meta['origin_event_name'] or '-'} "
-                f"delay={delay} cancel_running={cancel_running} "
-                f"is_user_origin={is_user_origin}"
+                f"delay={delay} is_user_origin={is_user_origin}"
             ),
         )
         return request_id
@@ -1727,12 +1721,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Prefer the newest user-origin request; fall back to the newest overall.
         selected_idx = len(requests) - 1
         for i in range(len(requests) - 1, -1, -1):
-            if requests[i][2]:  # is_user_origin
+            if requests[i][1]:  # is_user_origin
                 selected_idx = i
                 break
 
         dropped_requests = len(requests) - 1
-        delay, cancel_running, is_user_origin = requests[selected_idx]
+        delay, is_user_origin = requests[selected_idx]
         selected_meta = dict(metas[selected_idx]) if metas else {}
 
         self._pending_llm_requests.clear()
@@ -1747,14 +1741,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             (
                 "⏱️ [StartupTiming] first_reply.flush_llm_requests dispatch "
                 "run_id=%s request_id=%s origin_event=%s dropped=%d delay=%s "
-                "cancel_running=%s is_user_origin=%s"
+                "is_user_origin=%s"
             ),
             run_id,
             selected_meta.get("request_id", "-"),
             selected_meta.get("origin_event_name", "-") or "-",
             dropped_requests,
             delay,
-            cancel_running,
             is_user_origin,
         )
 
@@ -1766,7 +1759,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"origin_event_id={selected_meta.get('origin_event_id', '-') or '-'} "
                 f"origin_event={selected_meta.get('origin_event_name', '-') or '-'} "
                 f"dropped_requests={dropped_requests} delay={delay} "
-                f"cancel_running={cancel_running} is_user_origin={is_user_origin}"
+                f"is_user_origin={is_user_origin}"
             ),
         )
         if await self._maybe_handle_depleted_credit_gate(selected_meta):
@@ -1796,7 +1789,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         await self.run_llm(
             delay=delay,
-            cancel_running=cancel_running,
             trace_meta=selected_meta,
             is_user_origin=is_user_origin,
         )
