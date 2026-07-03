@@ -135,20 +135,29 @@ async def check_whatsapp_status(
     To: str = Form(...),
     From: str = Form(...),
     MessageSid: str | None = Form(None),
+    ErrorCode: str | None = Form(None),
     callback_id: str | None = Query(None),
 ):
     """Twilio delivery-receipt webhook for outbound WhatsApp messages."""
     logger.info(
         "[WhatsApp Status Callback] MessageStatus=%s To=%s From=%s "
-        "MessageSid=%s callback_id=%s",
+        "MessageSid=%s ErrorCode=%s callback_id=%s",
         MessageStatus,
         To,
         From,
         MessageSid,
+        ErrorCode,
         callback_id,
     )
     if callback_id:
         await _forward_notification_status(callback_id, To, MessageSid, MessageStatus)
+    elif MessageStatus == "failed":
+        await _recover_permanent_permission_from_failed_invite_status(
+            pool_number=_normalize_whatsapp_number(From),
+            contact_number=_normalize_whatsapp_number(To),
+            message_sid=MessageSid,
+            error_code=ErrorCode,
+        )
     return {"status": True, "message_status": MessageStatus}
 
 
@@ -193,6 +202,8 @@ GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
+TWILIO_PERMANENT_CALL_PERMISSION_ERROR = 37010
+PERMANENT_CALL_PERMISSION_SOURCE = "twilio_permanent_permission"
 CALL_PERMISSION_PENDING_SUPPRESSION = timedelta(minutes=10)
 CALL_PERMISSION_PROBE_STATUSES = {"pending", "unknown_interaction"}
 
@@ -494,6 +505,210 @@ async def _has_pending_call_intent(pool_number: str, contact_number: str) -> boo
     return True
 
 
+async def _clear_pending_call_intent(pool_number: str, contact_number: str) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if response.status_code == 404:
+        return
+    response.raise_for_status()
+
+
+async def _resolve_inbound_assistant_id(
+    pool_number: str,
+    contact_number: str,
+) -> int | None:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/resolve",
+            params={
+                "pool_number": pool_number,
+                "sender": contact_number,
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if response.status_code >= 400:
+        return None
+    data = response.json()
+    assistant_id = data.get("assistant_id")
+    if assistant_id is None:
+        return None
+    return int(assistant_id)
+
+
+def _normalize_whatsapp_number(value: str) -> str:
+    return value.replace("whatsapp:", "").strip()
+
+
+def _whatsapp_call_room_name(assistant_id: int | str) -> str:
+    return f"unity_{assistant_id}_whatsapp_call"
+
+
+def _is_permanent_call_permission_error(error_code: object) -> bool:
+    return str(error_code or "") == str(TWILIO_PERMANENT_CALL_PERMISSION_ERROR)
+
+
+def _fetch_twilio_message(wa_client, message_sid: str):
+    return wa_client.messages(message_sid).fetch()
+
+
+def _message_indicates_permanent_permission(message) -> bool:
+    return _is_permanent_call_permission_error(getattr(message, "error_code", None))
+
+
+def _invite_status_callback_url() -> str:
+    return twilio_callback_url(
+        local_path="/local/twilio/whatsapp-status",
+        hosted_base=SETTINGS.conversation.COMMS_URL,
+        hosted_path="/whatsapp/status",
+    )
+
+
+def _create_call_permission_invite_message(*, wa_client, pool_number: str, to: str):
+    return wa_client.messages.create(
+        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
+        status_callback=_invite_status_callback_url(),
+    )
+
+
+async def _attempt_call_permission_invite(
+    *,
+    wa_client,
+    pool_number: str,
+    to: str,
+) -> str:
+    """Send a call-permission invite unless WhatsApp already granted permission.
+
+    Returns ``"sent"`` when the invite was queued, or ``"permanent_permission"``
+    when Twilio reports permanent call permission already exists (error 37010).
+    """
+    try:
+        message = await asyncio.to_thread(
+            _create_call_permission_invite_message,
+            wa_client=wa_client,
+            pool_number=pool_number,
+            to=to,
+        )
+    except Exception as exc:
+        if _is_permanent_call_permission_error(getattr(exc, "code", None)):
+            return "permanent_permission"
+        raise
+
+    fetched = await asyncio.to_thread(_fetch_twilio_message, wa_client, message.sid)
+    if _message_indicates_permanent_permission(fetched):
+        return "permanent_permission"
+    return "sent"
+
+
+async def _recover_permanent_call_permission_and_place_call(
+    *,
+    credentials: CredentialStore,
+    assistant_id: int,
+    pool_number: str,
+    contact_number: str,
+    room_name: str,
+    wa_client,
+) -> dict:
+    accepted = await _record_call_permission_accepted(
+        pool_number,
+        contact_number,
+        source=PERMANENT_CALL_PERMISSION_SOURCE,
+    )
+    _cache_call_permission(
+        pool_number=pool_number,
+        contact_number=contact_number,
+        response_payload=accepted,
+    )
+    try:
+        await _clear_pending_call_intent(pool_number, contact_number)
+    except Exception:
+        logger.exception(
+            "failed to clear pending WhatsApp call intent for %s",
+            contact_number,
+        )
+    return await _place_direct_whatsapp_call(
+        credentials=credentials,
+        assistant_id=assistant_id,
+        pool_number=pool_number,
+        to=contact_number,
+        room_name=room_name,
+        wa_client=wa_client,
+    )
+
+
+async def _recover_permanent_permission_from_failed_invite_status(
+    *,
+    pool_number: str,
+    contact_number: str,
+    message_sid: str | None,
+    error_code: str | None,
+) -> None:
+    if not _is_permanent_call_permission_error(error_code):
+        if not message_sid:
+            return
+        credentials = EnvCredentialStore()
+        wa_client = build_twilio_wa_client(credentials)
+        try:
+            fetched = await asyncio.to_thread(
+                _fetch_twilio_message,
+                wa_client,
+                message_sid,
+            )
+        except Exception:
+            logger.exception(
+                "failed to fetch WhatsApp message %s for permission recovery",
+                message_sid,
+            )
+            return
+        if not _message_indicates_permanent_permission(fetched):
+            return
+
+    permission = await _check_call_permission(pool_number, contact_number)
+    if permission.get("permitted"):
+        logger.info(
+            "WhatsApp permanent permission already reconciled for %s",
+            contact_number,
+        )
+        return
+
+    assistant_id = await _resolve_inbound_assistant_id(pool_number, contact_number)
+    if assistant_id is None:
+        logger.error(
+            "cannot recover WhatsApp permanent permission: no assistant route "
+            "for pool=%s contact=%s",
+            pool_number,
+            contact_number,
+        )
+        return
+
+    credentials = EnvCredentialStore()
+    wa_client = build_twilio_wa_client(credentials)
+    try:
+        await _recover_permanent_call_permission_and_place_call(
+            credentials=credentials,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=contact_number,
+            room_name=_whatsapp_call_room_name(assistant_id),
+            wa_client=wa_client,
+        )
+    except Exception:
+        logger.exception(
+            "failed to recover WhatsApp permanent permission for %s",
+            contact_number,
+        )
+
+
 def _recent_pending_invite(permission: dict) -> bool:
     if permission.get("status") != "pending":
         return False
@@ -628,24 +843,6 @@ async def _place_direct_whatsapp_call(
         "pool_number": pool_number,
         "conference_name": conference_name,
     }
-
-
-def _send_call_permission_invite(
-    *,
-    wa_client,
-    pool_number: str,
-    to: str,
-) -> None:
-    wa_client.messages.create(
-        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        status_callback=twilio_callback_url(
-            local_path="/local/twilio/whatsapp-status",
-            hosted_base=SETTINGS.conversation.COMMS_URL,
-            hosted_path="/whatsapp/status",
-        ),
-    )
 
 
 async def _can_probe_permission(
@@ -800,12 +997,25 @@ async def send_call(request: Request):
             "pool_number": pool_number,
         }
 
-    wa_client.messages.create(
-        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
+    invite_result = await _attempt_call_permission_invite(
+        wa_client=wa_client,
+        pool_number=pool_number,
+        to=to,
     )
+    if invite_result == "permanent_permission":
+        logger.info(
+            "WhatsApp permanent call permission exists for %s; placing direct call",
+            to,
+        )
+        return await _recover_permanent_call_permission_and_place_call(
+            credentials=credentials,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=to,
+            room_name=room_name,
+            wa_client=wa_client,
+        )
+
     await _record_call_permission_pending(pool_number, to)
     logger.info("WhatsApp call permission request sent to %s", to)
     return {"success": True, "method": "invite", "pool_number": pool_number}
