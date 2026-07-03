@@ -283,11 +283,10 @@ def learning_expenses_improved_act_query() -> str:
         f'User correction: "{LEARNING_EXPENSES_USER_CORRECTION_TEXT}"\n\n'
         f"Re-read `{checking}` and `{card}` under `{LEARNING_EXPENSES_BASE_DIR}/`.\n\n"
         f"Apply this corrected spend algorithm:\n{algo}\n\n"
-        "1. Recompute corrected monthly spend via execute_code.\n"
-        "2. Store the correction rule as Guidance (monthly bank export spend rules).\n"
-        "3. Store a reusable Function that builds monthly spending from checking+card "
-        "CSV exports using the corrected algorithm.\n\n"
-        "Return the corrected total and briefly confirm what Guidance/Function you stored."
+        "1. Recompute corrected monthly spend via execute_code.\n\n"
+        "Return the corrected total and a short report summary. Do not store "
+        "Guidance or Functions — StorageCheck runs after this act and persists "
+        "reusable skills from the trajectory."
     )
 
 

@@ -1199,12 +1199,14 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  4. Surface my own mistake with the real numbers, suggest the exact "
             "correction text for the user to send, and WAIT — never send the "
             "correction or proceed on their behalf.",
-            "  5. After the user's correction, revise and tag the improved "
-            "deliverable with onboarding_learning_phase=`improved`. Store the "
-            "stated rule as Guidance AND the pipeline as a Function, then tell "
-            "the user to open the Brain rail **Guidance** and **Functions** "
-            "sections themselves — I have no tool to navigate the Console for "
-            "them (not a generic Memory tab).",
+            "  5. After the user's correction, act(persist=True) to recompute with "
+            "the corrected algorithm and tag the improved deliverable with "
+            "onboarding_learning_phase=`improved`. Do not store Guidance or "
+            "Functions inside the act — StorageCheck runs after completion and "
+            "persists them from the trajectory; once the act finishes, tell the "
+            "user to open the Brain rail **Guidance** and **Functions** sections "
+            "and point at what StorageCheck stored — I have no tool to navigate "
+            "the Console for them (not a generic Memory tab).",
             "  6. Invite the user to ask for next month's report and WAIT; the "
             "replay only runs once they ask.",
             "  7. Replay via a second act(persist=True) over the month-N+1 files "
