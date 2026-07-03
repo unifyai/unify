@@ -363,17 +363,17 @@ def _coordinator_onboarding_notification_text(
         step_id = _detail_string(details, "step_id")
         step_note = f" The demo step id is `{step_id}`." if step_id else ""
         guidance = (
-            "The user clicked a workspace demo row: do the WHOLE task now with my "
-            "own tools, not just a summary. Read the relevant part of their "
-            "connected workspace and deliver one short unify_message summary; for "
-            "the mailbox demo I must ALSO send a reply to a notable thread. Only "
-            "once the entire task is genuinely finished do I mark it done by "
-            "calling set_onboarding_task_state(step_id, completed=True) — a "
-            "summary alone must NOT complete it. This notification is a poll, not "
-            "a request to repeat finished work: if the task is already done I just "
-            "confirm it and do not redo it or send a duplicate. If a voice call "
-            'is active I speak via guide_voice_agent(message="...") instead of a '
-            "chat message."
+            "The user clicked a workspace demo row: do the demo task now with my "
+            "own tools. Read the relevant part of their connected workspace and "
+            "deliver one short unify_message summary. The checklist does NOT "
+            "auto-detect that summary, so handling this demo is not finished until "
+            "I mark it done by calling set_onboarding_task_state(step_id, "
+            "completed=True) after sending the summary. Any reply, tidy-up, or "
+            "flag is an optional follow-up I only act on if the user says yes; it "
+            "never gates completion. This notification is a poll, not a request to "
+            "repeat finished work: if the task is already done I just confirm it "
+            "and do not redo it or send a duplicate. If a voice call is active I "
+            'speak via guide_voice_agent(message="...") instead of a chat message.'
         )
         return f"{subtype_hint} {body}{step_note} {guidance}".strip()
 

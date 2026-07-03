@@ -1994,11 +1994,13 @@ class ConversationManagerBrainActionTools:
         when messages are sent and received — if this tool returns an error,
         relay that explanation rather than guessing which steps are settable.
 
-        **Workspace demos are completed here, explicitly.** A demo is a
-        multi-part task and does NOT auto-complete from a summary. I do the
-        whole task first — e.g. for ``workspace-mailbox`` I summarise the
-        mailbox AND send the reply — and only then call this with
-        ``completed=True``. Sending the summary alone must not mark it done.
+        **Workspace demos are completed here, explicitly.** A demo never
+        auto-completes, so the checklist cannot detect it on its own. I do the
+        demo task — read the relevant area and deliver one short summary as a
+        single ``unify_message`` (e.g. for ``workspace-mailbox`` I summarise the
+        recent mail) — and then call this with ``completed=True``; the demo is
+        not finished until I make that call. Any reply, tidy-up, or flag I offer
+        afterwards is an optional follow-up and never gates completion.
 
         **Call when:** I have finished onboarding work the checklist cannot
         detect yet (a workspace demo task, semantic setup, or a guided
@@ -2007,7 +2009,7 @@ class ConversationManagerBrainActionTools:
 
         **Do not call when:** onboarding is inactive; the step is in the
         Communication section; or I have not actually finished the work yet
-        (e.g. I've only summarised the mailbox but not sent the reply).
+        (e.g. I've not yet delivered the workspace demo summary).
 
         After success: confirm briefly and continue from the refreshed
         onboarding progress block.
