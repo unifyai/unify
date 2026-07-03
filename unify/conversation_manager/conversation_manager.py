@@ -2983,6 +2983,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         if isinstance(render, dict):
             self.coordinator_onboarding_render = render
+            self._coordinator_state_checked_at = 0.0
 
     @property
     def onboarding_clicked_trigger_steps(self) -> set[str]:

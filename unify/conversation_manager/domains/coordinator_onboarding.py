@@ -49,6 +49,9 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     "onboarding_step_completed": (
         "An onboarding step you were working on is now marked complete."
     ),
+    "onboarding_render_updated": (
+        "The onboarding checklist progress updated from durable account state."
+    ),
     "onboarding_session_started": (
         "The user just opened the onboarding session with you — they are "
         "waiting for you to open with one short turn."
@@ -76,6 +79,7 @@ _SUBTYPE_STEP_SKIPPED = "step_skipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_STEP_RESET = "onboarding_step_reset"
 _SUBTYPE_STEP_COMPLETED = "onboarding_step_completed"
+_SUBTYPE_ONBOARDING_RENDER_UPDATED = "onboarding_render_updated"
 _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
@@ -547,6 +551,8 @@ async def _handle_coordinator_onboarding_event(
                 cm.clear_active_learning_beat(
                     _ONBOARDING_STEP_LEARN_FROM_CORRECTION,
                 )
+    if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
+        return False
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),
