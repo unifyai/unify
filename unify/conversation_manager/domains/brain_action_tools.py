@@ -609,11 +609,13 @@ class ConversationManagerBrainActionTools:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
+        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.send_unify_message(
             content=content,
             contact_id=contact_id,
             attachment_filepath=attachment_filepath,
+            onboarding_learning_phase=onboarding_learning_phase,
         )
 
     async def send_unify_message_to_boss(
@@ -621,6 +623,7 @@ class ConversationManagerBrainActionTools:
         *,
         content: str,
         attachment_filepath: str | None = None,
+        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         """Send a Unify inbox message directly to my boss only.
 
@@ -635,11 +638,14 @@ class ConversationManagerBrainActionTools:
             Message body to send to my boss.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
+        onboarding_learning_phase : str | None, optional
+            Learning-beat phase tag for onboarding derivation.
         """
         return await self._comms.send_unify_message(
             content=content,
             contact_id=self._boss_contact_id(),
             attachment_filepath=attachment_filepath,
+            onboarding_learning_phase=onboarding_learning_phase,
         )
 
     @wraps(CommsPrimitives.send_api_response)
