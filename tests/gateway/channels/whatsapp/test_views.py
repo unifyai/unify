@@ -84,6 +84,18 @@ def _async_httpx_response(
     return resp
 
 
+def _mock_invite_message_delivery(
+    twilio_client: MagicMock,
+    *,
+    error_code: int | None = None,
+    status: str = "sent",
+) -> None:
+    created_msg = MagicMock(sid="MM_invite_test")
+    fetched_msg = MagicMock(error_code=error_code, status=status)
+    twilio_client.messages.create.return_value = created_msg
+    twilio_client.messages.return_value.fetch.return_value = fetched_msg
+
+
 def test_send_closed_window_returns_template_delivered_body(client: TestClient):
     twilio_client = MagicMock()
     twilio_client.messages.create.return_value = MagicMock(sid="SM_template")
@@ -314,6 +326,75 @@ class TestStatus:
             )
         assert resp.status_code == 200
         MockClient.assert_not_called()
+
+    def test_failed_invite_37010_recovers_with_direct_call(
+        self,
+        client: TestClient,
+        _wa_credentials: None,
+        _settings: None,
+    ) -> None:
+        twilio_client = MagicMock()
+        user_call = MagicMock(sid="CA_user")
+        sip_call = MagicMock(sid="CA_sip")
+        twilio_client.calls.create.side_effect = [sip_call, user_call]
+
+        perm_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"permitted": False, "status": "pending"},
+        )
+        resolve_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"assistant_id": 42},
+        )
+        accepted_resp = _async_httpx_response(
+            status_code=200,
+            json_body={
+                "status": "accepted",
+                "permitted": True,
+                "expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        )
+        session_resp = _async_httpx_response(status_code=200, json_body={"id": 123})
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.get.side_effect = [perm_resp, resolve_resp]
+        httpx_client.post.side_effect = [accepted_resp, session_resp]
+        httpx_client.delete.return_value = _async_httpx_response(status_code=404)
+
+        with (
+            patch(
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                return_value=httpx_client,
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                return_value=twilio_client,
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                new=AsyncMock(),
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
+                return_value="sip:+15555550111@test.sip.livekit.cloud",
+            ),
+        ):
+            resp = client.post(
+                "/whatsapp/status",
+                data={
+                    "MessageStatus": "failed",
+                    "To": "whatsapp:+15555550000",
+                    "From": "whatsapp:+15555550111",
+                    "MessageSid": "MM_failed_invite",
+                    "ErrorCode": "37010",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert twilio_client.calls.create.call_count == 2
+        accepted_call = httpx_client.post.await_args_list[0].kwargs["json"]
+        assert accepted_call["status"] == "accepted"
+        assert accepted_call["source"] == "twilio_permanent_permission"
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +649,7 @@ class TestSendCall:
         )
 
         twilio_client = MagicMock()
+        _mock_invite_message_delivery(twilio_client)
 
         route_resp = _async_httpx_response(
             status_code=200,
@@ -609,6 +691,81 @@ class TestSendCall:
         }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["content_sid"] == VOICE_CALL_REQUEST_TEMPLATE_SID
+
+    def test_permanent_permission_on_invite_places_direct_call(
+        self,
+        client: TestClient,
+        _wa_credentials: None,
+        _settings: None,
+    ) -> None:
+        twilio_client = MagicMock()
+        _mock_invite_message_delivery(
+            twilio_client,
+            error_code=37010,
+            status="failed",
+        )
+        user_call = MagicMock(sid="CA_user")
+        sip_call = MagicMock(sid="CA_sip")
+        twilio_client.calls.create.side_effect = [sip_call, user_call]
+
+        route_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"pool_number": "+15555550111", "window_open": True},
+        )
+        perm_resp = _async_httpx_response(
+            status_code=200,
+            json_body={"permitted": False, "status": "unknown"},
+        )
+        accepted_resp = _async_httpx_response(
+            status_code=200,
+            json_body={
+                "status": "accepted",
+                "permitted": True,
+                "expires_at": "2999-01-01T00:00:00+00:00",
+            },
+        )
+        session_resp = _async_httpx_response(status_code=200, json_body={"id": 123})
+        httpx_client = AsyncMock()
+        httpx_client.__aenter__.return_value = httpx_client
+        httpx_client.post.side_effect = [route_resp, accepted_resp, session_resp]
+        httpx_client.get.return_value = perm_resp
+        httpx_client.delete.return_value = _async_httpx_response(status_code=404)
+
+        with (
+            patch(
+                "unify.gateway.channels.whatsapp.views.httpx.AsyncClient",
+                return_value=httpx_client,
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
+                return_value=twilio_client,
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.ensure_phone_dispatch_rule",
+                new=AsyncMock(),
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views.make_sip_uri",
+                return_value="sip:+15555550111@test.sip.livekit.cloud",
+            ),
+        ):
+            resp = client.post(
+                "/whatsapp/send-call",
+                json={
+                    "to": "+15555550000",
+                    "assistant_id": 42,
+                    "room_name": "unity_42_whatsapp_call",
+                },
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["method"] == "direct"
+        assert twilio_client.calls.create.call_count == 2
+        accepted_call = httpx_client.post.await_args_list[1].kwargs["json"]
+        assert accepted_call["status"] == "accepted"
+        assert accepted_call["source"] == "twilio_permanent_permission"
 
     def test_recent_pending_invite_is_not_resent(
         self,
