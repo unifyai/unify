@@ -831,6 +831,11 @@ def _whatsapp_voice_app_sid(credentials: CredentialStore) -> str:
 WHATSAPP_GB_BUNDLE_SID = "BUd85f47e01a9d85003c364f400105a8da"
 _SENDER_BASE = "https://messaging.twilio.com/v2/Channels/Senders"
 
+# WhatsApp business-profile defaults for the shared universal T-W1N pool.
+DEFAULT_WHATSAPP_PROFILE_NAME = "Unify T-W1N"
+WHATSAPP_PROFILE_LOGO_URL = "https://console.unify.ai/brand/twin-logo.png"
+WHATSAPP_PROFILE_ABOUT = "Your digital twin."
+
 
 async def _attach_voice_app(
     sender_sid: str,
@@ -990,8 +995,9 @@ async def create_whatsapp_sender(request: Request):
     payload: dict = {
         "sender_id": f"whatsapp:{phone_number}",
         "profile": {
-            "name": data.get("name", "Unify Assistant"),
-            "logo_url": "https://console.unify.ai/icon.png",
+            "name": data.get("name", DEFAULT_WHATSAPP_PROFILE_NAME),
+            "logo_url": WHATSAPP_PROFILE_LOGO_URL,
+            "about": data.get("about", WHATSAPP_PROFILE_ABOUT),
         },
         "webhook": {
             "callback_method": "POST",
