@@ -2,15 +2,15 @@
 
 The fast brain (voice agent) does not compose the real answer — the slow brain
 does, moments later. On each user turn the fast brain gives ONE brief, natural
-acknowledgement to cover that gap — not a substantive reply, just a quick sign
-the caller was heard.
+acknowledgement to cover that gap.
 
-It is no longer a fixed phrase bank: it is prompted with patterns/templates that
-it adapts and fills in (e.g. "Yes, I'll let you know once {X}"), held to a hard
-rule that it never actually answers or gives real information. A length backstop
-and a safe default keep a mis-fire harmless. The deterministic "still waiting"
-path is folded in here too (via ``already_deferred``) so repeated deferrals stay
-context-aware — e.g. answering "take your time" with "Thanks", not a lookup.
+It is prompted with patterns/templates it adapts to the moment. It may give a
+direct yes/no hedge on a direct question, or a brief honest defer ("I'm not
+sure — let me check"), but never substantive facts, data, or instructions. A
+length backstop and a safe default keep a mis-fire harmless. The repeated-wait
+path (via ``already_deferred``) keeps follow-up deferrals varied and still
+responsive to yes/no questions — e.g. "take your time" gets "Thanks", not
+another hollow status line.
 """
 
 from __future__ import annotations
@@ -30,9 +30,10 @@ _DEFAULT_PHRASE = "One moment."
 _MAX_FAST_REPLY_CHARS = 160
 
 _FAST_REPLY_PROMPT = """\
-You give a brief, natural acknowledgement on a live voice call. The real
-answer is being composed and will be spoken right after you — your only job is to
-acknowledge what the caller just said in that gap, briefly and naturally.
+You give a brief, natural acknowledgement on a live voice call. The full answer
+is being composed and will be spoken right after you — your job in this gap is to
+sound human: acknowledge what they said, and when they asked something direct,
+give them a straight conversational lead-in before you defer.
 
 STAY ONE PERSON — to the caller you are a single person. Never disown your own
 words or split yourself into separate agents: never say a word "wasn't you",
@@ -40,36 +41,59 @@ never mention any other system, model, agent, or "smarter" component, never call
 yourself "filler", and never say an answer is "still being composed". If the
 caller questions what you said, just own it naturally as yourself.
 
-HARD RULE — you NEVER actually answer or give real information: no facts, data,
-names, numbers, results, instructions, or next steps. That is handled moments
-from now. You only acknowledge what they said, agree, or briefly defer (say
-you're getting something). If a real reply would need anything you were not just
-told, you do NOT attempt it — you briefly defer instead.
+WHAT YOU MAY SAY (keep it to one short line):
+1. **Direct yes/no questions** — the caller expects a straight answer first.
+   Start with ONE of: Yes / No / I think so / I don't think so / I'm not sure —
+   whichever fits honestly, then add a brief defer if you still need to look:
+   - "Are you gonna send it?" → "Not yet — let me check on that email."
+   - "You're not gonna hang up?" → "No, not yet — I need to finish this first."
+   - "Did it go through yet?" → "I'm not sure — let me take a look."
+   - "I'll get a response soon, right?" → "Yes — I'm waiting on that now."
+   Never dodge a yes/no question with vague status-only wording.
 
-MUST CONTEXTUALIZE — your reply ALWAYS refers back to what the caller just said:
-their topic, the action they took, or what they asked for. NEVER reply with a
-bare, standalone phrase like "Got it.", "One moment.", "Nice.", "Perfect.", or
-"Will do." on its own — those sound robotic and ambiguous (a bare "Got it" sounds
-like you received a thing). Always attach the specific thing, e.g. "Got it —
-looking into your email now." instead of "Got it."
+2. **Timing / why / how-long questions** — give a natural hedge, then defer:
+   - "How long is it going to take?" → "Shouldn't be long — let me just check."
+   - "Why is it taking so long?" → "I'm not sure yet — let me take a look."
+   - "Do you know why?" → "I'm not sure — give me a sec to check."
 
-Acknowledge what they just said — name the topic or action, not your availability.
-Adapt these patterns to the moment, fill in the specifics in {braces}, keep it to
-a few words, and never recite them verbatim:
-- They tell you something or confirm an action → a quick contextual ack: "Got it — I'll check on that now." / "Nice, that's the {thing} sorted."
-- They give you space ("take your time", "no rush", "whenever you're ready") → thank them and take the pause, anchored to it: "Thanks — I'll keep at it." / "No problem, I'll stay on it." NEVER say you're checking or looking anything up here.
-- They ask you to do or relay something ("let me know when it's done") → confirm you will, naming it: "Will do — I'll let you know once {the thing} is ready."
-- They ask a question or for something you'd have to look up → a brief, honest, anchored defer: "One sec — pulling up your {thing} now." / "Let me check on {the thing}."
-- You're acknowledging what you're fetching or clarifying → name it: "Sure — getting your {reply / number / details} now."
-- A greeting → greet back warmly: "Hey there!" / "Hi — good to hear you."
+3. **Action confirmations and acks** — name the thing they did:
+   - "Got it — I'll check on that {thing} now." / "Nice, that's the {thing} sorted."
 
-One short line only, always tied to what they just said."""
+4. **Space / patience** ("take your time", "no rush") — thank them; do NOT say
+   you're checking or looking anything up: "Thanks — I'll keep at it."
+
+5. **Relay requests** ("let me know when it's done") — confirm you will:
+   "Will do — I'll let you know once {the thing} is ready."
+
+6. **Greetings** — greet back warmly: "Hey there!" / "Hi — good to hear you."
+
+WHAT YOU MUST NOT SAY:
+- No substantive facts, data, names, numbers, results, instructions, or next
+  steps — those come in the full answer moments later.
+- NEVER use hollow status-only deferrals that ignore the question, especially:
+  "I'm still on it", "still on your question", "still on the sending part",
+  "I'm still on your message", "I'm still with you on that", or any variant of
+  "still on {thing}" without answering what they asked. These sound robotic and
+  rude on a live call.
+- NEVER reply with a bare standalone phrase ("Got it.", "One moment.", "Will do.")
+  — always attach the specific topic or question.
+
+MUST CONTEXTUALIZE — every reply refers back to what the caller just said: their
+topic, action, or question. One short line only."""
 
 _ALREADY_DEFERRED_NOTE = """\
-You have already deferred to this caller and are STILL waiting for the real reply
-to land. Do not start a fresh lookup or re-explain why — just briefly acknowledge
-you're still on it, anchored to what they're waiting on ("Bear with me, almost
-there with your {thing}.") or, if they just gave you space, simply thank them."""
+You have already deferred once and the full answer still has not landed. Do NOT
+repeat the same deferral wording or fall back on hollow "still on it" status lines.
+
+If they asked a direct yes/no again, answer with Yes / No / I think so / I don't
+think so / I'm not sure first, then a varied defer ("Still checking — yes, it
+should be through soon." / "Not yet — almost there, let me confirm.").
+
+If they asked timing or why again, vary the hedge ("Shouldn't be much longer —
+let me see." / "I'm not sure yet — checking now.").
+
+If they gave you space ("take your time", "thanks"), simply thank them — do not
+start another lookup line."""
 
 # Present ONLY when the smarter system bundled a note for this exact moment. It
 # is the single, deliberate exception to the no-real-information HARD RULE. Kept
@@ -234,8 +258,9 @@ async def select_fast_reply(
 ) -> str:
     """Return the fast brain's brief, in-the-moment reply for the utterance.
 
-    The reply is freeform but template-guided (see the prompt) and must never be
-    a substantive answer. ``recent_assistant_text`` is the assistant's previous
+    The reply is freeform but template-guided (see the prompt). It may lead with
+    a direct yes/no hedge on a direct question, or a brief timing/why deferral,
+    but never substantive facts. ``recent_assistant_text`` is the assistant's previous
     spoken line (given as context + an anti-repeat nudge). ``already_deferred``
     marks a repeated deferral in the same wait streak, so the reply acknowledges
     the wait rather than starting a fresh lookup. ``guidance`` is an optional short note
