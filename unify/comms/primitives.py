@@ -233,13 +233,24 @@ class CommsPrimitives:
             return await self._wait_for_voice_session_to_clear()
         return await await_ready()
 
-    def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
+    def _onboarding_event_kwargs(
+        self,
+        medium: Medium,
+        *,
+        learning_phase: str | None = None,
+    ) -> dict[str, str]:
         if self._cm is None:
             return {}
         consume = getattr(self._cm, "consume_pending_onboarding_outbound", None)
-        if not callable(consume):
-            return {}
-        return consume(medium.value) or {}
+        if callable(consume):
+            pending = consume(medium.value)
+            if pending:
+                return pending
+        if learning_phase:
+            build = getattr(self._cm, "build_learning_beat_onboarding_kwargs", None)
+            if callable(build):
+                return build(medium.value, learning_phase=learning_phase) or {}
+        return {}
 
     def _stash_whatsapp_resend_onboarding_kwargs(
         self,
@@ -2795,6 +2806,7 @@ class CommsPrimitives:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
+        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         """Send an assistant-owned Unify inbox message to one contact.
 
@@ -2818,6 +2830,10 @@ class CommsPrimitives:
             Integer contact id for the recipient. Not a ``team:<id>`` token.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment to upload and include.
+        onboarding_learning_phase : str | None, optional
+            Learning-beat phase tag for onboarding derivation: ``first_attempt``,
+            ``improved``, or ``replay``. The first attempt is usually armed by
+            pending onboarding outbound; later phases must pass this explicitly.
 
         Returns
         -------
@@ -2981,7 +2997,10 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
-                **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
+                **self._onboarding_event_kwargs(
+                    Medium.UNIFY_MESSAGE,
+                    learning_phase=onboarding_learning_phase,
+                ),
             )
             await self._event_broker.publish(topic, event.to_json())
             self._record_offline_success(
