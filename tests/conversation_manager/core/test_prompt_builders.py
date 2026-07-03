@@ -660,6 +660,45 @@ class TestCommunicationGuidelinesAdapt:
         )
 
 
+def _concurrent_ack_block(prompt: str) -> str:
+    start = prompt.index("Concurrent action and acknowledgment")
+    end = prompt.index("**Acknowledgments should be brief:**", start)
+    return prompt[start:end]
+
+
+class TestConcurrentActionAckBlock:
+    """Concurrent-action ack guidance names only outbound tools exposed this turn."""
+
+    def test_ack_block_omits_send_sms_without_phone(self):
+        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert "`send_unify_message`" in block
+        assert "send_sms" not in block
+        assert "only outbound message tool available on this turn" in block
+
+    def test_ack_block_includes_send_sms_with_phone(self):
+        prompt = _build(assistant_has_phone=True, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert "`send_sms`" in block
+        assert "`send_unify_message`" in block
+        assert "Pick whichever tool matches the active conversation thread" in block
+
+    def test_ack_block_whatsapp_only_omits_send_sms(self):
+        prompt = _build(
+            assistant_has_phone=False,
+            assistant_has_whatsapp=True,
+            assistant_has_email=False,
+        )
+        block = _concurrent_ack_block(prompt)
+        assert "`send_whatsapp`" in block
+        assert "send_sms" not in block
+
+    def test_ack_block_example_uses_default_outbound_tool(self):
+        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert 'send_unify_message(contact_id=1, content="Let me check.")' in block
+
+
 # ---------------------------------------------------------------------------
 # Tests – external app integration
 # ---------------------------------------------------------------------------
