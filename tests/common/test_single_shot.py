@@ -234,13 +234,13 @@ async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
         client.messages = [
             {
                 "role": "assistant",
-                "content": "No action needed.",
+                "content": '{"thoughts": "Greet the user."}',
                 "tool_calls": [
                     {
                         "type": "function",
                         "function": {
-                            "name": "json_tool_call",
-                            "arguments": "{}",
+                            "name": "greet",
+                            "arguments": '{"name": "Alice"}',
                         },
                     },
                 ],
@@ -252,16 +252,19 @@ async def test_staging_logs_single_shot_response_shape(monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="unify")
 
     try:
-        result = await single_shot_tool_decision(client, "hello", {})
+        await single_shot_tool_decision(
+            client,
+            "hello",
+            {"greet": lambda name: f"Hello, {name}!"},
+        )
     finally:
         LOGGER.removeHandler(caplog.handler)
 
-    assert result.tools == []
     assert "Single-shot response shape" in caplog.text
     assert "message_type=dict" in caplog.text
     assert "content_type=str" in caplog.text
     assert "tool_calls_type=list" in caplog.text
-    assert "wrapper_tool_names=['json_tool_call']" in caplog.text
+    assert "tool_call_names=['greet']" in caplog.text
 
 
 # --------------------------------------------------------------------------- #
