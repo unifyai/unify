@@ -384,6 +384,7 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     # intentionally NOT set. Those traces duplicate the OTEL spans in logs/all/
     # and add ~370MB to CI artifacts. Orchestra's own CI still uses it.
     export ORCHESTRA_OTEL_LOG_DIR="$REPO_ROOT/logs/all"
+    export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-86400}"
 
     # Check if local orchestra is already running
     if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
@@ -415,11 +416,11 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
           echo "Shared orchestra: using existing instance, creating log symlinks..."
           _create_orchestra_log_symlinks
           export ORCHESTRA_URL="$_local_url"
-        else
+        elif [[ "${UNIFY_FORCE_ORCHESTRA_PURGE:-0}" == "1" ]]; then
           # MAIN REPO MODE: Purge then start to pick up logging config AND wipe
-          # the database for test isolation. `restart` no longer wipes data
-          # (intentionally, for the install-and-live local UX), so tests use
-          # `purge` to explicitly destroy the named volume + container.
+          # the database for test isolation. Opt in via UNIFY_FORCE_ORCHESTRA_PURGE=1
+          # so concurrent long-running suites (bare pytest, other agents) are not
+          # killed mid-flight when OTEL log paths differ.
           _original_url="$_local_url"
           echo "Purging + starting orchestra to apply logging configuration..."
           "$_local_orchestra_script" purge >/dev/null 2>&1 || true
@@ -432,6 +433,10 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
             export ORCHESTRA_URL="$_original_url"
           fi
           unset _original_url
+        else
+          echo "Orchestra running with different logging config; creating symlinks (set UNIFY_FORCE_ORCHESTRA_PURGE=1 to purge DB and restart)..."
+          _create_orchestra_log_symlinks
+          export ORCHESTRA_URL="$_local_url"
         fi
       else
         # Logging already configured correctly, reuse existing instance
