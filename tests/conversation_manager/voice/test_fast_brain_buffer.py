@@ -59,22 +59,25 @@ def _patch_client(
 
 def test_prompt_covers_key_patterns():
     p = fast_brain_buffer._FAST_REPLY_PROMPT
-    assert "NEVER actually answer" in p
+    assert "Direct yes/no questions" in p
+    assert "Yes / No / I think so" in p
     assert "take your time" in p
-    # The give-space case is still handled (thank + take the pause).
     assert "Thanks" in p
-    assert "{the thing}" in p  # template placeholder
-    # The default fallback is always safe.
+    assert "How long is it going to take?" in p
     assert _DEFAULT == "One moment."
+
+
+def test_prompt_forbids_hollow_still_on_deferrals():
+    p = fast_brain_buffer._FAST_REPLY_PROMPT
+    assert "still on it" in p.lower()
+    assert "NEVER use hollow status-only deferrals" in p
 
 
 def test_prompt_forbids_bare_canned_phrases():
     """Every reply must be contextualized - no standalone canned acks/defers."""
     p = fast_brain_buffer._FAST_REPLY_PROMPT
     assert "MUST CONTEXTUALIZE" in p
-    # It explicitly tells the model not to reply with a bare phrase on its own.
-    assert "bare" in p.lower()
-    assert "on its own" in p.lower()
+    assert "bare standalone phrase" in p.lower()
 
 
 def test_prompt_keeps_single_identity():
@@ -154,12 +157,14 @@ async def test_llm_error_falls_back_to_default(monkeypatch):
 @pytest.mark.asyncio
 async def test_already_deferred_adds_reassurance_note(monkeypatch):
     captured: dict = {}
-    _patch_client(monkeypatch, raw="Bear with me, almost there.", captured=captured)
+    _patch_client(monkeypatch, raw="Not yet — let me confirm.", captured=captured)
 
     await select_fast_reply("you still there?", already_deferred=True)
 
     system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
-    assert any("already deferred" in c.lower() for c in system_msgs), system_msgs
+    assert any("already deferred once" in c.lower() for c in system_msgs), system_msgs
+    deferred_note = next(c for c in system_msgs if "already deferred once" in c.lower())
+    assert "yes/no" in deferred_note.lower() or "Yes / No" in deferred_note
 
 
 @pytest.mark.asyncio
@@ -170,7 +175,7 @@ async def test_first_reply_has_no_deferred_note(monkeypatch):
     await select_fast_reply("I clicked it", already_deferred=False)
 
     system_msgs = [m["content"] for m in captured["messages"] if m["role"] == "system"]
-    assert not any("already deferred" in c.lower() for c in system_msgs)
+    assert not any("already deferred once" in c.lower() for c in system_msgs)
 
 
 @pytest.mark.asyncio
