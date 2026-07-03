@@ -27,6 +27,7 @@ __all__ = [
     "_EVENT_SOURCE",
     "new_call_id",
     "publish_manager_method_event",
+    "publish_persist_session_phase",
     "wrap_handle_with_logging",
     "log_manager_call",
     "log_manager_result",
@@ -163,6 +164,33 @@ def _coerce_text_value(value: Any) -> str:
         return str(value)
 
 
+async def publish_persist_session_phase(
+    outer: Any,
+    phase: str,
+) -> None:
+    """Publish persist-session lifecycle events on the root act calling_id."""
+    if outer is None:
+        return
+
+    call_id = getattr(outer, "_manager_call_id", None)
+    manager_name = getattr(outer, "_manager_name", None)
+    method_name = getattr(outer, "_manager_method_name", None)
+    hierarchy = getattr(outer, "_manager_hierarchy", None)
+    display_label = getattr(outer, "_manager_display_label", None)
+
+    if not call_id or not manager_name or not method_name:
+        return
+
+    await publish_manager_method_event(
+        call_id,
+        manager_name,
+        method_name,
+        phase=phase,
+        display_label=display_label,
+        hierarchy=hierarchy if isinstance(hierarchy, list) else None,
+    )
+
+
 def wrap_handle_with_logging(
     inner: SteerableToolHandle,
     call_id: str,
@@ -175,6 +203,12 @@ def wrap_handle_with_logging(
     """Monkey-patch result() to publish the outgoing ManagerMethod event on completion."""
     _orig_result = inner.result
     _hierarchy = list(hierarchy) if hierarchy else []
+
+    setattr(inner, "_manager_call_id", call_id)
+    setattr(inner, "_manager_name", manager_name)
+    setattr(inner, "_manager_method_name", method_name)
+    setattr(inner, "_manager_hierarchy", _hierarchy)
+    setattr(inner, "_manager_display_label", display_label)
 
     async def _result_with_outgoing():
         try:
