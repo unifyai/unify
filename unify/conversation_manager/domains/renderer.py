@@ -603,6 +603,7 @@ class Renderer:
         vm_ready: bool = True,
         file_sync_complete: bool = True,
         has_desktop: bool = False,
+        pending_onboarding_outbound: dict | None = None,
     ) -> SnapshotState:
         """Render the full conversation state.
 
@@ -632,6 +633,11 @@ class Renderer:
             has_desktop=has_desktop,
         )
         _infra_ms = _mark_step()
+
+        pending_deliverable_render = self.render_pending_onboarding_deliverable(
+            pending_onboarding_outbound,
+        )
+        _mark_step()
 
         meet_render = self.render_meet_interaction_state(
             assistant_screen_share_active=assistant_screen_share_active,
@@ -682,6 +688,7 @@ class Renderer:
             s
             for s in [
                 infra_render,
+                pending_deliverable_render,
                 meet_render,
                 web_sessions_render,
                 notif_render,
@@ -731,6 +738,31 @@ class Renderer:
         )
 
         return snapshot_state
+
+    @staticmethod
+    def render_pending_onboarding_deliverable(
+        pending: dict | None,
+    ) -> str:
+        """Render a prominent nudge while a tagged onboarding deliverable is armed.
+
+        Shown every turn until the next outbound message consumes the pending tag
+        (``consume_pending_onboarding_outbound``). Learning-beat phases carry
+        ``onboarding_learning_phase``; other armed outbounds omit this block.
+        """
+        if not pending:
+            return ""
+        phase = pending.get("onboarding_learning_phase")
+        if not isinstance(phase, str) or not phase.strip():
+            return ""
+        phase = phase.strip()
+        return (
+            "<pending_tagged_deliverable>\n"
+            "PENDING TAGGED DELIVERABLE: my next send_unify_message will be tagged "
+            f"onboarding_learning_phase={phase}. If the demo act has produced its "
+            "result, I must forward it to the user NOW in a tagged message — "
+            "wait alone is wrong here.\n"
+            "</pending_tagged_deliverable>"
+        )
 
     @staticmethod
     def render_infrastructure_state(
