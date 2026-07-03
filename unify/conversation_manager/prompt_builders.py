@@ -13,6 +13,7 @@ from unify.common.accessible_teams_block import build_accessible_teams_block
 from unify.conversation_manager.domains.learning_expenses_fixtures import (
     learning_expenses_scenario_prompt_lines,
     learning_expenses_storage_check_nudge,
+    learning_expenses_user_facing_voice,
 )
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -1184,6 +1185,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - Per-row **Defer** on the checklist is not a global pause; I never "
             "call `deactivate_onboarding` for a single skipped row.",
             "Rules for `learning_beat_requested`:",
+            f"  0. {learning_expenses_user_facing_voice()}",
             "  1. Treat the notification body and section `framing` as the task "
             "contract. Say up front this is a demo of how the user corrects me.",
             "  Scenario context (fixed bundled fixtures):",
@@ -1197,9 +1199,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "scenario context verbatim so the actor double-counts INTERNAL XFER "
             "rows on both files. Tag the first-attempt deliverable with "
             "onboarding_learning_phase=`first_attempt`.",
-            "  4. Surface my own mistake with the real numbers, suggest the exact "
-            "correction text for the user to send, and WAIT — never send the "
-            "correction or proceed on their behalf.",
+            "  4. State the naive total and explain the mistake in plain language "
+            "(see rule 0) — never forward act tables or row-by-row math. Suggest "
+            "the exact correction text for the user to send, and WAIT — never "
+            "send the correction or proceed on their behalf.",
             "  5. After the user's correction, interject_* into the running "
             "persist act (do not start a new act) with the corrected algorithm "
             "from scenario context and include this StorageCheck memoization "

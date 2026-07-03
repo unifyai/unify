@@ -370,6 +370,7 @@ def _coordinator_onboarding_notification_text(
         from unify.conversation_manager.domains.learning_expenses_fixtures import (
             learning_expenses_scenario_prompt_lines,
             learning_expenses_storage_check_nudge,
+            learning_expenses_user_facing_voice,
         )
 
         details = event.details if isinstance(event.details, dict) else {}
@@ -382,13 +383,15 @@ def _coordinator_onboarding_notification_text(
         fixture_note = " ".join(learning_expenses_scenario_prompt_lines())
         medium_note = (
             " This is an openly narrated tutorial demo — say so up front. "
+            f"{learning_expenses_user_facing_voice()} "
             f"{fixture_note} "
             "Before the first attempt, send the month-N bank export CSVs as "
             "unify_message attachments (one attachment per message). Run a "
             "deliberately naive first pass via act(persist=True) with genuinely "
             "computed numbers (sum every outflow, add abs(Amount) again for each "
             "INTERNAL XFER row on either file including card-side credits, ignore "
-            "refunds), surface my own mistake, suggest the exact "
+            "refunds), state the naive total and explain the mistake in plain "
+            "language (no tables or row-by-row breakdowns), suggest the exact "
             "correction text, and WAIT — never send the correction or proceed "
             "on the user's behalf. After their correction, interject_* into the "
             "running persist act with the corrected algorithm and include this "

@@ -51,6 +51,28 @@ def learning_expenses_storage_check_nudge() -> str:
     )
 
 
+def learning_expenses_user_facing_voice() -> str:
+    """Plain-language rules for Learning demo chat messages (non-technical audience)."""
+    return (
+        "User-facing voice: the audience is non-technical. Keep every learning-demo "
+        "chat message short and scannable — a headline dollar total plus one or two "
+        "plain sentences. Do NOT send markdown tables, line-by-line row breakdowns, "
+        "disposition/contribution columns, or accounting jargon (gross outflows, "
+        "netted, phantom spending, rule 1/rule 2). The CSVs are attachments for "
+        "anyone curious; do not recite every row in chat. "
+        "Opening arc: at most five short bullets; casual tone, not a compliance brief. "
+        "Attachment captions: one sentence each (what the file is; mention the "
+        "checking↔card transfer trap in plain English). "
+        "First-attempt deliverable: state the naive total, then one sentence on "
+        "the mistake (double-counted the internal transfer between checking and "
+        "card), then the exact correction text to paste — nothing else. "
+        "Improved deliverable: state the corrected total, one sentence on what "
+        "changed (skipped transfers, counted refunds), optionally one contrast "
+        "vs the naive total — then Brain/StorageCheck nudge and invite February. "
+        "Replay deliverable: corrected total for the new month in one line."
+    )
+
+
 _BUNDLED_ASSET_PACKAGE = "unify.assets.onboarding.learning.expenses"
 _BUNDLED_FILENAMES: tuple[str, ...] = (
     f"checking-{LEARNING_EXPENSES_MONTH_N}.csv",
@@ -284,7 +306,8 @@ def learning_expenses_first_attempt_act_query() -> str:
         "Build the monthly spending report.\n\n"
         f"Apply this naive spend algorithm exactly:\n{algo}\n\n"
         "Parse the CSVs with execute_code and compute totals — never hardcode numbers.\n\n"
-        "Return the naive total spend (numeric) and a short report summary."
+        "Return the naive total (numeric) and a brief internal summary (2–3 sentences, "
+        "no markdown tables) for the ConversationManager to relay simply to the user."
     )
 
 
@@ -302,7 +325,9 @@ def learning_expenses_improved_act_query() -> str:
         f"Apply this corrected spend algorithm:\n{algo}\n\n"
         "1. Recompute corrected monthly spend via execute_code.\n\n"
         f"{learning_expenses_storage_check_nudge()}\n\n"
-        "Return the corrected total and a short report summary. Do not call "
+        "Return the corrected total (numeric) and a brief internal summary (2–3 "
+        "sentences, no markdown tables) for the ConversationManager to relay "
+        "simply to the user. Do not call "
         "GuidanceManager or FunctionManager store tools in the doing loop."
     )
 
