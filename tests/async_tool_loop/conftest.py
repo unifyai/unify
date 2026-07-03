@@ -4,64 +4,32 @@ tests/async_tool_loop/conftest.py
 
 Shared pytest fixtures for async tool loop tests.
 
-Provides model parameterization to ensure all LLM-based tests run against
-multiple model families for cross-provider compatibility.
-Each config bundles the model identifier with its production-matching kwargs
-(reasoning_effort, service_tier, etc.) so tests exercise the exact settings
-used when that model is hot-swapped into production.
+LLM-based tests run against the production default model (``UNIFY_MODEL``).
+Override ``UNIFY_MODEL`` in the environment for one-off cross-provider runs.
 """
 
 from __future__ import annotations
 
 import pytest
 
-# Full client configs to test against — mirrors production hot-swap settings.
+from unify.settings import SETTINGS
+
+_DEFAULT_MODEL = SETTINGS.UNIFY_MODEL
+
+# Single production-default config — ``new_llm_client`` supplies reasoning_effort
+# and service_tier unless a test overrides them explicitly.
+DEFAULT_LLM_CONFIG: dict[str, str] = {"model": _DEFAULT_MODEL}
+
 LLM_CONFIGS = [
     pytest.param(
-        {
-            "model": "gpt-5.2@openai",
-            "reasoning_effort": "high",
-            "service_tier": "priority",
-        },
-        id="gpt-5.2",
-    ),
-    pytest.param(
-        {
-            "model": "claude-4.6-opus@anthropic",
-            "reasoning_effort": "low",
-            "service_tier": "priority",
-        },
-        id="claude-4.6-opus",
-    ),
-    pytest.param(
-        {
-            "model": "deepseek-v4-max@deepseek",
-        },
-        id="deepseek-v4-max",
-    ),
-    pytest.param(
-        {
-            "model": "minimax-v3@minimax",
-        },
-        id="minimax-v3",
-    ),
-    pytest.param(
-        {
-            "model": "mimo-v2.5@xiaomi-mimo",
-        },
-        id="mimo-v2.5",
+        DEFAULT_LLM_CONFIG,
+        id=_DEFAULT_MODEL.replace("@", "-"),
     ),
 ]
 
 
 @pytest.fixture(params=LLM_CONFIGS)
 def llm_config(request) -> dict[str, str]:
-    """Parameterized fixture providing full LLM client configurations.
+    """Fixture providing the production-default LLM client configuration."""
 
-    Each config bundles the model identifier with all provider-specific
-    kwargs (reasoning_effort, service_tier, etc.) so that tests exercise
-    the exact settings used in production for each model family.
-
-    Tests using this fixture will run once per config in LLM_CONFIGS.
-    """
     return request.param
