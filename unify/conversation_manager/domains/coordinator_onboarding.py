@@ -58,6 +58,10 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user picked an example task — set it up now with your task tools "
         "and confirm it in one short message."
     ),
+    "learning_beat_requested": (
+        "The user clicked the Learning tutorial row — run the guided "
+        "expenses-etl correction demo now."
+    ),
 }
 
 
@@ -72,6 +76,10 @@ _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 _SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
+_SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
+_LEARNING_BEAT_CHANNEL = "learning_beat"
+_ONBOARDING_STEP_LEARN_FROM_CORRECTION = "learn-from-correction"
+_ONBOARDING_LEARNING_PHASE_FIRST = "first_attempt"
 
 
 def _detail_string(details: dict[str, Any], key: str) -> str:
@@ -354,6 +362,53 @@ def _coordinator_onboarding_notification_text(
         )
         return f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
 
+    if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
+        from unify.conversation_manager.domains.learning_expenses_fixtures import (
+            learning_expenses_scenario_prompt_lines,
+        )
+
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        scenario_id = _detail_string(details, "scenario_id")
+        replay_hint = _detail_string(details, "replay_hint")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        scenario_note = f" Scenario id: `{scenario_id}`." if scenario_id else ""
+        replay_note = f" Replay hint: {replay_hint}" if replay_hint else ""
+        fixture_note = " ".join(learning_expenses_scenario_prompt_lines())
+        medium_note = (
+            " This is an openly narrated tutorial demo — say so up front. "
+            f"{fixture_note} "
+            "Before the first attempt, send the month-N bank export CSVs as "
+            "unify_message attachments (one attachment per message). Run a "
+            "deliberately naive first pass via act(persist=True) with genuinely "
+            "computed numbers (sum every outflow, add abs(Amount) again for each "
+            "INTERNAL XFER row on either file including card-side credits, ignore "
+            "refunds), surface my own mistake, suggest the exact "
+            "correction text, and WAIT — never send the correction or proceed "
+            "on the user's behalf. After their correction, revise, store "
+            "Guidance AND a Function, tell the user to open the Brain rail "
+            "Guidance and Functions sections themselves — I have no tool to "
+            "navigate the Console for them — invite them to ask for next "
+            "month's report, and WAIT again before the replay act. Each phase "
+            "deliverable (first attempt, improved version, replay) must be sent "
+            "with send_unify_message using onboarding_learning_phase "
+            "(first_attempt, improved, replay). Brain nudges and attachment "
+            "intro messages are not phase deliverables. Tell the user to open "
+            "the Actions tab themselves before/during each act run — I have no "
+            "tool to navigate the Console for them. "
+            "On a live in-app Unify Meet call: narrate spoken beats via "
+            "guide_voice_agent, but CSV attachments and all three phase "
+            "deliverables MUST still be sent as tagged unify_message chat "
+            "messages — a report is a document, not a spoken line. "
+            "On off-console channels (plain phone call, WhatsApp call): do not "
+            "run the tutorial; say it is a Console exercise and offer to start "
+            "when the user is back in the app."
+        )
+        return (
+            f"{subtype_hint} {body}{framing_note}{scenario_note}{replay_note}"
+            f"{medium_note}"
+        ).strip()
+
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
         "just completed, and preview the next pending onboarding step. "
@@ -408,6 +463,7 @@ async def _handle_coordinator_onboarding_event(
             # New session boundary: forget any prior in-session clicks so a
             # stale click can't keep a re-gated channel's tool unlocked.
             cm.clear_onboarding_clicked_trigger_steps()
+            cm.clear_active_learning_beat()
         if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
             trace = getattr(cm, "_current_event_trace", None) or {}
             # Unlock this channel's send tool for the session (the click is
@@ -427,6 +483,31 @@ async def _handle_coordinator_onboarding_event(
                 event.details,
                 origin_event_id=trace.get("event_id", ""),
             )
+        if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
+            from unify.conversation_manager.domains.learning_expenses_fixtures import (
+                provision_learning_expenses_fixtures,
+            )
+            from unify.file_manager.settings import get_local_root
+
+            trace = getattr(cm, "_current_event_trace", None) or {}
+            details = event.details if isinstance(event.details, dict) else {}
+            provision_learning_expenses_fixtures(get_local_root())
+            cm.set_active_learning_beat(details)
+            cm.set_pending_onboarding_outbound(
+                {
+                    **details,
+                    "channel": _LEARNING_BEAT_CHANNEL,
+                    "onboarding_learning_phase": _ONBOARDING_LEARNING_PHASE_FIRST,
+                },
+                origin_event_id=trace.get("event_id", ""),
+            )
+        if event.subtype == _SUBTYPE_STEP_RESET:
+            reset_details = event.details if isinstance(event.details, dict) else {}
+            reset_step_id = reset_details.get("step_id")
+            if reset_step_id == _ONBOARDING_STEP_LEARN_FROM_CORRECTION:
+                cm.clear_active_learning_beat(
+                    _ONBOARDING_STEP_LEARN_FROM_CORRECTION,
+                )
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),
