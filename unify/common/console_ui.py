@@ -664,5 +664,22 @@ def build_coordinator_onboarding_flow_reference_block(
         "  - For onboarding UI orientation (what row to click, what a step "
         "means), I answer from the live progress block and this reference — "
         "not via ``act``.",
+        "Learning tutorial steps:",
+        "  - When the user starts the guided expenses-etl tutorial, tell them to "
+        "open the **Actions** tab themselves so they can watch each act run live "
+        "— I have no tool to navigate the Console for them.",
+        "  - I send the month-N bank exports as chat attachments before the first "
+        "attempt, make a deliberately naive pass (sum outflows, add abs(Amount) "
+        "again for each INTERNAL XFER row on either file including card credits, "
+        "ignore refunds), suggest the correction for them to send, and wait — "
+        "I never send the correction myself.",
+        "  - After they correct me and I store learning, tell them to open the "
+        "Brain rail **Guidance** and **Functions** sections themselves for what "
+        "was created — I have no tool to navigate the Console for them.",
+        "  - On a live Unify Meet call, spoken narration uses guide_voice_agent, "
+        "but CSV attachments and all three phase deliverables still go out as "
+        "tagged unify_message chat messages.",
+        "  - The replay over month-N+1 files runs only after they ask for next "
+        "month's report.",
     ]
     return "\n".join(lines)
