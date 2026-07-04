@@ -22,6 +22,8 @@ from typing import Any, Callable, Dict, List, Type, Union
 import unillm
 from pydantic import BaseModel
 
+from unillm.clients.completion_mutator import CompletionMutator
+
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
 
 from .llm_helpers import (
@@ -110,6 +112,7 @@ async def single_shot_tool_decision(
     inject_tool_thoughts: bool = False,
     exclusive_tools: set[str] | None = None,
     on_tool_execution_start: Callable[[], None] | None = None,
+    completion_mutator: CompletionMutator | None = None,
 ) -> SingleShotResult:
     """Make a single LLM call, execute all selected tools, return the results.
 
@@ -217,6 +220,8 @@ async def single_shot_tool_decision(
         gen_kwargs["response_format"] = pydantic_to_json_schema_response_format(
             response_format,
         )
+    if completion_mutator is not None:
+        gen_kwargs["completion_mutator"] = completion_mutator
 
     # Single LLM call
     _ss_logger.debug(

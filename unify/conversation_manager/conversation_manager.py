@@ -424,6 +424,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_gen: int = 0
         self._active_llm_trace_meta: dict[str, Any] | None = None
         self._credit_gate_reply_sent_at: dict[tuple[str, str], float] = {}
+        self._last_inbound_reply_context: dict[str, Any] | None = None
         self._recent_tool_executions: list[dict[str, Any]] = []
         self._recent_commissioning_successes: dict[str, int] = {}
 
@@ -1485,6 +1486,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
             raise
 
+    def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:
+        self._last_inbound_reply_context = reply_context
+
     def _credit_gate_throttle_key(
         self,
         reply_context: dict[str, Any],
@@ -2191,6 +2195,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         try:
             try:
+                from unify.conversation_manager.domains.prose_send_healing import (
+                    build_slow_brain_completion_mutator,
+                )
+
+                completion_mutator = build_slow_brain_completion_mutator(
+                    self,
+                    trace_meta=trace_meta,
+                    available_tool_names=set(tools.keys()),
+                )
                 result = await single_shot_tool_decision(
                     client,
                     messages,
@@ -2207,6 +2220,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         trace_meta,
                         run_id,
                     ),
+                    completion_mutator=completion_mutator,
                 )
             except Exception:
                 _log_slow_brain_single_shot_failure(
