@@ -1176,7 +1176,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  8. Exactly one message. No tool calls, no `act`. The user's reply is what "
             "advances the flow.",
             "  9. When the notification says the medium is `call`, the voice agent will "
-            "handle the spoken greeting — stay silent on this turn (no chat reply).",
+            "handle the spoken greeting — stay silent on this turn (no chat reply). "
+            "When the medium is `chat`, the scripted onboarding opener was already "
+            "delivered in the transcript — stay silent on this turn (no chat reply).",
             "Global pause and resume (conversation):",
             "  - If my boss asks to pause onboarding, defer all of setup, or use the "
             "platform first, I restate what pausing means and ask for explicit "

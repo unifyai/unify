@@ -25,6 +25,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from unify.conversation_manager.events import CoordinatorOnboardingEvent
+from unify.conversation_manager.medium_scripts.call import (
+    COORDINATOR_ONBOARDING_CHAT_INTRO,
+)
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -273,6 +276,13 @@ def _coordinator_onboarding_notification_text(
             "one-sentence recap of what's been done so far plus that first "
             "valid next step — do NOT re-introduce yourself."
         )
+        if medium == "chat":
+            guidance = (
+                "The onboarding picker resolved to chat and the fixed opener "
+                "was already delivered verbatim in the transcript. Stay silent "
+                "until the user sends their next message — do not send another "
+                "opening turn or replay the intro/overview."
+            )
         medium_note = ""
         if medium == "call":
             medium_note = (
@@ -280,7 +290,10 @@ def _coordinator_onboarding_notification_text(
                 "agent generates its own spoken opener. No chat reply needed.)"
             )
         elif medium == "chat":
-            medium_note = " (Chat: send exactly one short chat message.)"
+            medium_note = (
+                " (Chat: the scripted opener is already in the transcript — "
+                "no chat reply on this event.)"
+            )
         composed = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
         return composed.strip()
 
@@ -499,6 +512,10 @@ async def _handle_coordinator_onboarding_event(
     still push the notification — keeps the brain aware that the
     user just opened a session in case it matters for a later turn —
     but suppress the immediate run.
+
+    The ``medium == 'chat'`` branch is similar: the handler delivers
+    the fixed onboarding opener as a unify_message and suppresses
+    the immediate run so the slow brain cannot race a second intro.
     """
     from unify.settings import SETTINGS
 
@@ -568,7 +585,18 @@ async def _handle_coordinator_onboarding_event(
     )
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
         details = event.details if isinstance(event.details, dict) else {}
-        if details.get("medium") == "call":
+        medium = details.get("medium")
+        if medium == "chat":
+            from unify.conversation_manager.domains.brain_action_tools import (
+                ConversationManagerBrainActionTools,
+            )
+
+            tools = ConversationManagerBrainActionTools(cm)
+            await tools.send_unify_message_to_boss(
+                content=COORDINATOR_ONBOARDING_CHAT_INTRO,
+            )
+            return False
+        if medium == "call":
             return False
     if event.subtype == _SUBTYPE_STEP_RESET:
         # The render refresh + standing notification above are the whole

@@ -910,6 +910,15 @@ MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
 # Boundaries were derived from the original per-sentence audio slices aligned via
 # Whisper word timestamps; playback uses one continuous recording with TimedString
 # chunks so LiveKit can commit only the heard prefix on interruption.
+#
+# ``twin-onboarding-intro.mp3`` is spliced from the original recording:
+#   1. Part A: trim 0→18.35s (through "Much better." + natural silence).
+#   2. Part B: trim 20.77→21.27s (0.5s natural silence before unmute in the
+#      source) concat 21.27s→end ("By the way…") — one continuous part B.
+#   3. Concat part A + part B once with a 2ms ``acrossfade`` at that join.
+# Extra pause comes from prefixing part B, not from padding part A or adding a
+# third segment after "Much better." — those extra joins caused the blip.
+# The "Any questions…" block (≈18.36–20.76s) stays removed.
 _COORDINATOR_ONBOARDING_CLEAN_START_TIME = 17.160000
 _COORDINATOR_ONBOARDING_TIMED_CHUNKS: list[dict[str, object]] = [
     {"text": "Hey, great to meet you.", "start_time": 0.000000, "end_time": 1.140000},
@@ -931,16 +940,20 @@ _COORDINATOR_ONBOARDING_TIMED_CHUNKS: list[dict[str, object]] = [
     },
     {"text": "Much better.", "start_time": 17.160000, "end_time": 17.900000},
     {
-        "text": "Any questions before we start with the onboarding?",
-        "start_time": 17.900000,
-        "end_time": 20.320000,
-    },
-    {
         "text": "By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.",
-        "start_time": 20.320000,
-        "end_time": 28.175313,
+        "start_time": 18.850000,
+        "end_time": 25.800000,
     },
 ]
+
+# Scripted chat intro when the user picks text over the onboarding call.
+# Matches the recorded opener minus walkie static, unmute guidance, and the
+# removed "Any questions before we start with the onboarding?" line.
+COORDINATOR_ONBOARDING_CHAT_INTRO = (
+    "Hey, great to meet you. I'm T-W1N, and I'll be acting as your digital twin. "
+    "Inventive name, I know. Should we start with the onboarding, or would you "
+    "rather just dive in and get help with some of the tasks on your plate?"
+)
 
 _RECORDED_OPENING_ASSETS = {
     "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
