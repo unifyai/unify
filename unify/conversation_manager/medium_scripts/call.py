@@ -919,6 +919,9 @@ MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
 # Extra pause comes from prefixing part B, not from padding part A or adding a
 # third segment after "Much better." — those extra joins caused the blip.
 # The "Any questions…" block (≈18.36–20.76s) stays removed.
+# Radio static-removal SFX (≈16.65–16.95s intro, ≈2.05–3.85s bridge) is
+# level-matched on ``twin-onboarding-intro.mp3`` and
+# ``twin-onboarding-static-bridge.mp3`` (~8× intro, ~⅙ bridge).
 _COORDINATOR_ONBOARDING_CLEAN_START_TIME = 17.160000
 _COORDINATOR_ONBOARDING_TIMED_CHUNKS: list[dict[str, object]] = [
     {"text": "Hey, great to meet you.", "start_time": 0.000000, "end_time": 1.140000},
