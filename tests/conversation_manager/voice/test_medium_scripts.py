@@ -3097,7 +3097,7 @@ class TestChildProcessLogging:
 
 
 class TestFastBrainContinuation:
-    """``Assistant._claim_interrupted_continuation`` exactly-once semantics."""
+    """Pending continuation claim and llm_node resume semantics."""
 
     def _assistant(self, boss_contact):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3120,33 +3120,33 @@ class TestFastBrainContinuation:
         }
 
     @pytest.mark.asyncio
-    async def test_claims_and_resumes_with_verbatim_remainder(
-        self,
-        boss_contact,
-        monkeypatch,
-    ):
-        from unify.conversation_manager.medium_scripts import call as call_mod
-
+    async def test_claim_pending_returns_snapshot(self, boss_contact):
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
 
-        async def _fake(resume_text, user_text):
-            return "Sorry — as I was saying,"
-
-        monkeypatch.setattr(call_mod, "select_continuation", _fake)
-
-        out = await a._claim_interrupted_continuation("okay")
-        # Lead-in from the model + the slow brain's verbatim remainder.
-        assert out == "Sorry — as I was saying, Next, click Connect Slack."
-        # Claimed: cleared so the VoiceInterrupt handoff becomes a no-op.
+        pending = await a._claim_pending_continuation("okay")
+        assert pending is not None
+        assert pending.resume_text == "Next, click Connect Slack."
         assert a._pending_continuation is None
 
     @pytest.mark.asyncio
     async def test_defer_hands_off_to_slow_brain(self, boss_contact, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
+        a.call_received = True
         a._pending_continuation = self._pending()
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
         published: dict = {}
 
         async def _pub(spoken, remainder):
@@ -3154,14 +3154,20 @@ class TestFastBrainContinuation:
 
         a._publish_voice_interrupt = _pub
 
-        async def _defer(resume_text, user_text):
-            return None
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="Sure — one moment.",
+                declined_continuation=True,
+            )
 
-        monkeypatch.setattr(call_mod, "select_continuation", _defer)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
-        out = await a._claim_interrupted_continuation("wait, stop")
-        assert out is None
-        # The remainder is handed to the slow brain instead (delivered once).
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content="wait, stop")
+        chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(chunks) == 1
         assert published["args"] == (
             "Your number is saved.",
             "Next, click Connect Slack.",
@@ -3172,43 +3178,43 @@ class TestFastBrainContinuation:
     async def test_no_pending_returns_none(self, boss_contact):
         a = self._assistant(boss_contact)
         assert a._pending_continuation is None
-        assert await a._claim_interrupted_continuation("okay") is None
+        assert await a._claim_pending_continuation("okay") is None
 
     @pytest.mark.asyncio
-    async def test_already_consumed_returns_none(self, boss_contact, monkeypatch):
-        from unify.conversation_manager.medium_scripts import call as call_mod
-
+    async def test_already_consumed_returns_none(self, boss_contact):
         a = self._assistant(boss_contact)
         pending = self._pending()
         pending["consumed"] = True
         a._pending_continuation = pending
-
-        def _boom(*args, **kwargs):
-            raise AssertionError(
-                "must not select a continuation for a consumed candidate",
-            )
-
-        monkeypatch.setattr(call_mod, "select_continuation", _boom)
-        assert await a._claim_interrupted_continuation("okay") is None
+        assert await a._claim_pending_continuation("okay") is None
 
     @pytest.mark.asyncio
     async def test_speechless_barge_in_auto_continues(self, boss_contact, monkeypatch):
-        """A barge-in with no transcript (noise/echo) resumes the remainder
-        verbatim WITHOUT consulting the classifier - the only sensible action."""
+        """A barge-in with no transcript resumes without calling the LLM."""
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
+        a.call_received = True
         a._pending_continuation = self._pending()
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
         def _boom(*args, **kwargs):
-            raise AssertionError("speechless barge-in must not consult the classifier")
+            raise AssertionError("speechless barge-in must not consult the LLM")
 
-        monkeypatch.setattr(call_mod, "select_continuation", _boom)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _boom)
 
-        out = await a._claim_interrupted_continuation("   ")
-        assert out is not None
-        assert out.endswith("Next, click Connect Slack.")
-        # Claimed exactly once.
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content="   ")
+        chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(chunks) == 1
+        assert chunks[0].delta.content.endswith("Next, click Connect Slack.")
         assert a._pending_continuation is None
 
     @pytest.mark.asyncio
@@ -3217,19 +3223,30 @@ class TestFastBrainContinuation:
         boss_contact,
         monkeypatch,
     ):
-        """On CONTINUE, llm_node yields the verbatim remainder and schedules
-        the slow brain with a continuation note."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
         from unify.conversation_manager.events import FAST_BRAIN_TURN_CONTINUATION
+        from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         resumed = "Sorry — as I was saying, Next, click Connect Slack."
-        a._claim_interrupted_continuation = AsyncMock(return_value=resumed)
         a._publish_fast_brain_turn_completed = AsyncMock()
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_CONTINUATION,
+                intended_speech=resumed,
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
@@ -3245,8 +3262,7 @@ class TestFastBrainContinuation:
 
 
 class TestFastBrainSmalltalk:
-    """``llm_node`` small-talk branch: the fast brain fully answers a pure social
-    turn, then schedules the slow brain with the classification note."""
+    """``llm_node`` unified fast-brain turn outcomes."""
 
     def _assistant(self, boss_contact):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3269,20 +3285,26 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
         from unify.conversation_manager.events import FAST_BRAIN_TURN_SMALLTALK
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         reply = "Doing great, thanks for asking! How are you?"
-        a._generate_smalltalk_reply = AsyncMock(return_value=reply)
         a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SMALLTALK,
+                intended_speech=reply,
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
@@ -3305,26 +3327,30 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
-        # Not small talk -> defer; the filler covers the gap, slow brain proceeds.
-        a._generate_smalltalk_reply = AsyncMock(return_value=None)
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One sec — pulling that up."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One sec — pulling that up.",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == "One sec — pulling that up."
-        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
-
         a._publish_fast_brain_turn_completed.assert_awaited_once_with(
             turn_id=a._user_turn_seq,
             user_content="",
@@ -3333,7 +3359,7 @@ class TestFastBrainSmalltalk:
         )
 
     @pytest.mark.asyncio
-    async def test_idle_status_gate_is_passed_to_smalltalk(
+    async def test_idle_status_gate_is_passed_to_selector(
         self,
         boss_contact,
         monkeypatch,
@@ -3342,28 +3368,32 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
         a._request_idle_smalltalk_state = AsyncMock(return_value=True)
-        a._generate_smalltalk_reply = AsyncMock(return_value=None)
         a._publish_fast_brain_turn_completed = AsyncMock()
+        captured: dict = {}
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One moment.",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
-        assert chunks[0].delta.content == "One moment."
-        a._generate_smalltalk_reply.assert_awaited_once_with(
-            "",
-            idle_status_smalltalk=True,
-        )
+        assert captured.get("idle_status_smalltalk") is True
 
     @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
@@ -3376,20 +3406,25 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
-        a._generate_smalltalk_reply = AsyncMock(
-            return_value=call_mod._SMALLTALK_STAY_SILENT,
-        )
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 

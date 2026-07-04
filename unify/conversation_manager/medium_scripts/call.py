@@ -48,10 +48,7 @@ from unify.conversation_manager.events import *
 from unify.conversation_manager import speaker_id
 from unify.conversation_manager.utils import dispatch_livekit_agent
 from unify.conversation_manager.prompt_builders import (
-    SMALLTALK_DEFER_SENTINEL,
-    SMALLTALK_SILENCE_SENTINEL,
     build_opening_greeting_messages,
-    build_smalltalk_messages,
     build_voice_agent_prompt,
 )
 from unify.conversation_manager.tracing import (
@@ -86,11 +83,11 @@ from unify.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from unify.conversation_manager.domains.fast_brain_buffer import (
+from unify.conversation_manager.domains.fast_brain_turn import (
+    PendingContinuation,
     compute_resume_text,
     pick_resume_lead_in,
-    select_continuation,
-    select_fast_reply,
+    select_fast_brain_turn,
 )
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
@@ -406,9 +403,8 @@ class Assistant(Agent):
         self._turn_engaged_provider: Callable[[], bool] | None = None
         # Sink for final transcripts swallowed as non-engaged background speech.
         self._on_background_final: Callable[[str, str | None], None] | None = None
-        # Fully answers a pure small-talk turn from persona + recent history, or
-        # returns None to defer to the slow brain. Set in the entrypoint.
-        self._generate_smalltalk_reply: Callable | None = None
+        self._fast_brain_system_prompt: str = ""
+        self._fast_brain_history_provider: Callable[[], list[dict]] | None = None
         self._idle_smalltalk_allowed = False
         self._idle_smalltalk_state_event = asyncio.Event()
 
@@ -590,20 +586,14 @@ class Assistant(Agent):
                     recent_assistant_text = item.text_content or ""
                     break
 
-            # If this barge-in cut off a slow-brain line, the fast brain may
-            # resume the unheard remainder immediately (speaking the slow brain's
-            # own verbatim words) instead of waiting a full slow-brain turn for it
-            # to be re-delivered.
-            continuation = await self._claim_interrupted_continuation(user_text)
-            if continuation is not None:
+            pending = await self._claim_pending_continuation(user_text)
+
+            if pending is not None and not (user_text or "").strip():
                 if self._slow_brain_responded_turn >= my_turn:
                     _log.info("Continuation suppressed: slow brain already responded")
                     return
                 self._buffers_since_slow_reply += 1
-                # Resume the slow brain's verbatim remainder AS the reply. Mark the
-                # full text so the ``speech_created`` observer registers this reply
-                # for interruption-stashing -> a barge-in mid-resume re-stashes a
-                # fresh candidate, making continuation recursive.
+                continuation = f"{pick_resume_lead_in()} {pending.resume_text}".strip()
                 self._continuation_full_text = continuation
                 turn_classification = FAST_BRAIN_TURN_CONTINUATION
                 intended_speech = continuation
@@ -613,72 +603,60 @@ class Assistant(Agent):
                 )
                 return
 
-            # Refresh screenshots only on the first reaction (also feeds the slow
-            # brain); repeated deferrals don't need it and should stay snappy.
             if not already_deferred:
                 await self._capture_screenshots_for_llm(chat_ctx)
 
-            # Race the small-talk reply against the lean filler. If this turn is
-            # pure small talk (greeting, biographical, simple self-context,
-            # repeat), the fast brain answers it in full; otherwise it defers and
-            # the filler covers the gap while the slow brain composes the real
-            # answer after this turn completes. Running both concurrently keeps
-            # DEFER turns at the filler's latency.
-            _log.info("Selecting fast reply… (llm_node_start)")
-            smalltalk_task = (
-                asyncio.create_task(
-                    self._generate_smalltalk_reply(
-                        user_text,
-                        idle_status_smalltalk=idle_status_smalltalk,
-                    ),
-                )
-                if self._generate_smalltalk_reply is not None
-                else None
+            history_provider = self._fast_brain_history_provider
+            history_messages = (
+                history_provider() if history_provider is not None else []
             )
-            buffer_task = asyncio.create_task(
-                select_fast_reply(
-                    user_text,
-                    recent_assistant_text,
-                    already_deferred=already_deferred,
-                    guidance=self._fast_brain_guidance,
-                ),
+            resolved = await select_fast_brain_turn(
+                user_text=user_text,
+                system_prompt=self._fast_brain_system_prompt,
+                history_messages=history_messages,
+                pending_continuation=pending,
+                already_deferred=already_deferred,
+                guidance=self._fast_brain_guidance,
+                idle_status_smalltalk=idle_status_smalltalk,
+                recent_assistant_text=recent_assistant_text,
             )
 
-            smalltalk = await smalltalk_task if smalltalk_task is not None else None
-            if smalltalk is _SMALLTALK_STAY_SILENT:
-                # A bare acknowledgement ("okay") needs no reply: say nothing.
-                buffer_task.cancel()
-                _log.info("Small talk: staying silent on bare acknowledgement")
-                turn_classification = FAST_BRAIN_TURN_SILENCE
-                return
-            if smalltalk is not None:
-                buffer_task.cancel()  # the filler is not needed
-                if self._slow_brain_responded_turn >= my_turn:
-                    _log.info("Small talk suppressed: slow brain already responded")
-                    return
-                self._buffers_since_slow_reply += 1
-                turn_classification = FAST_BRAIN_TURN_SMALLTALK
-                intended_speech = smalltalk
-                yield ChatChunk(
-                    id=f"fast-brain-smalltalk-{monotonic_ms()}",
-                    delta=ChoiceDelta(role="assistant", content=smalltalk),
+            if (
+                resolved.declined_continuation
+                and pending is not None
+                and self._publish_voice_interrupt is not None
+                and pending.remainder
+            ):
+                await self._publish_voice_interrupt(
+                    pending.spoken_prefix,
+                    pending.remainder,
                 )
+
+            if resolved.classification == FAST_BRAIN_TURN_SILENCE:
+                _log.info("Fast brain: staying silent on bare acknowledgement")
                 return
 
-            phrase = await buffer_task
-
-            # Re-check: the slow brain may have answered during selection. If so,
-            # drop the now-stale filler so it does not trail the real answer.
             if self._slow_brain_responded_turn >= my_turn:
-                _log.info("Buffer suppressed: slow brain responded during selection")
+                _log.info("Fast reply suppressed: slow brain already responded")
+                return
+
+            speech = resolved.intended_speech
+            if not speech:
                 return
 
             self._buffers_since_slow_reply += 1
-            turn_classification = FAST_BRAIN_TURN_DEFER
-            intended_speech = phrase
+            turn_classification = resolved.classification
+            intended_speech = speech
+            if turn_classification == FAST_BRAIN_TURN_CONTINUATION:
+                self._continuation_full_text = speech
+                chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
+            elif turn_classification == FAST_BRAIN_TURN_SMALLTALK:
+                chunk_id = f"fast-brain-smalltalk-{monotonic_ms()}"
+            else:
+                chunk_id = f"fast-brain-buffer-{monotonic_ms()}"
             yield ChatChunk(
-                id=f"fast-brain-buffer-{monotonic_ms()}",
-                delta=ChoiceDelta(role="assistant", content=phrase),
+                id=chunk_id,
+                delta=ChoiceDelta(role="assistant", content=speech),
             )
         finally:
             self.user_turn_generating = False
@@ -693,22 +671,11 @@ class Assistant(Agent):
                     intended_speech=intended_speech,
                 )
 
-    async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
-        """Decide the fate of an interrupted line - the fast brain's front-door job.
-
-        Every turn after a barge-in routes through here:
-        - No pending candidate -> None (ordinary buffer path).
-        - A barge-in that produced no transcript (speechless noise/echo) ->
-          auto-CONTINUE: resume the remainder verbatim, since there is no spoken
-          content that could possibly justify deferring.
-        - A barge-in with speech -> classify (heavily biased to CONTINUE); on a
-          DEFER, hand the remainder to the slow brain via ``VoiceInterrupt``.
-
-        Returns "{lead-in} {verbatim remainder}" to resume, else None. Claiming
-        marks the candidate consumed so it is delivered exactly once.
-        """
-        text = (user_text or "").strip()
-
+    async def _claim_pending_continuation(
+        self,
+        user_text: str,
+    ) -> PendingContinuation | None:
+        """Claim a stashed interrupted-line candidate for this user turn."""
         # Barge-in vs user-turn race: if a line was just interrupted but its
         # remainder hasn't been computed yet, wait briefly for it.
         active = self._active_tts
@@ -726,7 +693,6 @@ class Assistant(Agent):
         if not pending or pending.get("consumed"):
             return None
 
-        # Claim synchronously so no other path can double-deliver it.
         pending["consumed"] = True
         resume_text = (pending.get("resume_text") or "").strip()
         remainder = (pending.get("remainder") or "").strip()
@@ -736,18 +702,11 @@ class Assistant(Agent):
         if not resume_text:
             return None
 
-        # Speechless barge-in: the only sensible action is to continue, so resume
-        # directly without consulting the classifier.
-        if not text:
-            return f"{pick_resume_lead_in()} {resume_text}".strip()
-
-        lead_in = await select_continuation(resume_text, user_text)
-        if lead_in is None:
-            # Redirect / new ask: hand the remainder to the slow brain instead.
-            if self._publish_voice_interrupt is not None and remainder:
-                await self._publish_voice_interrupt(spoken_prefix, remainder)
-            return None
-        return f"{lead_in} {resume_text}".strip()
+        return PendingContinuation(
+            resume_text=resume_text,
+            remainder=remainder,
+            spoken_prefix=spoken_prefix,
+        )
 
     def _tee_frames_to_speaker_tracker(
         self,
@@ -1017,15 +976,7 @@ def build_deferred_outbound_opener_continuation(
     }
 
 
-# Ceiling on a fast-brain small-talk reply. A social / biographical / self-context
-# answer is a sentence or two; anything longer means the model overreached into a
-# substantive answer (the slow brain's job), so we drop it and defer instead.
-_MAX_SMALLTALK_CHARS = 300
-
-# Distinct small-talk outcome: a bare acknowledgement ("okay") needs no reply at
-# all. The fast brain stays silent AND cancels the slow-brain run, so neither
-# brain speaks. Identity-checked, so it can never collide with a real reply.
-_SMALLTALK_STAY_SILENT = object()
+# Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
 
 # When the assistant ends a Unify Meet, we first tell the Console to leave the
 # room itself (so its WebRTC peer connection and SCTP data channels close
@@ -3563,53 +3514,11 @@ async def entrypoint(ctx: agents.JobContext):
         )
         return await greeting_client.generate(messages=greeting_messages)
 
-    async def _generate_smalltalk_reply(
-        user_text: str,
-        *,
-        idle_status_smalltalk: bool = False,
-    ):
-        """Resolve a pure small-talk turn, or return None to defer.
-
-        Returns one of:
-        - a reply string: a social / biographical / self-context / repeat answer
-          to speak (the fast brain owns the turn);
-        - ``_SMALLTALK_STAY_SILENT``: a bare acknowledgement that needs no reply;
-        - ``None``: defer to the slow brain (anything substantive, or any action
-          / status question, or any error / overreach).
-
-        Drawn from the assistant persona plus recent history. Fail-safe to None.
-        """
-        from unify.common.llm_client import new_llm_client
-
-        if not (user_text or "").strip():
-            return None
-        try:
-            client = new_llm_client(
-                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                origin="fast_brain_smalltalk",
-                reasoning_effort="low",
-            )
-            messages = build_smalltalk_messages(
-                system_prompt=system_prompt,
-                history_messages=_extract_chat_messages(session.history, tail=8),
-                user_text=user_text.strip(),
-                idle_status_smalltalk=idle_status_smalltalk,
-            )
-            raw = await client.generate(messages=messages)
-            text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")
-            upper = text.upper()
-            if not text or upper.startswith(SMALLTALK_DEFER_SENTINEL):
-                return None
-            if upper.startswith(SMALLTALK_SILENCE_SENTINEL):
-                return _SMALLTALK_STAY_SILENT
-            if len(text) > _MAX_SMALLTALK_CHARS:
-                return None
-            return text
-        except Exception as exc:  # never let small-talk selection break the turn
-            _log.info(f"Small-talk selection failed; deferring: {exc}")
-            return None
-
-    assistant._generate_smalltalk_reply = _generate_smalltalk_reply
+    assistant._fast_brain_system_prompt = system_prompt
+    assistant._fast_brain_history_provider = lambda: _extract_chat_messages(
+        session.history,
+        tail=8,
+    )
 
     def _inject_opening_system_context(text: str) -> None:
         """Seed the call with a durable system briefing before the opener.
