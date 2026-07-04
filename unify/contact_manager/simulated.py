@@ -1126,6 +1126,50 @@ class SimulatedContactManager(BaseContactManager):
         """
         # System contacts are already pre-populated in __init__, nothing to do
 
+    # ── voice enrollment (in-memory; API parity with ContactManager) ──────
+    def get_voice_profiles(self, contact_ids) -> Dict[int, List[float]]:
+        """Return {contact_id: voice embedding} for enrolled contacts."""
+        profiles: Dict[int, List[float]] = {}
+        for cid in contact_ids:
+            row = self._contacts.get(int(cid))
+            if row and row.get("_voice_embedding"):
+                profiles[int(cid)] = list(row["_voice_embedding"])
+        return profiles
+
+    def get_voice_enrollment_info(self, contact_id: int) -> Dict[str, Any]:
+        """Return enrollment metadata (enrolled, enrolled_at, source)."""
+        row = self._contacts.get(int(contact_id)) or {}
+        return {
+            "enrolled": bool(row.get("_voice_embedding")),
+            "enrolled_at": row.get("_voice_enrolled_at"),
+            "source": row.get("_voice_enrollment_source"),
+        }
+
+    def set_voice_enrollment(
+        self,
+        *,
+        contact_id: int,
+        embedding: List[float],
+        wav_bytes: bytes | None = None,
+        source: str,
+    ) -> None:
+        """Persist a voice enrollment on the in-memory contact row."""
+        from datetime import datetime, timezone
+
+        row = self._contacts.get(int(contact_id))
+        if row is None:
+            raise ValueError(
+                f"No contact found with contact_id {contact_id} for voice enrollment.",
+            )
+        row["_voice_embedding"] = [float(x) for x in embedding]
+        row["_voice_enrolled_at"] = datetime.now(timezone.utc).isoformat()
+        row["_voice_enrollment_source"] = source
+        if wav_bytes is not None:
+            row["_voice_sample_size"] = len(wav_bytes)
+
+    def sync_manual_voice_enrollment(self) -> None:
+        """No-op for the simulated manager (no Orchestra user record)."""
+
     def _merge_contacts(
         self,
         *,

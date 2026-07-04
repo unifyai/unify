@@ -6,7 +6,7 @@ import unisdk
 
 from ..common.context_store import TableStore
 from ..common.model_to_fields import model_to_fields
-from .types.contact import Contact
+from .types.contact import Contact, VOICE_ENROLLMENT_FIELDS
 
 
 def provision_storage(self) -> None:
@@ -17,7 +17,7 @@ def provision_storage(self) -> None:
         unique_keys={"contact_id": "int"},
         auto_counting={"contact_id": None},
         description="List of contacts, with all contact details stored.",
-        fields=model_to_fields(Contact),
+        fields={**model_to_fields(Contact), **VOICE_ENROLLMENT_FIELDS},
     )
 
     # Prefill known custom fields once to include any preexisting non-private columns

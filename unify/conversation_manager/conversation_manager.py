@@ -321,6 +321,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.call_manager.on_screenshot = self._buffer_screenshot
         self.call_manager.on_fast_brain_generating = self._on_fast_brain_generating
         self.call_manager.on_pipeline_quiescent = self._on_pipeline_quiescent
+        self.call_manager.voice_profile_provider = self._get_voice_profiles
 
         # renderer
         self.prompt_renderer = Renderer()
@@ -3243,6 +3244,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
     # Proactive speech related methods
 
     PROACTIVE_DEBOUNCE_SECONDS = 5
+
+    def _get_voice_profiles(self, contact_ids: list[int]) -> dict[int, list[float]]:
+        """Return enrolled voice embeddings for the given contacts."""
+        if self.contact_manager is None:
+            return {}
+        return self.contact_manager.get_voice_profiles(contact_ids)
 
     def _on_fast_brain_generating(self) -> dict[str, bool]:
         """Called via IPC when the fast brain starts generating a reply.
