@@ -88,6 +88,11 @@ async def test_session_started_chat_delivers_scripted_intro_without_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "unify.conversation_manager.domains.coordinator_onboarding.asyncio.sleep",
+        sleep,
+    )
     cm = _fake_cm()
     send_intro = AsyncMock()
     monkeypatch.setattr(
@@ -103,6 +108,7 @@ async def test_session_started_chat_delivers_scripted_intro_without_run(
     should_run = await _handle_coordinator_onboarding_event(event, cm)
 
     assert should_run is False
+    sleep.assert_awaited_once()
     send_intro.assert_awaited_once()
     assert send_intro.await_args.kwargs["content"]
     assert "T-W1N" in send_intro.await_args.kwargs["content"]
