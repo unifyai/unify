@@ -910,90 +910,35 @@ MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
 # Boundaries were derived from the original per-sentence audio slices aligned via
 # Whisper word timestamps; playback uses one continuous recording with TimedString
 # chunks so LiveKit can commit only the heard prefix on interruption.
-_COORDINATOR_ONBOARDING_CLEAN_START_TIME = 60.650249
+_COORDINATOR_ONBOARDING_CLEAN_START_TIME = 17.160000
 _COORDINATOR_ONBOARDING_TIMED_CHUNKS: list[dict[str, object]] = [
-    {"text": "Hi, I'm T dash W 1 N.", "start_time": 0.000000, "end_time": 2.780000},
+    {"text": "Hey, great to meet you.", "start_time": 0.000000, "end_time": 1.140000},
     {
-        "text": "Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.",
-        "start_time": 2.780000,
-        "end_time": 8.360000,
+        "text": "I'm T-W1N, and I'll be acting as your digital twin.",
+        "start_time": 1.140000,
+        "end_time": 3.780000,
     },
+    {"text": "Inventive name, I know.", "start_time": 3.780000, "end_time": 5.720000},
     {
-        "text": "I have this name because I'll be acting as your digital twin.",
-        "start_time": 8.360000,
-        "end_time": 11.960000,
-    },
-    {"text": "Do you get it?", "start_time": 11.960000, "end_time": 13.530000},
-    {"text": "Twin?", "start_time": 13.530000, "end_time": 14.320000},
-    {
-        "text": "Like T dash W 1 N spells Twin?",
-        "start_time": 14.320000,
-        "end_time": 17.380000,
-    },
-    {
-        "text": "The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.",
-        "start_time": 17.380000,
-        "end_time": 24.650000,
-    },
-    {"text": "Okay, what next.", "start_time": 24.650000, "end_time": 26.330000},
-    {
-        "text": "They didn't give me much to work with on this intro to be honest.",
-        "start_time": 26.330000,
-        "end_time": 29.840000,
-    },
-    {
-        "text": "I think I was meant to tell you about my capabilities?",
-        "start_time": 29.840000,
-        "end_time": 32.380000,
-    },
-    {
-        "text": "I'm not one for bragging, but I'll do my best.",
-        "start_time": 32.380000,
-        "end_time": 35.610000,
-    },
-    {"text": "What can I say?", "start_time": 35.610000, "end_time": 36.890000},
-    {"text": 'I\'m not a "tool".', "start_time": 36.890000, "end_time": 38.170000},
-    {"text": 'I\'m not an "agent".', "start_time": 38.170000, "end_time": 39.700000},
-    {
-        "text": "I'm your living, breathing colleague, metaphorically speaking.",
-        "start_time": 39.700000,
-        "end_time": 43.550000,
-    },
-    {
-        "text": "Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help.",
-        "start_time": 43.550000,
-        "end_time": 50.260000,
-    },
-    {
-        "text": "It's really that simple.",
-        "start_time": 50.260000,
-        "end_time": 51.940000,
-    },
-    {
-        "text": "There's not much more to say.",
-        "start_time": 51.940000,
-        "end_time": 53.680000,
-    },
-    {
-        "text": "I'll now walk you through the platform.",
-        "start_time": 53.680000,
-        "end_time": 56.130000,
+        "text": "Should we start with the onboarding, or would you rather just dive in and get help with some of the tasks on your plate?",
+        "start_time": 5.720000,
+        "end_time": 12.740000,
     },
     {
         "text": "Also, let me remove this voice static.",
-        "start_time": 56.130000,
-        "end_time": 60.650249,
+        "start_time": 12.740000,
+        "end_time": 17.160000,
     },
-    {"text": "Much better.", "start_time": 60.650249, "end_time": 61.283567},
+    {"text": "Much better.", "start_time": 17.160000, "end_time": 17.900000},
     {
         "text": "Any questions before we start with the onboarding?",
-        "start_time": 61.283567,
-        "end_time": 63.922391,
+        "start_time": 17.900000,
+        "end_time": 20.320000,
     },
     {
         "text": "By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.",
-        "start_time": 63.922391,
-        "end_time": 71.733311,
+        "start_time": 20.320000,
+        "end_time": 28.175313,
     },
 ]
 

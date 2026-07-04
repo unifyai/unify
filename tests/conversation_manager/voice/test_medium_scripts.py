@@ -1597,11 +1597,11 @@ def test_walkie_opener_timed_chunks_cover_static_removal_transition():
     spec = call_script._RECORDED_OPENINGS["coordinator_onboarding_intro"]
     chunks = spec["timed_chunks"]
     bridge = spec["bridge"]
-    walkie = chunks[:20]
-    clean = chunks[20:]
+    walkie = chunks[:5]
+    clean = chunks[5:]
 
-    assert len(walkie) == 20
-    assert walkie[0]["text"] == "Hi, I'm T dash W 1 N."
+    assert len(walkie) == 5
+    assert walkie[0]["text"] == "Hey, great to meet you."
     assert walkie[-1]["text"] == "Also, let me remove this voice static."
     for chunk in walkie:
         assert "Much better." not in chunk["text"]
@@ -1631,10 +1631,10 @@ def test_coordinator_onboarding_timed_chunks_match_audio():
     from unify.conversation_manager.medium_scripts import call as call_script
 
     chunks = call_script._COORDINATOR_ONBOARDING_TIMED_CHUNKS
-    assert len(chunks) == 23
-    assert chunks[0]["text"] == "Hi, I'm T dash W 1 N."
-    assert chunks[19]["text"] == "Also, let me remove this voice static."
-    assert chunks[20]["text"] == "Much better."
+    assert len(chunks) == 8
+    assert chunks[0]["text"] == "Hey, great to meet you."
+    assert chunks[4]["text"] == "Also, let me remove this voice static."
+    assert chunks[5]["text"] == "Much better."
 
     with resources.as_file(
         resources.files("unify.assets.audio") / "twin-onboarding-intro.mp3",
@@ -1642,7 +1642,7 @@ def test_coordinator_onboarding_timed_chunks_match_audio():
         full_duration = sf.info(intro_path).duration
 
     assert float(chunks[-1]["end_time"]) == pytest.approx(full_duration, abs=0.01)
-    assert float(chunks[20]["start_time"]) == pytest.approx(
+    assert float(chunks[5]["start_time"]) == pytest.approx(
         call_script._COORDINATOR_ONBOARDING_CLEAN_START_TIME,
         abs=0.01,
     )
