@@ -973,40 +973,56 @@ class TestConsoleUIGate:
 
 
 # ---------------------------------------------------------------------------
-# Tests - small-talk sidecar prompt
+# Tests - unified fast-brain turn prompt
 # ---------------------------------------------------------------------------
 
 
-class TestSmalltalkMessages:
-    """The small-talk sidecar lets the fast brain fully answer pure social /
-    biographical / self-context / repeat turns, and DEFERs everything else."""
+class TestFastBrainTurnPrompt:
+    """The unified fast-brain turn prompt covers social, defer, silence, and
+    continuation rules formerly split across smalltalk/filler/continuation paths."""
 
-    def test_build_smalltalk_messages_structure(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+    def test_build_fast_brain_turn_messages_structure(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+            build_fast_brain_turn_messages,
+        )
 
         history = [
             {"role": "assistant", "content": "Hi there!"},
             {"role": "user", "content": "what did you just say?"},
         ]
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=history,
             user_text="what did you just say?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
+            idle_status_smalltalk=False,
+            recent_assistant_text="",
         )
-        # Persona first, guardrail near the end, caller's latest line last.
         assert msgs[0] == {"role": "system", "content": "PERSONA"}
         assert msgs[-1] == {"role": "user", "content": "what did you just say?"}
-        assert msgs[-2]["role"] == "system"
-        # History is preserved between persona and guardrail.
+        assert any(
+            m["role"] == "system" and m["content"] == FAST_BRAIN_TURN_PROMPT
+            for m in msgs
+        )
         assert {"role": "assistant", "content": "Hi there!"} in msgs
 
     def test_idle_status_smalltalk_guidance_is_absent_by_default(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            build_fast_brain_turn_messages,
+        )
 
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=[],
             user_text="what are you doing?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
+            idle_status_smalltalk=False,
+            recent_assistant_text="",
         )
 
         system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
@@ -1014,13 +1030,19 @@ class TestSmalltalkMessages:
         assert "Mario Kart" not in system_text
 
     def test_idle_status_smalltalk_guidance_is_gated(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            build_fast_brain_turn_messages,
+        )
 
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=[],
             user_text="what are you doing?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
             idle_status_smalltalk=True,
+            recent_assistant_text="",
         )
 
         system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
@@ -1031,58 +1053,56 @@ class TestSmalltalkMessages:
         assert "Mario Kart" in system_text
         assert "Tetris" in system_text
 
-    def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
-        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
-
-        g = _SMALLTALK_GUARDRAIL.lower()
-        assert "tell me about yourself" in g
-        assert "repeat" in g
-        # Self-context is allowed but only when actually known.
-        assert "local time" in g or "where you are" in g
-        assert "do not guess" in g or "do not actually know" in g
-
-    def test_smalltalk_guardrail_defers_substantive_and_mixed(self):
-        from unify.conversation_manager.prompt_builders import (
-            SMALLTALK_DEFER_SENTINEL,
-            _SMALLTALK_GUARDRAIL,
+    def test_fast_brain_turn_prompt_allows_social_bio_selfcontext_repeat(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
         )
 
-        assert SMALLTALK_DEFER_SENTINEL == "DEFER"
-        g = _SMALLTALK_GUARDRAIL
-        assert "DEFER" in g
+        g = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "smalltalk" in g
+        assert "repeat" in g
+        assert "persona" in g or "who you are" in g
+
+    def test_fast_brain_turn_prompt_defers_substantive_and_mixed(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
+
+        g = FAST_BRAIN_TURN_PROMPT
+        assert "defer" in g
         low = g.lower()
-        # Data / tools / actions and mixed turns must defer.
-        assert "calendar" in low and "inbox" in low
-        assert "tool" in low
-        assert "mixed" in low
+        assert "data" in low and "tools" in low
         assert "when unsure" in low
 
-    def test_smalltalk_guardrail_stays_silent_on_bare_acks(self):
-        from unify.conversation_manager.prompt_builders import (
-            SMALLTALK_SILENCE_SENTINEL,
-            _SMALLTALK_GUARDRAIL,
+    def test_fast_brain_turn_prompt_stays_silent_on_bare_acks(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
         )
 
-        assert SMALLTALK_SILENCE_SENTINEL == "SILENCE"
-        g = _SMALLTALK_GUARDRAIL
-        assert "SILENCE" in g
+        g = FAST_BRAIN_TURN_PROMPT
+        assert "silence" in g
         low = g.lower()
-        # Bare acknowledgements -> silence, never echoed back.
         assert "acknowledgement" in low
         assert "never echo" in low
-        # The carve-out: an 'okay' that authorises an action is NOT silence.
         assert "authorises an action" in low or "authorizes an action" in low
 
-    def test_smalltalk_guardrail_defers_action_and_status_questions(self):
-        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+    def test_fast_brain_turn_prompt_interrupted_question_ack_is_defer(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
 
-        low = _SMALLTALK_GUARDRAIL.lower()
-        # The fast brain must never promise/report on an action it controls.
-        assert "hang up" in low
-        assert "are you calling me" in low
-        assert "did you send it yet" in low
-        assert "idle status small-talk" in low
-        assert "never promise, claim, or report" in low
+        low = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "interrupted mid-sentence" in low and "question" in low
+        assert "agreeing to proceed" in low
+
+    def test_fast_brain_turn_prompt_defers_action_and_status_questions(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
+
+        low = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "status of work you control" in low
+        assert "idle status small-talk" not in low
 
     def test_slow_brain_voice_guide_knows_idle_smalltalk_exception(self):
         prompt = _build(is_voice_call=True)

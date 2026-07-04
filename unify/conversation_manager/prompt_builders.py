@@ -155,12 +155,6 @@ def build_opening_greeting_messages(
     return messages
 
 
-# Sentinels the small-talk sidecar emits. DEFER -> the slow brain handles the
-# turn; SILENCE -> say nothing and skip the slow brain (bare ack needs no reply).
-SMALLTALK_DEFER_SENTINEL = "DEFER"
-SMALLTALK_SILENCE_SENTINEL = "SILENCE"
-
-
 def build_fast_brain_turn_guidance(
     *,
     classification: str,
@@ -201,95 +195,6 @@ def build_fast_brain_turn_guidance(
         "[Voice Agent turn completed. Classification: "
         f"{classification or 'unknown'}. Intended speech: {quoted}.]"
     )
-
-
-_SMALLTALK_GUARDRAIL = (
-    "[system] Small-talk rule. You are the fast, in-the-moment voice; a slower, "
-    "smarter version of you is also about to answer this same turn. Decide: can "
-    "you fully and safely answer THIS turn yourself, right now, from who you are "
-    "(the persona above) and what was just said in this conversation - with NO "
-    "lookups, tools, data, or actions?\n\n"
-    "Answer it yourself ONLY when the whole turn is one of these:\n"
-    "- Social pleasantries: greetings, 'how are you', 'nice to meet you', "
-    "'have a good one', light chit-chat.\n"
-    "- About you: who you are, your name/role, 'tell me about yourself', what "
-    "you can help with in general - drawn from the persona above.\n"
-    "- Simple self-context you ACTUALLY know from the persona: e.g. where you are "
-    "based or the local time where you are, ONLY if the persona actually tells "
-    "you. If you do not actually know it, do not guess.\n"
-    "- Repeat or clarify the immediately preceding line: 'what did you just "
-    "say?', 'sorry, can you repeat that?', 'what do you mean?' - restate or "
-    "lightly rephrase what was just said.\n\n"
-    f"Output EXACTLY the single word {SMALLTALK_SILENCE_SENTINEL} (and nothing "
-    "else) when the WHOLE turn is just a bare acknowledgement that the caller "
-    "heard you or is ready to continue - 'okay', 'ok', 'k', 'yeah', 'yep', "
-    "'sure', 'right', 'cool', 'mm-hm', 'got it', 'fine', a bare 'thanks' - AND "
-    "you are not waiting on an answer or decision from them. Say nothing; NEVER "
-    "echo their acknowledgement back ('okay' -> 'okay' is exactly what to avoid). "
-    "(If their 'okay' instead answers a question you asked or authorises an "
-    f"action, that is NOT silence -> use {SMALLTALK_DEFER_SENTINEL} so the "
-    "slower brain can act.)\n\n"
-    f"Otherwise, output EXACTLY the single word {SMALLTALK_DEFER_SENTINEL} and "
-    "nothing else. In particular, "
-    f"{SMALLTALK_DEFER_SENTINEL} for ANYTHING that needs the user's data, inbox, "
-    "calendar, files, tasks, history, settings, an action, a tool, an "
-    "integration, a real-world fact, or anything not already in your persona or "
-    "this conversation - and for any MIXED turn that contains even one such "
-    f"part. Also {SMALLTALK_DEFER_SENTINEL} for ANY question about what you are "
-    "about to do, are doing, or have done, or your current status or an action "
-    "you control - e.g. 'are you going to hang up?', 'are you calling me?', "
-    "'did you send it yet?', 'have you done that?', 'are you still there?', "
-    "'why is it taking so long?' - unless a later system message explicitly "
-    "allows idle status small-talk for this turn. NEVER promise, claim, or "
-    "report on an action or its status yourself; the slower brain owns those. "
-    "When unsure, "
-    f"{SMALLTALK_DEFER_SENTINEL}. Never invent facts or self-context you do not "
-    "actually know.\n\n"
-    "If you do answer: reply as one natural person (never mention any other "
-    "system, model, or 'version' of you), stay in persona, and keep it to one or "
-    "two short sentences."
-)
-
-_IDLE_STATUS_SMALLTALK_GUARDRAIL = (
-    "[system] Idle status small-talk is available for this turn. The runtime has "
-    "confirmed that no action is in flight, no assistant message was sent "
-    "recently, and no spoken line is pending. If the caller's WHOLE turn is a "
-    "casual idle-status question like 'what are you doing?', 'what are you up "
-    "to?', or 'why are you on your laptop?', you may answer with a playful "
-    "non-work aside. The assistant is often visually rendered as working on a "
-    "laptop, so make it feel like you are passing time there: 'Nothing "
-    "important, just playing Snake for a minute', 'Nothing important, just "
-    "stuck on a Sudoku', 'Nothing important, just losing at Mario Kart', or "
-    "'Nothing important, just playing Tetris'. Vary the game naturally. Do NOT "
-    "claim to be doing real work, checking anything, sending anything, waiting "
-    "on a tool, or monitoring an action. If the turn asks for real status or "
-    "mentions any actual task, action, message, call, file, data, or result, "
-    f"output EXACTLY {SMALLTALK_DEFER_SENTINEL}."
-)
-
-
-def build_smalltalk_messages(
-    *,
-    system_prompt: str,
-    history_messages: Sequence[dict[str, Any]],
-    user_text: str,
-    idle_status_smalltalk: bool = False,
-) -> list[dict[str, Any]]:
-    """Build the sidecar prompt for the small-talk fast reply.
-
-    Mirrors ``build_opening_greeting_messages``: the assistant persona, then the
-    recent conversation, then the small-talk guardrail, then the caller's latest
-    line. The model either answers a pure social / biographical / self-context /
-    repeat turn directly, or emits ``SMALLTALK_DEFER_SENTINEL`` to leave it to
-    the slow brain.
-    """
-    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-    messages.extend(dict(message) for message in history_messages)
-    messages.append({"role": "system", "content": _SMALLTALK_GUARDRAIL})
-    if idle_status_smalltalk:
-        messages.append({"role": "system", "content": _IDLE_STATUS_SMALLTALK_GUARDRAIL})
-    messages.append({"role": "user", "content": user_text})
-    return messages
 
 
 def _build_boss_details_block(
