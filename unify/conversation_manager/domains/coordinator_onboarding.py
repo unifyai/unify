@@ -22,6 +22,7 @@ onboarding the helper simply never runs.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from unify.conversation_manager.events import CoordinatorOnboardingEvent
@@ -34,6 +35,10 @@ if TYPE_CHECKING:
 
 
 _NOTIFICATION_TYPE = "CoordinatorOnboarding"
+
+# Paired with Console's coordinator onboarding chat typing indicator so the
+# scripted opener lands after ~5s rather than instantly on a warm CM.
+_COORDINATOR_ONBOARDING_CHAT_INTRO_TYPING_SECONDS = 5.0
 
 # Per-subtype default instruction used when the orchestra-side
 # ``message`` field is missing or empty — the live emit path always
@@ -592,6 +597,7 @@ async def _handle_coordinator_onboarding_event(
             )
 
             tools = ConversationManagerBrainActionTools(cm)
+            await asyncio.sleep(_COORDINATOR_ONBOARDING_CHAT_INTRO_TYPING_SECONDS)
             await tools.send_unify_message_to_boss(
                 content=COORDINATOR_ONBOARDING_CHAT_INTRO,
             )
