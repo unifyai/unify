@@ -528,6 +528,12 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         sender_name=sender_name,
         timestamp=event.timestamp,
     ):
+        cm.record_last_inbound_reply(
+            _credit_gate_reply_context(
+                medium=medium,
+                contact_id=contact_id,
+            ),
+        )
         await cm.request_llm_run(
             delay=0,
             triggering_contact_id=contact_id,
@@ -2174,14 +2180,16 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 sender_name=sender_name,
                 timestamp=event.timestamp,
             )
+            email_reply_context = _credit_gate_reply_context(
+                medium=Medium.EMAIL,
+                contact_id=contact_id,
+                email_id=event.email_id,
+                thread_id=event.thread_id,
+            )
+            cm.record_last_inbound_reply(email_reply_context)
             await cm.request_llm_run(
                 triggering_contact_id=contact_id,
-                credit_gate_reply_context=_credit_gate_reply_context(
-                    medium=Medium.EMAIL,
-                    contact_id=contact_id,
-                    email_id=event.email_id,
-                    thread_id=event.thread_id,
-                ),
+                credit_gate_reply_context=email_reply_context,
             )
             return  # Early return - email handling is complete
 
@@ -2457,27 +2465,30 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
 
     if role == "user" or _should_wake_for_outbound_sent(event):
         _t0 = time.perf_counter()
+        inbound_reply_context = (
+            _credit_gate_reply_context(
+                medium=medium,
+                contact_id=contact_id,
+                api_message_id=getattr(event, "api_message_id", None),
+                tags=tags,
+                chat_id=chat_id,
+                channel_id=channel_id,
+                team_id=team_id,
+                thread_id=thread_id,
+                thread_ts=thread_ts,
+                guild_id=guild_id,
+                bot_id=bot_id,
+                message_id=message_id,
+                routing_metadata=routing_metadata,
+            )
+            if role == "user"
+            else None
+        )
+        if inbound_reply_context is not None:
+            cm.record_last_inbound_reply(inbound_reply_context)
         await cm.request_llm_run(
             triggering_contact_id=contact_id,
-            credit_gate_reply_context=(
-                _credit_gate_reply_context(
-                    medium=medium,
-                    contact_id=contact_id,
-                    api_message_id=getattr(event, "api_message_id", None),
-                    tags=tags,
-                    chat_id=chat_id,
-                    channel_id=channel_id,
-                    team_id=team_id,
-                    thread_id=thread_id,
-                    thread_ts=thread_ts,
-                    guild_id=guild_id,
-                    bot_id=bot_id,
-                    message_id=message_id,
-                    routing_metadata=routing_metadata,
-                )
-                if role == "user"
-                else None
-            ),
+            credit_gate_reply_context=inbound_reply_context,
         )
         log_startup_timing(
             LOGGER,
