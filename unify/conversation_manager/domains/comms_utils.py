@@ -477,6 +477,44 @@ async def complete_api_message(
             return {"success": True}
 
 
+async def publish_voice_enrollment_suggested(*, num_speakers: int) -> None:
+    """Notify Console that manual voice enrollment is needed after this call.
+
+    Published when multiple speakers are heard but the call contact has no
+    voice profile, so auto-capture could not run. Console opens the fallback
+    recorder when the call ends.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event = {
+        "event_type": "voice_enrollment_suggested",
+        "num_speakers": int(num_speakers),
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(
+                {
+                    "thread": "unity_system_event",
+                    "event": event,
+                },
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error publishing voice_enrollment_suggested: {e}",
+            )
+        return
+
+    try:
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unity_system_event",
+            event=event,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['comms_outbound']} Error publishing voice_enrollment_suggested: {e}",
+        )
+
+
 async def publish_assistant_desktop_ready(
     binding_id: str,
     desktop_url: str,
