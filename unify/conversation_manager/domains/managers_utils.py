@@ -1232,10 +1232,19 @@ async def log_message(
                 if participant_names:
                     metadata = metadata or {}
                     metadata["meet_participants"] = meet_participants_meta
-                dia_sid = getattr(event, "diarization_speaker_id", None)
-                if dia_sid:
-                    metadata = metadata or {}
-                    metadata["diarization_speaker_id"] = dia_sid
+
+            # Voice-derived speaker attribution (all diarized voice channels).
+            dia_sid = getattr(event, "diarization_speaker_id", None)
+            if dia_sid:
+                metadata = metadata or {}
+                metadata["diarization_speaker_id"] = dia_sid
+            speaker_label = getattr(event, "speaker_label", None)
+            if speaker_label:
+                metadata = metadata or {}
+                metadata["speaker_label"] = speaker_label
+            if getattr(event, "voice_verified", False):
+                metadata = metadata or {}
+                metadata["voice_verified"] = True
 
             if call_utterance_timestamp:
                 metadata = metadata or {}
@@ -1640,6 +1649,22 @@ def _init_managers(
     )
     # Wire up ContactManager to ContactIndex for always-fresh contact data
     cm.contact_index.set_contact_manager(cm.contact_manager)
+
+    # Sync a manually recorded voice enrollment (account-page upload) onto the
+    # boss contact in the background; call dispatch reads the embedding later.
+    def _sync_manual_voice_enrollment() -> None:
+        try:
+            cm.contact_manager.sync_manual_voice_enrollment()
+        except Exception as e:  # noqa: BLE001
+            LOGGER.warning(
+                f"{ICONS['managers_worker']} [ManagersWorker] Manual voice "
+                f"enrollment sync failed: {e}",
+            )
+
+    asyncio.run_coroutine_threadsafe(
+        asyncio.to_thread(_sync_manual_voice_enrollment),
+        loop,
+    )
     # In demo mode, ensure the boss contact is always visible
     # in active_conversations so the slow brain can use inline details on
     # communication tools and set_boss_details can use inline details.

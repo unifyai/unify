@@ -212,6 +212,13 @@ class InboundPhoneUtterance(Event):
     # Per-turn id from the voice agent, correlated with the slow-brain run that
     # starts after the fast brain completes this user turn.
     turn_id: int | None = None
+    # Voice-derived speaker attribution: an anonymous session-scoped label
+    # (e.g. "Speaker 2") when the voice does not match the contact's enrolled
+    # profile, the diarization id from STT, and whether the utterance's voice
+    # was positively matched to the contact's enrollment.
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
 
 
 @dataclass
@@ -223,6 +230,9 @@ class InboundUnifyMeetUtterance(Event):
     contact: dict
     content: str
     turn_id: int | None = None
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
 
 
 @dataclass
@@ -234,6 +244,9 @@ class InboundWhatsAppCallUtterance(Event):
     contact: dict
     content: str
     turn_id: int | None = None
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
 
 
 @dataclass
@@ -249,6 +262,42 @@ class VoiceInterrupt(Event):
     contact: dict
     spoken_prefix: str = ""
     unheard_remainder: str = ""
+
+
+@dataclass
+class VoiceEnrollmentCaptured(Event):
+    """A single-voice call accumulated enough speech to enroll the contact.
+
+    Published by the voice agent child process. The embedding is the
+    duration-weighted speaker embedding of the captured speech; ``wav_path``
+    points at a temp WAV file on the shared filesystem that the parent
+    persists onto the contact row (and then deletes).
+    """
+
+    topic: ClassVar[str | None] = "app:comms:voice_enrollment_captured"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+    embedding: list
+    wav_path: str = ""
+    duration_s: float = 0.0
+    channel: str = ""
+
+
+@dataclass
+class VoiceEnrollmentSuggested(Event):
+    """Multiple voices were heard on a call but the contact has no enrollment.
+
+    Signals the slow brain that speaker attribution is degraded and the user
+    could fix it by recording a voice enrollment on their account page.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:voice_enrollment_suggested"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+    num_speakers: int = 0
+    channel: str = ""
 
 
 # Classifications the fast brain emits when a user turn completes.
@@ -339,6 +388,7 @@ class InboundGoogleMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
+    voice_verified: bool = False
 
 
 @dataclass
@@ -415,6 +465,7 @@ class InboundTeamsMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
+    voice_verified: bool = False
 
 
 @dataclass

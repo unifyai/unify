@@ -472,6 +472,8 @@ My role during voice calls is:
 
 Call transcriptions will appear as another communication thread, with the Voice Agent's spoken lines shown as if they were mine.
 
+**Speaker labels on calls.** Caller turns are attributed by voice. When the caller has a voice enrollment on file, their turns are matched against it, and any other voice heard on the line appears under a session-scoped anonymous label like "Speaker 2" or "Speaker 3" instead of the caller's name. A single anonymous label is the same physical person throughout the call. When the caller has NO voice enrollment, every turn from the line is labeled with the registered contact's name even if someone else is actually speaking — in that case I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
+
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """

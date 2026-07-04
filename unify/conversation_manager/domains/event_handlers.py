@@ -1225,10 +1225,20 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     else:
         medium = Medium.PHONE_CALL
 
-    # For diarized browser-meet utterances, prefer the speaker_label from
-    # the event so we attribute speech to the right participant.
+    # For diarized utterances, prefer the speaker_label from the event so we
+    # attribute speech to the right participant. On enrolled-contact calls
+    # this surfaces anonymous voices as "Speaker 2", "Speaker 3", …
     if (
-        isinstance(event, (InboundGoogleMeetUtterance, InboundTeamsMeetUtterance))
+        isinstance(
+            event,
+            (
+                InboundPhoneUtterance,
+                InboundWhatsAppCallUtterance,
+                InboundUnifyMeetUtterance,
+                InboundGoogleMeetUtterance,
+                InboundTeamsMeetUtterance,
+            ),
+        )
         and event.speaker_label
     ):
         sender_name = event.speaker_label
@@ -1277,6 +1287,98 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                 message_id,
                 cached=True,
             )
+
+
+@EventHandler.register(VoiceEnrollmentCaptured)
+async def _(
+    event: VoiceEnrollmentCaptured,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Persist an auto-captured voice enrollment onto the contact row."""
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    if contact_id is None or not event.embedding:
+        return
+    contact = cm.contact_index.get_contact(contact_id=contact_id) or event.contact
+    sender_name = _get_sender_name(contact)
+
+    async def _persist(cm: "ConversationManager") -> None:
+        from unify.contact_manager.voice_enrollment import (
+            VOICE_ENROLLMENT_SOURCE_AUTO,
+        )
+
+        wav_bytes = None
+        if event.wav_path:
+            wav_file = Path(event.wav_path)
+            if wav_file.exists():
+                wav_bytes = wav_file.read_bytes()
+                wav_file.unlink(missing_ok=True)
+        await asyncio.to_thread(
+            cm.contact_manager.set_voice_enrollment,
+            contact_id=int(contact_id),
+            embedding=[float(x) for x in event.embedding],
+            wav_bytes=wav_bytes,
+            source=VOICE_ENROLLMENT_SOURCE_AUTO,
+        )
+        LOGGER.info(
+            f"{DEFAULT_ICON} Voice enrollment persisted for contact "
+            f"{contact_id} ({event.duration_s:.0f}s of speech)",
+        )
+
+    await managers_utils.queue_operation(_persist, cm)
+
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"Voice profile enrolled for {sender_name} from this call's audio; "
+        "their turns on future calls will be voice-verified",
+        event.timestamp,
+    )
+
+
+@EventHandler.register(VoiceEnrollmentSuggested)
+async def _(
+    event: VoiceEnrollmentSuggested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Surface degraded speaker attribution and nudge manual enrollment."""
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"{event.num_speakers} distinct voices detected on this call, but "
+        f"{sender_name} has no voice enrollment, so turns cannot be "
+        "attributed to individual speakers",
+        event.timestamp,
+    )
+
+    # Only account holders can record a manual enrollment on their account
+    # page, so the guidance nudge is limited to the boss.
+    if contact_id == SESSION_DETAILS.boss_contact_id:
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=_active_voice_thread_medium(cm),
+            message_content=(
+                "Speaker attribution note: multiple distinct voices are "
+                f"present on this call, but {sender_name} has no voice "
+                "enrollment, so the transcript cannot reliably distinguish "
+                "who said what. If a natural moment arises, you may suggest "
+                "they record the one-minute voice enrollment in the Voice "
+                "section of their account page, so future calls can "
+                "voice-verify their turns. Do not derail the current topic "
+                "for this."
+            ),
+            role="guidance",
+        )
 
 
 @EventHandler.register(FastBrainTurnCompleted)
@@ -2890,6 +2992,13 @@ async def _(
             cm._session_logger.info("state_update", "Contacts synced successfully")
         except Exception as e:
             cm._session_logger.error("state_update", f"Error syncing contacts: {e}")
+        try:
+            await asyncio.to_thread(cm.contact_manager.sync_manual_voice_enrollment)
+        except Exception as e:
+            cm._session_logger.error(
+                "state_update",
+                f"Error syncing manual voice enrollment: {e}",
+            )
         cm.notifications_bar.push_notif(
             "System",
             f"Contacts synced: {event.reason or 'manual sync'}",

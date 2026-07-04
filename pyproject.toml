@@ -71,6 +71,8 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "python-multipart>=0.0.27",
     "polars>=1.39.3",
+    "sherpa-onnx>=1.13.3",
+    "sherpa-onnx-core>=1.13.3",
 ]
 
 [dependency-groups]

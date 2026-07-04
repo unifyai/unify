@@ -45,6 +45,7 @@ from typing import AsyncIterable, Callable
 load_dotenv()
 
 from unify.conversation_manager.events import *
+from unify.conversation_manager import speaker_id
 from unify.conversation_manager.utils import dispatch_livekit_agent
 from unify.conversation_manager.prompt_builders import (
     SMALLTALK_DEFER_SENTINEL,
@@ -95,6 +96,7 @@ from unify.conversation_manager.domains.fast_brain_buffer import (
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
 STT = None
 VAD = None
+SPEAKER_EMBEDDER = None
 
 
 # Module-level logger created early for prewarm (before entrypoint runs).
@@ -272,16 +274,29 @@ class MeetAudioBridge:
 
 
 def prewarm(_ctx=None):
-    global STT, VAD
+    global STT, VAD, SPEAKER_EMBEDDER
     try:
         _log.info("Prewarm: initializing STT, VAD and turn detector…")
-        STT = deepgram.STT(model="nova-3", language="en-GB")
+        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
         _log.info("Prewarm complete")
     except Exception as e:  # noqa: BLE001
         _log.error(f"Prewarm failed: {e}")
         STT = None
         VAD = None
+    try:
+        model_path = speaker_id.ensure_speaker_model()
+        if model_path is not None:
+            SPEAKER_EMBEDDER = speaker_id.SpeakerEmbedder(model_path)
+            _log.info("Prewarm: speaker-embedding model ready")
+        else:
+            _log.warning(
+                "Prewarm: speaker-embedding model unavailable — "
+                "speaker attribution disabled",
+            )
+    except Exception as e:  # noqa: BLE001
+        _log.error(f"Prewarm speaker model failed: {e}")
+        SPEAKER_EMBEDDER = None
 
 
 class Assistant(Agent):
@@ -303,11 +318,13 @@ class Assistant(Agent):
         outbound: bool = False,
         audio_bridge: MeetAudioBridge | None = None,
         normalize_elevenlabs_twin_pronunciation: bool = False,
+        speaker_tracker: "speaker_id.SpeakerTracker | None" = None,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
         self.audio_bridge = audio_bridge
+        self.speaker_tracker = speaker_tracker
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -707,11 +724,37 @@ class Assistant(Agent):
             return None
         return f"{lead_in} {resume_text}".strip()
 
+    def _tee_frames_to_speaker_tracker(
+        self,
+        audio: AsyncIterable[rtc.AudioFrame],
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """Copy inbound audio frames into the speaker tracker's ring buffer.
+
+        Purely observational: frames are forwarded to STT unchanged and the
+        tracker only appends to an in-memory buffer, so the live pipeline
+        incurs no added latency.
+        """
+        tracker = self.speaker_tracker
+        if tracker is None:
+            return audio
+
+        async def _tee():
+            async for frame in audio:
+                tracker.add_audio(
+                    bytes(frame.data),
+                    frame.sample_rate,
+                    frame.num_channels,
+                )
+                yield frame
+
+        return _tee()
+
     async def stt_node(
         self,
         audio: AsyncIterable[rtc.AudioFrame],
         model_settings: ModelSettings,
     ):
+        audio = self._tee_frames_to_speaker_tracker(audio)
         if (
             self.channel not in ("google_meet", "teams_meet")
             or self.audio_bridge is None
@@ -734,8 +777,11 @@ class Assistant(Agent):
         _RATE = self.audio_bridge._capture_rate
 
         async def _audio_from_bridge():
+            tracker = self.speaker_tracker
             while True:
                 pcm = await self.audio_bridge.capture_q.get()
+                if tracker is not None:
+                    tracker.add_audio(pcm, _RATE, 1)
                 samples = len(pcm) // 2
                 yield rtc.AudioFrame(
                     data=pcm,
@@ -1265,7 +1311,7 @@ def _configure_child_logging() -> None:
 
 
 async def entrypoint(ctx: agents.JobContext):
-    global STT, VAD
+    global STT, VAD, SPEAKER_EMBEDDER
 
     _configure_child_logging()
 
@@ -1390,16 +1436,10 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Fallback for whenever pre-loading fails
     if STT is None:
-        STT = deepgram.STT(model="nova-3", language="en-GB")
+        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
 
     stt_instance = STT
-    if channel in ("google_meet", "teams_meet"):
-        stt_instance = deepgram.STT(
-            model="nova-3",
-            language="en-GB",
-            enable_diarization=True,
-        )
 
     # --- Browser-meet speaker + participant tracker (Meet / Teams) ---
     # Speaker identity uses two complementary signals:
@@ -1439,20 +1479,102 @@ async def entrypoint(ctx: agents.JobContext):
                 return candidate
         return None
 
-    def _resolve_speaker() -> tuple[dict, str | None, str | None]:
-        """Resolve the current browser-meet speaker to (contact_dict, display_name, speaker_id).
+    # --- Voice-embedding speaker tracker (all voice channels) ---
+    # Pins Deepgram's per-call anonymous speaker ids to enrolled contact voice
+    # profiles, accumulates an auto-enrollment on single-voice calls, and
+    # suggests manual enrollment when multiple unattributable voices are heard.
+    voice_profiles: dict[int, list[float]] = {}
+    for _cid, _vec in ((meta or {}).get("voice_profiles") or {}).items():
+        try:
+            voice_profiles[int(_cid)] = [float(x) for x in _vec]
+        except (TypeError, ValueError):
+            continue
 
-        Uses two signals in priority order:
-        1. Diarization speaker_id → correlation mapping (precise, audio-level).
-        2. DOM-scraped activeSpeaker name (fallback, 2s polling granularity).
-        Returns (contact_dict, display_name_or_None, diarization_speaker_id_or_None).
+    if SPEAKER_EMBEDDER is None:
+        _speaker_model_path = speaker_id.ensure_speaker_model(download=False)
+        if _speaker_model_path is not None:
+            SPEAKER_EMBEDDER = speaker_id.SpeakerEmbedder(_speaker_model_path)
+
+    speaker_tracker: speaker_id.SpeakerTracker | None = None
+    # Publishes spawned by tracker callbacks; awaited during job shutdown so a
+    # call-end enrollment is never dropped by process teardown.
+    speaker_event_tasks: set[asyncio.Task] = set()
+
+    def _publish_speaker_event(event) -> None:
+        task = asyncio.create_task(
+            event_broker.publish(event.topic, event.to_json()),
+        )
+        speaker_event_tasks.add(task)
+        task.add_done_callback(speaker_event_tasks.discard)
+
+    if SPEAKER_EMBEDDER is not None:
+
+        def _on_enrollment_captured(
+            embedding,
+            wav_path: str,
+            duration_s: float,
+        ) -> None:
+            event = VoiceEnrollmentCaptured(
+                contact=contact,
+                embedding=[float(x) for x in embedding],
+                wav_path=wav_path,
+                duration_s=float(duration_s),
+                channel=channel,
+            )
+            _log.info(
+                f"Voice enrollment captured ({duration_s:.0f}s) for "
+                f"contact {contact.get('contact_id')}",
+            )
+            _publish_speaker_event(event)
+
+        def _on_enrollment_suggested(num_speakers: int) -> None:
+            event = VoiceEnrollmentSuggested(
+                contact=contact,
+                num_speakers=num_speakers,
+                channel=channel,
+            )
+            _log.info(
+                f"Voice enrollment suggested: {num_speakers} distinct voices "
+                "and call contact has no enrollment",
+            )
+            _publish_speaker_event(event)
+
+        speaker_tracker = speaker_id.SpeakerTracker(
+            embedder=SPEAKER_EMBEDDER,
+            enrolled_profiles=voice_profiles,
+            call_contact_id=contact.get("contact_id"),
+            on_enrollment_captured=_on_enrollment_captured,
+            on_enrollment_suggested=_on_enrollment_suggested,
+        )
+
+    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool]:
+        """Resolve the current speaker to (contact_dict, display_name, speaker_id, voice_verified).
+
+        Signals in priority order:
+        1. Voice-embedding match against enrolled contact profiles (all channels).
+        2. Diarization speaker_id → DOM correlation mapping (browser meets).
+        3. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
         """
-        if channel not in ("google_meet", "teams_meet"):
-            return contact, None, None
-
         sid = _meet_last_speaker_id
 
-        # Primary: diarization speaker_id → mapped display name
+        # Primary: embedding-pinned identity from the speaker tracker
+        if sid and speaker_tracker is not None:
+            resolution = speaker_tracker.resolve(sid)
+            if resolution is not None:
+                if resolution.contact_id is not None:
+                    for cand in (contact, boss):
+                        if cand.get("contact_id") == resolution.contact_id:
+                            label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                            return cand, label or None, sid, True
+                elif resolution.label:
+                    # Confidently a different, unenrolled voice: keep the call
+                    # contact for routing but surface the anonymous label.
+                    return contact, resolution.label, sid, False
+
+        if channel not in ("google_meet", "teams_meet"):
+            return contact, None, sid, False
+
+        # Diarization speaker_id → mapped display name (browser meets)
         if sid and sid in _meet_speaker_map:
             votes = _meet_speaker_map[sid]
             if votes:
@@ -1463,8 +1585,8 @@ async def entrypoint(ctx: agents.JobContext):
                     resolved = _resolve_contact_by_name(top_name)
                     if resolved:
                         label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                        return resolved, label or None, sid
-                    return contact, top_name, sid
+                        return resolved, label or None, sid, False
+                    return contact, top_name, sid, False
 
         # Fallback: DOM active speaker
         active_name = _meet_cached_active_speaker
@@ -1472,10 +1594,10 @@ async def entrypoint(ctx: agents.JobContext):
             resolved = _resolve_contact_by_name(active_name)
             if resolved:
                 label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                return resolved, label or None, sid
-            return contact, active_name, sid
+                return resolved, label or None, sid, False
+            return contact, active_name, sid, False
 
-        return contact, None, sid
+        return contact, None, sid, False
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -1940,6 +2062,15 @@ async def entrypoint(ctx: agents.JobContext):
         if shutdown_completed:
             return
         shutdown_completed = True
+        if speaker_tracker is not None:
+            # Flush pending embeddings and fire a partial auto-enrollment for
+            # single-voice calls that ended before reaching the full target.
+            await speaker_tracker.finalize()
+            if speaker_event_tasks:
+                await asyncio.gather(
+                    *list(speaker_event_tasks),
+                    return_exceptions=True,
+                )
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
         if mood_classification_task is not None:
@@ -2009,15 +2140,23 @@ async def entrypoint(ctx: agents.JobContext):
             maybe_speak_queued()
         _check_quiescence_transition()
 
-    # -- Diarization ↔ DOM speaker correlation --
-    if channel in ("google_meet", "teams_meet"):
-
-        @session.on("user_input_transcribed")
-        def _on_user_input_transcribed(ev):
-            nonlocal _meet_last_speaker_id
-            if not ev.is_final or not ev.speaker_id:
-                return
-            _meet_last_speaker_id = ev.speaker_id
+    # -- Diarization: speaker tracking (all channels) + DOM correlation (meets) --
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev):
+        nonlocal _meet_last_speaker_id
+        if not ev.is_final:
+            return
+        # Feed the speaker tracker even without a speaker id so segment
+        # windows stay aligned with final transcripts.
+        if speaker_tracker is not None:
+            speaker_tracker.observe_final_transcript(
+                ev.speaker_id,
+                end_ts=ev.created_at,
+            )
+        if not ev.speaker_id:
+            return
+        _meet_last_speaker_id = ev.speaker_id
+        if channel in ("google_meet", "teams_meet"):
             dom_speaker = _meet_cached_active_speaker
             if dom_speaker and dom_speaker != _meet_display_name:
                 bucket = _meet_speaker_map.setdefault(ev.speaker_id, {})
@@ -2302,7 +2441,9 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
-                resolved_contact, speaker_label, dia_sid = _resolve_speaker()
+                resolved_contact, speaker_label, dia_sid, voice_verified = (
+                    _resolve_speaker()
+                )
                 _meet_last_speaker_id = None
                 # Stamp the current turn so the slow-brain run scheduled after
                 # the fast brain completes can be correlated precisely.
@@ -2315,6 +2456,7 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
+                        voice_verified=voice_verified,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -2324,12 +2466,16 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
+                        voice_verified=voice_verified,
                     )
                 else:
                     event = user_utterance_event(
                         resolved_contact,
                         content=text,
                         turn_id=turn_id,
+                        speaker_label=speaker_label,
+                        diarization_speaker_id=dia_sid,
+                        voice_verified=voice_verified,
                     )
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
@@ -2360,6 +2506,7 @@ async def entrypoint(ctx: agents.JobContext):
         outbound=outbound,
         audio_bridge=audio_bridge,
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
+        speaker_tracker=speaker_tracker,
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)

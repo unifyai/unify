@@ -129,6 +129,12 @@ class LivekitCallManager:
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
+        # Returns {contact_id: voice embedding} for enrolled contacts, injected
+        # into job dispatch metadata so the voice agent can pin diarized
+        # speakers to known voices. Set by the ConversationManager.
+        self.voice_profile_provider: (
+            Callable[[list[int]], dict[int, list[float]]] | None
+        ) = None
         # Pulled at the top of every dispatch so a call always carries the
         # assistant's current voice/config rather than a snapshot taken at
         # construction time (which can go stale, e.g. self-host bootstrap).
@@ -481,6 +487,31 @@ class LivekitCallManager:
         )
         return False
 
+    def _get_voice_profiles(self, contact: dict, boss: dict) -> dict[str, list[float]]:
+        """Fetch enrolled voice embeddings for the call participants.
+
+        Best-effort: a backend hiccup here must never block call dispatch, so
+        failures degrade to "no profiles" (speaker attribution disabled).
+        """
+        if self.voice_profile_provider is None:
+            return {}
+        contact_ids = {
+            int(c["contact_id"])
+            for c in (contact, boss)
+            if c and c.get("contact_id") is not None
+        }
+        if not contact_ids:
+            return {}
+        try:
+            profiles = self.voice_profile_provider(sorted(contact_ids))
+        except Exception as e:  # noqa: BLE001
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] voice profile lookup "
+                f"failed: {e}",
+            )
+            return {}
+        return {str(cid): vec for cid, vec in (profiles or {}).items()}
+
     async def _dispatch_job(
         self,
         room_name: str,
@@ -525,6 +556,7 @@ class LivekitCallManager:
                 "ipc_socket_path": socket_path or "",
                 "unify_key": SESSION_DETAILS.unify_key,
             }
+            meta_dict["voice_profiles"] = self._get_voice_profiles(contact, boss)
             if extra_metadata:
                 meta_dict.update(extra_metadata)
             metadata = json.dumps(meta_dict)
