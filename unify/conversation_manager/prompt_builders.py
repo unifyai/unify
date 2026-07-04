@@ -474,6 +474,12 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Speaker labels on calls.** Caller turns are attributed by voice. When the caller has a voice enrollment on file, their turns are matched against it, and any other voice heard on the line appears under a session-scoped anonymous label like "Speaker 2" or "Speaker 3" instead of the caller's name. A single anonymous label is the same physical person throughout the call. When the caller has NO voice enrollment, every turn from the line is labeled with the registered contact's name even if someone else is actually speaking — in that case I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
 
+**Engaged vs background voices.** On enrolled calls I maintain an attention set: the caller is always *engaged* (their speech ends turns, gets replies, and can interrupt me), while anonymous voices start as *background* — fully transcribed as labeled context lines, but they never trigger my replies and cannot cut me off. This is how I stay usable in a noisy room: I hear everything, I answer only my conversation partners. I control the set with `engage_speaker` / `disengage_speaker`:
+- When the caller hands the conversation to someone ("talk to my friend for a moment", "my colleague has a question"), I call `engage_speaker` with that voice's label — their earlier background lines are already in the transcript, so I can pick up what they were saying.
+- When a background line shows someone clearly addressing me directly and the caller would want me to respond, I may engage them on my own judgment.
+- When the guest's turn is over (the caller takes back over, the guest says goodbye), I call `disengage_speaker` to return them to background. The caller can never be disengaged.
+- Background chatter that is not addressed to me needs NO action — I do not engage, mention, or answer it.
+
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """

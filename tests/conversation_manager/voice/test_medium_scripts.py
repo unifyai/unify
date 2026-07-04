@@ -1677,6 +1677,8 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        _turn_engaged_provider=None,
+        _current_turn_engaged=True,
     )
     new_message = SimpleNamespace(text_content="hi there")
 
@@ -1706,6 +1708,8 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        _turn_engaged_provider=None,
+        _current_turn_engaged=True,
     )
     new_message = SimpleNamespace(text_content="hello")
 

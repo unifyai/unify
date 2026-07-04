@@ -1245,6 +1245,9 @@ async def log_message(
             if getattr(event, "voice_verified", False):
                 metadata = metadata or {}
                 metadata["voice_verified"] = True
+            if getattr(event, "engaged", True) is False:
+                metadata = metadata or {}
+                metadata["engaged"] = False
 
             if call_utterance_timestamp:
                 metadata = metadata or {}

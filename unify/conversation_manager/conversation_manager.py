@@ -1435,6 +1435,72 @@ class ConversationManager(metaclass=SingletonABCMeta):
             event_json,
         )
 
+    async def set_speaker_engagement(
+        self,
+        *,
+        speaker: str,
+        engaged: bool,
+    ) -> dict[str, Any]:
+        """Promote or demote a call voice's conversational standing.
+
+        Resolves ``speaker`` against the permanently engaged call participants
+        (by name — engaging them is a no-op, demoting them is refused) and
+        otherwise treats it as a session speaker label ("Speaker 2"). The
+        update is mirrored locally for prompt/tool rendering and pushed to the
+        voice agent over IPC, where it takes effect on the floor/turn/reply
+        gates immediately.
+        """
+        cmgr = self.call_manager
+        if not self.in_voice_session:
+            return {"status": "no_active_call"}
+        name = (speaker or "").strip()
+        if not name:
+            return {
+                "status": "error",
+                "reason": "speaker must be a non-empty name or label",
+            }
+        low = name.lower()
+
+        for cid, cname in cmgr.engaged_contacts.items():
+            cname_low = cname.lower()
+            if low == cname_low or low == cname_low.split()[0]:
+                if not engaged:
+                    return {
+                        "status": "refused",
+                        "reason": (
+                            f"{cname} is a primary call participant and always "
+                            "remains engaged."
+                        ),
+                    }
+                return {"status": "already_engaged", "speaker": cname}
+
+        # Anonymous session label: use the canonical casing if already heard.
+        canonical = next(
+            (lbl for lbl in cmgr.known_speaker_labels if lbl.lower() == low),
+            name,
+        )
+        if engaged:
+            cmgr.engaged_labels.add(canonical)
+        else:
+            cmgr.engaged_labels.discard(canonical)
+        await self.event_broker.publish(
+            "app:call:speaker_engagement",
+            json.dumps(
+                {
+                    "action": "engage" if engaged else "disengage",
+                    "label": canonical,
+                },
+            ),
+        )
+        self._session_logger.info(
+            "speaker_engagement",
+            f"{'Engaged' if engaged else 'Disengaged'} speaker: {canonical}",
+        )
+        return {
+            "status": "engaged" if engaged else "disengaged",
+            "speaker": canonical,
+        }
+
     async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
         """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
 
