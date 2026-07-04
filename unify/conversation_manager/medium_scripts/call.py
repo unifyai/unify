@@ -319,12 +319,16 @@ class Assistant(Agent):
         audio_bridge: MeetAudioBridge | None = None,
         normalize_elevenlabs_twin_pronunciation: bool = False,
         speaker_tracker: "speaker_id.SpeakerTracker | None" = None,
+        engaged_speakers: "speaker_id.EngagedSpeakers | None" = None,
+        realtime_scorer: "speaker_id.RealtimeSpeakerScorer | None" = None,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
         self.audio_bridge = audio_bridge
         self.speaker_tracker = speaker_tracker
+        self.engaged_speakers = engaged_speakers
+        self.realtime_scorer = realtime_scorer
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -393,6 +397,15 @@ class Assistant(Agent):
         self._publish_fast_brain_turn_completed: Callable | None = None
         # Latest user turn for which the slow brain was already scheduled.
         self._fast_brain_completed_turn = -1
+        # Whether the current committed user turn belongs to an engaged speaker.
+        # Captured at turn completion (before the diarization id is consumed);
+        # a non-engaged turn is published as labeled context but gets no fast
+        # filler and schedules no slow-brain user run.
+        self._current_turn_engaged = True
+        # Resolves the just-completed turn's speaker to an engagement verdict.
+        self._turn_engaged_provider: Callable[[], bool] | None = None
+        # Sink for final transcripts swallowed as non-engaged background speech.
+        self._on_background_final: Callable[[str, str | None], None] | None = None
         # Fully answers a pure small-talk turn from persona + recent history, or
         # returns None to defer to the slow brain. Set in the entrypoint.
         self._generate_smalltalk_reply: Callable | None = None
@@ -474,6 +487,10 @@ class Assistant(Agent):
         # New user turn: a fresh buffer filler is now warranted (until the slow
         # brain responds to this turn).
         self._user_turn_seq += 1
+        # Capture the turn's engagement verdict now, while the diarization id
+        # is still current (the utterance publisher consumes it shortly after).
+        provider = self._turn_engaged_provider
+        self._current_turn_engaged = provider() if provider is not None else True
         # On an outbound call, the callee's first completed utterance triggers the
         # held opener (the opener answers it). Signalling on turn-completed means
         # we respond after their "Hello?", never over it.
@@ -511,6 +528,14 @@ class Assistant(Agent):
         turn_classification: str | None = None
         intended_speech = ""
         try:
+            # A committed turn from a non-engaged voice is context, not an
+            # instruction: no filler, no small talk, and (classification stays
+            # None) no FastBrainTurnCompleted, so no slow-brain user run. The
+            # utterance itself is still published with its speaker label.
+            if not self._current_turn_engaged:
+                _log.info("Fast-brain turn suppressed: non-engaged speaker")
+                return
+
             _log.info("Waiting for call to be received…")
             while not self.call_received:
                 await asyncio.sleep(0.1)
@@ -749,6 +774,60 @@ class Assistant(Agent):
 
         return _tee()
 
+    def _should_swallow_final(self, transcript_speaker_id: str | None) -> bool:
+        """Whether a final transcript belongs to a confidently non-engaged voice.
+
+        Fails open: no tracker, no engagement state, no diarization id, or an
+        unresolved speaker all forward the transcript unchanged.
+        """
+        tracker = self.speaker_tracker
+        engaged = self.engaged_speakers
+        if tracker is None or engaged is None or not transcript_speaker_id:
+            return False
+        resolution = tracker.resolve(transcript_speaker_id)
+        if resolution is None:
+            return False
+        return not engaged.is_engaged(resolution)
+
+    def _filter_stt_events(self, events):
+        """Gate the STT stream by speaker engagement.
+
+        Finals from confidently non-engaged voices are diverted to the
+        background sink (labeled context) instead of reaching the session's
+        turn machinery, where they would otherwise extend or commit turns.
+        Interim/preflight transcripts are dropped only while the realtime
+        scorer is confident that only non-engaged voices hold the mic (they
+        carry no per-word speaker ids). The speaker tracker observes every
+        final here — before gating — so attribution windows stay aligned.
+        """
+
+        async def _filtered():
+            async for ev in events:
+                ev_type = getattr(ev, "type", None)
+                if ev_type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
+                    data = ev.alternatives[0]
+                    tracker = self.speaker_tracker
+                    if tracker is not None:
+                        tracker.observe_final_transcript(
+                            data.speaker_id,
+                            end_ts=time.time(),
+                        )
+                    if self._should_swallow_final(data.speaker_id):
+                        handler = self._on_background_final
+                        if handler is not None:
+                            handler(data.text or "", data.speaker_id)
+                        continue
+                elif ev_type in (
+                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                ):
+                    scorer = self.realtime_scorer
+                    if scorer is not None and scorer.confidently_non_engaged:
+                        continue
+                yield ev
+
+        return _filtered()
+
     async def stt_node(
         self,
         audio: AsyncIterable[rtc.AudioFrame],
@@ -759,7 +838,8 @@ class Assistant(Agent):
             self.channel not in ("google_meet", "teams_meet")
             or self.audio_bridge is None
         ):
-            async for event in super().stt_node(audio, model_settings):
+            events = super().stt_node(audio, model_settings)
+            async for event in self._filter_stt_events(events):
                 yield event
             return
 
@@ -796,9 +876,13 @@ class Assistant(Agent):
                 async for frame in _audio_from_bridge():
                     stt_stream.push_frame(frame)
 
+            async def _stream_events():
+                async for event in stt_stream:
+                    yield event
+
             fwd = asyncio.create_task(_forward())
             try:
-                async for event in stt_stream:
+                async for event in self._filter_stt_events(_stream_events()):
                     yield event
             finally:
                 await utils.aio.cancel_and_wait(fwd)
@@ -1547,15 +1631,79 @@ async def entrypoint(ctx: agents.JobContext):
             on_enrollment_suggested=_on_enrollment_suggested,
         )
 
-    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool]:
-        """Resolve the current speaker to (contact_dict, display_name, speaker_id, voice_verified).
+    # --- Engagement: who currently has conversational standing ---
+    # The call contact and boss are permanently engaged; the slow brain
+    # promotes/demotes everyone else via app:call:speaker_engagement.
+    engaged_speakers = speaker_id.EngagedSpeakers(
+        permanent_contact_ids={
+            int(cand["contact_id"])
+            for cand in (contact, boss)
+            if cand and cand.get("contact_id") is not None
+        },
+    )
 
-        Signals in priority order:
+    def on_speaker_engagement(data: dict) -> None:
+        action = str(data.get("action") or "")
+        cid = data.get("contact_id")
+        label = data.get("label")
+        if action == "engage":
+            changed = engaged_speakers.engage(contact_id=cid, label=label)
+        elif action == "disengage":
+            changed = engaged_speakers.disengage(contact_id=cid, label=label)
+        else:
+            return
+        _log.info(
+            f"Speaker engagement: {action} contact_id={cid} label={label} "
+            f"applied={changed} now_engaged_labels={engaged_speakers.engaged_labels}",
+        )
+
+    event_broker.register_callback(
+        "app:call:speaker_engagement",
+        on_speaker_engagement,
+    )
+
+    # --- Realtime floor gating (enrolled calls only) ---
+    # A sliding-window verifier drives a VAD wrapper so that background voices
+    # neither hold the floor nor barge in once they are confidently known.
+    # Without an enrollment for the call contact the plain VAD is used and
+    # behavior is identical to an ungated call.
+    realtime_scorer: speaker_id.RealtimeSpeakerScorer | None = None
+    session_vad = VAD
+    _call_contact_id = contact.get("contact_id")
+    if (
+        speaker_tracker is not None
+        and VAD is not None
+        and _call_contact_id is not None
+        and int(_call_contact_id) in voice_profiles
+    ):
+        from unify.conversation_manager.engaged_vad import EngagedGateVAD
+
+        realtime_scorer = speaker_id.RealtimeSpeakerScorer(
+            embedder=SPEAKER_EMBEDDER,
+            profiles_provider=lambda: speaker_tracker.profiles_partition(
+                engaged_speakers,
+            ),
+        )
+        session_vad = EngagedGateVAD(inner=VAD, scorer=realtime_scorer)
+        _log.config("Engaged-speaker floor gating active (call contact enrolled)")
+
+    def _speaker_is_engaged(sid: str | None) -> bool:
+        """Engagement verdict for a diarization id (fail-open on unresolved)."""
+        if speaker_tracker is None:
+            return True
+        return engaged_speakers.is_engaged(speaker_tracker.resolve(sid))
+
+    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool, bool]:
+        """Resolve the current speaker.
+
+        Returns (contact_dict, display_name, speaker_id, voice_verified,
+        engaged). Signals in priority order:
         1. Voice-embedding match against enrolled contact profiles (all channels).
         2. Diarization speaker_id → DOM correlation mapping (browser meets).
         3. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
         """
         sid = _meet_last_speaker_id
+        engaged = _speaker_is_engaged(sid)
 
         # Primary: embedding-pinned identity from the speaker tracker
         if sid and speaker_tracker is not None:
@@ -1565,14 +1713,14 @@ async def entrypoint(ctx: agents.JobContext):
                     for cand in (contact, boss):
                         if cand.get("contact_id") == resolution.contact_id:
                             label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                            return cand, label or None, sid, True
+                            return cand, label or None, sid, True, engaged
                 elif resolution.label:
                     # Confidently a different, unenrolled voice: keep the call
                     # contact for routing but surface the anonymous label.
-                    return contact, resolution.label, sid, False
+                    return contact, resolution.label, sid, False, engaged
 
         if channel not in ("google_meet", "teams_meet"):
-            return contact, None, sid, False
+            return contact, None, sid, False, engaged
 
         # Diarization speaker_id → mapped display name (browser meets)
         if sid and sid in _meet_speaker_map:
@@ -1585,8 +1733,8 @@ async def entrypoint(ctx: agents.JobContext):
                     resolved = _resolve_contact_by_name(top_name)
                     if resolved:
                         label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                        return resolved, label or None, sid, False
-                    return contact, top_name, sid, False
+                        return resolved, label or None, sid, False, engaged
+                    return contact, top_name, sid, False, engaged
 
         # Fallback: DOM active speaker
         active_name = _meet_cached_active_speaker
@@ -1594,10 +1742,35 @@ async def entrypoint(ctx: agents.JobContext):
             resolved = _resolve_contact_by_name(active_name)
             if resolved:
                 label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                return resolved, label or None, sid, False
-            return contact, active_name, sid, False
+                return resolved, label or None, sid, False, engaged
+            return contact, active_name, sid, False, engaged
 
-        return contact, None, sid, False
+        return contact, None, sid, False, engaged
+
+    def _background_label_for(sid: str | None) -> str | None:
+        """Best display label for a background (non-engaged) voice.
+
+        Prefers a pinned contact name, then a confidently DOM-correlated meet
+        display name, then the tracker's session-scoped anonymous label.
+        """
+        if speaker_tracker is None or not sid:
+            return None
+        resolution = speaker_tracker.resolve(sid)
+        if resolution is None:
+            return None
+        if resolution.contact_id is not None:
+            for cand in (contact, boss):
+                if cand.get("contact_id") == resolution.contact_id:
+                    name = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                    if name:
+                        return name
+        if channel in ("google_meet", "teams_meet") and sid in _meet_speaker_map:
+            votes = _meet_speaker_map[sid]
+            if votes:
+                top_name = max(votes, key=votes.get)
+                if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
+                    return top_name
+        return resolution.label
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -1798,7 +1971,7 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm_model,
         stt=stt_instance,
         tts=tts_instance,
-        vad=VAD,
+        vad=session_vad,
         turn_handling={
             "turn_detection": EnglishModel(),
             "endpointing": {"min_delay": 0.75},
@@ -2051,6 +2224,46 @@ async def entrypoint(ctx: agents.JobContext):
             event.to_json(),
         )
 
+    async def _publish_background_utterance(
+        text: str,
+        label: str | None,
+        sid: str | None,
+    ) -> None:
+        """Publish a non-engaged voice's line as labeled context (no turn)."""
+        if channel == "google_meet":
+            event = InboundGoogleMeetUtterance(
+                contact=contact,
+                content=text,
+                speaker_label=label,
+                participant_names=_get_meet_participant_names() or None,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        elif channel == "teams_meet":
+            event = InboundTeamsMeetUtterance(
+                contact=contact,
+                content=text,
+                speaker_label=label,
+                participant_names=_get_meet_participant_names() or None,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        else:
+            event = user_utterance_event(
+                contact,
+                content=text,
+                speaker_label=label,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        await event_broker.publish(
+            f"app:comms:{channel}_utterance",
+            event.to_json(),
+        )
+
     credit_gate_task: asyncio.Task | None = None
     explicit_stop_requested = False
     shutdown_completed = False
@@ -2140,20 +2353,14 @@ async def entrypoint(ctx: agents.JobContext):
             maybe_speak_queued()
         _check_quiescence_transition()
 
-    # -- Diarization: speaker tracking (all channels) + DOM correlation (meets) --
+    # -- Diarization: last-speaker tracking + DOM correlation (meets) --
+    # The speaker tracker itself is fed from the STT filter (which sees every
+    # final, including gated background speech); this handler only sees
+    # forwarded finals, so it tracks the current *turn's* speaker.
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev):
         nonlocal _meet_last_speaker_id
-        if not ev.is_final:
-            return
-        # Feed the speaker tracker even without a speaker id so segment
-        # windows stay aligned with final transcripts.
-        if speaker_tracker is not None:
-            speaker_tracker.observe_final_transcript(
-                ev.speaker_id,
-                end_ts=ev.created_at,
-            )
-        if not ev.speaker_id:
+        if not ev.is_final or not ev.speaker_id:
             return
         _meet_last_speaker_id = ev.speaker_id
         if channel in ("google_meet", "teams_meet"):
@@ -2441,9 +2648,13 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
-                resolved_contact, speaker_label, dia_sid, voice_verified = (
-                    _resolve_speaker()
-                )
+                (
+                    resolved_contact,
+                    speaker_label,
+                    dia_sid,
+                    voice_verified,
+                    speaker_engaged,
+                ) = _resolve_speaker()
                 _meet_last_speaker_id = None
                 # Stamp the current turn so the slow-brain run scheduled after
                 # the fast brain completes can be correlated precisely.
@@ -2457,6 +2668,7 @@ async def entrypoint(ctx: agents.JobContext):
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
                         voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -2467,6 +2679,7 @@ async def entrypoint(ctx: agents.JobContext):
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
                         voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 else:
                     event = user_utterance_event(
@@ -2476,6 +2689,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
                         voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
@@ -2507,6 +2721,11 @@ async def entrypoint(ctx: agents.JobContext):
         audio_bridge=audio_bridge,
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
         speaker_tracker=speaker_tracker,
+        engaged_speakers=engaged_speakers,
+        realtime_scorer=realtime_scorer,
+    )
+    assistant._turn_engaged_provider = lambda: _speaker_is_engaged(
+        _meet_last_speaker_id,
     )
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
@@ -2719,6 +2938,60 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     assistant._publish_fast_brain_turn_completed = _publish_fast_brain_turn_completed
+
+    async def _maybe_resume_after_background_bargein() -> None:
+        """Resume a line interrupted by a voice that turned out to be background.
+
+        Ordinarily an interrupted line waits for the fast brain's next turn to
+        decide its fate — but a barge-in whose transcript was gated as
+        non-engaged never produces that turn, so the line would hang until the
+        engaged caller next spoke. When the gated final lands and the floor is
+        genuinely free (no engaged speech, no in-flight generation, nothing
+        playing), the remainder is resumed directly.
+        """
+        # Barge-in vs transcript race: the pending continuation is computed
+        # after playout settles; wait briefly for it, as the claim path does.
+        active = assistant._active_tts
+        if (
+            assistant._pending_continuation is None
+            and active is not None
+            and getattr(active.get("handle"), "interrupted", False)
+        ):
+            for _ in range(6):  # ~300ms
+                await asyncio.sleep(0.05)
+                if assistant._pending_continuation is not None:
+                    break
+        pending = assistant._pending_continuation
+        if not pending or pending.get("consumed"):
+            return
+        # Leave the decision to the fast brain's front door whenever an
+        # engaged turn is (or may be) in flight.
+        if user_is_speaking or assistant.user_turn_generating:
+            return
+        if _queued_speech_block_reason():
+            return
+        pending["consumed"] = True
+        assistant._pending_continuation = None
+        assistant._active_tts = None
+        resume_text = (pending.get("resume_text") or "").strip()
+        if not resume_text:
+            return
+        line = f"{pick_resume_lead_in()} {resume_text}".strip()
+        _log.info("Resuming line interrupted by non-engaged background speech")
+        handle = session.say(line, allow_interruptions=True, add_to_chat_ctx=True)
+        _register_interruptible_tts(handle, lambda: line, "continuation")
+
+    def _handle_background_final(text: str, sid: str | None) -> None:
+        """Sink for final transcripts gated out as non-engaged background."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        label = _background_label_for(sid) or "Unknown speaker"
+        _log.info(f"Background speech ({label}): {cleaned}")
+        asyncio.create_task(_publish_background_utterance(cleaned, label, sid))
+        asyncio.create_task(_maybe_resume_after_background_bargein())
+
+    assistant._on_background_final = _handle_background_final
 
     def _register_interruptible_tts(
         handle: object,

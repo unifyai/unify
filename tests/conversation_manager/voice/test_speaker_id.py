@@ -3,9 +3,10 @@ tests/conversation_manager/voice/test_speaker_id.py
 ====================================================
 
 Unit tests for the speaker-identification core (`speaker_id.py`): audio
-helpers, ring buffer, centroid accumulation, and the SpeakerTracker state
+helpers, ring buffer, centroid accumulation, the SpeakerTracker state
 machine (enrolled-contact pinning, anonymous labelling, auto-enrollment
-capture, and enrollment suggestion).
+capture, and enrollment suggestion), and the engagement layer (EngagedSpeakers
+set, realtime scorer, and the engaged-gated VAD wrapper).
 
 The tracker tests drive a stub embedder that derives deterministic vectors
 from the audio content itself, so the full pipeline (ring buffer slice →
@@ -27,6 +28,9 @@ from unify.conversation_manager import speaker_id
 from unify.conversation_manager.speaker_id import (
     AudioRingBuffer,
     CentroidAccumulator,
+    EngagedSpeakers,
+    RealtimeSpeakerScorer,
+    SpeakerResolution,
     SpeakerTracker,
     cosine_similarity,
     downmix_to_mono,
@@ -321,6 +325,372 @@ class TestSpeakerTracker:
         _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.2)
         await tracker.finalize()
         assert tracker.resolve("S0") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EngagedSpeakers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestEngagedSpeakers:
+    def test_permanent_members_always_engaged(self):
+        engaged = EngagedSpeakers(permanent_contact_ids={1, 5})
+        assert engaged.is_engaged_contact(1)
+        assert engaged.is_engaged_contact(5)
+        assert not engaged.disengage(contact_id=1)
+        assert engaged.is_engaged_contact(1)
+
+    def test_label_engagement_case_insensitive(self):
+        engaged = EngagedSpeakers(permanent_contact_ids={1})
+        assert not engaged.is_engaged_label("Speaker 2")
+        assert engaged.engage(label="Speaker 2")
+        assert engaged.is_engaged_label("speaker 2")
+        assert engaged.is_engaged(SpeakerResolution(label="SPEAKER 2"))
+        assert engaged.disengage(label="speaker 2")
+        assert not engaged.is_engaged_label("Speaker 2")
+
+    def test_engage_idempotent(self):
+        engaged = EngagedSpeakers(permanent_contact_ids={1})
+        assert engaged.engage(label="Speaker 2")
+        assert not engaged.engage(label="speaker 2")
+        assert engaged.engaged_labels == ["Speaker 2"]
+
+    def test_fail_open_polarity(self):
+        engaged = EngagedSpeakers(permanent_contact_ids={1})
+        # Unresolved speakers are always engaged.
+        assert engaged.is_engaged(None)
+        assert engaged.is_engaged(SpeakerResolution())
+        # Confidently resolved non-members are not.
+        assert not engaged.is_engaged(SpeakerResolution(contact_id=99))
+        assert not engaged.is_engaged(SpeakerResolution(label="Speaker 3"))
+        # Members are.
+        assert engaged.is_engaged(SpeakerResolution(contact_id=1, verified=True))
+
+    def test_non_permanent_contact_can_be_disengaged(self):
+        engaged = EngagedSpeakers(permanent_contact_ids={1})
+        assert engaged.engage(contact_id=7)
+        assert engaged.is_engaged_contact(7)
+        assert engaged.disengage(contact_id=7)
+        assert not engaged.is_engaged_contact(7)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Profiles partition (scorer input)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestProfilesPartition:
+    async def test_split_by_engagement(self):
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        engaged = EngagedSpeakers(permanent_contact_ids={5})
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        # Enrolled profile + S0's centroid on the engaged side; S1's centroid
+        # (anonymous "Speaker 2") on the other side.
+        assert len(engaged_profiles) == 2
+        assert len(other_profiles) == 1
+        assert cosine_similarity(other_profiles[0], np.array(VOICE_B)) > 0.9
+
+        # Engaging the anonymous label moves its centroid across.
+        engaged.engage(label="Speaker 2")
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        assert len(engaged_profiles) == 3
+        assert not other_profiles
+
+    async def test_unresolved_centroids_stay_engaged(self):
+        # Contact NOT enrolled: no anonymous labels are assigned, so all
+        # session centroids remain on the engaged (fail-open) side.
+        tracker = _make_tracker(enrolled={})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.finalize()
+
+        engaged = EngagedSpeakers(permanent_contact_ids={5})
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        assert len(engaged_profiles) == 1
+        assert not other_profiles
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RealtimeSpeakerScorer
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_scorer(
+    *,
+    engaged_profiles: list[list[float]],
+    other_profiles: list[list[float]],
+    hysteresis_s: float = 0.0,
+) -> RealtimeSpeakerScorer:
+    return RealtimeSpeakerScorer(
+        embedder=StubEmbedder(),
+        profiles_provider=lambda: (
+            [np.asarray(v, dtype=np.float32) for v in engaged_profiles],
+            [np.asarray(v, dtype=np.float32) for v in other_profiles],
+        ),
+        window_s=0.4,
+        hop_s=0.1,
+        hysteresis_s=hysteresis_s,
+    )
+
+
+async def _drain_scorer(scorer: RealtimeSpeakerScorer) -> None:
+    while scorer._pending:
+        await asyncio.gather(*list(scorer._pending), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+class TestRealtimeSpeakerScorer:
+    async def test_engaged_voice_scores_engaged(self):
+        scorer = _make_scorer(engaged_profiles=[VOICE_A], other_profiles=[VOICE_B])
+        scorer.add_audio(_tone(1000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "engaged"
+        assert not scorer.confidently_non_engaged
+
+    async def test_known_other_voice_scores_non_engaged(self):
+        scorer = _make_scorer(engaged_profiles=[VOICE_A], other_profiles=[VOICE_B])
+        scorer.add_audio(_tone(9000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "non_engaged"
+        # hysteresis_s=0 -> immediately confident
+        assert scorer.confidently_non_engaged
+
+    async def test_unknown_without_matching_profile(self):
+        # No known non-engaged profile: a mismatching voice must stay
+        # fail-open (unknown), never confidently non-engaged.
+        scorer = _make_scorer(engaged_profiles=[VOICE_A], other_profiles=[])
+        scorer.add_audio(_tone(9000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "unknown"
+        assert not scorer.confidently_non_engaged
+
+    async def test_silence_resets_to_unknown(self):
+        scorer = _make_scorer(engaged_profiles=[VOICE_A], other_profiles=[VOICE_B])
+        scorer.add_audio(_tone(9000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.confidently_non_engaged
+        scorer.add_audio(_tone(0, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "unknown"
+        assert not scorer.confidently_non_engaged
+
+    async def test_hysteresis_delays_confidence(self):
+        scorer = _make_scorer(
+            engaged_profiles=[VOICE_A],
+            other_profiles=[VOICE_B],
+            hysteresis_s=0.2,
+        )
+        scorer.add_audio(_tone(9000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "non_engaged"
+        assert not scorer.confidently_non_engaged
+        await asyncio.sleep(0.25)
+        assert scorer.confidently_non_engaged
+
+    async def test_engaged_window_clears_non_engaged_run(self):
+        scorer = _make_scorer(engaged_profiles=[VOICE_A], other_profiles=[VOICE_B])
+        scorer.add_audio(_tone(9000, 0.5), SR)
+        await _drain_scorer(scorer)
+        assert scorer.confidently_non_engaged
+        scorer.add_audio(_tone(1000, 0.6), SR)
+        await _drain_scorer(scorer)
+        assert scorer.verdict == "engaged"
+        assert not scorer.confidently_non_engaged
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EngagedGateVAD
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _FakeScorer:
+    """Manually driven stand-in for RealtimeSpeakerScorer."""
+
+    def __init__(self) -> None:
+        self.confidently_non_engaged = False
+        self.audio_calls = 0
+
+    def add_audio(self, data, sample_rate, num_channels=1) -> None:
+        self.audio_calls += 1
+
+
+def _vad_event(ev_type, *, speaking=False, speech_duration=0.0):
+    from livekit.agents.vad import VADEvent
+
+    return VADEvent(
+        type=ev_type,
+        samples_index=0,
+        timestamp=time.time(),
+        speech_duration=speech_duration,
+        silence_duration=0.0,
+        speaking=speaking,
+        raw_accumulated_speech=speech_duration,
+    )
+
+
+def _make_gate(scorer):
+    from livekit.agents import vad as agents_vad
+
+    from unify.conversation_manager.engaged_vad import EngagedGateVAD
+
+    class ScriptedVADStream(agents_vad.VADStream):
+        async def _main_task(self) -> None:
+            # Drain input frames; events are injected via emit().
+            async for _ in self._input_ch:
+                pass
+
+        def emit(self, ev) -> None:
+            self._event_ch.send_nowait(ev)
+
+    class ScriptedVAD(agents_vad.VAD):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=agents_vad.VADCapabilities(update_interval=0.1),
+            )
+            self.last_stream: ScriptedVADStream | None = None
+
+        def stream(self) -> ScriptedVADStream:
+            self.last_stream = ScriptedVADStream(self)
+            return self.last_stream
+
+    inner = ScriptedVAD()
+    gate = EngagedGateVAD(inner=inner, scorer=scorer)
+    stream = gate.stream()
+    return inner, gate, stream
+
+
+async def _next_event(stream, timeout: float = 1.0):
+    return await asyncio.wait_for(stream.__anext__(), timeout=timeout)
+
+
+async def _expect_no_event(stream, wait: float = 0.15) -> None:
+    task = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(wait)
+    assert not task.done(), f"unexpected event: {task.result() if task.done() else ''}"
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, StopAsyncIteration):
+        pass
+
+
+@pytest.mark.asyncio
+class TestEngagedGateVAD:
+    async def test_forwards_speech_events_when_not_confident(self):
+        from livekit.agents.vad import VADEventType
+
+        scorer = _FakeScorer()
+        inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)  # let the gate's main task start
+        inner.last_stream.emit(_vad_event(VADEventType.START_OF_SPEECH))
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.START_OF_SPEECH
+        inner.last_stream.emit(_vad_event(VADEventType.END_OF_SPEECH))
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.END_OF_SPEECH
+        await stream.aclose()
+
+    async def test_suppresses_background_speech(self):
+        from livekit.agents.vad import VADEventType
+
+        scorer = _FakeScorer()
+        scorer.confidently_non_engaged = True
+        inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)
+        inner.last_stream.emit(_vad_event(VADEventType.START_OF_SPEECH))
+        # Suppressed START; the ongoing-speech inference is neutralized.
+        inner.last_stream.emit(
+            _vad_event(
+                VADEventType.INFERENCE_DONE,
+                speaking=True,
+                speech_duration=2.0,
+            ),
+        )
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.INFERENCE_DONE
+        assert ev.speaking is False
+        assert ev.speech_duration == 0.0
+        assert ev.raw_accumulated_speech == 0.0
+        # The inner END for never-reported speech is swallowed.
+        inner.last_stream.emit(_vad_event(VADEventType.END_OF_SPEECH))
+        await _expect_no_event(stream)
+        await stream.aclose()
+
+    async def test_synthesizes_end_when_only_background_remains(self):
+        from livekit.agents.vad import VADEventType
+
+        scorer = _FakeScorer()
+        inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)
+        inner.last_stream.emit(_vad_event(VADEventType.START_OF_SPEECH))
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.START_OF_SPEECH
+        # Mid-turn, the scorer becomes confident the mic is background-only.
+        scorer.confidently_non_engaged = True
+        inner.last_stream.emit(
+            _vad_event(
+                VADEventType.INFERENCE_DONE,
+                speaking=True,
+                speech_duration=5.0,
+            ),
+        )
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.END_OF_SPEECH
+        assert ev.speaking is False
+        # Inner's own eventual END is not double-reported.
+        inner.last_stream.emit(_vad_event(VADEventType.END_OF_SPEECH))
+        await _expect_no_event(stream)
+        await stream.aclose()
+
+    async def test_synthesizes_start_when_engaged_speaker_returns(self):
+        from livekit.agents.vad import VADEventType
+
+        scorer = _FakeScorer()
+        scorer.confidently_non_engaged = True
+        inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)
+        inner.last_stream.emit(_vad_event(VADEventType.START_OF_SPEECH))
+        # Verdict clears mid-speech (engaged voice took over the mic).
+        scorer.confidently_non_engaged = False
+        inner.last_stream.emit(
+            _vad_event(
+                VADEventType.INFERENCE_DONE,
+                speaking=True,
+                speech_duration=3.0,
+            ),
+        )
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.START_OF_SPEECH
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.INFERENCE_DONE
+        assert ev.speaking is True
+        inner.last_stream.emit(_vad_event(VADEventType.END_OF_SPEECH))
+        ev = await _next_event(stream)
+        assert ev.type == VADEventType.END_OF_SPEECH
+        await stream.aclose()
+
+    async def test_frames_reach_scorer_and_inner(self):
+        from livekit import rtc
+
+        scorer = _FakeScorer()
+        inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)
+        frame = rtc.AudioFrame(
+            data=_tone(1000, 0.1).tobytes(),
+            sample_rate=SR,
+            num_channels=1,
+            samples_per_channel=int(0.1 * SR),
+        )
+        stream.push_frame(frame)
+        await asyncio.sleep(0.05)
+        assert scorer.audio_calls == 1
+        await stream.aclose()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

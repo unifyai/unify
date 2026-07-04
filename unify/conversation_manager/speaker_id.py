@@ -6,6 +6,14 @@ each final diarized transcript triggers an embedding computation in a worker
 thread. Embeddings pin Deepgram's per-call anonymous speaker ids (S0, S1, …)
 to enrolled contacts, and accumulate auto-enrollments for single-speaker
 calls.
+
+On top of attribution sits the *engagement* layer: a per-call
+``EngagedSpeakers`` set records who currently has conversational standing
+(may end turns, trigger replies, and interrupt the assistant). Speech from
+everyone else is still transcribed and surfaced as labeled context, but no
+longer steers the conversation loop. ``RealtimeSpeakerScorer`` provides the
+near-realtime "is an engaged speaker talking right now?" signal used for
+floor gating.
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import numpy as np
 
@@ -51,6 +59,17 @@ SEGMENT_MIN_S = 0.8
 ENROLLMENT_SAMPLE_RATE = 16000
 
 RING_BUFFER_S = 120.0
+
+# Realtime floor-gating scorer: rolling window size, inference cadence, and
+# how long a confident non-engaged verdict must persist before it gates the
+# floor (hysteresis against per-window jitter).
+REALTIME_WINDOW_S = 1.0
+REALTIME_HOP_S = 0.25
+NON_ENGAGED_HYSTERESIS_S = 1.0
+
+# Windows quieter than this int16 RMS are treated as silence and produce an
+# "unknown" verdict instead of a garbage embedding.
+REALTIME_MIN_RMS = 250.0
 
 
 def speaker_model_path() -> Path:
@@ -546,3 +565,261 @@ class SpeakerTracker:
         if state.anonymous_label:
             return SpeakerResolution(label=state.anonymous_label)
         return None
+
+    def profiles_partition(
+        self,
+        engaged: "EngagedSpeakers",
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        """Split every known voice profile into (engaged, non-engaged) lists.
+
+        Combines enrolled contact embeddings with this call's per-speaker
+        session centroids, so both an engaged-but-unenrolled guest and the
+        enrolled caller on this exact channel/mic are representable. Voices
+        that are not yet confidently resolved contribute to the *engaged*
+        side (fail-open: an unidentified voice must never be gated out).
+        """
+        engaged_profiles: list[np.ndarray] = []
+        other_profiles: list[np.ndarray] = []
+        for cid, vec in self._enrolled.items():
+            target = (
+                engaged_profiles if engaged.is_engaged_contact(cid) else other_profiles
+            )
+            target.append(vec)
+        for state in self._speakers.values():
+            centroid = state.accumulator.centroid
+            if centroid is None:
+                continue
+            if state.pinned_contact_id is not None:
+                target = (
+                    engaged_profiles
+                    if engaged.is_engaged_contact(state.pinned_contact_id)
+                    else other_profiles
+                )
+            elif state.anonymous_label:
+                target = (
+                    engaged_profiles
+                    if engaged.is_engaged_label(state.anonymous_label)
+                    else other_profiles
+                )
+            else:
+                target = engaged_profiles
+            target.append(centroid)
+        return engaged_profiles, other_profiles
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Engagement: who currently has conversational standing
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class EngagedSpeakers:
+    """Per-call attention set consulted by the floor/turn/reply gates.
+
+    Membership is by ``contact_id`` (enrolled voices) or session-scoped
+    anonymous label ("Speaker 2"). The permanent members (call contact and
+    boss) can never be disengaged. All checks fail open: an unresolved or
+    ambiguous speaker is treated as engaged, so the worst failure mode is
+    today's ungated behavior, never a deaf assistant.
+    """
+
+    def __init__(self, *, permanent_contact_ids: Iterable[int] = ()) -> None:
+        self._permanent = {int(cid) for cid in permanent_contact_ids}
+        self._contact_ids: set[int] = set(self._permanent)
+        # lowercase key -> canonical label as first seen
+        self._labels: dict[str, str] = {}
+
+    def engage(
+        self,
+        *,
+        contact_id: int | None = None,
+        label: str | None = None,
+    ) -> bool:
+        """Add a speaker to the engaged set. Returns True if anything changed."""
+        changed = False
+        if contact_id is not None:
+            cid = int(contact_id)
+            if cid not in self._contact_ids:
+                self._contact_ids.add(cid)
+                changed = True
+        if label and label.strip():
+            key = label.strip().lower()
+            if key not in self._labels:
+                self._labels[key] = label.strip()
+                changed = True
+        return changed
+
+    def disengage(
+        self,
+        *,
+        contact_id: int | None = None,
+        label: str | None = None,
+    ) -> bool:
+        """Remove a speaker (permanent members are refused). True if changed."""
+        changed = False
+        if contact_id is not None:
+            cid = int(contact_id)
+            if cid not in self._permanent and cid in self._contact_ids:
+                self._contact_ids.discard(cid)
+                changed = True
+        if label and label.strip():
+            key = label.strip().lower()
+            if key in self._labels:
+                del self._labels[key]
+                changed = True
+        return changed
+
+    def is_engaged_contact(self, contact_id: int | None) -> bool:
+        return contact_id is not None and int(contact_id) in self._contact_ids
+
+    def is_engaged_label(self, label: str | None) -> bool:
+        return bool(label) and label.strip().lower() in self._labels
+
+    def is_engaged(self, resolution: SpeakerResolution | None) -> bool:
+        """Whether a resolved speaker has conversational standing.
+
+        ``None`` (unresolved) is engaged by construction — gating only ever
+        applies to voices the tracker has confidently identified.
+        """
+        if resolution is None:
+            return True
+        if resolution.contact_id is not None:
+            return self.is_engaged_contact(resolution.contact_id)
+        if resolution.label:
+            return self.is_engaged_label(resolution.label)
+        return True
+
+    @property
+    def engaged_contact_ids(self) -> set[int]:
+        return set(self._contact_ids)
+
+    @property
+    def engaged_labels(self) -> list[str]:
+        return list(self._labels.values())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Realtime scorer: "is an engaged speaker talking right now?"
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class RealtimeSpeakerScorer:
+    """Sliding-window speaker verification for realtime floor gating.
+
+    Audio is accumulated into a rolling ~1s window; every ~250ms of new audio
+    an embedding of the window is scored against the engaged and non-engaged
+    profile sets. The verdict is deliberately conservative:
+
+    - ``engaged``     — the window confidently matches an engaged profile.
+    - ``non_engaged`` — the window confidently matches a *known* non-engaged
+      voice and does not match any engaged profile.
+    - ``unknown``     — everything else (silence, ambiguity, no profiles).
+
+    Only a ``non_engaged`` verdict sustained past the hysteresis window gates
+    the floor; ``unknown`` always fails open.
+    """
+
+    def __init__(
+        self,
+        *,
+        embedder: SpeakerEmbedder,
+        profiles_provider: Callable[[], tuple[list[np.ndarray], list[np.ndarray]]],
+        window_s: float = REALTIME_WINDOW_S,
+        hop_s: float = REALTIME_HOP_S,
+        match_threshold: float = SPEAKER_MATCH_THRESHOLD,
+        hysteresis_s: float = NON_ENGAGED_HYSTERESIS_S,
+        min_rms: float = REALTIME_MIN_RMS,
+    ) -> None:
+        self._embedder = embedder
+        self._profiles_provider = profiles_provider
+        self._window_s = window_s
+        self._hop_s = hop_s
+        self._match_threshold = match_threshold
+        self._hysteresis_s = hysteresis_s
+        self._min_rms = min_rms
+
+        self._window: deque[np.ndarray] = deque()
+        self._window_duration_s = 0.0
+        self._since_infer_s = 0.0
+        self._busy = False
+        self._pending: set[asyncio.Task] = set()
+
+        self.verdict: str = "unknown"
+        self._non_engaged_since: float | None = None
+
+    def add_audio(
+        self,
+        data: bytes | np.ndarray,
+        sample_rate: int,
+        num_channels: int = 1,
+    ) -> None:
+        """Feed live audio; schedules a window inference every hop interval."""
+        pcm = (
+            np.frombuffer(data, dtype=np.int16)
+            if isinstance(data, (bytes, bytearray, memoryview))
+            else np.asarray(data, dtype=np.int16)
+        )
+        pcm = downmix_to_mono(pcm, num_channels)
+        pcm = resample_pcm(pcm, sample_rate, ENROLLMENT_SAMPLE_RATE)
+        if len(pcm) == 0:
+            return
+        duration_s = len(pcm) / ENROLLMENT_SAMPLE_RATE
+        self._window.append(pcm)
+        self._window_duration_s += duration_s
+        while self._window_duration_s > self._window_s and len(self._window) > 1:
+            old = self._window.popleft()
+            self._window_duration_s -= len(old) / ENROLLMENT_SAMPLE_RATE
+
+        self._since_infer_s += duration_s
+        if (
+            self._since_infer_s < self._hop_s
+            or self._busy
+            or self._window_duration_s < self._window_s * 0.5
+        ):
+            return
+        self._since_infer_s = 0.0
+        snapshot = np.concatenate(list(self._window))
+        rms = float(np.sqrt(np.mean(snapshot.astype(np.float32) ** 2)))
+        if rms < self._min_rms:
+            self.verdict = "unknown"
+            self._non_engaged_since = None
+            return
+        self._busy = True
+        task = asyncio.create_task(self._infer(snapshot))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def _infer(self, pcm: np.ndarray) -> None:
+        try:
+            embedding = await self._embedder.embed(pcm, ENROLLMENT_SAMPLE_RATE)
+            engaged_profiles, other_profiles = self._profiles_provider()
+            engaged_score = max(
+                (cosine_similarity(embedding, p) for p in engaged_profiles),
+                default=0.0,
+            )
+            other_score = max(
+                (cosine_similarity(embedding, p) for p in other_profiles),
+                default=0.0,
+            )
+            if engaged_score >= self._match_threshold and engaged_score >= other_score:
+                self.verdict = "engaged"
+                self._non_engaged_since = None
+            elif (
+                other_score >= self._match_threshold
+                and engaged_score < self._match_threshold
+            ):
+                self.verdict = "non_engaged"
+                if self._non_engaged_since is None:
+                    self._non_engaged_since = time.time()
+            else:
+                self.verdict = "unknown"
+                self._non_engaged_since = None
+        finally:
+            self._busy = False
+
+    @property
+    def confidently_non_engaged(self) -> bool:
+        """True when only non-engaged voices have held the mic past hysteresis."""
+        return (
+            self._non_engaged_since is not None
+            and (time.time() - self._non_engaged_since) >= self._hysteresis_s
+        )
