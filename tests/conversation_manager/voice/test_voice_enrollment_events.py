@@ -110,7 +110,7 @@ async def test_enrollment_captured_persists_on_contact(initialized_cm):
 @pytest.mark.asyncio
 async def test_enrollment_suggested_pushes_boss_guidance(initialized_cm):
     """For the boss, VoiceEnrollmentSuggested pushes both a notification and a
-    guidance message nudging the account-page recorder."""
+    guidance message nudging the in-app fallback recorder."""
     cm = initialized_cm
 
     await cm.step(PhoneCallStarted(contact=BOSS), run_llm=False)
@@ -128,8 +128,8 @@ async def test_enrollment_suggested_pushes_boss_guidance(initialized_cm):
 
 @pytest.mark.asyncio
 async def test_enrollment_suggested_non_boss_no_guidance(initialized_cm):
-    """Non-boss contacts get the notification but no account-page guidance
-    (they have no account page to record on)."""
+    """Non-boss contacts get the notification but no fallback-recorder guidance
+    (they cannot use the account-holder recorder)."""
     cm = initialized_cm
 
     await cm.step(

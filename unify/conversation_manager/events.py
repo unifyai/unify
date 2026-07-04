@@ -295,8 +295,8 @@ class VoiceEnrollmentCaptured(Event):
 class VoiceEnrollmentSuggested(Event):
     """Multiple voices were heard on a call but the contact has no enrollment.
 
-    Signals the slow brain that speaker attribution is degraded and the user
-    could fix it by recording a voice enrollment on their account page.
+    Signals degraded speaker attribution and triggers the Console fallback
+    recorder after the call when the contact is the account holder.
     """
 
     topic: ClassVar[str | None] = "app:comms:voice_enrollment_suggested"

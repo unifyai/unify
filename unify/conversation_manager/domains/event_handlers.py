@@ -15,7 +15,10 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
-from unify.conversation_manager.domains.comms_utils import publish_system_error
+from unify.conversation_manager.domains.comms_utils import (
+    publish_system_error,
+    publish_voice_enrollment_suggested,
+)
 from unify.conversation_manager.domains.coordinator_onboarding import (
     _handle_coordinator_onboarding_event,
 )
@@ -1386,9 +1389,10 @@ async def _(
         event.timestamp,
     )
 
-    # Only account holders can record a manual enrollment on their account
-    # page, so the guidance nudge is limited to the boss.
+    # Only the account holder can use the in-app fallback recorder, so the
+    # guidance nudge is limited to the boss.
     if contact_id == SESSION_DETAILS.boss_contact_id:
+        await publish_voice_enrollment_suggested(num_speakers=event.num_speakers)
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
@@ -1397,11 +1401,10 @@ async def _(
                 "Speaker attribution note: multiple distinct voices are "
                 f"present on this call, but {sender_name} has no voice "
                 "enrollment, so the transcript cannot reliably distinguish "
-                "who said what. If a natural moment arises, you may suggest "
-                "they record the one-minute voice enrollment in the Voice "
-                "section of their account page, so future calls can "
-                "voice-verify their turns. Do not derail the current topic "
-                "for this."
+                "who said what. If a natural moment arises, you may mention "
+                "that a short in-app voice recorder will appear when the call "
+                "ends so they can enroll for future calls. Do not derail the "
+                "current topic for this."
             ),
             role="guidance",
         )
