@@ -12,6 +12,7 @@ from unify.common import console_ui
 from unify.common.accessible_teams_block import build_accessible_teams_block
 from unify.conversation_manager.domains.learning_expenses_fixtures import (
     learning_expenses_scenario_prompt_lines,
+    learning_expenses_stop_act_for_storage_rule,
     learning_expenses_storage_check_nudge,
     learning_expenses_user_facing_voice,
 )
@@ -1208,7 +1209,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "from scenario context and include this StorageCheck memoization "
             f"request verbatim: {learning_expenses_storage_check_nudge()} "
             "Then tag the improved deliverable with "
-            "onboarding_learning_phase=`improved`. The doing loop must not call "
+            "onboarding_learning_phase=`improved`. "
+            f"{learning_expenses_stop_act_for_storage_rule()} "
+            "The doing loop must not call "
             "GuidanceManager or FunctionManager store tools — StorageCheck runs "
             "after completion; once the act finishes, tell the user to open the "
             "Brain rail **Guidance** and **Functions** sections and point at what "

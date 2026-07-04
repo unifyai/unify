@@ -373,6 +373,7 @@ def _coordinator_onboarding_notification_text(
     if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
         from unify.conversation_manager.domains.learning_expenses_fixtures import (
             learning_expenses_scenario_prompt_lines,
+            learning_expenses_stop_act_for_storage_rule,
             learning_expenses_storage_check_nudge,
             learning_expenses_user_facing_voice,
         )
@@ -402,7 +403,9 @@ def _coordinator_onboarding_notification_text(
             f"StorageCheck memoization request verbatim: "
             f"{learning_expenses_storage_check_nudge()} "
             "Then tag the improved deliverable with "
-            "onboarding_learning_phase=improved. The doing loop must not call "
+            "onboarding_learning_phase=improved. "
+            f"{learning_expenses_stop_act_for_storage_rule()} "
+            "The doing loop must not call "
             "GuidanceManager or FunctionManager store tools — StorageCheck "
             "persists after completion; tell the user to open the Brain rail "
             "Guidance and Functions sections and cite what StorageCheck stored — "
