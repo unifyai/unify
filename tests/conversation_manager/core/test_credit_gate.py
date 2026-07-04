@@ -16,7 +16,7 @@ from unify.spending_limits import CreditGateState
 def _cm_for_queued_run(*, reply_context: dict | None):
     cm = object.__new__(ConversationManager)
     cm.ready_for_brain = True
-    cm._pending_llm_requests = [(0, False, False)]
+    cm._pending_llm_requests = [(0, False)]
     cm._pending_llm_request_meta = [
         {
             "request_id": "llmreq-000001",
@@ -152,10 +152,8 @@ def test_credit_gate_reply_does_not_throttle_api_responses():
 
 
 @pytest.mark.asyncio
-async def test_credit_gate_reply_routes_unify_message_and_restores_suppression():
+async def test_credit_gate_reply_routes_unify_message():
     cm = object.__new__(ConversationManager)
-    cm._outbound_suppress_gen = -1
-    cm._llm_gen = 12
     tools = MagicMock()
     tools.send_unify_message = AsyncMock(return_value={"status": "ok"})
 
@@ -176,14 +174,11 @@ async def test_credit_gate_reply_routes_unify_message_and_restores_suppression()
         contact_id=1,
         content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
     )
-    assert cm._outbound_suppress_gen == -1
 
 
 @pytest.mark.asyncio
 async def test_credit_gate_reply_routes_email_replies():
     cm = object.__new__(ConversationManager)
-    cm._outbound_suppress_gen = -1
-    cm._llm_gen = 12
     tools = MagicMock()
     tools.send_email = AsyncMock(return_value={"status": "ok"})
 

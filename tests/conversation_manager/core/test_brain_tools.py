@@ -32,6 +32,7 @@ from unify.conversation_manager.domains.brain_tools import (
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
+from unify.comms.outbound_origin import slow_brain_direct_outbound_active
 from unify.file_manager.filesystem_adapters.local_adapter import (
     LocalFileSystemAdapter,
 )
@@ -676,6 +677,27 @@ class TestActionToolsAsTools:
         assert {"contact_id", "team_id", "channel_id", "chat_topic"}.issubset(
             teams_props,
         )
+
+
+class TestSlowBrainDirectOutboundMarker:
+    @pytest.mark.asyncio
+    async def test_send_email_wrapper_marks_outbound_origin(self, brain_action_tools):
+        active_during_send: list[bool] = []
+
+        async def capture_send(*args, **kwargs):
+            active_during_send.append(slow_brain_direct_outbound_active())
+            return {"status": "ok"}
+
+        brain_action_tools._comms.send_email = AsyncMock(side_effect=capture_send)
+
+        await brain_action_tools.send_email(
+            to=[2],
+            subject="Hello",
+            body="World",
+        )
+
+        assert active_during_send == [True]
+        assert slow_brain_direct_outbound_active() is False
 
 
 class TestHangUpTool:
