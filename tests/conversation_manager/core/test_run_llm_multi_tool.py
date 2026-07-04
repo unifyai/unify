@@ -207,52 +207,7 @@ async def test_publish_slow_brain_guidance_speak_mode():
     assert notif.fast_brain_guidance == "The answer is X; confirm if they guess it."
 
 
-# =============================================================================
-# wait() sets outbound-suppress generation flag
-# =============================================================================
-
-
 @pytest.mark.asyncio
-async def test_wait_sets_outbound_suppress_generation():
-    """wait() should stamp _outbound_suppress_gen with the current _llm_gen.
-
-    When the LLM calls wait() alongside an outbound tool (send_unify_message,
-    send_sms, etc.), the sent-message event handler should NOT trigger a
-    redundant follow-up LLM turn.  The suppression uses a generation counter:
-    wait() stamps _outbound_suppress_gen = _llm_gen, and the event handler
-    skips request_llm_run when the two match.
-    """
-    from unify.conversation_manager.domains.brain_action_tools import (
-        ConversationManagerBrainActionTools,
-    )
-
-    cm = MagicMock()
-    cm._llm_gen = 7
-    cm._outbound_suppress_gen = -1
-
-    with patch(
-        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        mock_broker.return_value.publish = AsyncMock()
-        tools = ConversationManagerBrainActionTools(cm)
-
-    result = await tools.wait()
-    assert result == {"status": "waiting", "delay": None}
-    assert cm._outbound_suppress_gen == 7, (
-        "wait() should set _outbound_suppress_gen to the current _llm_gen "
-        "so outbound-comms event handlers skip the reflexive follow-up turn"
-    )
-
-    result = await tools.wait(delay=30)
-    assert result == {"status": "waiting", "delay": 30}
-    assert (
-        cm._outbound_suppress_gen == 7
-    ), "wait(delay=N) should also set the suppression flag"
-
-
-@pytest.mark.asyncio
-@_handle_project
 async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     initialized_cm,
 ):

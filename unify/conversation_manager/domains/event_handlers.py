@@ -1243,6 +1243,14 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     ):
         sender_name = event.speaker_label
 
+    # Track anonymous voice labels for the engagement tools' status appendix.
+    if (
+        role == "user"
+        and getattr(event, "speaker_label", None)
+        and not getattr(event, "voice_verified", False)
+    ):
+        cm.call_manager.note_speaker_label(event.speaker_label)
+
     message_id = cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
@@ -1257,6 +1265,18 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         event,
         local_message_id=message_id,
     )
+
+    # A non-engaged (background) utterance is context, not a turn: the fast
+    # brain emitted no reply and scheduled no slow-brain user run for it. A
+    # debounced non-user-origin run lets the slow brain notice a background
+    # voice addressing the assistant and engage it; bursts collapse in the
+    # debouncer.
+    if role == "user" and getattr(event, "engaged", True) is False:
+        await cm.request_llm_run(
+            delay=2,
+            triggering_contact_id=contact_id,
+        )
+        return
 
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
@@ -1909,6 +1929,10 @@ def _push_email_to_all_contacts(
             _push_to_contact(contact["contact_id"], "bcc")
 
 
+def _should_wake_for_outbound_sent(event) -> bool:
+    return not getattr(event, "suppress_slow_brain_wake", False)
+
+
 def _credit_gate_reply_context(
     *,
     medium: Medium,
@@ -2106,7 +2130,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             )
             notif_content = f"Email sent to {', '.join(email_to[:2])}{'...' if len(email_to) > 2 else ''}"
             cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
-            if cm._outbound_suppress_gen != cm._llm_gen:
+            if _should_wake_for_outbound_sent(event):
                 await cm.request_llm_run(
                     triggering_contact_id=contact_id,
                 )
@@ -2431,7 +2455,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium.value,
         )
 
-    if role == "user" or cm._outbound_suppress_gen != cm._llm_gen:
+    if role == "user" or _should_wake_for_outbound_sent(event):
         _t0 = time.perf_counter()
         await cm.request_llm_run(
             triggering_contact_id=contact_id,

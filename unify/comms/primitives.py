@@ -56,6 +56,7 @@ from unify.comms.offline_support import (
     finalize_outbound_operation_success,
     reserve_outbound_operation,
 )
+from unify.comms.outbound_origin import slow_brain_direct_outbound_active
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -130,6 +131,11 @@ class CommsPrimitives:
     ) -> None:
         self._cm = conversation_manager
         self._event_broker = event_broker or get_event_broker()
+
+    async def _publish_comms_event(self, topic: str, event) -> None:
+        if slow_brain_direct_outbound_active():
+            event.suppress_slow_brain_wake = True
+        await self._event_broker.publish(topic, event.to_json())
 
     def _assistant_number(self) -> str:
         if self._cm is not None:
@@ -793,7 +799,7 @@ class CommsPrimitives:
                 content=content,
                 **self._onboarding_event_kwargs(Medium.SMS_MESSAGE),
             )
-            await self._event_broker.publish("app:comms:sms_sent", event.to_json())
+            await self._publish_comms_event("app:comms:sms_sent", event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1141,7 +1147,7 @@ class CommsPrimitives:
                 attachments=attachments_for_event or None,
                 **event_onboarding_kwargs,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1344,7 +1350,7 @@ class CommsPrimitives:
                 content=content,
                 **self._onboarding_event_kwargs(Medium.DISCORD_MESSAGE),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1493,9 +1499,9 @@ class CommsPrimitives:
                 guild_id=guild_id,
                 **self._onboarding_event_kwargs(Medium.DISCORD_CHANNEL_MESSAGE),
             )
-            await self._event_broker.publish(
+            await self._publish_comms_event(
                 "app:comms:discord_channel_message_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -1710,7 +1716,7 @@ class CommsPrimitives:
                 thread_ts=thread_ts or "",
                 **self._onboarding_event_kwargs(Medium.SLACK_MESSAGE),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1875,9 +1881,9 @@ class CommsPrimitives:
                 thread_ts=thread_ts or "",
                 **self._onboarding_event_kwargs(Medium.SLACK_CHANNEL_MESSAGE),
             )
-            await self._event_broker.publish(
+            await self._publish_comms_event(
                 "app:comms:slack_channel_message_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -2308,7 +2314,7 @@ class CommsPrimitives:
                     attachments=attachments_for_event,
                     participants=sorted(set(participants_list)),
                 )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -2524,7 +2530,7 @@ class CommsPrimitives:
                 description=description or "",
                 membership_type=membership_type,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             return {
                 "status": "ok",
                 "team_id": team_id,
@@ -2777,7 +2783,7 @@ class CommsPrimitives:
                 attendees=list(attendee_emails),
                 web_link=web_link,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             return {
                 "status": "ok",
                 "mode": mode,
@@ -3002,7 +3008,7 @@ class CommsPrimitives:
                     learning_phase=onboarding_learning_phase,
                 ),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -3158,7 +3164,7 @@ class CommsPrimitives:
                 attachments=uploaded_attachments,
                 tags=tags,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             if self._cm is not None:
                 self._cm._pending_api_message_id = None
                 self._cm._pending_api_message_tags = None
@@ -3803,7 +3809,7 @@ class CommsPrimitives:
                 bcc=final_bcc,
                 **self._onboarding_event_kwargs(Medium.EMAIL),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=f"Subject: {final_subject}\n\n{body}",
@@ -4011,7 +4017,7 @@ class CommsPrimitives:
                 provider_call_sid=response.get("call_sid", ""),
                 **self._onboarding_event_kwargs(Medium.PHONE_CALL),
             )
-            await self._event_broker.publish("app:comms:make_call", event.to_json())
+            await self._publish_comms_event("app:comms:make_call", event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content="<Sending Call...>",
@@ -4241,9 +4247,9 @@ class CommsPrimitives:
                 event = self._cm.build_whatsapp_call_sent_event(fresh_contact)
             else:
                 event = WhatsAppCallSent(contact=fresh_contact)
-            await self._event_broker.publish(
+            await self._publish_comms_event(
                 "app:comms:whatsapp_call_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -4346,9 +4352,9 @@ class CommsPrimitives:
             }
 
         event = WhatsAppCallInviteSent(contact=fresh_contact)
-        await self._event_broker.publish(
+        await self._publish_comms_event(
             "app:comms:whatsapp_call_invite_sent",
-            event.to_json(),
+            event,
         )
         self._record_offline_success(
             offline_reservation,

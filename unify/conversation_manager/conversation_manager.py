@@ -422,7 +422,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_request_seq: int = 0
         self._llm_run_seq: int = 0
         self._llm_gen: int = 0
-        self._outbound_suppress_gen: int = -1
         self._active_llm_trace_meta: dict[str, Any] | None = None
         self._credit_gate_reply_sent_at: dict[tuple[str, str], float] = {}
         self._recent_tool_executions: list[dict[str, Any]] = []
@@ -1527,99 +1526,94 @@ class ConversationManager(metaclass=SingletonABCMeta):
         contact_id = reply_context.get("contact_id")
         tools = ConversationManagerBrainActionTools(self)
 
-        previous_suppress_gen = self._outbound_suppress_gen
-        self._outbound_suppress_gen = self._llm_gen
-        try:
-            if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
-                await tools.send_unify_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+        if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
+            await tools.send_unify_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
+            await tools.send_sms(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
+            await tools.send_whatsapp(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.EMAIL.value:
+            email_id = reply_context.get("email_id")
+            thread_id = reply_context.get("thread_id")
+            if email_id:
+                await tools.send_email(
+                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    reply_all=True,
+                    email_id_to_reply_to=email_id,
+                    thread_id=thread_id,
                 )
-            elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
-                await tools.send_sms(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
-                await tools.send_whatsapp(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.EMAIL.value:
-                email_id = reply_context.get("email_id")
-                thread_id = reply_context.get("thread_id")
-                if email_id:
-                    await tools.send_email(
-                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                        reply_all=True,
-                        email_id_to_reply_to=email_id,
-                        thread_id=thread_id,
-                    )
-                elif contact_id is not None:
-                    await tools.send_email(
-                        to=[contact_id],
-                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    )
-                else:
-                    return False
-            elif medium == Medium.API_MESSAGE.value:
-                await tools.send_api_response(
-                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    tags=reply_context.get("tags"),
-                )
-            elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
-                await tools.send_discord_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_discord_channel_message(
-                    channel_id=reply_context["channel_id"],
-                    guild_id=reply_context.get("guild_id") or "",
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
-                await tools.send_slack_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    team_id=reply_context.get("team_id") or "",
-                    thread_ts=reply_context.get("thread_ts"),
-                )
-            elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_slack_channel_message(
-                    channel_id=reply_context["channel_id"],
-                    team_id=reply_context.get("team_id") or "",
-                    thread_ts=reply_context.get("thread_ts"),
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
-                await tools.send_teams_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    chat_id=reply_context.get("chat_id"),
-                )
-            elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_teams_message(
-                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    channel_id=reply_context.get("channel_id"),
-                    team_id=reply_context.get("team_id"),
+            elif contact_id is not None:
+                await tools.send_email(
+                    to=[contact_id],
+                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
                 )
             else:
                 return False
-        finally:
-            self._outbound_suppress_gen = previous_suppress_gen
+        elif medium == Medium.API_MESSAGE.value:
+            await tools.send_api_response(
+                contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tags=reply_context.get("tags"),
+            )
+        elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
+            await tools.send_discord_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_discord_channel_message(
+                channel_id=reply_context["channel_id"],
+                guild_id=reply_context.get("guild_id") or "",
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
+            await tools.send_slack_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                team_id=reply_context.get("team_id") or "",
+                thread_ts=reply_context.get("thread_ts"),
+            )
+        elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_slack_channel_message(
+                channel_id=reply_context["channel_id"],
+                team_id=reply_context.get("team_id") or "",
+                thread_ts=reply_context.get("thread_ts"),
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
+            await tools.send_teams_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                chat_id=reply_context.get("chat_id"),
+            )
+        elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_teams_message(
+                contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                channel_id=reply_context.get("channel_id"),
+                team_id=reply_context.get("team_id"),
+            )
+        else:
+            return False
 
         return True
 

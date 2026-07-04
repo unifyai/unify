@@ -35,6 +35,7 @@ from unify.conversation_manager.events import (
     EmailReceived,
     EmailSent,
     UnifyMessageReceived,
+    UnifyMessageSent,
     PhoneCallReceived,
     PhoneCallStarted,
     PhoneCallEnded,
@@ -196,9 +197,8 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     # Set up notifications bar
     cm.notifications_bar = NotificationBar()
 
-    # Generation-scoped outbound suppression (wait() sets suppress_gen = llm_gen)
+    # LLM generation counter (commissioning duplicate guard, tool execution metadata)
     cm._llm_gen = 0
-    cm._outbound_suppress_gen = -1
 
     # Mock async methods
     cm.request_llm_run = AsyncMock()
@@ -600,6 +600,83 @@ class TestTextMessageHandlers:
 
         # cancel_proactive_speech should NOT be called for sent (assistant) messages
         mock_cm.cancel_proactive_speech.assert_not_called()
+
+
+class TestOutboundSentWakePolicy:
+    """Outbound *Sent events honor suppress_slow_brain_wake on the event."""
+
+    @pytest.mark.asyncio
+    async def test_email_sent_with_suppress_flag_skips_llm_run(self, mock_cm):
+        event = EmailSent(
+            contact={"contact_id": 2, "email_address": "alice@example.com"},
+            subject="Update",
+            body="Please review.",
+            to=["alice@example.com"],
+            suppress_slow_brain_wake=True,
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+        assert len(mock_cm.notifications_bar.notifications) == 1
+
+    @pytest.mark.asyncio
+    async def test_email_sent_without_suppress_flag_wakes_slow_brain(self, mock_cm):
+        event = EmailSent(
+            contact={"contact_id": 2, "email_address": "alice@example.com"},
+            subject="Update",
+            body="Please review.",
+            to=["alice@example.com"],
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+
+    @pytest.mark.asyncio
+    async def test_unify_message_sent_with_suppress_flag_skips_llm_run(self, mock_cm):
+        event = UnifyMessageSent(
+            contact={"contact_id": 2},
+            content="Onboarding reply",
+            suppress_slow_brain_wake=True,
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unify_message_sent_without_suppress_flag_wakes_slow_brain(
+        self,
+        mock_cm,
+    ):
+        event = UnifyMessageSent(
+            contact={"contact_id": 2},
+            content="Actor follow-up",
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(
+            triggering_contact_id=2,
+            credit_gate_reply_context=None,
+        )
 
 
 # =============================================================================

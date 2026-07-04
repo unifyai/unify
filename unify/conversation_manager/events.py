@@ -61,6 +61,7 @@ def _now_datetime() -> datetime:
 @dataclass(kw_only=True)
 class Event:
     timestamp: datetime = field(default_factory=_now_datetime)
+    suppress_slow_brain_wake: bool = False
 
     _registry: ClassVar[dict[str, "Event"]] = {}
     loggable: ClassVar[bool] = True
@@ -219,6 +220,10 @@ class InboundPhoneUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    # Whether the speaker holds conversational standing on the call. False for
+    # background voices: the line is context only — it triggered no fast-brain
+    # reply and no slow-brain user turn.
+    engaged: bool = True
 
 
 @dataclass
@@ -233,6 +238,7 @@ class InboundUnifyMeetUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -247,6 +253,7 @@ class InboundWhatsAppCallUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -389,6 +396,7 @@ class InboundGoogleMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
     voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -466,6 +474,7 @@ class InboundTeamsMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
     voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
