@@ -1631,10 +1631,13 @@ def test_coordinator_onboarding_timed_chunks_match_audio():
     from unify.conversation_manager.medium_scripts import call as call_script
 
     chunks = call_script._COORDINATOR_ONBOARDING_TIMED_CHUNKS
-    assert len(chunks) == 8
+    assert len(chunks) == 7
     assert chunks[0]["text"] == "Hey, great to meet you."
     assert chunks[4]["text"] == "Also, let me remove this voice static."
     assert chunks[5]["text"] == "Much better."
+    assert "Any questions before we start with the onboarding?" not in (
+        call_script._recorded_opening_timed_transcript(chunks)
+    )
 
     with resources.as_file(
         resources.files("unify.assets.audio") / "twin-onboarding-intro.mp3",

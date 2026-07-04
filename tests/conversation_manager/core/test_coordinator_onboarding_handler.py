@@ -14,7 +14,7 @@ this file pins the two routing decisions the demo-completion redesign depends on
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,6 +35,7 @@ def _fake_cm() -> SimpleNamespace:
         set_pending_onboarding_outbound=MagicMock(),
         record_onboarding_trigger_clicked=MagicMock(),
         clear_onboarding_clicked_trigger_steps=MagicMock(),
+        clear_active_learning_beat=MagicMock(),
         notifications_bar=SimpleNamespace(push_notif=MagicMock()),
         _session_logger=SimpleNamespace(info=MagicMock()),
         _current_event_trace={},
@@ -80,6 +81,59 @@ async def test_render_updated_refreshes_render_without_notif_or_run(
     cm.set_coordinator_onboarding_render.assert_called_once_with(_RENDER)
     cm.notifications_bar.push_notif.assert_not_called()
     cm.set_pending_onboarding_outbound.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_session_started_chat_delivers_scripted_intro_without_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = _fake_cm()
+    send_intro = AsyncMock()
+    monkeypatch.setattr(
+        "unify.conversation_manager.domains.brain_action_tools.ConversationManagerBrainActionTools",
+        lambda _cm: SimpleNamespace(send_unify_message_to_boss=send_intro),
+    )
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_session_started",
+        message="User just opened the onboarding chat with you.",
+        details={"medium": "chat"},
+    )
+
+    should_run = await _handle_coordinator_onboarding_event(event, cm)
+
+    assert should_run is False
+    send_intro.assert_awaited_once()
+    assert send_intro.await_args.kwargs["content"]
+    assert "T-W1N" in send_intro.await_args.kwargs["content"]
+    assert "Any questions before we start with the onboarding?" not in (
+        send_intro.await_args.kwargs["content"]
+    )
+    cm.notifications_bar.push_notif.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_session_started_call_suppresses_run_without_chat_intro(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = _fake_cm()
+    send_intro = AsyncMock()
+    monkeypatch.setattr(
+        "unify.conversation_manager.domains.brain_action_tools.ConversationManagerBrainActionTools",
+        lambda _cm: SimpleNamespace(send_unify_message_to_boss=send_intro),
+    )
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_session_started",
+        message="User just started an onboarding voice call with you.",
+        details={"medium": "call"},
+    )
+
+    should_run = await _handle_coordinator_onboarding_event(event, cm)
+
+    assert should_run is False
+    send_intro.assert_not_called()
+    cm.notifications_bar.push_notif.assert_called_once()
 
 
 @pytest.mark.anyio
