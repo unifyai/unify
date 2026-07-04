@@ -25,8 +25,8 @@ import tempfile
 import numpy as np
 import pytest
 
-from tests.async_helpers import _wait_for_condition
 from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
+from unify.conversation_manager.domains.contact_index import GuidanceMessage
 from unify.conversation_manager.events import (
     InboundPhoneUtterance,
     PhoneCallStarted,
@@ -47,6 +47,33 @@ def _write_temp_wav(seconds: float = 2.0) -> str:
     return path
 
 
+async def _drain_operations_queue() -> None:
+    """Run queued CM operations inline.
+
+    The driver tests initialize managers directly and never start the
+    ``listen_to_operations`` background worker, so operations queued by event
+    handlers (transcript writes, enrollment persistence) are executed here
+    deterministically.
+    """
+    from unify.conversation_manager.domains import managers_utils
+
+    queue = managers_utils._operations_queue
+    while not queue.empty():
+        async_func, args, kwargs = queue.get_nowait()
+        try:
+            await async_func(*args, **kwargs)
+        finally:
+            queue.task_done()
+
+
+def _guidance_messages(cm) -> list[GuidanceMessage]:
+    return [
+        entry.message
+        for entry in cm.cm.contact_index.global_thread
+        if isinstance(entry.message, GuidanceMessage)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_enrollment_captured_persists_on_contact(initialized_cm):
     """VoiceEnrollmentCaptured stores the embedding on the contact row,
@@ -65,23 +92,16 @@ async def test_enrollment_captured_persists_on_contact(initialized_cm):
         ),
         run_llm=False,
     )
-
-    async def _enrolled() -> bool:
-        info = cm.cm.contact_manager.get_voice_enrollment_info(ALICE["contact_id"])
-        return bool(info.get("enrolled"))
-
-    await _wait_for_condition(_enrolled, poll=0.05, timeout=30.0)
+    await _drain_operations_queue()
 
     info = cm.cm.contact_manager.get_voice_enrollment_info(ALICE["contact_id"])
+    assert info["enrolled"], info
     assert info["source"] == "auto_call"
     profiles = cm.cm.contact_manager.get_voice_profiles([ALICE["contact_id"]])
     assert profiles[ALICE["contact_id"]] == pytest.approx(embedding)
 
     # The temp WAV is consumed (read + deleted) by the handler.
-    async def _wav_deleted() -> bool:
-        return not os.path.exists(wav_path)
-
-    await _wait_for_condition(_wav_deleted, poll=0.05, timeout=30.0)
+    assert not os.path.exists(wav_path)
 
     notif_texts = [n.content for n in cm.cm.notifications_bar.notifications]
     assert any("Voice profile enrolled" in text for text in notif_texts), notif_texts
@@ -102,14 +122,8 @@ async def test_enrollment_suggested_pushes_boss_guidance(initialized_cm):
     notif_texts = [n.content for n in cm.cm.notifications_bar.notifications]
     assert any("3 distinct voices" in text for text in notif_texts), notif_texts
 
-    guidance = [
-        entry.message
-        for entry in cm.cm.contact_index.global_thread
-        if getattr(entry.message, "role", "") == "guidance"
-    ]
-    assert any(
-        "voice enrollment" in getattr(msg, "content", "") for msg in guidance
-    ), guidance
+    guidance = _guidance_messages(cm)
+    assert any("voice enrollment" in msg.content for msg in guidance), guidance
 
 
 @pytest.mark.asyncio
@@ -127,10 +141,7 @@ async def test_enrollment_suggested_non_boss_no_guidance(initialized_cm):
     assert any("2 distinct voices" in text for text in notif_texts), notif_texts
 
     guidance = [
-        entry.message
-        for entry in cm.cm.contact_index.global_thread
-        if getattr(entry.message, "role", "") == "guidance"
-        and "voice enrollment" in getattr(entry.message, "content", "")
+        msg for msg in _guidance_messages(cm) if "voice enrollment" in msg.content
     ]
     assert not guidance
 
