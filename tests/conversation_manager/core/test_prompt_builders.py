@@ -1165,6 +1165,21 @@ class TestOnboardingPromptLeakageGuard:
         )
         assert "Trigger ... from T-W1N" in prompt
 
+    def test_onboarding_requires_responsive_unify_message_chat(self):
+        prompt = _build(is_coordinator=True, coordinator_onboarding_active=True)
+        assert "Rules for unify_message during onboarding" in prompt
+        assert "never `wait`" in prompt
+        assert (
+            "Do not leave chat silent while only the other channel carries the clue"
+            in prompt
+        )
+
+    def test_conversational_restraint_keeps_unify_message_responsive(self):
+        prompt = _build()
+        assert "Unify message / Console chat is the live thread" in prompt
+        assert "not over answering inbound chat" in prompt
+        assert "Never `wait` while their chat line is still unanswered" in prompt
+
     def test_onboarding_progress_leads_with_whats_next_answer(self):
         prompt = _build(
             is_coordinator=True,

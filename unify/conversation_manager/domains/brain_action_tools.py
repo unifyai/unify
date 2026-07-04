@@ -2032,15 +2032,24 @@ class ConversationManagerBrainActionTools:
         """
         Wait for more input without taking any action.
 
-        PREFER THIS TOOL over sending messages in most situations. Call this tool:
-        - After completing a request (let the user respond first)
-        - When there are no NEW messages requiring response
-        - When unsure whether to speak (when in doubt, wait)
-        - To let the conversation end naturally
+        Call this tool when I have nothing left to say or do this turn:
+        - After I already answered the user's latest message and they should
+          have the last word
+        - When there are no NEW inbound messages or completion events to handle
+        - After starting a long-running action or outbound send whose outcome
+          I will handle on the next event
+        - To let a natural exchange end
 
-        The user should usually have the last word. Do not send follow-up
-        messages, additional information, or "anything else?" prompts unless
-        the user explicitly asks for more.
+        Do NOT call this tool when:
+        - The user just sent a unify_message I have not answered yet
+        - I sent something on another channel (email, SMS, WhatsApp, etc.) but
+          have not yet told the user in chat where to look or what to do next
+        - The user asks a question, expresses confusion, or checks whether I
+          am still here ("hello?", "what next?", "are you ignoring me?")
+
+        The user should usually have the last word after I answer — not while
+        they are waiting on me. Do not send unprompted "anything else?" filler,
+        but do not leave an unanswered unify_message on the Console chat thread.
 
         Parameters
         ----------
