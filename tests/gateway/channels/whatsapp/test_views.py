@@ -788,10 +788,12 @@ class TestSendCall:
             "provider_call_sid"
         ] == ("CA_user")
         twiml = twilio_client.calls.create.call_args_list[1].kwargs["twiml"]
-        # Conference hold audio is a publicly reachable Twilio-hosted asset so
-        # it never depends on a self-host-local route Twilio cannot fetch.
-        assert "ring-tone" in twiml
-        assert "/whatsapp/conference-wait" not in twiml
+        # Agent-initiated call: no conference wait audio on either leg. The
+        # first participant into a Twilio conference hears the wait audio
+        # until the second joins, so a ring-tone here meant the callee could
+        # answer and immediately hear ringing.
+        assert 'waitUrl=""' in twiml
+        assert "ring-tone" not in twiml
         # Hosted mode: the answered-status callback points at the public adapters.
         assert twilio_client.calls.create.call_args_list[1].kwargs[
             "status_callback"

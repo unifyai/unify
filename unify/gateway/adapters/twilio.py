@@ -71,7 +71,20 @@ def _room_name(assistant_id: str, channel: str) -> str:
     return f"{safe_assistant_id}_{channel}_{suffix}"
 
 
-def _conference_response(conference_name: str) -> VoiceResponse:
+def _conference_response(
+    conference_name: str,
+    *,
+    ringback: bool = True,
+) -> VoiceResponse:
+    """TwiML joining a participant to a named conference.
+
+    The first participant into a Twilio conference hears the ``wait_url``
+    audio until a second joins. ``ringback`` stays True only for an inbound
+    caller's leg (a human waiting for us to answer); SIP/agent legs wait in
+    silence so ring audio never plays into the LiveKit room.
+    """
+    from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL
+
     resp = VoiceResponse()
     dial = resp.dial()
     dial.conference(
@@ -79,7 +92,7 @@ def _conference_response(conference_name: str) -> VoiceResponse:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        wait_url=CONFERENCE_WAIT_URL if ringback else "",
     )
     return resp
 
@@ -485,7 +498,7 @@ async def twilio_call_webhook(
     twilio_client.calls.create(
         to=sip_uri,
         from_=to_number,
-        twiml=str(_conference_response(conference_name)),
+        twiml=str(_conference_response(conference_name, ringback=False)),
     )
     return Response(content=str(resp_user), media_type="text/xml")
 
@@ -746,7 +759,7 @@ async def twilio_whatsapp_call_webhook(
     wa_client.calls.create(
         to=sip_uri,
         from_=pool_number,
-        twiml=str(_conference_response(conference_name)),
+        twiml=str(_conference_response(conference_name, ringback=False)),
     )
     return Response(
         content=str(_conference_response(conference_name)),
