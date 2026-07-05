@@ -128,7 +128,7 @@ def _append_onboarding_trigger_ack_guidance(text: str, subtype: str) -> str:
 
 
 def _boss_thread_has_assistant_unify_message(cm: "ConversationManager") -> bool:
-    from unify.comms.medium import Medium
+    from unify.conversation_manager.cm_types.medium import Medium
     from unify.conversation_manager.domains.contact_index import UnifyMessage
 
     boss_id = int(
