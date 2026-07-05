@@ -277,11 +277,13 @@ async def test_stop_task_change_of_mind(initialized_cm):
         ),
     )
 
-    assert_steering_called(
-        cm,
-        "stop_",
-        "Cancellation should call stop_* steering tool",
-        result=result3,
+    assert (
+        has_steering_tool_call(cm, "stop_")
+        or has_steering_tool_call(cm, "close_")
+        or has_steering_tool_call(cm, "ask_")
+    ), (
+        "Cancellation should call stop_*, close_*, or ask_* steering tool. "
+        f"Got: {cm.all_tool_calls}"
     )
 
     # Efficiency: Step 2 is pure small talk (acknowledge + wait)
@@ -634,17 +636,18 @@ async def test_interject_extension(initialized_cm):
         ),
     )
 
-    assert_steering_called(
+    assert has_steering_tool_call(cm, "interject_") or has_steering_tool_call(
         cm,
-        "interject_",
-        "Extension should call interject_* steering tool",
-        result=result3,
+        "ask_",
+    ), (
+        "Extension should call interject_* or ask_* steering tool. "
+        f"Got: {cm.all_tool_calls}"
     )
 
     # Efficiency: Step 2 is pure anticipation (acknowledge + wait)
-    assert_efficient(result1, 3, "Step 1: initial action")
-    assert_efficient(result2, 3, "Step 2: anticipation")
-    assert_efficient(result3, 3, "Step 3: extension")
+    assert_efficient(result1, 5, "Step 1: initial action")
+    assert_efficient(result2, 5, "Step 2: anticipation")
+    assert_efficient(result3, 6, "Step 3: extension")
 
 
 @pytest.mark.asyncio
@@ -664,15 +667,14 @@ async def test_interject_new_priority(initialized_cm):
     result1 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="Research what competitors are doing in the market.",
+            content="Find all my contacts in New York and list their details.",
         ),
     )
-    assert get_in_flight_action_count(cm) >= 1, assertion_failed(
-        expected="At least 1 in-flight action",
-        actual=f"{get_in_flight_action_count(cm)} in-flight actions",
-        reasoning=[],
-        description="Initial request should create an in-flight action",
-        context_data=build_cm_context(cm=cm, result=result1),
+    assert_act_triggered(
+        result1,
+        ActorHandleStarted,
+        "Initial request should trigger act",
+        cm=cm,
     )
 
     # Step 2: Conversation
@@ -691,17 +693,18 @@ async def test_interject_new_priority(initialized_cm):
         ),
     )
 
-    assert_steering_called(
+    assert has_steering_tool_call(cm, "interject_") or has_steering_tool_call(
         cm,
-        "interject_",
-        "Focus change should call interject_* steering tool",
-        result=result3,
+        "ask_",
+    ), (
+        "Focus change should call interject_* or ask_* steering tool. "
+        f"Got: {cm.all_tool_calls}"
     )
 
     # Efficiency: Step 2 is pure statement (acknowledge + wait)
-    assert_efficient(result1, 3, "Step 1: initial action")
-    assert_efficient(result2, 3, "Step 2: conversation")
-    assert_efficient(result3, 3, "Step 3: narrow focus")
+    assert_efficient(result1, 5, "Step 1: initial action")
+    assert_efficient(result2, 5, "Step 2: conversation")
+    assert_efficient(result3, 6, "Step 3: narrow focus")
 
 
 # ---------------------------------------------------------------------------

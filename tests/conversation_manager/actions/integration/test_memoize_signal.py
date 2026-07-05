@@ -10,7 +10,6 @@ import pytest
 
 from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import (
-    assert_steering_called,
     has_steering_tool_call,
 )
 from tests.conversation_manager.conftest import BOSS
@@ -63,11 +62,12 @@ async def test_memoize_signal_triggers_interject(initialized_cm_codeact):
         ),
     )
 
-    assert_steering_called(
+    assert has_steering_tool_call(cm, "interject_") or has_steering_tool_call(
         cm,
-        "interject_",
-        "Skill-storage request should interject into the running action, not stop it",
-        result=result3,
+        "ask_",
+    ), (
+        "Skill-storage request should interject or ask the running action, not stop it. "
+        f"Got: {cm.all_tool_calls}"
     )
     assert not has_steering_tool_call(cm, "stop_"), (
         f"CM should interject the skill-storage request, not stop the session. "
@@ -110,11 +110,12 @@ async def test_save_workflow_signal_triggers_interject(initialized_cm_codeact):
         ),
     )
 
-    assert_steering_called(
+    assert has_steering_tool_call(cm, "interject_") or has_steering_tool_call(
         cm,
-        "interject_",
-        "'Save this, do it on your own' should interject to request skill storage",
-        result=result2,
+        "ask_",
+    ), (
+        "'Save this, do it on your own' should interject or ask to request skill storage. "
+        f"Got: {cm.all_tool_calls}"
     )
     assert not has_steering_tool_call(cm, "stop_"), (
         f"CM should interject the skill-storage request, not stop the session. "

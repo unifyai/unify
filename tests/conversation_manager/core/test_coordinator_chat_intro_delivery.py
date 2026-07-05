@@ -64,10 +64,11 @@ def test_should_not_deliver_when_boss_thread_has_assistant_message() -> None:
     cm = _armed_cm(contact_index=contact_index)
     assert _boss_thread_has_assistant_unify_message(cm) is True
     assert _should_deliver_coordinator_chat_intro(cm) is False
-    contact_index.get_messages_for_contact.assert_called_once_with(
+    contact_index.get_messages_for_contact.assert_called_with(
         1,
         Medium.UNIFY_MESSAGE,
     )
+    assert contact_index.get_messages_for_contact.call_count == 2
 
 
 def test_boss_thread_ignores_user_messages_only() -> None:

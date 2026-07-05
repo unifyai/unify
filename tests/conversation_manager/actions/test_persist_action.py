@@ -192,8 +192,8 @@ class TestActLLMProfileParameter:
         description = schema["function"]["description"]
         assert "gpt_5_5_high" in description
         assert "use all of your thinking effort" in description
-        assert "11.5x" in description
-        assert "34.5x" in description
+        assert "17x" in description
+        assert "25x" in description
 
     @pytest.mark.asyncio
     async def test_llm_profile_forwarded_to_actor(

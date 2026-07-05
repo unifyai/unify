@@ -9,6 +9,10 @@ Key properties:
 from __future__ import annotations
 
 import os
+
+# Must be set before SETTINGS is first imported so per-test contexts are pre-created.
+os.environ["UNIFY_PRETEST_CONTEXT_CREATE"] = "true"
+
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -55,11 +59,6 @@ def pytest_configure(config) -> None:
 
     # Ensure NEW marker comparisons are stable in tests.
     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
-
-    # Some Unify log readers assume contexts already exist. These integration tests
-    # often run in isolation (fresh project, empty DB), so pre-create contexts to
-    # avoid sporadic 404s on GET/PUT /logs for brand-new contexts.
-    os.environ.setdefault("UNIFY_PRETEST_CONTEXT_CREATE", "true")
 
 
 @pytest_asyncio.fixture(autouse=True)

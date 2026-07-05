@@ -1481,7 +1481,10 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         mode=scenario.mode,
         get_active_contact=lambda: _BOSS_CONTACT,
         in_voice_session=False,
-        call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
+        call_manager=SimpleNamespace(
+            is_ready_for_outbound_call=False,
+            hang_up_gate_reason=None,
+        ),
         assistant_job_title=(
             "Coordinator" if scenario.is_coordinator else "Customer Success"
         ),

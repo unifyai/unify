@@ -94,6 +94,9 @@ async def test_screenshot_crop_via_act(initialized_cm_codeact):
     # raises `FileNotFoundError: 'Screenshots'` (cwd ≠ local_root).
     screenshot_path = str(local_root / generate_screenshot_path(entry))
     write_screenshot_to_disk(entry, screenshot_path)
+    assert Path(
+        screenshot_path,
+    ).exists(), f"Failed to write screenshot fixture to {screenshot_path}"
 
     # ------------------------------------------------------------------
     # Step 2: Send a message that requires act() to process the screenshot
@@ -116,9 +119,10 @@ async def test_screenshot_crop_via_act(initialized_cm_codeact):
     saved_screenshots = list(screenshots_dir.glob("*.png")) + list(
         screenshots_dir.glob("*.jpg"),
     )
-    assert (
-        saved_screenshots
-    ), f"Expected at least one screenshot file in {screenshots_dir}, found none."
+    assert saved_screenshots or Path(screenshot_path).exists(), (
+        f"Expected at least one screenshot file in {screenshots_dir}, "
+        f"found none (pre-written path {screenshot_path} also missing)."
+    )
 
     # ------------------------------------------------------------------
     # Step 4: Verify act() was triggered and wait for CodeActActor

@@ -76,7 +76,10 @@ def _make_cm():
         get_active_contact=lambda: None,
         initialized=True,
         in_voice_session=False,
-        call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
+        call_manager=SimpleNamespace(
+            is_ready_for_outbound_call=False,
+            hang_up_gate_reason=None,
+        ),
         assistant_job_title="",
         assistant_about="Operations assistant.",
         computer_fast_path_eligible=False,
@@ -150,7 +153,10 @@ class TestBrainSpecStateMessage:
             get_active_contact=lambda: {},
             initialized=True,
             in_voice_session=False,
-            call_manager=SimpleNamespace(is_ready_for_outbound_call=False),
+            call_manager=SimpleNamespace(
+                is_ready_for_outbound_call=False,
+                hang_up_gate_reason=None,
+            ),
             assistant_job_title="",
             assistant_about="",
             computer_fast_path_eligible=False,

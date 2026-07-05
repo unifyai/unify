@@ -50,6 +50,7 @@ def mock_cm():
     cm._pending_steering_tasks = set()
     cm._initialized = asyncio.Event()
     cm._initialized.set()  # mark as initialised so act() doesn't block
+    cm.suppress_duplicate_commissioning_tool.return_value = None
     return cm
 
 

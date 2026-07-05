@@ -241,16 +241,17 @@ async def test_single_message_update_contact_then_create_task(initialized_cm_cod
     cm = initialized_cm_codeact
     uniq = os.getpid()
     email = f"sam.taylor.{uniq}@example.com"
+    base_phone = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    new_phone = f"+1555{(uuid.uuid4().int + 1) % 10_000_000:07d}"
     _ = get_or_create_contact(
         cm.cm.contact_manager,
         first_name="Sam",
         surname="Taylor",
         email_address=email,
-        phone_number="+15555550001",
+        phone_number=base_phone,
     )
 
     token = f"CONTACTTASK-{uuid.uuid4().hex}"
-    new_phone = "+15555550002"
     task_name = f"Call Sam ({token})"
     task_desc = f"Call Sam at {new_phone}. Ref: {token}."
 

@@ -105,6 +105,8 @@ async def test_contact_update_persists_in_db(initialized_cm_codeact):
     """Update an existing contact via CM→Actor and verify the change persisted."""
     cm = initialized_cm_codeact
     email = f"eve.{uuid.uuid4().hex[:8]}@example.com"
+    base_phone = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    updated_phone = f"+1555{(uuid.uuid4().int + 1) % 10_000_000:07d}"
 
     # Create a baseline contact deterministically.
     created = get_or_create_contact(
@@ -112,14 +114,14 @@ async def test_contact_update_persists_in_db(initialized_cm_codeact):
         first_name="Eve",
         surname="Adams",
         email_address=email,
-        phone_number="+15555550900",
+        phone_number=base_phone,
     )
     assert created is not None
 
     result = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content=f"Update the contact with email {email} to have phone number +15555550901.",
+            content=f"Update the contact with email {email} to have phone number {updated_phone}.",
         ),
     )
 
@@ -143,7 +145,7 @@ async def test_contact_update_persists_in_db(initialized_cm_codeact):
         contact_id,
         expected_fields={
             "email_address": email,
-            "phone_number": "+15555550901",
+            "phone_number": updated_phone,
         },
     )
     assert_no_errors(result)
