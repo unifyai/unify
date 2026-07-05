@@ -98,6 +98,11 @@ def create_conference_response(
     Legs we dial at a human (they answered — ringing at them is broken UX) and
     SIP/agent legs (ring audio would play into the LiveKit room at the agent's
     STT) wait in silence instead.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
     """
     response = VoiceResponse()
     dial = response.dial()
@@ -105,6 +110,7 @@ def create_conference_response(
         "startConferenceOnEnter": True,
         "endConferenceOnExit": True,
         "muted": False,
+        "beep": False,
         "wait_url": _RINGTONE_URL if ringback else "",
     }
     if with_status:
