@@ -61,6 +61,16 @@ class _Forwarder:
                     ],
                 },
             )
+        if method == "GET" and "sites/S1/drive/root/children" in rest_path:
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "HR", "parentReference": {"driveId": "D"}},
+                        {"id": "FIN", "parentReference": {"driveId": "D"}},
+                    ],
+                },
+            )
         if method == "GET" and rest_path.endswith("/children"):
             return httpx.Response(
                 200,
@@ -68,6 +78,27 @@ class _Forwarder:
                     "value": [
                         {"id": "HRchild", "parentReference": {"driveId": "D"}},
                         {"id": "FIN", "parentReference": {"driveId": "D"}},
+                    ],
+                },
+            )
+        if method == "GET" and rest_path.endswith("/delta"):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "HR", "parentReference": {"driveId": "D"}},
+                        {"id": "FIN", "parentReference": {"driveId": "D"}},
+                    ],
+                },
+            )
+        if method == "GET" and rest_path.endswith("/changes"):
+            return httpx.Response(
+                200,
+                json={
+                    "changes": [
+                        {"file": {"id": "HR", "driveId": "D"}},
+                        {"file": {"id": "FIN", "driveId": "D"}},
+                        {"removed": True, "fileId": "gone"},
                     ],
                 },
             )
@@ -180,7 +211,7 @@ async def test_create_under_masked_parent_is_forbidden(client):
 
 @pytest.mark.asyncio
 async def test_unknown_file_endpoint_is_denied(client):
-    resp = await client.get("/microsoft/v1.0/me/drive/special")
+    resp = await client.get("/microsoft/v1.0/me/drive/items/I1/notARealGraphOp")
     assert resp.status_code == 403
     assert client._forwarder.calls == []
 
@@ -262,3 +293,52 @@ async def test_batch_denies_masked_and_filters_forwarded(client):
     # Forwarded listing is filtered.
     assert by_id["2"]["status"] == 200
     assert [i["id"] for i in by_id["2"]["body"]["value"]] == ["HR"]
+
+
+@pytest.mark.asyncio
+async def test_site_drive_listing_masks_disallowed_items(client):
+    get_policy_store().set_policies(
+        [
+            {
+                "provider": "microsoft",
+                "default_allow": False,
+                "decisions": [
+                    {"drive_id": "D", "item_id": "root", "allow": True},
+                    {"drive_id": "D", "item_id": "FIN", "allow": False},
+                ],
+            },
+        ],
+    )
+    resp = await client.get("/microsoft/v1.0/sites/S1/drive/root/children")
+    assert resp.status_code == 200
+    assert [i["id"] for i in resp.json()["value"]] == ["HR"]
+
+
+@pytest.mark.asyncio
+async def test_delta_listing_masks_disallowed_items(client):
+    get_policy_store().set_policies(
+        [
+            {
+                "provider": "microsoft",
+                "default_allow": False,
+                "decisions": [
+                    {"drive_id": "D", "item_id": "root", "allow": True},
+                    {"drive_id": "D", "item_id": "FIN", "allow": False},
+                ],
+            },
+        ],
+    )
+    resp = await client.get("/microsoft/v1.0/me/drive/root/delta")
+    assert resp.status_code == 200
+    assert [i["id"] for i in resp.json()["value"]] == ["HR"]
+
+
+@pytest.mark.asyncio
+async def test_google_changes_list_masks_disallowed_items(client):
+    get_policy_store().set_policies(
+        [{"provider": "google", "default_allow": False, "decisions": []}],
+    )
+    resp = await client.get("/google/drive/v3/changes")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [c["file"]["id"] for c in body["changes"]] == ["HR"]

@@ -90,13 +90,23 @@ def _ms_node(raw: dict[str, Any], fallback_drive_id: str) -> dict[str, Any]:
     }
 
 
+def _ms_drive_base(drive_id: str) -> str:
+    if drive_id in _MS_DEFAULT_DRIVE_ALIASES:
+        return f"{_GRAPH_BASE}/me/drive"
+    if drive_id.startswith("site:"):
+        return f"{_GRAPH_BASE}/sites/{drive_id[5:]}/drive"
+    if drive_id.startswith("group:"):
+        return f"{_GRAPH_BASE}/groups/{drive_id[6:]}/drive"
+    if drive_id.startswith("user:"):
+        return f"{_GRAPH_BASE}/users/{drive_id[5:]}/drive"
+    if drive_id.startswith("share:"):
+        return f"{_GRAPH_BASE}/shares/{drive_id[6:]}/driveItem"
+    return f"{_GRAPH_BASE}/drives/{drive_id}"
+
+
 def _ms_item_url(drive_id: str, item_id: str) -> str:
-    default_drive = drive_id in _MS_DEFAULT_DRIVE_ALIASES
+    base = _ms_drive_base(drive_id)
     root_item = not item_id or item_id in ("root", "")
-    if default_drive:
-        base = f"{_GRAPH_BASE}/me/drive"
-    else:
-        base = f"{_GRAPH_BASE}/drives/{drive_id}"
     return f"{base}/root" if root_item else f"{base}/items/{item_id}"
 
 
@@ -111,12 +121,6 @@ async def ms_get(drive_id: str, item_id: str) -> dict[str, Any]:
         raise WorkspaceFileNotFound(item_id)
     resp.raise_for_status()
     return _ms_node(resp.json(), drive_id)
-
-
-def _ms_drive_base(drive_id: str) -> str:
-    if drive_id in _MS_DEFAULT_DRIVE_ALIASES:
-        return f"{_GRAPH_BASE}/me/drive"
-    return f"{_GRAPH_BASE}/drives/{drive_id}"
 
 
 def _ms_path_url(drive_id: str, anchor_item_id: Optional[str], path: str) -> str:

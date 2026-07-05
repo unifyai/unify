@@ -23,6 +23,37 @@ _MY_DRIVE = "my-drive"
 _MS_DEFAULT_DRIVE = "me"
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+_MS_CONTAINER_PREFIX = {"sites": "site", "groups": "group", "users": "user"}
+
+_MS_ITEM_WRITE_OPS = frozenset(
+    {
+        "copy",
+        "createUploadSession",
+        "createLink",
+        "invite",
+        "restore",
+        "permanentDelete",
+        "checkin",
+        "checkout",
+        "discardCheckout",
+        "follow",
+        "assignSensitivityLabel",
+        "removeRetentionLabel",
+    },
+)
+
+_MS_ITEM_READ_OPS = frozenset(
+    {
+        "thumbnails",
+        "preview",
+        "analytics",
+        "activities",
+        "listItem",
+        "extractSensitivityLabels",
+        "retentionLabel",
+    },
+)
+
 
 @dataclass
 class Locator:
@@ -45,6 +76,14 @@ class Locator:
 
 
 @dataclass
+class DriveBase:
+    """Parsed Microsoft Graph drive container + remainder path segments."""
+
+    drive_id: str
+    rest: list[str]
+
+
+@dataclass
 class Classification:
     provider: str
     kind: str
@@ -55,6 +94,7 @@ class Classification:
     is_content: bool = False
     is_search: bool = False
     root_listing: bool = False
+    changes_list: bool = False
 
 
 # ── Microsoft Graph ─────────────────────────────────────────────────────────
@@ -69,9 +109,8 @@ def _strip_ms_version(segs: list[str]) -> list[str]:
 def _ms_split_drive_base(rest: str) -> tuple[str, str] | None:
     """Return ``(drive_id, remainder)`` after the drive base, or None.
 
-    ``remainder`` is the string after ``me/drive`` or ``drives/{id}`` and may
-    contain Graph path-addressing colons. Only the personal drive and explicit
-    ``drives/{id}`` are supported for path addressing.
+    ``remainder`` is the string after the drive base and may contain Graph
+    path-addressing colons.
     """
     if rest == "me/drive" or rest.startswith("me/drive/"):
         return (_MS_DEFAULT_DRIVE, rest[len("me/drive") :].lstrip("/"))
@@ -81,6 +120,25 @@ def _ms_split_drive_base(rest: str) -> tuple[str, str] | None:
         if not drive_id:
             return None
         return (drive_id, after)
+    for container, sentinel_key in _MS_CONTAINER_PREFIX.items():
+        prefix = f"{container}/"
+        if not rest.startswith(prefix):
+            continue
+        body = rest[len(prefix) :]
+        container_id, _, after = body.partition("/")
+        if not container_id:
+            return None
+        if after == "drive" or after.startswith("drive/"):
+            remainder = after[len("drive") :].lstrip("/")
+            return (f"{sentinel_key}:{container_id}", remainder)
+    if rest.startswith("shares/"):
+        body = rest[len("shares/") :]
+        share_id, _, after = body.partition("/")
+        if not share_id:
+            return None
+        if after == "driveItem" or after.startswith("driveItem/"):
+            remainder = after[len("driveItem") :].lstrip("/")
+            return (f"share:{share_id}", remainder)
     return None
 
 
@@ -90,12 +148,7 @@ def _classify_ms_path(
     after: str,
     query: dict[str, str],
 ) -> Classification | None:
-    """Classify a Graph path-addressed request (``root:/path:`` forms).
-
-    ``after`` is the remainder after the drive base, e.g. ``root:/A/B:/children``
-    or ``items/{id}:/rel/file.txt:/content``. Returns None if the shape is not
-    recognized so the caller can default-deny.
-    """
+    """Classify a Graph path-addressed request (``root:/path:`` forms)."""
     if after.startswith("root:"):
         anchor_id = "root"
         remainder = after[len("root:") :]
@@ -164,22 +217,267 @@ def _ms_is_file_domain(segs: list[str]) -> bool:
         return True
     if segs[:1] == ["shares"]:
         return True
-    if segs and segs[0] in ("sites", "groups", "users"):
+    if segs and segs[0] in _MS_CONTAINER_PREFIX:
         return "drive" in segs or "drives" in segs
     return False
 
 
-def _ms_drive_and_rest(segs: list[str]) -> Optional[tuple[str, list[str]]]:
-    """Return ``(drive_id, rest_segs)`` for a supported drive addressing, else None."""
+def _ms_is_drives_collection_list(segs: list[str]) -> bool:
+    if segs == ["drives"]:
+        return True
+    if segs[:2] == ["me", "drives"] and len(segs) == 2:
+        return True
+    if len(segs) == 3 and segs[0] in _MS_CONTAINER_PREFIX and segs[2] == "drives":
+        return True
+    return False
+
+
+def _ms_parse_drive_base(segs: list[str]) -> DriveBase | None:
     if segs[:2] == ["me", "drive"]:
-        return (_MS_DEFAULT_DRIVE, segs[2:])
+        return DriveBase(_MS_DEFAULT_DRIVE, segs[2:])
     if segs[:1] == ["drives"] and len(segs) >= 2:
-        return (segs[1], segs[2:])
-    if segs and segs[0] in ("sites", "groups", "users") and "drives" in segs:
-        idx = segs.index("drives")
-        if len(segs) >= idx + 2:
-            return (segs[idx + 1], segs[idx + 2 :])
+        return DriveBase(segs[1], segs[2:])
+    if segs[:1] == ["shares"] and len(segs) >= 2:
+        if len(segs) == 2:
+            return DriveBase(f"share:{segs[1]}", [])
+        if segs[2] == "driveItem":
+            return DriveBase(f"share:{segs[1]}", segs[3:])
+        return None
+    if segs[0] in _MS_CONTAINER_PREFIX and len(segs) >= 3:
+        container_id = segs[1]
+        sentinel_key = _MS_CONTAINER_PREFIX[segs[0]]
+        if segs[2] == "drive":
+            return DriveBase(f"{sentinel_key}:{container_id}", segs[3:])
+        if segs[2] == "drives" and len(segs) >= 4:
+            return DriveBase(segs[3], segs[4:])
     return None
+
+
+def _classify_ms_item_subresource(
+    method: str,
+    drive_id: str,
+    item_id: str,
+    sub: list[str],
+    segs_path: str,
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+    if not sub:
+        return Classification(
+            "microsoft",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "item",
+            target=Locator(drive_id, item_id),
+        )
+    if sub == ["children"]:
+        kind = KIND_FILE_WRITE if write else KIND_FILE_READ
+        return Classification(
+            "microsoft",
+            kind,
+            "children",
+            parent=Locator(drive_id, item_id),
+            is_listing=not write,
+        )
+    if sub == ["content"]:
+        return Classification(
+            "microsoft",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "content",
+            target=Locator(drive_id, item_id),
+            is_content=not write,
+        )
+    if sub == ["delta"] and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "delta",
+            parent=Locator(drive_id, item_id),
+            is_listing=True,
+        )
+    if sub and sub[0].startswith("search(") and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "search",
+            parent=Locator(drive_id, item_id),
+            is_listing=True,
+            is_search=True,
+        )
+    if sub[0] in _MS_ITEM_WRITE_OPS:
+        return Classification(
+            "microsoft",
+            KIND_FILE_WRITE,
+            sub[0],
+            target=Locator(drive_id, item_id),
+        )
+    if sub[0] in _MS_ITEM_READ_OPS and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            sub[0],
+            target=Locator(drive_id, item_id),
+        )
+    if sub[0] == "permissions":
+        if write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_WRITE,
+                "permissions",
+                target=Locator(drive_id, item_id),
+            )
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "permissions",
+            target=Locator(drive_id, item_id),
+        )
+    if sub[0] == "versions":
+        if len(sub) == 1 and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "versions",
+                target=Locator(drive_id, item_id),
+            )
+        if len(sub) == 2 and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "version",
+                target=Locator(drive_id, item_id),
+            )
+        if len(sub) == 3 and sub[2] == "content" and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "version_content",
+                target=Locator(drive_id, item_id),
+                is_content=True,
+            )
+    if sub[0] == "unfollow" and write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_WRITE,
+            "unfollow",
+            target=Locator(drive_id, item_id),
+        )
+    return None
+
+
+def _classify_ms_drive_tail(
+    method: str,
+    drive_id: str,
+    rest: list[str],
+    segs_path: str,
+    query: dict[str, str],
+) -> Classification:
+    write = method in _WRITE_METHODS
+
+    if not rest:
+        return Classification("microsoft", KIND_FILE_READ, "get_drive")
+
+    head = rest[0]
+    tail = rest[1:]
+
+    if head in ("recent", "sharedWithMe") and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            head,
+            is_listing=True,
+        )
+    if head in ("following", "bundles") and not tail and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            head,
+            is_listing=True,
+        )
+
+    if head == "special":
+        if not tail and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "special_list",
+                is_listing=True,
+            )
+        if len(tail) == 1:
+            return Classification(
+                "microsoft",
+                KIND_FILE_WRITE if write else KIND_FILE_READ,
+                "special_item",
+                target=Locator(drive_id, tail[0]),
+            )
+        return Classification("microsoft", KIND_UNKNOWN, segs_path)
+
+    if head == "children" and not tail and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "children",
+            parent=Locator(drive_id, "root"),
+            is_listing=True,
+        )
+
+    if head == "root":
+        if tail == ["children"]:
+            kind = KIND_FILE_WRITE if write else KIND_FILE_READ
+            return Classification(
+                "microsoft",
+                kind,
+                "root_children",
+                parent=Locator(drive_id, "root"),
+                is_listing=not write,
+            )
+        if tail == ["delta"] and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "root_delta",
+                parent=Locator(drive_id, "root"),
+                is_listing=True,
+            )
+        if tail and tail[0].startswith("search(") and not write:
+            return Classification(
+                "microsoft",
+                KIND_FILE_READ,
+                "search",
+                parent=Locator(drive_id, "root"),
+                is_listing=True,
+                is_search=True,
+            )
+        if not tail:
+            return Classification(
+                "microsoft",
+                KIND_FILE_WRITE if write else KIND_FILE_READ,
+                "root_item",
+                target=Locator(drive_id, "root"),
+            )
+        return Classification("microsoft", KIND_UNKNOWN, segs_path)
+
+    if head == "items" and len(rest) >= 2:
+        item_id = rest[1]
+        sub = rest[2:]
+        classified = _classify_ms_item_subresource(
+            method,
+            drive_id,
+            item_id,
+            sub,
+            segs_path,
+        )
+        if classified is not None:
+            return classified
+        return Classification("microsoft", KIND_UNKNOWN, segs_path)
+
+    if head == "delta" and not tail and not write:
+        return Classification(
+            "microsoft",
+            KIND_FILE_READ,
+            "drive_delta",
+            is_listing=True,
+        )
+
+    return Classification("microsoft", KIND_UNKNOWN, segs_path)
 
 
 def _classify_microsoft(
@@ -199,9 +497,6 @@ def _classify_microsoft(
 
     rest_str = "/".join(segs)
 
-    # Graph path addressing (root:/A/B: or items/{id}:/rel:) is resolved to a
-    # concrete item by the proxy; anything colon-shaped we cannot parse is
-    # default-denied.
     if ":" in rest_str:
         parsed = _ms_split_drive_base(rest_str)
         if parsed is not None:
@@ -211,8 +506,7 @@ def _classify_microsoft(
                 return path_class
         return Classification("microsoft", KIND_UNKNOWN, rest_str)
 
-    # me/drives => list of drives (roots); leave unfiltered.
-    if segs[:2] == ["me", "drives"]:
+    if _ms_is_drives_collection_list(segs):
         return Classification(
             "microsoft",
             KIND_FILE_READ,
@@ -220,105 +514,100 @@ def _classify_microsoft(
             root_listing=True,
         )
 
-    parsed = _ms_drive_and_rest(segs)
-    if parsed is None:
-        return Classification("microsoft", KIND_UNKNOWN, "/".join(segs))
-    drive_id, rest = parsed
-    write = method in _WRITE_METHODS
+    base = _ms_parse_drive_base(segs)
+    if base is None:
+        return Classification("microsoft", KIND_UNKNOWN, rest_str)
 
-    # Bare drive object (me/drive or drives/{id}) => drive metadata, no item.
-    if not rest:
-        return Classification("microsoft", KIND_FILE_READ, "get_drive")
+    if base.drive_id.startswith("share:") and not base.rest:
+        return Classification("microsoft", KIND_FILE_READ, "get_share")
 
-    head = rest[0]
-    tail = rest[1:]
-
-    if head == "root":
-        if tail == ["children"]:
-            kind = KIND_FILE_WRITE if write else KIND_FILE_READ
-            return Classification(
-                "microsoft",
-                kind,
-                "root_children",
-                parent=Locator(drive_id, "root"),
-                is_listing=not write,
-            )
-        if tail and tail[0].startswith("search("):
-            return Classification(
-                "microsoft",
-                KIND_FILE_READ,
-                "search",
-                parent=Locator(drive_id, "root"),
-                is_listing=True,
-                is_search=True,
-            )
-        if not tail:
-            return Classification(
-                "microsoft",
-                KIND_FILE_WRITE if write else KIND_FILE_READ,
-                "root_item",
-                target=Locator(drive_id, "root"),
-            )
-        return Classification("microsoft", KIND_UNKNOWN, "/".join(segs))
-
-    if head == "items" and len(rest) >= 2:
-        item_id = rest[1]
-        sub = rest[2:]
-        if sub == ["children"]:
-            kind = KIND_FILE_WRITE if write else KIND_FILE_READ
-            return Classification(
-                "microsoft",
-                kind,
-                "children",
-                parent=Locator(drive_id, item_id),
-                is_listing=not write,
-            )
-        if sub == ["content"]:
-            return Classification(
-                "microsoft",
-                KIND_FILE_WRITE if write else KIND_FILE_READ,
-                "content",
-                target=Locator(drive_id, item_id),
-                is_content=not write,
-            )
-        if sub and sub[0].startswith("search("):
-            return Classification(
-                "microsoft",
-                KIND_FILE_READ,
-                "search",
-                parent=Locator(drive_id, item_id),
-                is_listing=True,
-                is_search=True,
-            )
-        if sub in (["copy"], ["createUploadSession"]):
-            return Classification(
-                "microsoft",
-                KIND_FILE_WRITE,
-                sub[0],
-                target=Locator(drive_id, item_id),
-            )
-        if not sub:
-            return Classification(
-                "microsoft",
-                KIND_FILE_WRITE if write else KIND_FILE_READ,
-                "item",
-                target=Locator(drive_id, item_id),
-            )
-        return Classification("microsoft", KIND_UNKNOWN, "/".join(segs))
-
-    # recent / sharedWithMe / delta => cross-folder listings; filter per item.
-    if head in ("recent", "sharedWithMe") and not write:
-        return Classification(
-            "microsoft",
-            KIND_FILE_READ,
-            head,
-            is_listing=True,
-        )
-
-    return Classification("microsoft", KIND_UNKNOWN, "/".join(segs))
+    return _classify_ms_drive_tail(method, base.drive_id, base.rest, rest_str, query)
 
 
 # ── Google Drive ────────────────────────────────────────────────────────────
+
+
+def _classify_google_file_subresource(
+    method: str,
+    drive_id: str,
+    file_id: str,
+    sub: list[str],
+    query: dict[str, str],
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+    if sub == ["export"]:
+        return Classification(
+            "google",
+            KIND_FILE_READ,
+            "export",
+            target=Locator(drive_id, file_id),
+            is_content=True,
+        )
+    if sub == ["copy"]:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE,
+            "copy",
+            target=Locator(drive_id, file_id),
+        )
+    if sub == ["permissions"]:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "permissions",
+            target=Locator(drive_id, file_id),
+        )
+    if sub[:1] == ["permissions"] and len(sub) == 2:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "permission",
+            target=Locator(drive_id, file_id),
+        )
+    if sub == ["revisions"] and not write:
+        return Classification(
+            "google",
+            KIND_FILE_READ,
+            "revisions",
+            target=Locator(drive_id, file_id),
+        )
+    if sub[:1] == ["revisions"] and len(sub) == 2:
+        if write:
+            return Classification(
+                "google",
+                KIND_FILE_WRITE,
+                "revision",
+                target=Locator(drive_id, file_id),
+            )
+        if (query.get("alt") or "").lower() == "media":
+            return Classification(
+                "google",
+                KIND_FILE_READ,
+                "revision_content",
+                target=Locator(drive_id, file_id),
+                is_content=True,
+            )
+        return Classification(
+            "google",
+            KIND_FILE_READ,
+            "revision",
+            target=Locator(drive_id, file_id),
+        )
+    if sub == ["watch"] and write:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE,
+            "watch",
+            target=Locator(drive_id, file_id),
+        )
+    if sub == ["trash"] and write:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE,
+            "trash",
+            target=Locator(drive_id, file_id),
+        )
+    return None
 
 
 def _classify_google(
@@ -326,7 +615,6 @@ def _classify_google(
     segs: list[str],
     query: dict[str, str],
 ) -> Classification:
-    # Non-Drive Google APIs (calendar, people, ...) pass straight through.
     if segs[:2] != ["drive", "v3"]:
         return Classification("google", KIND_NON_FILE, "/".join(segs))
 
@@ -347,30 +635,52 @@ def _classify_google(
     if rest == ["about"]:
         return Classification("google", KIND_NON_FILE, "about")
 
+    if rest == ["changes"]:
+        if write:
+            return Classification("google", KIND_FILE_WRITE, "changes_watch")
+        return Classification(
+            "google",
+            KIND_FILE_READ,
+            "changes_list",
+            is_listing=True,
+            changes_list=True,
+        )
+    if rest == ["changes", "startPageToken"] and not write:
+        return Classification("google", KIND_FILE_READ, "changes_start_token")
+    if rest == ["changes", "watch"] and write:
+        return Classification("google", KIND_FILE_WRITE, "changes_watch")
+
+    if rest == ["files", "download"] and write:
+        return Classification("google", KIND_FILE_WRITE, "download")
+
+    if rest[:1] == ["drives"] and len(rest) >= 2:
+        if len(rest) == 2:
+            return Classification(
+                "google",
+                KIND_FILE_WRITE if write else KIND_FILE_READ,
+                "get_drive",
+            )
+        if rest[2:] == ["emptyTrash"] and write:
+            return Classification("google", KIND_FILE_WRITE, "empty_trash")
+        return Classification("google", KIND_UNKNOWN, "/".join(segs))
+
     if rest == ["files"]:
         if write:
-            # Create: parent(s) come from the JSON body; proxy checks them.
             return Classification("google", KIND_FILE_WRITE, "create")
         return Classification("google", KIND_FILE_READ, "list", is_listing=True)
 
     if rest[:1] == ["files"] and len(rest) >= 2:
         file_id = rest[1]
         sub = rest[2:]
-        if sub == ["export"]:
-            return Classification(
-                "google",
-                KIND_FILE_READ,
-                "export",
-                target=Locator(drive_id, file_id),
-                is_content=True,
-            )
-        if sub == ["copy"]:
-            return Classification(
-                "google",
-                KIND_FILE_WRITE,
-                "copy",
-                target=Locator(drive_id, file_id),
-            )
+        classified = _classify_google_file_subresource(
+            method,
+            drive_id,
+            file_id,
+            sub,
+            query,
+        )
+        if classified is not None:
+            return classified
         if not sub:
             if write:
                 return Classification(

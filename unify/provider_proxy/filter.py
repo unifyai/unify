@@ -45,11 +45,11 @@ async def filter_listing(
     """
     policy = policy_for(provider)
     if policy is None:
-        return _rewrite_next_link(payload, rewrite_url)
+        return _rewrite_pagination_links(payload, rewrite_url)
 
     field = _listing_field(provider, payload)
     if field is None:
-        return _rewrite_next_link(payload, rewrite_url)
+        return _rewrite_pagination_links(payload, rewrite_url)
 
     items = payload.get(field) or []
     parent_allowed: Optional[bool] = None
@@ -67,14 +67,43 @@ async def filter_listing(
             visible.append(raw)
 
     payload[field] = visible
-    return _rewrite_next_link(payload, rewrite_url)
+    return _rewrite_pagination_links(payload, rewrite_url)
 
 
-def _rewrite_next_link(
+async def filter_changes(
+    provider: str,
     payload: dict[str, Any],
     rewrite_url: Callable[[str], str],
 ) -> dict[str, Any]:
-    link = payload.get("@odata.nextLink")
-    if isinstance(link, str) and link:
-        payload["@odata.nextLink"] = rewrite_url(link)
+    """Return a Google ``changes.list`` payload with masked file changes removed."""
+    policy = policy_for(provider)
+    if policy is None:
+        return payload
+
+    visible: list[dict[str, Any]] = []
+    for change in payload.get("changes") or []:
+        if change.get("removed"):
+            continue
+        file_obj = change.get("file")
+        if not isinstance(file_obj, dict):
+            continue
+        file_id = str(file_obj.get("id") or "")
+        if not file_id:
+            continue
+        drive_id = str(file_obj.get("driveId") or _MY_DRIVE)
+        if await is_allowed(provider, drive_id, file_id):
+            visible.append(change)
+
+    payload["changes"] = visible
+    return payload
+
+
+def _rewrite_pagination_links(
+    payload: dict[str, Any],
+    rewrite_url: Callable[[str], str],
+) -> dict[str, Any]:
+    for key in ("@odata.nextLink", "@odata.deltaLink"):
+        link = payload.get(key)
+        if isinstance(link, str) and link:
+            payload[key] = rewrite_url(link)
     return payload
