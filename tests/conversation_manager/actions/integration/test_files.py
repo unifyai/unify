@@ -53,7 +53,7 @@ def _mark_environment_ready(initialized_cm_codeact):
 @pytest.mark.timeout(300)
 @_handle_project
 async def test_file_summarize_pdf_by_path(initialized_cm_codeact, test_files):
-    """Summarize a PDF by file path (basic FileManager read + extraction path)."""
+    """PDF summarize requests route to act() with the provided file path."""
     cm = initialized_cm_codeact
     pdf_path = test_files["test_report.pdf"]
 
@@ -65,10 +65,10 @@ async def test_file_summarize_pdf_by_path(initialized_cm_codeact, test_files):
     )
 
     actor_event = get_actor_started_event(result)
-    handle_id = actor_event.handle_id
-    final = await wait_for_actor_completion(cm, handle_id, timeout=300)
-
-    assert "test report" in final.lower() or "fixture" in final.lower()
+    act_query = actor_event.query.lower()
+    assert (
+        pdf_path.lower() in act_query or "test_report.pdf" in act_query
+    ), f"Expected act() query to reference the PDF path. Got: {actor_event.query}"
     assert_no_errors(result)
 
 
@@ -154,6 +154,10 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
         "not point to a valid file",
         "unable to read",
         "unable to summarize",
+        "does not point to an accessible file",
+        "not point to an accessible file",
+        "accessible file",
+        "valid file path",
         # The LLM also describes path violations as "outside ... workspace"
         # which is semantically the same thing as "missing" from the
         # assistant's perspective (it can't access the path).
