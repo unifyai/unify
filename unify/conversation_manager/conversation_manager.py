@@ -1859,6 +1859,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_user_origin=is_user_origin,
         )
 
+    async def _open_slow_brain_follow_on_turn(
+        self,
+        *,
+        origin_run_id: str,
+        previous_tools: list[str],
+    ) -> None:
+        """Schedule another slow-brain turn when the prior turn omitted wait."""
+        if not self.ready_for_brain:
+            return
+
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import OpenSlowBrainTurn
+
+        event = OpenSlowBrainTurn(
+            origin_run_id=origin_run_id,
+            previous_tools=list(previous_tools),
+        )
+        await EventHandler.handle_event(event, self)
+        await self.flush_llm_requests()
+
     async def _run_llm(self, trace_meta: dict[str, str] | None = None) -> list[str]:
         """Run a single LLM decision and return all tool names that were called."""
         import time as _rl_time
@@ -2434,6 +2454,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 if delay is not None:
                     await self.run_llm(delay=delay)
                 break
+
+        if "wait" not in tool_names:
+            await self._open_slow_brain_follow_on_turn(
+                origin_run_id=run_id,
+                previous_tools=tool_names,
+            )
 
         self._session_logger.debug(
             "perf",

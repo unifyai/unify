@@ -388,7 +388,9 @@ async def run_cm_until_wait(
             if pending:
                 await asyncio.wait(pending, timeout=300)
 
-            if "wait" in tool_names or not tool_names:
+            if "wait" in tool_names:
+                break
+            if not tool_names:
                 break
         return output_events
     finally:

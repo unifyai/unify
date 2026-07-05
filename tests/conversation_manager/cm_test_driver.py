@@ -309,10 +309,6 @@ class CMStepDriver:
                 if "wait" in tool_names and not llm_requested:
                     break
 
-                # If no explicit request but we didn't call 'wait', continue
-                if not llm_requested and "wait" not in tool_names:
-                    llm_requested = True
-
         finally:
             self._cm.event_broker.publish = original_publish
             self._cm.request_llm_run = original_request

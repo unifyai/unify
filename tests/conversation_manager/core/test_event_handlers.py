@@ -23,6 +23,7 @@ import pytest
 from tests.helpers import _handle_project
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
+    OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
     _event_type_to_log_key,
 )
 from unify.conversation_manager.cm_types import ScreenshotEntry
@@ -57,6 +58,7 @@ from unify.conversation_manager.events import (
     ActorResult,
     ActorClarificationRequest,
     InitializationComplete,
+    OpenSlowBrainTurn,
     NotificationInjectedEvent,
     NotificationUnpinnedEvent,
     SyncContacts,
@@ -4092,6 +4094,44 @@ class TestRemoteControlComputerPrimitivesIntegration:
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cp.set_user_remote_control.assert_not_called()
+
+
+# =============================================================================
+# OpenSlowBrainTurn Event Tests
+# =============================================================================
+
+
+class TestOpenSlowBrainTurnEvent:
+    """Tests for the OpenSlowBrainTurn event."""
+
+    def test_open_slow_brain_turn_is_registered(self):
+        """OpenSlowBrainTurn should have a handler in the registry."""
+        assert OpenSlowBrainTurn in EventHandler._registry
+
+    @pytest.mark.asyncio
+    async def test_open_slow_brain_turn_pushes_notification(self, mock_cm):
+        """OpenSlowBrainTurn handler should push the follow-on notification."""
+        event = OpenSlowBrainTurn(
+            origin_run_id="llmrun-000001",
+            previous_tools=["act"],
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        notifications = mock_cm.notifications_bar.notifications
+        assert any(
+            OPEN_SLOW_BRAIN_TURN_NOTIFICATION in n.content for n in notifications
+        )
+
+    @pytest.mark.asyncio
+    async def test_open_slow_brain_turn_triggers_llm_run(self, mock_cm):
+        """OpenSlowBrainTurn handler should trigger an LLM run."""
+        event = OpenSlowBrainTurn(
+            origin_run_id="llmrun-000001",
+            previous_tools=["act"],
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(delay=0)
 
 
 # =============================================================================
