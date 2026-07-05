@@ -472,6 +472,33 @@ class TestProactiveSpeechLoop:
 
         mock_cm.event_broker.publish.assert_called()
 
+    async def test_loop_drops_line_when_gate_arms_mid_decision(self, mock_cm):
+        """Scheduling-time suppression cannot see a gate that arms while the
+        decision is in flight; the delivery-time check drops the pending line
+        so proactive filler never keeps a sanctioned-close call alive."""
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+
+        async def mock_decide(*args, **kwargs):
+            # The slow brain arms the hang-up gate while the proactive
+            # decision is being generated.
+            mock_cm.call_manager.hang_up_gate_reason = "wrap up warmly"
+            return ProactiveDecision(delay=0, content="Bye, Dan."), ""
+
+        mock_cm.proactive_speech.decide = mock_decide
+
+        with (
+            patch("asyncio.sleep", new=AsyncMock()),
+            patch(
+                "unify.conversation_manager.conversation_manager.build_brain_spec",
+                return_value=MockBrainSpec(),
+            ),
+        ):
+            await ConversationManager._proactive_speech_loop(mock_cm)
+
+        mock_cm.event_broker.publish.assert_not_called()
+
     async def test_loop_returns_when_nothing_said_yet(self, mock_cm):
         """With an empty transcript there is no silence to break, so the loop
         exits without consulting the LLM. It re-arms on the next utterance."""

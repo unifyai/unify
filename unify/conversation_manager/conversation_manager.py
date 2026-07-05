@@ -3682,6 +3682,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if _superseded():
                 return
 
+            # The hang-up gate may have armed while the decision was in flight
+            # (scheduling-time suppression cannot see that): silence is now the
+            # close signal the voice agent's watcher acts on, so the pending
+            # line is dropped rather than delivered.
+            if self.call_manager.hang_up_gate_reason is not None:
+                _log.proactive_deferred("hang-up gate armed")
+                return
+
             # Do not pre-write to contact_index here: the line is recorded once,
             # via the actually-spoken Outbound utterance, only if it is genuinely
             # spoken (the fast brain discards proactive speech when the pipeline
