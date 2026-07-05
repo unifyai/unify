@@ -126,6 +126,8 @@ def mock_call_manager():
     manager._socket_server = None
     manager._disconnect_contact = None
     manager.pending_opener = ""
+    manager.pending_briefing = ""
+    manager.active_call_briefing = ""
     manager.conference_name = None
     manager.call_contact = None
     manager.call_exchange_id = -1
@@ -912,7 +914,9 @@ class TestPhoneCallHandlers:
     ):
         """Accepted WhatsApp permission should preserve the pre-refactor room-name fallback."""
 
-        mock_cm._pending_whatsapp_call_openers = {2: "pending call context"}
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "pending call context", "briefing": ""},
+        }
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -1054,7 +1058,9 @@ class TestPhoneCallHandlers:
         )
         from unify.conversation_manager.events import WhatsAppCallSent
 
-        mock_cm._pending_whatsapp_call_openers = {2: "Call briefing"}
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "Call opener line.", "briefing": "Full task design."},
+        }
         mock_cm._pending_onboarding_outbound = {
             "onboarding_trigger_step_id": "whatsapp-call-reference",
             "onboarding_reply_step_id": "whatsapp-call",
@@ -1115,7 +1121,9 @@ class TestPhoneCallHandlers:
         self,
         mock_cm,
     ):
-        mock_cm._pending_whatsapp_call_openers = {2: "Call briefing"}
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "Call opener line.", "briefing": "Full task design."},
+        }
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -1134,7 +1142,10 @@ class TestPhoneCallHandlers:
             "<WhatsApp Call Permission Unknown: waiting for reconciliation>"
         )
         assert "did not include" in mock_cm.notifications_bar.notifications[-1].content
-        assert mock_cm._pending_whatsapp_call_openers[2] == "Call briefing"
+        assert mock_cm._pending_whatsapp_call_openers[2] == {
+            "opener": "Call opener line.",
+            "briefing": "Full task design.",
+        }
         mock_cm.request_llm_run.assert_called_once()
 
 
