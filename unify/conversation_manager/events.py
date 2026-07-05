@@ -1277,6 +1277,15 @@ class InitializationComplete(Event):
 
 
 @dataclass
+class OpenSlowBrainTurn(Event):
+    """Follow-on slow-brain turn because the prior turn did not call wait."""
+
+    loggable: ClassVar[bool] = False
+    origin_run_id: str = ""
+    previous_tools: list[str] = field(default_factory=list)
+
+
+@dataclass
 class AssistantUpdateEvent(_SessionConfigBase):
     """Updated session configuration sent to a running ConversationManager."""
 
