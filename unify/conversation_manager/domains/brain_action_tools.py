@@ -801,12 +801,14 @@ class ConversationManagerBrainActionTools:
         contact_id: int | str,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_call(
             contact_id=contact_id,
             opener=opener,
             briefing=briefing,
+            allow_hang_up=allow_hang_up,
             phone_number=phone_number,
         )
 
@@ -815,6 +817,7 @@ class ConversationManagerBrainActionTools:
         *,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
     ) -> dict[str, Any]:
         """Start an outbound phone call to my boss only.
 
@@ -834,11 +837,18 @@ class ConversationManagerBrainActionTools:
             aloud. Describe the full task design (purpose, key facts, expected
             responses, how to confirm, and the wrap-up to give) so the voice
             runs the whole interaction itself.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason. Set this
+            whenever the call is expected to be short (a single question, a
+            message delivery, a quick confirmation) so the live voice can end
+            it at the natural close without waiting on me; revoke mid-call
+            with ``withdraw_hang_up`` if it turns into a longer conversation.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
             opener=opener,
             briefing=briefing,
+            allow_hang_up=allow_hang_up,
         )
 
     @wraps(CommsPrimitives.make_whatsapp_call)
@@ -848,12 +858,14 @@ class ConversationManagerBrainActionTools:
         contact_id: int | str,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_whatsapp_call(
             contact_id=contact_id,
             opener=opener,
             briefing=briefing,
+            allow_hang_up=allow_hang_up,
             whatsapp_number=whatsapp_number,
         )
 
@@ -862,6 +874,7 @@ class ConversationManagerBrainActionTools:
         *,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
     ) -> dict[str, Any]:
         """Start a WhatsApp voice call to my boss only.
 
@@ -881,11 +894,18 @@ class ConversationManagerBrainActionTools:
             aloud. Describe the full task design (purpose, key facts, expected
             responses, how to confirm, and the wrap-up to give) so the voice
             runs the whole interaction itself.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason. Set this
+            whenever the call is expected to be short (a single question, a
+            message delivery, a quick confirmation) so the live voice can end
+            it at the natural close without waiting on me; revoke mid-call
+            with ``withdraw_hang_up`` if it turns into a longer conversation.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),
             opener=opener,
             briefing=briefing,
+            allow_hang_up=allow_hang_up,
         )
 
     async def join_google_meet(
@@ -1055,6 +1075,7 @@ class ConversationManagerBrainActionTools:
         self,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
     ) -> dict[str, Any]:
         """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
 
@@ -1078,6 +1099,12 @@ class ConversationManagerBrainActionTools:
                 aloud. Describe the full task design (purpose, key facts,
                 expected responses, how to confirm, and the wrap-up to give)
                 so the voice runs the whole interaction itself.
+            allow_hang_up: Optional one-line reason that pre-sanctions ending
+                the call. Set it whenever the call is expected to be short (a
+                single question, a message delivery, a quick confirmation) so
+                the live voice can end it at the natural close without waiting
+                on me; revoke mid-call with ``withdraw_hang_up`` if it turns
+                into a longer conversation.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -1091,7 +1118,11 @@ class ConversationManagerBrainActionTools:
                     "ring the Unify Meet."
                 ),
             }
-        return await self._cm.ring_unify_meet(opener=opener, briefing=briefing)
+        return await self._cm.ring_unify_meet(
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
+        )
 
     async def allow_hang_up(self, reason: str) -> dict[str, Any]:
         """Sanction ending the current call; the live voice picks the moment.
