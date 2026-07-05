@@ -800,11 +800,13 @@ class ConversationManagerBrainActionTools:
         *,
         contact_id: int | str,
         opener: str,
+        briefing: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_call(
             contact_id=contact_id,
             opener=opener,
+            briefing=briefing,
             phone_number=phone_number,
         )
 
@@ -812,6 +814,7 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         opener: str,
+        briefing: str | None = None,
     ) -> dict[str, Any]:
         """Start an outbound phone call to my boss only.
 
@@ -826,10 +829,16 @@ class ConversationManagerBrainActionTools:
             Required. The exact words spoken to open the call — delivered
             verbatim right after my boss's brief "Hello?" (or a few seconds of
             silence). Write it so it reads naturally either way.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design (purpose, key facts, expected
+            responses, how to confirm, and the wrap-up to give) so the voice
+            runs the whole interaction itself.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
             opener=opener,
+            briefing=briefing,
         )
 
     @wraps(CommsPrimitives.make_whatsapp_call)
@@ -838,11 +847,13 @@ class ConversationManagerBrainActionTools:
         *,
         contact_id: int | str,
         opener: str,
+        briefing: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_whatsapp_call(
             contact_id=contact_id,
             opener=opener,
+            briefing=briefing,
             whatsapp_number=whatsapp_number,
         )
 
@@ -850,6 +861,7 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         opener: str,
+        briefing: str | None = None,
     ) -> dict[str, Any]:
         """Start a WhatsApp voice call to my boss only.
 
@@ -864,10 +876,16 @@ class ConversationManagerBrainActionTools:
             Required. The exact words spoken to open the call — delivered
             verbatim right after my boss's brief "Hello?" (or a few seconds of
             silence). Write it so it reads naturally either way.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design (purpose, key facts, expected
+            responses, how to confirm, and the wrap-up to give) so the voice
+            runs the whole interaction itself.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),
             opener=opener,
+            briefing=briefing,
         )
 
     async def join_google_meet(
@@ -1033,7 +1051,11 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
 
-    async def start_unify_meet(self, opener: str) -> dict[str, Any]:
+    async def start_unify_meet(
+        self,
+        opener: str,
+        briefing: str | None = None,
+    ) -> dict[str, Any]:
         """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
 
         Unify Meet is the in-app live call inside the Console - the canonical
@@ -1052,6 +1074,10 @@ class ConversationManagerBrainActionTools:
         Args:
             opener: Verbatim spoken line once the call connects. Write the exact
                 words to speak.
+            briefing: Optional unspoken context for the live voice — never read
+                aloud. Describe the full task design (purpose, key facts,
+                expected responses, how to confirm, and the wrap-up to give)
+                so the voice runs the whole interaction itself.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -1065,19 +1091,89 @@ class ConversationManagerBrainActionTools:
                     "ring the Unify Meet."
                 ),
             }
-        return await self._cm.ring_unify_meet(opener=opener)
+        return await self._cm.ring_unify_meet(opener=opener, briefing=briefing)
+
+    async def allow_hang_up(self, reason: str) -> dict[str, Any]:
+        """Sanction ending the current call; the live voice picks the moment.
+
+        Arms the hang-up gate: the live voice on the call gains permission to
+        end it, and will do so at the natural close — typically right after
+        goodbyes are exchanged, or after a stretch of dead air. It will NOT cut
+        anyone off mid-conversation, and it keeps handling substantive turns
+        normally until the close actually arrives.
+
+        This is the preferred way to end a call when the conversation is
+        wrapping up: I decide THAT ending is right, the live voice decides
+        WHEN. Use ``hang_up`` instead only when my boss explicitly tells me to
+        end the call right now.
+
+        If the conversation moves on to something new after I arm this, I use
+        ``withdraw_hang_up`` to take the permission back.
+
+        Parameters
+        ----------
+        reason : str
+            One short line on why wrapping up is appropriate (e.g. "channel
+            test complete — wrap up warmly"). The live voice sees this
+            verbatim as its guidance for the close.
+        """
+        if not self._cm.in_voice_session:
+            return {
+                "status": "error",
+                "message": "No active voice session to sanction ending.",
+            }
+        reason = " ".join((reason or "").split()).strip()
+        if not reason:
+            return {
+                "status": "error",
+                "message": (
+                    "reason is required: state briefly why wrapping up is "
+                    "appropriate."
+                ),
+            }
+        await self._cm.call_manager.set_hang_up_gate(reason)
+        return {
+            "status": "ok",
+            "message": (
+                "Hang-up gate armed — the live voice will end the call at the "
+                "natural close. Use withdraw_hang_up if the conversation "
+                "moves on instead."
+            ),
+        }
+
+    async def withdraw_hang_up(self) -> dict[str, Any]:
+        """Withdraw a previously granted permission to end the current call.
+
+        Disarms the hang-up gate set by ``allow_hang_up`` — for example when
+        my boss changes their mind, raises something new, or the conversation
+        clearly is not over after all. The live voice loses the ability to end
+        the call until I arm the gate again.
+        """
+        if self._cm.call_manager.hang_up_gate_reason is None:
+            return {
+                "status": "ok",
+                "message": "The hang-up gate was not armed; nothing to withdraw.",
+            }
+        await self._cm.call_manager.set_hang_up_gate(None)
+        return {
+            "status": "ok",
+            "message": "Hang-up gate disarmed — the call continues normally.",
+        }
 
     async def hang_up(self) -> dict[str, Any]:
-        """End the current call or meeting, whatever kind it is.
+        """End the current call or meeting immediately.
 
         Hangs up / leaves the live voice session — a phone call, WhatsApp call,
         Unify Meet, Google Meet, or Microsoft Teams meeting. Only one voice
         session can be active at a time, so this always targets that session.
         After it ends, the call-starting tools become available again.
 
-        Use this when my boss asks me to hang up, end the call, leave the
-        meeting, or when the conversation is clearly finished and it is natural
-        to disconnect.
+        This ends the session NOW. Use it only when my boss explicitly asks me
+        to hang up / end the call / leave the meeting, or when the session must
+        be torn down (e.g. to recover from a broken line). When a conversation
+        is simply wrapping up naturally, prefer ``allow_hang_up`` — it lets the
+        live voice finish the goodbyes and end at the right moment instead of
+        cutting anyone off.
         """
         channel = self._cm.call_manager._call_channel
         has_meet = (
@@ -2347,6 +2443,12 @@ class ConversationManagerBrainActionTools:
             # One voice session at a time; a single tool ends whichever is live
             # (phone, WhatsApp, Unify Meet, Google Meet, or Teams).
             tools["hang_up"] = self.hang_up
+            # Preferred close: arm the gate and let the live voice pick the
+            # natural cut-off point (withdrawable if the conversation moves on).
+            if self._cm.call_manager.hang_up_gate_reason is None:
+                tools["allow_hang_up"] = self.allow_hang_up
+            else:
+                tools["withdraw_hang_up"] = self.withdraw_hang_up
             engagement_suffix = self._speaker_engagement_doc_suffix()
             tools["engage_speaker"] = self._with_doc_suffix(
                 self.engage_speaker,

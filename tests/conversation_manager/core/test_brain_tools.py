@@ -109,6 +109,8 @@ def mock_cm():
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
     cm.call_manager._call_channel = None
+    cm.call_manager.hang_up_gate_reason = None
+    cm.call_manager.set_hang_up_gate = AsyncMock()
     cm.in_voice_session = False
     cm.assistant_has_teams = False
     # Set up SimulatedContactManager (starts with system contacts 0 and 1)
@@ -573,6 +575,7 @@ class TestActionToolsAsTools:
             content="hello",
             contact_id=SESSION_DETAILS.boss_contact_id,
             attachment_filepath=None,
+            onboarding_learning_phase=None,
         )
 
         await tools["send_api_response"](content="done", tags=["route"])
@@ -583,16 +586,24 @@ class TestActionToolsAsTools:
             tags=["route"],
         )
 
-        await tools["make_call"](context="briefing")
+        await tools["make_call"](
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+        )
         brain_action_tools._comms.make_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
-            context="briefing",
+            opener="Hi — quick call.",
+            briefing="Full task design.",
         )
 
-        await tools["make_whatsapp_call"](context="briefing")
+        await tools["make_whatsapp_call"](
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+        )
         brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
-            context="briefing",
+            opener="Hi — quick call.",
+            briefing="Full task design.",
         )
 
         await tools["send_email"](
@@ -726,6 +737,89 @@ class TestHangUpTool:
         tools = brain_action_tools.as_tools()
         assert "hang_up" not in tools
         assert "make_call" in tools
+
+    def test_gate_tools_swap_on_armed_state(self, mock_cm):
+        """allow_hang_up is offered while the gate is disarmed; withdraw_hang_up
+        replaces it once armed. Neither exists outside a voice session."""
+        with patch(
+            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "allow_hang_up" not in tools
+            assert "withdraw_hang_up" not in tools
+
+            mock_cm.in_voice_session = True
+            mock_cm.call_manager._call_channel = "phone_call"
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "allow_hang_up" in tools
+            assert "withdraw_hang_up" not in tools
+
+            mock_cm.call_manager.hang_up_gate_reason = "wrap up"
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "withdraw_hang_up" in tools
+            assert "allow_hang_up" not in tools
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_arms_gate(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+
+        result = await brain_action_tools.allow_hang_up(
+            reason="channel test complete — wrap up warmly",
+        )
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(
+            "channel test complete — wrap up warmly",
+        )
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_requires_reason(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+
+        result = await brain_action_tools.allow_hang_up(reason="   ")
+
+        assert result["status"] == "error"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_requires_voice_session(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        mock_cm.in_voice_session = False
+
+        result = await brain_action_tools.allow_hang_up(reason="wrap up")
+
+        assert result["status"] == "error"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_hang_up_disarms_gate(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager.hang_up_gate_reason = "wrap up"
+
+        result = await brain_action_tools.withdraw_hang_up()
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_withdraw_hang_up_noop_when_disarmed(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager.hang_up_gate_reason = None
+
+        result = await brain_action_tools.withdraw_hang_up()
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_hang_up_defers_then_teardown_ends_phone_call(

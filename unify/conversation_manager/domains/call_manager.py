@@ -91,12 +91,15 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 WORKER_REWARM_STALL_S = 60.0
 
 
-def _opener_opening_config(opener: str, *, source: str) -> dict:
-    return {
+def _opener_opening_config(opener: str, *, source: str, briefing: str = "") -> dict:
+    config = {
         "mode": "opener",
         "opener_text": opener.strip(),
         "source": source,
     }
+    if briefing.strip():
+        config["briefing"] = briefing.strip()
+    return config
 
 
 def _opening_config_is_outbound(opening_config: dict | None) -> bool:
@@ -130,6 +133,13 @@ class LivekitCallManager:
         self._socket_server: CallEventSocketServer | None = None
         self.is_outbound: bool = False
         self.pending_opener: str = ""
+        # Optional unspoken briefing queued alongside the opener by the
+        # call-start tools; travels in the opening config and is injected into
+        # the voice agent's context (never spoken).
+        self.pending_briefing: str = ""
+        # Briefing of the currently dispatched call, if any. The slow brain's
+        # turn guidance uses it to defer briefed play to the voice agent.
+        self.active_call_briefing: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
@@ -145,6 +155,11 @@ class LivekitCallManager:
         self._config_provider: Callable[[], CallConfig] | None = None
         self._call_channel: str | None = None
         self._disconnect_contact: dict | None = None
+        # Hang-up gate: while armed (non-None), the slow brain has sanctioned
+        # ending the active voice session and the fast brain may close the call
+        # at a natural point. Holds the slow brain's stated reason. Armed and
+        # disarmed via ``set_hang_up_gate``; cleared on session end.
+        self.hang_up_gate_reason: str | None = None
         self._boss_notification_task: asyncio.Task | None = None
         self._worker_watchdog_task: asyncio.Task | None = None
         self._dispatch_watchdog_task: asyncio.Task | None = None
@@ -714,13 +729,16 @@ class LivekitCallManager:
             opening_config = _opener_opening_config(
                 self.pending_opener,
                 source="outbound_call_opening",
+                briefing=self.pending_briefing,
             )
             self.pending_opener = ""
+            self.pending_briefing = ""
         if outbound and opening_config is None:
             raise RuntimeError(
                 "Outbound call refused: no verbatim opener was queued "
                 "(call-start tools must set pending_opener before dialing)",
             )
+        self.active_call_briefing = (opening_config or {}).get("briefing", "")
 
         extra_metadata = {"opening_config": opening_config} if opening_config else None
         extra_env = (
@@ -774,9 +792,25 @@ class LivekitCallManager:
             opening_config = _opener_opening_config(
                 self.pending_opener,
                 source="outbound_unify_meet_opening",
+                briefing=self.pending_briefing,
             )
             self.pending_opener = ""
+            self.pending_briefing = ""
             outbound = True
+        elif (
+            opening_config is not None
+            and opening_config.get("mode") == "opener"
+            and not opening_config.get("briefing")
+            and (self.pending_briefing or "").strip()
+        ):
+            # A Unify Meet ring answer round-trips the opener through the
+            # Console, but the briefing stays queued CM-side — reattach it.
+            opening_config = {
+                **opening_config,
+                "briefing": self.pending_briefing.strip(),
+            }
+            self.pending_briefing = ""
+        self.active_call_briefing = (opening_config or {}).get("briefing", "")
 
         self.is_outbound = outbound
         self._call_channel = "unify_meet"
@@ -1319,6 +1353,28 @@ class LivekitCallManager:
             f"{ICONS['ipc']} [LivekitCallManager] Persistent worker terminated",
         )
 
+    async def set_hang_up_gate(self, reason: str | None) -> None:
+        """Arm or disarm the fast brain's hang-up gate on the live voice agent.
+
+        Arming (``reason`` set) exposes the ``hang_up`` classification to the
+        fast brain so it can end the call at a natural close; disarming
+        (``reason=None``) withdraws it. The state is mirrored to the voice
+        agent child over the ``app:call:status`` IPC channel.
+        """
+        self.hang_up_gate_reason = reason
+        if self._event_broker is None:
+            return
+        await self._event_broker.publish(
+            "app:call:status",
+            json.dumps(
+                {
+                    "type": "hang_up_gate",
+                    "armed": reason is not None,
+                    "reason": reason or "",
+                },
+            ),
+        )
+
     async def end_call(self, reason: str = "assistant_hangup") -> None:
         """Tear down an active phone / WhatsApp / Unify Meet voice session.
 
@@ -1371,6 +1427,8 @@ class LivekitCallManager:
 
         self.is_outbound = False
         self.pending_opener = ""
+        self.pending_briefing = ""
+        self.active_call_briefing = ""
         self._call_channel = None
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""

@@ -143,3 +143,49 @@ async def test_outbound_unify_meet_uses_verbatim_opener():
     assert opening["opener_text"] == "Hi — continuing onboarding on the live call."
     assert manager.is_outbound is True
     assert manager.pending_opener == ""
+
+
+@pytest.mark.asyncio
+async def test_outbound_call_carries_unspoken_briefing():
+    manager, captured = _manager_with_worker()
+    manager.pending_opener = "Hi Dan — quick quiz to test this channel."
+    manager.pending_briefing = "Expected answer: Dune. Confirm warmly and wrap up."
+
+    await manager.start_call(
+        {"contact_id": 2},
+        {"contact_id": 1},
+        outbound=True,
+        channel="whatsapp_call",
+    )
+
+    opening = captured["extra_metadata"]["opening_config"]
+    assert opening["mode"] == "opener"
+    assert opening["briefing"] == ("Expected answer: Dune. Confirm warmly and wrap up.")
+    assert manager.pending_briefing == ""
+    assert manager.active_call_briefing == (
+        "Expected answer: Dune. Confirm warmly and wrap up."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unify_meet_ring_answer_reattaches_queued_briefing():
+    """The meet-ring opener round-trips through the Console without the
+    briefing; start_unify_meet must reattach the CM-side queued briefing."""
+    manager, captured = _manager_with_worker()
+    manager.pending_briefing = "Continue onboarding from the Slack step."
+
+    await manager.start_unify_meet(
+        {"contact_id": 1},
+        {"contact_id": 1},
+        "unity_1_meet",
+        opening_config={
+            "mode": "opener",
+            "opener_text": "Hi — picking up where we left off.",
+            "source": "unify_meet_ring",
+        },
+    )
+
+    opening = captured["extra_metadata"]["opening_config"]
+    assert opening["briefing"] == "Continue onboarding from the Slack step."
+    assert manager.pending_briefing == ""
+    assert manager.active_call_briefing == ("Continue onboarding from the Slack step.")

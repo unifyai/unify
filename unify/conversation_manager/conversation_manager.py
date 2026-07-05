@@ -456,9 +456,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._whatsapp_window_open: dict[int, bool] = {}
 
         # Outbound WhatsApp call openers stashed while awaiting call permission.
-        # When the contact grants permission (taps "Call now"), the opener is
-        # injected as call_manager.pending_opener. Maps contact_id → opener.
-        self._pending_whatsapp_call_openers: dict[int, str] = {}
+        # When the contact grants permission (taps "Call now"), the stash is
+        # injected as call_manager.pending_opener / pending_briefing. Maps
+        # contact_id → {"opener": str, "briefing": str}.
+        self._pending_whatsapp_call_openers: dict[int, dict[str, str]] = {}
         self._pending_onboarding_outbound: dict[str, Any] | None = None
         self._active_learning_beat: dict[str, str] | None = None
         self._startup_wake_reasons: list[dict[str, Any]] = []
@@ -1276,15 +1277,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
     # conversation falls back to text.
     _MEET_RING_TIMEOUT_S = 25.0
 
-    async def ring_unify_meet(self, opener: str) -> dict:
+    async def ring_unify_meet(self, opener: str, briefing: str | None = None) -> dict:
         """Ring the owner on Unify Meet and await an answer (no-answer -> text).
 
         Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
         incoming-call window with an Answer button. The assistant cannot join the
         owner's browser for them; when they answer, Console's normal connect flow
         lands here as ``UnifyMeetReceived``. ``opener`` is spoken verbatim once
-        the call connects. If unanswered within ``_MEET_RING_TIMEOUT_S``, a
-        notification tells the brain to continue over text.
+        the call connects; ``briefing`` is unspoken context the voice agent uses
+        to run the call's task itself. If unanswered within
+        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue
+        over text.
         """
         import uuid
 
@@ -1299,6 +1302,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     "the call connects. No ring was sent."
                 ),
             }
+        # The opener round-trips through the Console's answer flow; the
+        # briefing stays queued here and is reattached by start_unify_meet.
+        self.call_manager.pending_briefing = (briefing or "").strip()
         call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
         self._pending_meet_ring = call_session_id
         result = await comms_utils.send_unify_meet_ring(
@@ -3490,6 +3496,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
 
         if not self._proactive_speech_enabled:
+            return
+
+        # While the hang-up gate is armed, silence is the close signal the
+        # voice agent's own watcher acts on — proactive filler would keep a
+        # finished conversation alive indefinitely.
+        if self.call_manager.hang_up_gate_reason is not None:
             return
 
         if self._proactive_speech_gen != my_gen:

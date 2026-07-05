@@ -3873,6 +3873,7 @@ class CommsPrimitives:
         *,
         contact_id: int | str,
         opener: str,
+        briefing: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound phone call to an existing contact.
@@ -3897,6 +3898,14 @@ class CommsPrimitives:
             of silence if they say nothing). Write it so it reads naturally
             either way. If they instead open with something substantive, the
             live voice decides whether to still deliver it or respond to them.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design: why the call is happening,
+            key facts, expected responses (including likely mishearings), how
+            to confirm or correct, and the exact wrap-up to give when done.
+            The voice runs everything the briefing covers by itself, so a
+            complete briefing makes the call feel instant; leave it out only
+            for calls with no plan beyond the opener.
         phone_number : str | None, optional
             Recipient phone number when the contact does not already have one on
             file.
@@ -4020,10 +4029,11 @@ class CommsPrimitives:
             opener,
             bool(to_number),
         )
-        # Queue the opener BEFORE dialing: a call must never be attempted
-        # without its verbatim opening line already in place.
+        # Queue the opener (and any briefing) BEFORE dialing: a call must
+        # never be attempted without its verbatim opening line in place.
         if self._cm is not None:
             self._cm.call_manager.pending_opener = opener
+            self._cm.call_manager.pending_briefing = (briefing or "").strip()
 
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
@@ -4049,10 +4059,11 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
-        # The dial failed — clear the queued opener so it cannot leak into a
-        # later, unrelated call.
+        # The dial failed — clear the queued opener/briefing so they cannot
+        # leak into a later, unrelated call.
         if self._cm is not None:
             self._cm.call_manager.pending_opener = ""
+            self._cm.call_manager.pending_briefing = ""
         if not self._assistant_number():
             error_msg = "You don't have a number, please provision one."
         else:
@@ -4079,6 +4090,7 @@ class CommsPrimitives:
         *,
         contact_id: int | str,
         opener: str,
+        briefing: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound WhatsApp voice call.
@@ -4111,6 +4123,14 @@ class CommsPrimitives:
             of silence if they say nothing). Write it so it reads naturally
             either way. If they instead open with something substantive, the
             live voice decides whether to still deliver it or respond to them.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design: why the call is happening,
+            key facts, expected responses (including likely mishearings), how
+            to confirm or correct, and the exact wrap-up to give when done.
+            The voice runs everything the briefing covers by itself, so a
+            complete briefing makes the call feel instant; leave it out only
+            for calls with no plan beyond the opener.
         whatsapp_number : str | None, optional
             Recipient WhatsApp number when the contact does not already have one
             on file.
@@ -4236,12 +4256,14 @@ class CommsPrimitives:
             f"{DEFAULT_ICON} [make_whatsapp_call] opener: {opener}, to_number: {to_number}",
         )
 
-        # Queue the opener BEFORE dialing: a call must never be attempted
-        # without its verbatim opening line already in place. Non-direct
-        # outcomes below (invite / pending / rejected / failure) clear it so a
-        # stale opener cannot leak into a later, unrelated call.
+        # Queue the opener (and any briefing) BEFORE dialing: a call must
+        # never be attempted without its verbatim opening line in place.
+        # Non-direct outcomes below (invite / pending / rejected / failure)
+        # clear them so stale state cannot leak into a later, unrelated call.
+        briefing = (briefing or "").strip()
         if self._cm is not None:
             self._cm.call_manager.pending_opener = opener
+            self._cm.call_manager.pending_briefing = briefing
             self._cm.call_manager._whatsapp_call_joining = True
 
         response = await comms_utils.start_whatsapp_call(
@@ -4254,6 +4276,7 @@ class CommsPrimitives:
         if not response.get("success"):
             if self._cm is not None:
                 self._cm.call_manager.pending_opener = ""
+                self._cm.call_manager.pending_briefing = ""
                 self._cm.call_manager._whatsapp_call_joining = False
             if not self._assistant_whatsapp_number():
                 error_msg = "You don't have a WhatsApp number configured."
@@ -4303,12 +4326,14 @@ class CommsPrimitives:
             return {"status": "ok"}
 
         # Not a direct dial (permission invite / pending / rejected): no live
-        # call leg exists yet, so the opener moves from the live queue to the
-        # per-contact stash consumed when the permission callback fires.
+        # call leg exists yet, so the opener and briefing move from the live
+        # queue to the per-contact stash consumed when the permission callback
+        # fires.
         pending_openers = None
         automatic_callback_available = False
         if self._cm is not None:
             self._cm.call_manager.pending_opener = ""
+            self._cm.call_manager.pending_briefing = ""
             self._cm.call_manager._whatsapp_call_joining = False
             pending_openers = getattr(
                 self._cm,
@@ -4316,7 +4341,10 @@ class CommsPrimitives:
                 None,
             )
             if isinstance(pending_openers, dict):
-                pending_openers[contact_id] = opener
+                pending_openers[contact_id] = {
+                    "opener": opener,
+                    "briefing": briefing,
+                }
                 automatic_callback_available = True
 
         pool_number = response.get("pool_number") or self._assistant_whatsapp_number()

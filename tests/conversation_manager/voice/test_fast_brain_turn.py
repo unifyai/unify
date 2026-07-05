@@ -24,6 +24,7 @@ from unify.conversation_manager.domains.fast_brain_turn import (
 from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_CONTINUATION,
     FAST_BRAIN_TURN_DEFER,
+    FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
 )
@@ -433,6 +434,100 @@ async def test_held_opener_continuation_is_verbatim_with_no_lead_in(monkeypatch)
     )
 
 
+# ---------------------------------------------------------------------------
+# Call briefing: unspoken context that lets the fast brain conduct the briefed
+# interaction itself (via smalltalk) instead of deferring to the slow brain.
+# ---------------------------------------------------------------------------
+
+_BRIEFING = (
+    "Channel test via one sci-fi quiz clue. Expected answer: Dune (accept "
+    "mishearings like June or Doon). On a correct guess, confirm warmly, say "
+    "the channel is proven, and that you'll continue in chat."
+)
+
+
+def test_build_messages_includes_briefing_block():
+    msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="It's from Dune!",
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+        briefing=_BRIEFING,
+    )
+    system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+    assert "Active call briefing" in system_text
+    assert _BRIEFING in system_text
+    assert "NEVER read the briefing aloud" in system_text
+    assert "fully own every interaction the briefing covers" in system_text
+
+
+def test_build_messages_has_no_briefing_block_without_briefing():
+    msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="hello",
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+    )
+    system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+    assert "Active call briefing" not in system_text
+
+
+@pytest.mark.asyncio
+async def test_briefed_smalltalk_allows_longer_replies(monkeypatch):
+    """A briefed reply (confirm + wrap-up) may exceed the ordinary smalltalk
+    cap without being coerced into a bare defer."""
+    long_reply = (
+        "Dune — exactly right, Frank Herbert's classic. That proves the "
+        "phone channel works in both directions, which is all we needed "
+        "from this call. "
+    ) * 3
+    assert 300 < len(long_reply.strip()) <= 600
+    _patch_client(
+        monkeypatch,
+        {"classification": "smalltalk", "content": long_reply},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="It's Dune, right?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        briefing=_BRIEFING,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_SMALLTALK
+    assert resolved.intended_speech == " ".join(long_reply.split())
+
+
+@pytest.mark.asyncio
+async def test_unbriefed_smalltalk_keeps_ordinary_cap(monkeypatch):
+    long_reply = "x" * 400
+    _patch_client(
+        monkeypatch,
+        {"classification": "smalltalk", "content": long_reply},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="how are you?",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.intended_speech == _DEFAULT
+
+
 @pytest.mark.asyncio
 async def test_held_opener_declined_reports_declined_continuation(monkeypatch):
     _patch_client(
@@ -449,4 +544,155 @@ async def test_held_opener_declined_reports_declined_continuation(monkeypatch):
         idle_status_smalltalk=False,
     )
     assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.declined_continuation is True
+
+
+# ---------------------------------------------------------------------------
+# Hang-up gate: the slow brain sanctions ending the call; the extra hang_up
+# classification (and its prompt block) only exist while the gate is armed.
+# ---------------------------------------------------------------------------
+
+
+def test_response_model_matrix():
+    assert (
+        fast_brain_turn._response_model(
+            interrupted=False,
+            hang_up_gated=False,
+        )
+        is fast_brain_turn.FastBrainTurnDecision
+    )
+    assert (
+        fast_brain_turn._response_model(
+            interrupted=True,
+            hang_up_gated=False,
+        )
+        is fast_brain_turn.FastBrainInterruptedTurnDecision
+    )
+    assert (
+        fast_brain_turn._response_model(
+            interrupted=False,
+            hang_up_gated=True,
+        )
+        is fast_brain_turn.FastBrainGatedTurnDecision
+    )
+    assert (
+        fast_brain_turn._response_model(
+            interrupted=True,
+            hang_up_gated=True,
+        )
+        is fast_brain_turn.FastBrainInterruptedGatedTurnDecision
+    )
+
+
+def test_hang_up_gate_block_injected_only_when_armed():
+    kwargs = dict(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="okay great, bye!",
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+    )
+    armed = build_fast_brain_turn_messages(
+        **kwargs,
+        hang_up_gate_reason="channel test complete — wrap up warmly",
+    )
+    armed_text = "\n".join(m["content"] for m in armed if m["role"] == "system")
+    assert "Ending this call is now sanctioned" in armed_text
+    assert "channel test complete — wrap up warmly" in armed_text
+    assert "hang_up" in armed_text
+
+    disarmed = build_fast_brain_turn_messages(**kwargs, hang_up_gate_reason=None)
+    disarmed_text = "\n".join(m["content"] for m in disarmed if m["role"] == "system")
+    assert "Ending this call is now sanctioned" not in disarmed_text
+
+
+@pytest.mark.asyncio
+async def test_gated_hang_up_returns_farewell(monkeypatch):
+    _patch_client(
+        monkeypatch,
+        {"classification": "hang_up", "content": "Bye Dan — talk soon!"},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="Perfect, thanks — bye!",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        hang_up_gate_reason="channel test complete",
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_HANG_UP
+    assert resolved.intended_speech == "Bye Dan — talk soon!"
+
+
+@pytest.mark.asyncio
+async def test_gated_hang_up_empty_content_gets_default_farewell(monkeypatch):
+    _patch_client(monkeypatch, {"classification": "hang_up", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="bye!",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        hang_up_gate_reason="wrap up",
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_HANG_UP
+    assert resolved.intended_speech == fast_brain_turn._DEFAULT_FAREWELL
+
+
+@pytest.mark.asyncio
+async def test_hang_up_without_gate_falls_back_to_defer(monkeypatch):
+    """Without the gate, hang_up is not in the response model — a model that
+    emits it anyway fails validation and resolves to the defer fallback."""
+    _patch_client(
+        monkeypatch,
+        {"classification": "hang_up", "content": "Bye!"},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="bye!",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+
+
+def test_resolve_hang_up_without_gate_coerces_to_defer():
+    resolved = fast_brain_turn._resolve_content(
+        FAST_BRAIN_TURN_HANG_UP,
+        "Bye!",
+        pending_continuation=None,
+        hang_up_gated=False,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+
+
+@pytest.mark.asyncio
+async def test_gated_hang_up_with_held_opener_reports_declined(monkeypatch):
+    """Closing while a never-delivered line is pending surfaces the decline so
+    the slow brain knows the remainder was never heard."""
+    _patch_client(
+        monkeypatch,
+        {"classification": "hang_up", "content": "No worries — bye!"},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="actually I have to run, bye!",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=_held_opener(),
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        hang_up_gate_reason="wrap up",
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_HANG_UP
     assert resolved.declined_continuation is True

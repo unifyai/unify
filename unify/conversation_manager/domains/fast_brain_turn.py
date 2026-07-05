@@ -18,6 +18,7 @@ from unify.common.llm_client import new_llm_client
 from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_CONTINUATION,
     FAST_BRAIN_TURN_DEFER,
+    FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
 )
@@ -27,6 +28,12 @@ from unify.settings import SETTINGS
 _DEFAULT_PHRASE = "One moment."
 _MAX_DEFER_CHARS = 160
 _MAX_SMALLTALK_CHARS = 300
+# Briefed replies conduct a pre-scripted interaction (confirmations, wrap-up
+# lines), so they get more room than ordinary small talk before being coerced
+# to a defer.
+_MAX_BRIEFED_SMALLTALK_CHARS = 600
+_MAX_FAREWELL_CHARS = 200
+_DEFAULT_FAREWELL = "Alright — bye for now!"
 
 _RESUME_LEAD_INS = (
     "Sorry — as I was saying,",
@@ -98,6 +105,21 @@ content if not silence.
 continuation is the strong default for greetings ("Hello?"), "go on", agreeing,
 partial overlap, or asking why you are calling — lean hard toward continuation."""
 
+_CALL_BRIEFING_CONTEXT = """\
+[system] Active call briefing — context, not script. You are on this call for
+the reason below. NEVER read the briefing aloud or quote it verbatim; speak
+naturally in your own words.
+
+{briefing}
+
+You fully own every interaction the briefing covers: use classification
+smalltalk to conduct it yourself — give the real confirmations, answers, and
+wrap-up lines it describes. Do NOT defer things the briefing already equips
+you to handle. Use defer only for requests clearly outside the briefing's
+scope. If the briefing says the interaction concludes after some point,
+deliver its concluding line and then stop volunteering new topics — the
+system handles whatever follows (ending the call, follow-up messages)."""
+
 _HELD_OPENER_CONTEXT = """\
 [system] You just placed this call and have NOT spoken yet — the other person
 answered and spoke first, at some length. The EXACT planned opening line for
@@ -113,6 +135,28 @@ they said makes the planned line inappropriate as-is (they raised something
 urgent, asked you not to speak, or clearly need something else addressed
 first), pick defer, smalltalk, or silence as appropriate and put a brief line
 in content if not silence."""
+
+_HANG_UP_GATE_CONTEXT = """\
+[system] Ending this call is now sanctioned. The reason it is appropriate to
+wrap up: {reason}
+
+An extra classification is available for THIS turn:
+
+**hang_up** — content is a brief, warm closing line (1 short sentence). The
+runtime speaks it and then ends the call. Choose hang_up ONLY when the
+caller's whole turn is a close — "bye", "thanks, that's all", "talk later",
+"sounds good, bye" — and nothing substantive is left owed to them. This should
+land at the natural end of the conversation, ideally as your reply to their
+goodbye.
+
+Rules:
+- Substance first: if their turn asks anything, raises anything new, or an
+  interrupted line still needs resuming, handle that normally (defer /
+  smalltalk / continuation) — do NOT force the goodbye.
+- Never pick hang_up mid-topic just because ending is sanctioned; wait for the
+  actual close.
+- content must never be empty for hang_up — always say a short goodbye before
+  the line drops. Never mention that the call is being ended by a system."""
 
 FAST_BRAIN_TURN_PROMPT = """\
 You are the fast, in-the-moment voice on a live call. A slower, smarter version
@@ -175,6 +219,49 @@ class FastBrainInterruptedTurnDecision(BaseModel):
     )
 
 
+class FastBrainGatedTurnDecision(BaseModel):
+    classification: Literal["silence", "defer", "smalltalk", "hang_up"]
+    content: str = Field(
+        default="",
+        description=(
+            "Spoken line for defer/smalltalk/hang_up; empty for silence. For "
+            "hang_up this is the farewell spoken before the call ends."
+        ),
+    )
+
+
+class FastBrainInterruptedGatedTurnDecision(BaseModel):
+    classification: Literal[
+        "silence",
+        "defer",
+        "smalltalk",
+        "continuation",
+        "hang_up",
+    ]
+    content: str = Field(
+        default="",
+        description=(
+            "Spoken line for defer/smalltalk/hang_up; empty for "
+            "silence/continuation. For hang_up this is the farewell spoken "
+            "before the call ends."
+        ),
+    )
+
+
+def _response_model(
+    *,
+    interrupted: bool,
+    hang_up_gated: bool,
+) -> type[BaseModel]:
+    if interrupted and hang_up_gated:
+        return FastBrainInterruptedGatedTurnDecision
+    if interrupted:
+        return FastBrainInterruptedTurnDecision
+    if hang_up_gated:
+        return FastBrainGatedTurnDecision
+    return FastBrainTurnDecision
+
+
 @dataclass(frozen=True)
 class PendingContinuation:
     """A substantive line the caller has not heard (fully or partially).
@@ -229,12 +316,22 @@ def build_fast_brain_turn_messages(
     guidance: str,
     idle_status_smalltalk: bool,
     recent_assistant_text: str,
+    hang_up_gate_reason: str | None = None,
+    briefing: str = "",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
     messages.extend(dict(message) for message in history_messages)
     messages.append({"role": "system", "content": FAST_BRAIN_TURN_PROMPT})
+    briefing = (briefing or "").strip()
+    if briefing:
+        messages.append(
+            {
+                "role": "system",
+                "content": _CALL_BRIEFING_CONTEXT.format(briefing=briefing),
+            },
+        )
     if pending_continuation is not None:
         template = (
             _INTERRUPTED_CONTEXT
@@ -246,6 +343,16 @@ def build_fast_brain_turn_messages(
                 "role": "system",
                 "content": template.format(
                     resume_text=pending_continuation.resume_text.strip(),
+                ),
+            },
+        )
+    if hang_up_gate_reason is not None:
+        messages.append(
+            {
+                "role": "system",
+                "content": _HANG_UP_GATE_CONTEXT.format(
+                    reason=hang_up_gate_reason.strip()
+                    or "the conversation " "has reached its natural end",
                 ),
             },
         )
@@ -279,8 +386,28 @@ def _resolve_content(
     content: str,
     *,
     pending_continuation: PendingContinuation | None,
+    hang_up_gated: bool = False,
+    briefed: bool = False,
 ) -> ResolvedFastBrainTurn:
     text = " ".join((content or "").split()).strip()
+
+    if classification == FAST_BRAIN_TURN_HANG_UP:
+        if not hang_up_gated:
+            LOGGER.warning(
+                "Fast brain returned hang_up without an armed gate; deferring",
+            )
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech=text[:_MAX_DEFER_CHARS] or _DEFAULT_PHRASE,
+                declined_continuation=pending_continuation is not None,
+            )
+        if not text or len(text) > _MAX_FAREWELL_CHARS:
+            text = _DEFAULT_FAREWELL
+        return ResolvedFastBrainTurn(
+            classification=FAST_BRAIN_TURN_HANG_UP,
+            intended_speech=text,
+            declined_continuation=pending_continuation is not None,
+        )
 
     if classification == FAST_BRAIN_TURN_CONTINUATION:
         if pending_continuation is None:
@@ -324,7 +451,10 @@ def _resolve_content(
         )
 
     if classification == FAST_BRAIN_TURN_SMALLTALK:
-        if not text or len(text) > _MAX_SMALLTALK_CHARS:
+        smalltalk_cap = (
+            _MAX_BRIEFED_SMALLTALK_CHARS if briefed else _MAX_SMALLTALK_CHARS
+        )
+        if not text or len(text) > smalltalk_cap:
             return ResolvedFastBrainTurn(
                 classification=FAST_BRAIN_TURN_DEFER,
                 intended_speech=_DEFAULT_PHRASE,
@@ -354,6 +484,8 @@ def _wire_classification(raw: str) -> str:
         return FAST_BRAIN_TURN_SMALLTALK
     if key == "continuation":
         return FAST_BRAIN_TURN_CONTINUATION
+    if key == "hang_up":
+        return FAST_BRAIN_TURN_HANG_UP
     return FAST_BRAIN_TURN_DEFER
 
 
@@ -367,6 +499,8 @@ async def select_fast_brain_turn(
     guidance: str,
     idle_status_smalltalk: bool,
     recent_assistant_text: str = "",
+    hang_up_gate_reason: str | None = None,
+    briefing: str = "",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
     if not (user_text or "").strip():
@@ -376,10 +510,10 @@ async def select_fast_brain_turn(
             declined_continuation=False,
         )
 
-    response_model = (
-        FastBrainInterruptedTurnDecision
-        if pending_continuation is not None
-        else FastBrainTurnDecision
+    hang_up_gated = hang_up_gate_reason is not None
+    response_model = _response_model(
+        interrupted=pending_continuation is not None,
+        hang_up_gated=hang_up_gated,
     )
     messages = build_fast_brain_turn_messages(
         system_prompt=system_prompt,
@@ -390,6 +524,8 @@ async def select_fast_brain_turn(
         guidance=guidance,
         idle_status_smalltalk=idle_status_smalltalk,
         recent_assistant_text=recent_assistant_text,
+        hang_up_gate_reason=hang_up_gate_reason,
+        briefing=briefing,
     )
 
     try:
@@ -406,6 +542,8 @@ async def select_fast_brain_turn(
             classification,
             decision.content,
             pending_continuation=pending_continuation,
+            hang_up_gated=hang_up_gated,
+            briefed=bool(briefing.strip()),
         )
     except Exception as exc:
         LOGGER.warning(f"Fast brain turn selection failed; deferring: {exc}")

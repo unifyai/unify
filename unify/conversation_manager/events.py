@@ -312,6 +312,26 @@ FAST_BRAIN_TURN_DEFER = "defer"
 FAST_BRAIN_TURN_SMALLTALK = "smalltalk"
 FAST_BRAIN_TURN_SILENCE = "silence"
 FAST_BRAIN_TURN_CONTINUATION = "continuation"
+FAST_BRAIN_TURN_HANG_UP = "hang_up"
+
+
+@dataclass
+class FastBrainHangUp(Event):
+    """The fast brain closed the call at a natural end point.
+
+    Only possible while the slow brain has armed the hang-up gate. Published by
+    the voice agent child process after its farewell line finished playing out
+    uninterrupted (or after a sanctioned-silence close). The CM performs the
+    actual session teardown on receipt.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_hang_up"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+    farewell: str = ""
+    trigger: str = ""  # "user_turn" | "silence"
+    gate_reason: str = ""
 
 
 @dataclass
