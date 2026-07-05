@@ -1,9 +1,8 @@
-"""An agent-initiated (outbound) call must always open with a briefed opener.
+"""An agent-initiated (outbound) call must always open with a verbatim opener.
 
-The mission context the brain passes to make_call/make_whatsapp_call lands on
-``call_manager.initial_notification``; start_call must turn that into a
-``briefed`` opening_config (spoken on answer) for every outbound call and must
-never dispatch one "blind" — even when no context was provided.
+The slow brain passes ``opener`` to make_call/make_whatsapp_call; it lands on
+``call_manager.pending_opener``. ``start_call`` must turn that into a
+``simulated`` opening_config for every outbound call.
 """
 
 from __future__ import annotations
@@ -61,9 +60,9 @@ def _manager_with_worker() -> tuple[LivekitCallManager, dict]:
 
 
 @pytest.mark.asyncio
-async def test_outbound_call_opens_with_briefed_mission_context():
+async def test_outbound_call_opens_with_simulated_opener():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = "Call Daniel to confirm tomorrow's 3pm demo."
+    manager.pending_opener = "Call Daniel to confirm tomorrow's 3pm demo."
 
     await manager.start_call(
         {"contact_id": 2},
@@ -73,30 +72,30 @@ async def test_outbound_call_opens_with_briefed_mission_context():
     )
 
     opening = captured["extra_metadata"]["opening_config"]
-    assert opening["mode"] == "briefed"
-    assert opening["system_context"] == "Call Daniel to confirm tomorrow's 3pm demo."
-    # The mission is delivered as the opener, not also queued as a separate
-    # reactive notification that would race / double the greeting.
-    assert manager.initial_notification == ""
+    assert opening["mode"] == "simulated"
+    assert opening["simulated_utterance"] == (
+        "Call Daniel to confirm tomorrow's 3pm demo."
+    )
+    assert captured["outbound"] is True
+    assert manager.pending_opener == ""
 
 
 @pytest.mark.asyncio
-async def test_outbound_call_is_never_blind_without_context():
+async def test_outbound_call_without_opener_still_uses_simulated_mode():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = ""  # no mission context provided
+    manager.pending_opener = ""
 
     await manager.start_call({"contact_id": 2}, {"contact_id": 1}, outbound=True)
 
     opening = captured["extra_metadata"]["opening_config"]
-    assert opening["mode"] == "briefed"
-    # A non-empty fallback briefing guarantees a purposeful opener (never silent).
-    assert opening["system_context"].strip()
+    assert opening["mode"] == "simulated"
+    assert opening["simulated_utterance"] == ""
 
 
 @pytest.mark.asyncio
 async def test_inbound_call_does_not_force_an_opener():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = "Inbound context"
+    manager.pending_opener = "Inbound context"
 
     await manager.start_call(
         {"contact_id": 2},
@@ -104,8 +103,22 @@ async def test_inbound_call_does_not_force_an_opener():
         outbound=False,
     )
 
-    # Inbound calls keep their existing behaviour (no forced briefed opener).
     assert captured["extra_metadata"] is None
+
+
+@pytest.mark.asyncio
+async def test_outbound_unify_meet_uses_simulated_opener():
+    manager, captured = _manager_with_worker()
+    manager.pending_opener = "Hi — continuing onboarding on the live call."
+
+    await manager.start_unify_meet(
+        {"contact_id": 1},
+        {"contact_id": 1},
+        "unity_1_meet",
+    )
+
+    assert manager.is_outbound is True
+    assert manager.pending_opener == ""
 
 
 def test_opener_guardrails_handle_reply_to_hello():

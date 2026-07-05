@@ -123,7 +123,7 @@ def mock_call_manager():
     manager._gmeet_joining = False
     manager._socket_server = None
     manager._disconnect_contact = None
-    manager.initial_notification = ""
+    manager.pending_opener = ""
     manager.conference_name = None
     manager.call_contact = None
     manager.call_exchange_id = -1
@@ -786,7 +786,7 @@ class TestPhoneCallHandlers:
     async def test_phone_call_started_does_not_trigger_llm_run(self, mock_cm):
         """PhoneCallStarted does not trigger an LLM run.
 
-        Call guidance is pre-computed via make_call(context=...) before the call
+        Call guidance is pre-computed via make_call(opener=...) before the call
         is placed.  The slow brain is woken later by InboundPhoneUtterance,
         ActorResult, or cross-channel notifications — not by call-start itself.
         """
@@ -910,7 +910,7 @@ class TestPhoneCallHandlers:
     ):
         """Accepted WhatsApp permission should preserve the pre-refactor room-name fallback."""
 
-        mock_cm._pending_whatsapp_call_contexts = {2: "pending call context"}
+        mock_cm._pending_whatsapp_call_openers = {2: "pending call context"}
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -985,11 +985,11 @@ class TestPhoneCallHandlers:
         assert "calling now" in mock_cm.notifications_bar.notifications[-1].content
 
     @pytest.mark.asyncio
-    async def test_whatsapp_permission_acceptance_uses_persisted_context(
+    async def test_whatsapp_permission_acceptance_uses_persisted_opener(
         self,
         mock_cm,
     ):
-        mock_cm._pending_whatsapp_call_contexts = {}
+        mock_cm._pending_whatsapp_call_openers = {}
         mock_cm.assistant_whatsapp_number = "+15550000000"
         event = WhatsAppCallPermissionResponse(
             contact={
@@ -1031,7 +1031,7 @@ class TestPhoneCallHandlers:
             contact_number="+15555552222",
         )
         mock_start_whatsapp_call.assert_awaited_once()
-        assert mock_cm.call_manager.initial_notification == "Persisted call briefing"
+        assert mock_cm.call_manager.pending_opener == "Persisted call briefing"
         mock_clear_intent.assert_awaited_once_with(
             pool_number="+15550000000",
             contact_number="+15555552222",
@@ -1052,7 +1052,7 @@ class TestPhoneCallHandlers:
         )
         from unify.conversation_manager.events import WhatsAppCallSent
 
-        mock_cm._pending_whatsapp_call_contexts = {2: "Call briefing"}
+        mock_cm._pending_whatsapp_call_openers = {2: "Call briefing"}
         mock_cm._pending_onboarding_outbound = {
             "onboarding_trigger_step_id": "whatsapp-call-reference",
             "onboarding_reply_step_id": "whatsapp-call",
@@ -1109,11 +1109,11 @@ class TestPhoneCallHandlers:
         assert mock_cm._pending_onboarding_outbound is None
 
     @pytest.mark.asyncio
-    async def test_whatsapp_permission_unknown_does_not_clear_pending_context(
+    async def test_whatsapp_permission_unknown_does_not_clear_pending_opener(
         self,
         mock_cm,
     ):
-        mock_cm._pending_whatsapp_call_contexts = {2: "Call briefing"}
+        mock_cm._pending_whatsapp_call_openers = {2: "Call briefing"}
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -1132,7 +1132,7 @@ class TestPhoneCallHandlers:
             "<WhatsApp Call Permission Unknown: waiting for reconciliation>"
         )
         assert "did not include" in mock_cm.notifications_bar.notifications[-1].content
-        assert mock_cm._pending_whatsapp_call_contexts[2] == "Call briefing"
+        assert mock_cm._pending_whatsapp_call_openers[2] == "Call briefing"
         mock_cm.request_llm_run.assert_called_once()
 
 

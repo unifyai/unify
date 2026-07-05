@@ -2805,6 +2805,8 @@ async def entrypoint(ctx: agents.JobContext):
     def _on_room_participant_connected(participant):
         if joined_gate_required and not outbound:
             _mark_user_joined("participant_connected")
+        elif outbound and channel == "unify_meet":
+            _mark_user_joined("participant_connected")
 
     def _is_pipeline_quiescent() -> bool:
         """True when the voice pipeline is completely idle (no speech in flight)."""

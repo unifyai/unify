@@ -1524,7 +1524,7 @@ class TestMakeCallTool:
 
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context="Calling to confirm the Thursday meeting",
+            opener="Calling to confirm the Thursday meeting",
         )
 
         assert result["status"] == "ok"
@@ -1547,7 +1547,7 @@ class TestMakeCallTool:
 
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context="Calling to confirm the Thursday meeting",
+            opener="Calling to confirm the Thursday meeting",
         )
 
         assert result["status"] == "error"
@@ -1555,12 +1555,12 @@ class TestMakeCallTool:
         assert "phone" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_context_stores_initial_notification(
+    async def test_opener_stores_pending_opener(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """The context param stores initial_notification on call_manager
+        """The opener param stores pending_opener on call_manager
         before the call is placed, so CallManager can publish it to the
         fast brain after the subprocess spawns."""
         contact = {
@@ -1575,15 +1575,15 @@ class TestMakeCallTool:
         guidance_text = "Confirm the Thursday 3pm meeting"
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context=guidance_text,
+            opener=guidance_text,
         )
 
         assert result["status"] == "ok"
-        assert mock_cm.call_manager.initial_notification == guidance_text
+        assert mock_cm.call_manager.pending_opener == guidance_text
 
     @pytest.mark.asyncio
-    async def test_context_is_required(self, brain_action_tools):
-        """context is a required argument — calling without it raises TypeError."""
+    async def test_opener_is_required(self, brain_action_tools):
+        """opener is a required argument — calling without it raises TypeError."""
         with pytest.raises(TypeError):
             await brain_action_tools.make_call(contact_id=5)
 

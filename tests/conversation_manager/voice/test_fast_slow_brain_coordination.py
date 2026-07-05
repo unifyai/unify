@@ -204,17 +204,17 @@ class TestSlowBrainDecisionBoundaries:
         NOT run a separate LLM step.
 
         Initial guidance for outbound calls is captured by the make_call tool's
-        `context` parameter and published to the fast brain by
+        `opener` parameter and becomes a simulated opening_config in
         CallManager.start_call() after the subprocess spawns.  This eliminates
         the race condition where a slow LLM finishes after the fast brain has
         already spoken.
 
         Flow for outbound calls:
-        1. Slow brain decides to call → calls make_call(context="...")
-        2. make_call stores context on call_manager.initial_notification
+        1. Slow brain decides to call → calls make_call(opener="...")
+        2. make_call stores opener on call_manager.pending_opener
         3. comms_utils.start_call() places the call
         4. PhoneCallSent arrives → event handler spawns subprocess
-        5. CallManager.start_call() publishes stored guidance as FastBrainNotification
+        5. CallManager.start_call() dispatches simulated opener in opening_config
         6. Fast brain receives guidance via on_guidance / pending_guidance buffer
         7. PhoneCallStarted arrives → mode set to CALL
         8. Ongoing guidance flows via the guide_voice_agent tool (called in parallel)

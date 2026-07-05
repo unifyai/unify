@@ -1297,7 +1297,7 @@ class TestSendCall:
                     "assistant_id": 42,
                     "room_name": "unity_42_wa_call",
                     "allow_permission_probe": True,
-                    "pending_call_context": "Call briefing",
+                    "pending_call_opener": "Call briefing",
                 },
             )
 

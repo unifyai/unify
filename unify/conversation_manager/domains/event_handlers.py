@@ -409,18 +409,18 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     )
     sender_name = _get_sender_name(contact)
 
-    # Inject stashed context from make_whatsapp_call if a pending permission
+    # Inject stashed opener from make_whatsapp_call if a pending permission
     # grant triggered this inbound WhatsApp call.
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
-        stashed_context = cm._pending_whatsapp_call_contexts.pop(contact_id, None)
-        if stashed_context:
-            cm.call_manager.initial_notification = stashed_context
+        stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+        if stashed_opener:
+            cm.call_manager.pending_opener = stashed_opener
 
     if isinstance(event, WhatsAppCallSent) and contact_id is not None:
-        if not cm.call_manager.initial_notification:
-            stashed_context = cm._pending_whatsapp_call_contexts.pop(contact_id, None)
-            if stashed_context:
-                cm.call_manager.initial_notification = stashed_context
+        if not cm.call_manager.pending_opener:
+            stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+            if stashed_opener:
+                cm.call_manager.pending_opener = stashed_opener
             else:
                 from unify.conversation_manager.domains import comms_utils
 
@@ -441,9 +441,9 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
                             f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
                         )
                         intent = None
-                    context = (intent or {}).get("context")
-                    if context:
-                        cm.call_manager.initial_notification = context
+                    opener = (intent or {}).get("context")
+                    if opener:
+                        cm.call_manager.pending_opener = opener
                         try:
                             await comms_utils.clear_pending_whatsapp_call_intent(
                                 pool_number=pool_number,
@@ -803,6 +803,12 @@ async def _(
     conv_state = cm.contact_index.get_or_create_conversation(contact_id)
     conv_state.on_call = True
 
+    if isinstance(event, UnifyMeetStarted) and cm.call_manager.is_outbound:
+        await cm.event_broker.publish(
+            "app:call:status",
+            json.dumps({"type": "call_answered"}),
+        )
+
     # Sync meet interaction state that may have been set before the call started.
     # The fast brain starts with all flags as False and relies on guidance delivery,
     # so any state that was already active needs to be pushed now.
@@ -823,7 +829,7 @@ async def _(
             notification_event.to_json(),
         )
 
-    # No LLM run here — call guidance is pre-computed via make_call(context=...).
+    # No LLM run here — outbound openers are pre-computed via make_call(opener=...).
     # The slow brain will be woken later by:
     # - InboundPhoneUtterance (user says something)
     # - ActorResult (action completes)
@@ -1026,7 +1032,7 @@ async def _(
     sender_name = _get_sender_name(contact)
 
     permission_status = event.status or ("accepted" if event.accepted else "rejected")
-    pending_contexts = getattr(cm, "_pending_whatsapp_call_contexts", None)
+    pending_openers = getattr(cm, "_pending_whatsapp_call_openers", None)
     whatsapp_number = contact.get("whatsapp_number")
     pool_number = (
         getattr(cm, "assistant_whatsapp_number", "")
@@ -1039,8 +1045,8 @@ async def _(
         message_content = "<WhatsApp Call Permission Granted: calling now>"
     elif permission_status == "rejected":
         notif_content = f"{sender_name} rejected WhatsApp call permission"
-        if isinstance(pending_contexts, dict):
-            pending_contexts.pop(contact_id, None)
+        if isinstance(pending_openers, dict):
+            pending_openers.pop(contact_id, None)
         if pool_number and whatsapp_number:
             from unify.conversation_manager.domains import comms_utils
 
@@ -1080,10 +1086,10 @@ async def _(
         from unify.conversation_manager.domains import comms_utils
         from unify.conversation_manager.domains.call_manager import make_room_name
 
-        context = None
-        if isinstance(pending_contexts, dict):
-            context = pending_contexts.pop(contact_id, None)
-        if context is None and pool_number and whatsapp_number:
+        opener = None
+        if isinstance(pending_openers, dict):
+            opener = pending_openers.pop(contact_id, None)
+        if opener is None and pool_number and whatsapp_number:
             try:
                 intent = await comms_utils.get_pending_whatsapp_call_intent(
                     pool_number=pool_number,
@@ -1094,16 +1100,16 @@ async def _(
                     f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
                 )
                 intent = None
-            context = (intent or {}).get("context")
+            opener = (intent or {}).get("context")
 
-        if context is None:
+        if opener is None:
             await cm.request_llm_run(
                 delay=0,
                 triggering_contact_id=contact_id,
             )
             return
 
-        cm.call_manager.initial_notification = context
+        cm.call_manager.pending_opener = opener
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1134,7 +1140,7 @@ async def _(
             return
 
         cm.call_manager._whatsapp_call_joining = False
-        cm.call_manager.initial_notification = None
+        cm.call_manager.pending_opener = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
@@ -1495,7 +1501,7 @@ async def _(
             event.to_json(),
         )
     else:
-        cm.call_manager.initial_notification = event.content
+        cm.call_manager.pending_opener = event.content
 
     if event.schedule_proactive:
         await cm.schedule_proactive_speech()

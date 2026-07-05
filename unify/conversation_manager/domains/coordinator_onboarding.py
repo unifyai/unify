@@ -217,8 +217,9 @@ def _coordinator_onboarding_notification_text(
             else ""
         )
         call_note = (
-            " If the tool starts a call, put the briefing and framing in the call context "
-            "so the spoken sidecar can run the interaction without needing this notification."
+            " If the tool starts a call, put the full spoken line in the required "
+            "`opener` argument — verbatim at call start — so the voice agent does "
+            "not need this notification repeated."
             if tool_name.startswith("make_") or "call" in channel
             else ""
         )
