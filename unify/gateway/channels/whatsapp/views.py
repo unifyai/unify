@@ -52,7 +52,7 @@ from unify.gateway.adapters.common import (
     get_assistant,
     publish_runtime_event,
 )
-from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL, twilio_callback_url
+from unify.gateway.common.callbacks import twilio_callback_url
 from unify.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
 from unify.gateway.common.twilio import build_twilio_wa_client
 from unify.gateway.context import GatewayContext
@@ -972,7 +972,17 @@ async def _can_probe_permission(
 
 
 def _conference_twiml(conference_name: str) -> str:
-    """TwiML for joining a participant into a named Twilio conference."""
+    """TwiML for joining a participant into a named Twilio conference.
+
+    A Twilio conference only starts once TWO participants are present, and the
+    first arrival hears the ``wait_url`` audio until then. On an
+    assistant-initiated call both legs are dialed concurrently, so either leg
+    can land first: a ring-tone ``wait_url`` here meant the callee could answer
+    and immediately hear ringing (or, in the opposite order, the ringtone
+    played into the LiveKit room at the agent's STT). ``wait_url=""`` keeps the
+    lone first leg in silence instead — the callee's only ringing experience is
+    WhatsApp's native pre-answer ring.
+    """
     from twilio.twiml.voice_response import VoiceResponse
 
     resp = VoiceResponse()
@@ -982,7 +992,7 @@ def _conference_twiml(conference_name: str) -> str:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url=CONFERENCE_WAIT_URL,
+        wait_url="",
     )
     return str(resp)
 
