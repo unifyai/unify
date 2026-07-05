@@ -1133,12 +1133,32 @@ class EventBus:
                 )
             except Exception as exc:
                 LOGGER.warning(
-                    "EventBus flush failed: context=%s events=%d error=%s",
+                    "EventBus flush batch failed: context=%s events=%d error=%s "
+                    "— retrying entries individually",
                     context,
                     len(entries_list),
                     exc,
                     exc_info=True,
                 )
+                # One poisoned entry must not take the whole batch down with
+                # it: retry each entry alone so only the genuinely bad rows
+                # are lost, and log exactly which ones.
+                for entries in entries_list:
+                    try:
+                        unisdk.create_logs(
+                            project=project,
+                            context=context,
+                            entries=[entries],
+                        )
+                    except Exception as entry_exc:
+                        LOGGER.warning(
+                            "EventBus flush dropped event: context=%s "
+                            "event_id=%s type=%s error=%s",
+                            context,
+                            entries.get("event_id"),
+                            entries.get("type"),
+                            entry_exc,
+                        )
                 continue
 
     def join_published(self):
