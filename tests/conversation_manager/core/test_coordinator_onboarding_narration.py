@@ -34,7 +34,7 @@ def test_workspace_demo_notification_requires_full_task_then_explicit_completion
 ):
     event = CoordinatorOnboardingEvent(
         subtype="workspace_demo_requested",
-        message="The user just clicked 'Summarise my mailbox'.",
+        message="The user just clicked 'Ask T-W1N to summarize your mailbox'.",
         details={"step_id": "workspace-mailbox"},
     )
     text = _coordinator_onboarding_notification_text(event)

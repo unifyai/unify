@@ -119,13 +119,13 @@ _STEP_FLOW_NOTES: dict[str, str] = {
     "discord-reference": "Clicking sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "Clicking the 'Give T-W1N access to your workspace' row opens the workspace "
         "OAuth dialog (Google Workspace or "
         "Microsoft 365). Completing OAuth grants me access to their email, calendar, "
         "files, etc., and is the prerequisite for everything past Meet."
     ),
     "apps": (
-        "Clicking the 'Connect me with your apps' row opens the Integrations tab; "
+        "Clicking the 'Connect T-W1N with your apps' row opens the Integrations tab; "
         "they connect at least one app (Slack, Gmail, Notion, etc.) from the "
         "gallery and authorize it."
     ),

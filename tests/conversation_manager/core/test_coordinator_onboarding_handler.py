@@ -52,7 +52,7 @@ async def test_workspace_demo_requested_refreshes_render_without_arming(
     cm = _fake_cm()
     event = CoordinatorOnboardingEvent(
         subtype="workspace_demo_requested",
-        message="The user just clicked 'Summarise my mailbox'.",
+        message="The user just clicked 'Ask T-W1N to summarize your mailbox'.",
         details={"step_id": "workspace-mailbox", "onboarding": _RENDER},
     )
 
