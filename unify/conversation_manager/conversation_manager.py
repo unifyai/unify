@@ -272,6 +272,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the slow brain reads a standing progress block instead of
         # deriving "what's next". None outside active onboarding.
         self.coordinator_onboarding_render: dict[str, Any] | None = None
+        self.coordinator_intro_watched: bool = False
+        self.coordinator_pending_chat_intro: bool = False
+        self.coordinator_chat_intro_armed_at: str | None = None
+        self._coordinator_chat_intro_delivery_task: asyncio.Task[None] | None = None
         # Trigger-step ids the user clicked in THIS session (ephemeral by
         # design): unlocks the matching reference-quiz comms tool until the
         # send durably completes the step. Lost on restart on purpose — the
@@ -2756,17 +2760,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
-    async def _refresh_coordinator_onboarding_state(self) -> None:
+    async def _refresh_coordinator_onboarding_state(
+        self,
+        *,
+        force: bool = False,
+    ) -> None:
         """Best-effort refresh of the cached onboarding state for the brain.
 
-        Mirrors two things from Orchestra's ``Coordinator/State`` onto the
-        session so ``build_brain_spec`` never has to derive anything:
+        Mirrors onboarding gate, render, and chat-intro intent from
+        Orchestra's ``Coordinator/State`` onto the session so
+        ``build_brain_spec`` never has to derive anything:
           - ``coordinator_onboarding_active``: whether onboarding scaffolding
             is live (narration, progress block, tool masking).
           - ``coordinator_onboarding_render``: the precomputed
             depends_on-aware picture (steps + statuses + valid next
             targets with nudge copy) that drives the standing progress
             block.
+          - ``coordinator_intro_watched`` / ``coordinator_pending_chat_intro`` /
+            ``coordinator_chat_intro_armed_at``: durable chat-opener intent.
 
         TTL-cached so we don't pay an HTTP round-trip every turn; the
         render is also refreshed in real time from each onboarding event
@@ -2785,7 +2796,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ttl = 10.0 if self.coordinator_onboarding_active else 30.0
         # Stamp before the await so concurrent runs don't stampede the
         # endpoint; a failed fetch still respects the TTL backoff.
-        if now - self._coordinator_state_checked_at < ttl:
+        if not force and now - self._coordinator_state_checked_at < ttl:
             return
         self._coordinator_state_checked_at = now
         agent_id = SESSION_DETAILS.assistant.agent_id
@@ -2831,6 +2842,60 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.coordinator_onboarding_render = (
             render if isinstance(render, dict) else None
         )
+        self.coordinator_intro_watched = bool(info.get("intro_watched"))
+        self.coordinator_pending_chat_intro = bool(info.get("pending_chat_intro"))
+        armed_at = info.get("chat_intro_armed_at")
+        self.coordinator_chat_intro_armed_at = (
+            armed_at if isinstance(armed_at, str) and armed_at.strip() else None
+        )
+
+    async def _patch_coordinator_pending_chat_intro(
+        self,
+        *,
+        pending: bool,
+    ) -> dict[str, Any]:
+        """PATCH ``pending_chat_intro`` on Orchestra and refresh the session cache."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": "Chat intro state can only be changed for the Coordinator.",
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        import httpx as _httpx
+        import time as _time
+
+        try:
+            async with _httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.patch(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                    headers={
+                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                    },
+                    json={"pending_chat_intro": pending},
+                )
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            return {"status": "ok", "pending_chat_intro": pending}
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator pending_chat_intro PATCH failed (pending=%s): %s",
+                pending,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update chat intro state: {exc}",
+            }
 
     async def _patch_coordinator_onboarding_active(
         self,
