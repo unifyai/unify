@@ -3239,6 +3239,12 @@ class TestFastBrainContinuation:
         a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         resumed = "Sorry — as I was saying, Next, click Connect Slack."
         a._publish_fast_brain_turn_completed = AsyncMock()
+        reply_handle = object()
+        a._active_reply_handle = reply_handle
+        registered: list = []
+        a._register_reply_continuation = lambda handle, text: registered.append(
+            (handle, text),
+        )
 
         async def _resolved(*args, **kwargs):
             return ResolvedFastBrainTurn(
@@ -3252,7 +3258,8 @@ class TestFastBrainContinuation:
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == resumed
-        assert a._continuation_full_text == resumed
+        # The continuation registers against this turn's own reply speech.
+        assert registered == [(reply_handle, resumed)]
         a._publish_fast_brain_turn_completed.assert_awaited_once_with(
             turn_id=a._user_turn_seq,
             user_content="",

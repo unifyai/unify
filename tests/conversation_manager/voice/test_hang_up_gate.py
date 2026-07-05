@@ -130,7 +130,7 @@ class TestVoiceAgentGatedTurn:
         assert captured.get("hang_up_gate_reason") == "wrap up warmly"
 
     @pytest.mark.asyncio
-    async def test_hang_up_classification_marks_pending_cut(
+    async def test_hang_up_classification_finalizes_own_reply_speech(
         self,
         boss_contact,
         monkeypatch,
@@ -144,6 +144,14 @@ class TestVoiceAgentGatedTurn:
 
         a = self._assistant(boss_contact)
         a._hang_up_gate_reason = "wrap up"
+        # The speech_created observer recorded this turn's reply handle before
+        # llm_node streamed; the finalizer must be attached to exactly it.
+        reply_handle = object()
+        a._active_reply_handle = reply_handle
+        finalized: list = []
+        a._finalize_reply_hang_up = lambda handle, farewell: finalized.append(
+            (handle, farewell),
+        )
 
         async def _resolved(*args, **kwargs):
             return ResolvedFastBrainTurn(
@@ -157,16 +165,52 @@ class TestVoiceAgentGatedTurn:
         ctx.add_message(role="user", content=["bye!"])
         chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
 
-        # The farewell is spoken like any reply, and the pending-cut marker is
-        # set for the speech_created observer to finalize after playout.
+        # The farewell is spoken like any reply, and the cut is scheduled on
+        # this turn's own speech handle (never deferred to a later speech).
         assert len(chunks) == 1
         assert chunks[0].delta.content == "Bye Dan — talk soon!"
-        assert a._pending_gated_hang_up == "Bye Dan — talk soon!"
+        assert finalized == [(reply_handle, "Bye Dan — talk soon!")]
 
         # The slow brain is informed of the closing turn.
         a._publish_fast_brain_turn_completed.assert_awaited_once()
         kwargs = a._publish_fast_brain_turn_completed.await_args.kwargs
         assert kwargs["classification"] == FAST_BRAIN_TURN_HANG_UP
+
+    @pytest.mark.asyncio
+    async def test_hang_up_without_reply_handle_is_dropped(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        """No recorded reply speech means nothing safe to finalize on."""
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a._hang_up_gate_reason = "wrap up"
+        finalized: list = []
+        a._finalize_reply_hang_up = lambda handle, farewell: finalized.append(
+            (handle, farewell),
+        )
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_HANG_UP,
+                intended_speech="Bye!",
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content=["bye!"])
+        chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(chunks) == 1  # the farewell is still spoken
+        assert finalized == []
 
 
 class TestFastBrainHangUpHandler:
