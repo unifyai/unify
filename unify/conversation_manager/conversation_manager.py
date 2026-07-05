@@ -286,6 +286,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # every prompt build so console_ui never re-declares onboarding copy.
         self.onboarding_catalog: dict[str, Any] | None = None
         self._coordinator_state_checked_at: float = 0.0
+        # Shared keep-alive HTTP client for Orchestra state reads/writes, plus
+        # the in-flight background refresh (see
+        # _schedule_coordinator_onboarding_state_refresh). Closed in cleanup().
+        self._coordinator_state_http: Any | None = None
+        self._coordinator_state_refresh_task: asyncio.Task | None = None
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -2095,9 +2100,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Mirror the Coordinator's onboarding state (defer switch + the
         # precomputed progress render) so the prompt builder reads a
         # standing "what's done / what's next" block and can drop
-        # scaffolding when deferred. TTL-cached + event-refreshed, so this
-        # is a no-op on most turns.
-        await self._refresh_coordinator_onboarding_state()
+        # scaffolding when deferred. TTL-cached + event-refreshed, and
+        # fetched in the background: a turn never blocks on the HTTP
+        # round-trip — it builds with the previous values and the fresh
+        # snapshot lands for the next turn.
+        self._schedule_coordinator_onboarding_state_refresh()
 
         _t0 = _rl_time.perf_counter()
         brain_spec = build_brain_spec(
@@ -2794,6 +2801,37 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
+    def _orchestra_state_client(self) -> Any:
+        """Shared keep-alive HTTP client for Orchestra state calls.
+
+        A fresh client per call paid a new TCP+TLS handshake against the
+        (cross-region) Orchestra endpoint every time, eating a large slice of
+        the request budget before the server even responded. One pooled
+        client amortises that to the first call; ``cleanup`` closes it.
+        """
+        import httpx as _httpx
+
+        client = self._coordinator_state_http
+        if client is None or client.is_closed:
+            client = _httpx.AsyncClient(timeout=5.0)
+            self._coordinator_state_http = client
+        return client
+
+    def _schedule_coordinator_onboarding_state_refresh(self) -> None:
+        """Kick the onboarding-state refresh without blocking the caller.
+
+        The refresh is a TTL backstop — onboarding events already push fresh
+        renders in real time — so a slow-brain turn must never sit on its HTTP
+        round-trip. The previous values stay in place until the background
+        fetch lands; a still-running fetch is simply left to finish.
+        """
+        task = self._coordinator_state_refresh_task
+        if task is not None and not task.done():
+            return
+        self._coordinator_state_refresh_task = asyncio.create_task(
+            self._refresh_coordinator_onboarding_state(),
+        )
+
     async def _refresh_coordinator_onboarding_state(
         self,
         *,
@@ -2836,35 +2874,33 @@ class ConversationManager(metaclass=SingletonABCMeta):
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
             return
-        import httpx as _httpx
 
         try:
-            async with _httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+            client = self._orchestra_state_client()
+            resp = await client.get(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
+            )
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            # The onboarding catalog is static + deployment-gated; fetch it
+            # once and reuse it for every subsequent prompt build.
+            if self.onboarding_catalog is None:
+                cat_resp = await client.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
+                    headers={
+                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                    },
                 )
-                resp.raise_for_status()
-                info = (resp.json() or {}).get("info") or {}
-                # The onboarding catalog is static + deployment-gated; fetch it
-                # once and reuse it for every subsequent prompt build.
-                if self.onboarding_catalog is None:
-                    cat_resp = await client.get(
-                        f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                        headers={
-                            "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                        },
-                    )
-                    cat_resp.raise_for_status()
-                    catalog = (cat_resp.json() or {}).get("info") or {}
-                    self.onboarding_catalog = (
-                        catalog if isinstance(catalog, dict) else None
-                    )
+                cat_resp.raise_for_status()
+                catalog = (cat_resp.json() or {}).get("info") or {}
+                self.onboarding_catalog = catalog if isinstance(catalog, dict) else None
             self._apply_coordinator_state_info(info)
         except Exception as exc:
+            # repr, not str: httpx timeout exceptions stringify to "".
             LOGGER.warning(
                 "Coordinator onboarding-state refresh failed; "
-                "keeping previous values (active=%s): %s",
+                "keeping previous values (active=%s): %r",
                 self.coordinator_onboarding_active,
                 exc,
             )
@@ -2902,18 +2938,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "status": "error",
                 "message": "Coordinator agent id is missing.",
             }
-        import httpx as _httpx
         import time as _time
 
         try:
-            async with _httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.patch(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
-                    headers={
-                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                    json={"pending_chat_intro": pending},
-                )
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json={"pending_chat_intro": pending},
+            )
             resp.raise_for_status()
             info = (resp.json() or {}).get("info") or {}
             if isinstance(info, dict):
@@ -2922,13 +2956,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return {"status": "ok", "pending_chat_intro": pending}
         except Exception as exc:
             LOGGER.warning(
-                "Coordinator pending_chat_intro PATCH failed (pending=%s): %s",
+                "Coordinator pending_chat_intro PATCH failed (pending=%s): %r",
                 pending,
                 exc,
             )
             return {
                 "status": "error",
-                "message": f"Failed to update chat intro state: {exc}",
+                "message": f"Failed to update chat intro state: {exc!r}",
             }
 
     async def _patch_coordinator_onboarding_active(
@@ -2954,18 +2988,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         body: dict[str, Any] = {"onboarding_active": active}
         if clear_onboarding_step:
             body["clear_onboarding_step"] = True
-        import httpx as _httpx
         import time as _time
 
         try:
-            async with _httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.patch(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
-                    headers={
-                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                    json=body,
-                )
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json=body,
+            )
             if resp.status_code == 403:
                 return {
                     "status": "error",
@@ -2997,13 +3029,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             }
         except Exception as exc:
             LOGGER.warning(
-                "Coordinator onboarding_active PATCH failed (active=%s): %s",
+                "Coordinator onboarding_active PATCH failed (active=%s): %r",
                 active,
                 exc,
             )
             return {
                 "status": "error",
-                "message": f"Failed to update onboarding state: {exc}",
+                "message": f"Failed to update onboarding state: {exc!r}",
             }
 
     async def _patch_coordinator_onboarding_step_state(
@@ -3029,23 +3061,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 "status": "error",
                 "message": "Coordinator agent id is missing.",
             }
-        import httpx as _httpx
         import time as _time
 
         try:
-            async with _httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.patch(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
-                    headers={
-                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json={
+                    "onboarding_step_completion": {
+                        "step_id": step_id,
+                        "completed": completed,
                     },
-                    json={
-                        "onboarding_step_completion": {
-                            "step_id": step_id,
-                            "completed": completed,
-                        },
-                    },
-                )
+                },
+                timeout=30.0,
+            )
             payload = resp.json() if resp.content else {}
             if resp.status_code == 403:
                 return {
@@ -3095,14 +3126,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
         except Exception as exc:
             LOGGER.warning(
                 "Coordinator onboarding step completion PATCH failed "
-                "(step_id=%s, completed=%s): %s",
+                "(step_id=%s, completed=%s): %r",
                 step_id,
                 completed,
                 exc,
             )
             return {
                 "status": "error",
-                "message": f"Failed to update onboarding step completion: {exc}",
+                "message": f"Failed to update onboarding step completion: {exc!r}",
                 "step_id": step_id,
             }
 
@@ -3350,6 +3381,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def cleanup(self):
         """Clean up any running call processes and file sync."""
         await self.store_chat_history()
+        refresh_task = self._coordinator_state_refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+        state_client = self._coordinator_state_http
+        if state_client is not None and not state_client.is_closed:
+            await state_client.aclose()
         local_ingress = getattr(self, "_local_comms_ingress", None)
         if local_ingress is not None:
             await local_ingress.stop()
