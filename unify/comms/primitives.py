@@ -74,6 +74,14 @@ _DETAIL_LABELS = {
 _VOICE_SESSION_CLEAR_TIMEOUT_SECONDS = 15.0
 _VOICE_SESSION_CLEAR_POLL_SECONDS = 0.5
 
+# Onboarding reference-quiz calls are short and scripted by design: the
+# hang-up gate is force-armed at dispatch so the live voice can end the call
+# at its natural close without waiting on a slow-brain grant.
+_ONBOARDING_CALL_HANG_UP_REASON = (
+    "Onboarding channel test: one quiz clue, confirm their answer, then wrap "
+    "up warmly and end the call."
+)
+
 
 def _coerce_contact_id(value: Any) -> int:
     """Coerce a contact_id value to int."""
@@ -238,6 +246,27 @@ class CommsPrimitives:
         if not callable(await_ready):
             return await self._wait_for_voice_session_to_clear()
         return await await_ready()
+
+    def _pre_armed_hang_up_reason(
+        self,
+        allow_hang_up: str | None,
+        channel: str,
+    ) -> str:
+        """Effective pre-armed hang-up gate reason for an outbound call.
+
+        Normally the slow brain's ``allow_hang_up`` argument (blank = not
+        pre-armed). Onboarding reference-quiz calls force the gate on — they
+        are short and scripted by design — using the slow brain's own reason
+        when it supplied one.
+        """
+        reason = " ".join((allow_hang_up or "").split()).strip()
+        if self._cm is None:
+            return reason
+        peek = getattr(self._cm, "active_pending_onboarding_outbound", None)
+        pending = peek() if callable(peek) else None
+        if pending and pending.get("channel") == channel:
+            return reason or _ONBOARDING_CALL_HANG_UP_REASON
+        return reason
 
     def _onboarding_event_kwargs(
         self,
@@ -3874,6 +3903,7 @@ class CommsPrimitives:
         contact_id: int | str,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound phone call to an existing contact.
@@ -3906,6 +3936,17 @@ class CommsPrimitives:
             The voice runs everything the briefing covers by itself, so a
             complete briefing makes the call feel instant; leave it out only
             for calls with no plan beyond the opener.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason the live
+            voice sees as its guidance for the close. Set this whenever the
+            call is expected to be short — a single question and answer,
+            delivering a message, a quick confirmation — so the voice can end
+            the call the moment it naturally closes (after goodbyes, or after
+            sustained silence) with no round trip back to me for permission.
+            Leave it unset for open-ended calls. If the call turns into a
+            longer, fluid conversation, withdraw the permission mid-call with
+            ``withdraw_hang_up``; a call placed without it can be sanctioned
+            later with ``allow_hang_up``.
         phone_number : str | None, optional
             Recipient phone number when the contact does not already have one on
             file.
@@ -4029,11 +4070,14 @@ class CommsPrimitives:
             opener,
             bool(to_number),
         )
-        # Queue the opener (and any briefing) BEFORE dialing: a call must
-        # never be attempted without its verbatim opening line in place.
+        # Queue the opener (and any briefing / pre-armed hang-up gate) BEFORE
+        # dialing: a call must never be attempted without its verbatim opening
+        # line in place.
+        hang_up_reason = self._pre_armed_hang_up_reason(allow_hang_up, "phone_call")
         if self._cm is not None:
             self._cm.call_manager.pending_opener = opener
             self._cm.call_manager.pending_briefing = (briefing or "").strip()
+            self._cm.call_manager.pending_hang_up_gate = hang_up_reason
 
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
@@ -4059,11 +4103,12 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
-        # The dial failed — clear the queued opener/briefing so they cannot
-        # leak into a later, unrelated call.
+        # The dial failed — clear the queued opener/briefing/gate so they
+        # cannot leak into a later, unrelated call.
         if self._cm is not None:
             self._cm.call_manager.pending_opener = ""
             self._cm.call_manager.pending_briefing = ""
+            self._cm.call_manager.pending_hang_up_gate = ""
         if not self._assistant_number():
             error_msg = "You don't have a number, please provision one."
         else:
@@ -4091,6 +4136,7 @@ class CommsPrimitives:
         contact_id: int | str,
         opener: str,
         briefing: str | None = None,
+        allow_hang_up: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound WhatsApp voice call.
@@ -4131,6 +4177,17 @@ class CommsPrimitives:
             The voice runs everything the briefing covers by itself, so a
             complete briefing makes the call feel instant; leave it out only
             for calls with no plan beyond the opener.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason the live
+            voice sees as its guidance for the close. Set this whenever the
+            call is expected to be short — a single question and answer,
+            delivering a message, a quick confirmation — so the voice can end
+            the call the moment it naturally closes (after goodbyes, or after
+            sustained silence) with no round trip back to me for permission.
+            Leave it unset for open-ended calls. If the call turns into a
+            longer, fluid conversation, withdraw the permission mid-call with
+            ``withdraw_hang_up``; a call placed without it can be sanctioned
+            later with ``allow_hang_up``.
         whatsapp_number : str | None, optional
             Recipient WhatsApp number when the contact does not already have one
             on file.
@@ -4256,14 +4313,20 @@ class CommsPrimitives:
             f"{DEFAULT_ICON} [make_whatsapp_call] opener: {opener}, to_number: {to_number}",
         )
 
-        # Queue the opener (and any briefing) BEFORE dialing: a call must
-        # never be attempted without its verbatim opening line in place.
-        # Non-direct outcomes below (invite / pending / rejected / failure)
-        # clear them so stale state cannot leak into a later, unrelated call.
+        # Queue the opener (and any briefing / pre-armed hang-up gate) BEFORE
+        # dialing: a call must never be attempted without its verbatim opening
+        # line in place. Non-direct outcomes below (invite / pending /
+        # rejected / failure) clear them so stale state cannot leak into a
+        # later, unrelated call.
         briefing = (briefing or "").strip()
+        hang_up_reason = self._pre_armed_hang_up_reason(
+            allow_hang_up,
+            "whatsapp_call",
+        )
         if self._cm is not None:
             self._cm.call_manager.pending_opener = opener
             self._cm.call_manager.pending_briefing = briefing
+            self._cm.call_manager.pending_hang_up_gate = hang_up_reason
             self._cm.call_manager._whatsapp_call_joining = True
 
         response = await comms_utils.start_whatsapp_call(
@@ -4277,6 +4340,7 @@ class CommsPrimitives:
             if self._cm is not None:
                 self._cm.call_manager.pending_opener = ""
                 self._cm.call_manager.pending_briefing = ""
+                self._cm.call_manager.pending_hang_up_gate = ""
                 self._cm.call_manager._whatsapp_call_joining = False
             if not self._assistant_whatsapp_number():
                 error_msg = "You don't have a WhatsApp number configured."
@@ -4326,14 +4390,15 @@ class CommsPrimitives:
             return {"status": "ok"}
 
         # Not a direct dial (permission invite / pending / rejected): no live
-        # call leg exists yet, so the opener and briefing move from the live
-        # queue to the per-contact stash consumed when the permission callback
-        # fires.
+        # call leg exists yet, so the opener, briefing, and pre-armed gate move
+        # from the live queue to the per-contact stash consumed when the
+        # permission callback fires.
         pending_openers = None
         automatic_callback_available = False
         if self._cm is not None:
             self._cm.call_manager.pending_opener = ""
             self._cm.call_manager.pending_briefing = ""
+            self._cm.call_manager.pending_hang_up_gate = ""
             self._cm.call_manager._whatsapp_call_joining = False
             pending_openers = getattr(
                 self._cm,
@@ -4344,6 +4409,7 @@ class CommsPrimitives:
                 pending_openers[contact_id] = {
                     "opener": opener,
                     "briefing": briefing,
+                    "hang_up_gate": hang_up_reason,
                 }
                 automatic_callback_available = True
 

@@ -140,6 +140,10 @@ class LivekitCallManager:
         # Briefing of the currently dispatched call, if any. The slow brain's
         # turn guidance uses it to defer briefed play to the voice agent.
         self.active_call_briefing: str = ""
+        # Pre-armed hang-up gate reason queued by the call-start tools for
+        # calls expected to be short; consumed into dispatch metadata (and the
+        # CM-side ``hang_up_gate_reason`` mirror) when the session starts.
+        self.pending_hang_up_gate: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
@@ -740,10 +744,25 @@ class LivekitCallManager:
             )
         self.active_call_briefing = (opening_config or {}).get("briefing", "")
 
-        extra_metadata = {"opening_config": opening_config} if opening_config else None
-        extra_env = (
-            {"opening_config": json.dumps(opening_config)} if opening_config else None
-        )
+        # A queued pre-armed hang-up gate rides the dispatch metadata so the
+        # voice agent starts already sanctioned to close (no IPC race on short
+        # calls); the CM-side mirror drives tool registration, the standing
+        # prompt note, and proactive-speech suppression from call start.
+        gate_reason = (self.pending_hang_up_gate or "").strip()
+        self.pending_hang_up_gate = ""
+        if gate_reason:
+            self.hang_up_gate_reason = gate_reason
+
+        extra_metadata: dict = {}
+        if opening_config:
+            extra_metadata["opening_config"] = opening_config
+        if gate_reason:
+            extra_metadata["hang_up_gate_reason"] = gate_reason
+        extra_env: dict = {}
+        if opening_config:
+            extra_env["opening_config"] = json.dumps(opening_config)
+        if gate_reason:
+            extra_env["hang_up_gate_reason"] = gate_reason
 
         dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
@@ -753,7 +772,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 outbound,
-                extra_metadata=extra_metadata,
+                extra_metadata=extra_metadata or None,
             )
         if not dispatched:
             await self._start_call_subprocess(
@@ -762,7 +781,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 outbound,
-                extra_env=extra_env,
+                extra_env=extra_env or None,
             )
 
     async def start_unify_meet(
@@ -812,6 +831,13 @@ class LivekitCallManager:
             self.pending_briefing = ""
         self.active_call_briefing = (opening_config or {}).get("briefing", "")
 
+        # The pre-armed gate never round-trips the Console either — consume the
+        # CM-side stash regardless of which branch produced the opening config.
+        gate_reason = (self.pending_hang_up_gate or "").strip()
+        self.pending_hang_up_gate = ""
+        if gate_reason:
+            self.hang_up_gate_reason = gate_reason
+
         self.is_outbound = outbound
         self._call_channel = "unify_meet"
         self._disconnect_contact = contact
@@ -832,6 +858,8 @@ class LivekitCallManager:
             extra_metadata["opening_config"] = opening_config
         if call_session_id:
             extra_metadata["call_session_id"] = call_session_id
+        if gate_reason:
+            extra_metadata["hang_up_gate_reason"] = gate_reason
         extra_env = {
             key: value
             for key, value in {
@@ -839,6 +867,7 @@ class LivekitCallManager:
                     json.dumps(opening_config) if opening_config else None
                 ),
                 "CALL_SESSION_ID": call_session_id,
+                "hang_up_gate_reason": gate_reason or None,
             }.items()
             if value
         } or None
@@ -1429,6 +1458,8 @@ class LivekitCallManager:
         self.pending_opener = ""
         self.pending_briefing = ""
         self.active_call_briefing = ""
+        self.pending_hang_up_gate = ""
+        self.hang_up_gate_reason = None
         self._call_channel = None
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
