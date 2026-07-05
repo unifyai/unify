@@ -1496,13 +1496,15 @@ async def _(
         local_message_id=message_id,
     )
 
+    # ``pending_opener`` is exclusively the verbatim opener queued by the
+    # call-start tools — an injected turn must never masquerade as one. If no
+    # voice socket is up yet the injected turn is simply not forwarded (it is
+    # already recorded above and re-derives on the next slow-brain turn).
     if cm.call_manager and cm.call_manager._socket_server:
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
             event.to_json(),
         )
-    else:
-        cm.call_manager.pending_opener = event.content
 
     if event.schedule_proactive:
         await cm.schedule_proactive_speech()

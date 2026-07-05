@@ -1502,7 +1502,7 @@ class TestMakeCallTool:
         assert brain_action_tools.make_call.__doc__ is not None
         assert "call" in brain_action_tools.make_call.__doc__.lower()
         assert (
-            "Mission briefing for the voice agent"
+            "exact words spoken to open the call"
             in brain_action_tools.make_call.__doc__
         )
 

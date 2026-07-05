@@ -823,7 +823,9 @@ class ConversationManagerBrainActionTools:
         Parameters
         ----------
         opener : str
-            Verbatim spoken line at the start of the call once my boss answers.
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after my boss's brief "Hello?" (or a few seconds of
+            silence). Write it so it reads naturally either way.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
@@ -859,7 +861,9 @@ class ConversationManagerBrainActionTools:
         Parameters
         ----------
         opener : str
-            Verbatim spoken line at the start of the call once my boss answers.
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after my boss's brief "Hello?" (or a few seconds of
+            silence). Write it so it reads naturally either way.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),

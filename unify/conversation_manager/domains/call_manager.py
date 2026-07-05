@@ -17,7 +17,6 @@ from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CM_EVENT_SOCKET_ENV,
 )
-from unify.conversation_manager.tracing import trace_kv
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.helpers import (
@@ -92,10 +91,10 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 WORKER_REWARM_STALL_S = 60.0
 
 
-def _simulated_outbound_opening_config(opener: str, *, source: str) -> dict:
+def _opener_opening_config(opener: str, *, source: str) -> dict:
     return {
-        "mode": "simulated",
-        "simulated_utterance": opener.strip(),
+        "mode": "opener",
+        "opener_text": opener.strip(),
         "source": source,
     }
 
@@ -103,7 +102,7 @@ def _simulated_outbound_opening_config(opener: str, *, source: str) -> dict:
 def _opening_config_is_outbound(opening_config: dict | None) -> bool:
     if not opening_config:
         return False
-    return opening_config.get("mode") == "simulated"
+    return opening_config.get("mode") == "opener"
 
 
 class LivekitCallManager:
@@ -707,13 +706,21 @@ class LivekitCallManager:
         room_name = room_name or make_room_name(self.assistant_id, medium)
         self.room_name = room_name
 
-        if outbound and opening_config is None:
-            opener = (self.pending_opener or "").strip()
-            opening_config = _simulated_outbound_opening_config(
-                opener,
+        # A queued opener always becomes a spoken ``opener`` opening — even on
+        # an inbound-shaped leg of an agent-initiated call (e.g. the WhatsApp
+        # permission-callback call, where the contact's "Call now" tap dials
+        # us back but the opener was decided when we tried to place the call).
+        if opening_config is None and (self.pending_opener or "").strip():
+            opening_config = _opener_opening_config(
+                self.pending_opener,
                 source="outbound_call_opening",
             )
             self.pending_opener = ""
+        if outbound and opening_config is None:
+            raise RuntimeError(
+                "Outbound call refused: no verbatim opener was queued "
+                "(call-start tools must set pending_opener before dialing)",
+            )
 
         extra_metadata = {"opening_config": opening_config} if opening_config else None
         extra_env = (
@@ -740,25 +747,6 @@ class LivekitCallManager:
                 extra_env=extra_env,
             )
 
-        if self.pending_opener and not outbound:
-            notification_event = FastBrainNotification(
-                contact=contact,
-                message=self.pending_opener,
-                source="initial_call",
-            )
-            await self._socket_server.queue_for_clients(
-                "app:call:notification",
-                notification_event.to_json(),
-            )
-            await self._event_broker.publish(
-                "app:comms:assistant_notification",
-                notification_event.to_json(),
-            )
-            LOGGER.debug(
-                f"{ICONS['ipc']} {trace_kv('CALL_MANAGER_PENDING_OPENER', content_preview=self.pending_opener[:80])}",
-            )
-            self.pending_opener = ""
-
     async def start_unify_meet(
         self,
         contact: dict | None,
@@ -783,9 +771,8 @@ class LivekitCallManager:
 
         outbound = _opening_config_is_outbound(opening_config)
         if opening_config is None and (self.pending_opener or "").strip():
-            opener = self.pending_opener.strip()
-            opening_config = _simulated_outbound_opening_config(
-                opener,
+            opening_config = _opener_opening_config(
+                self.pending_opener,
                 source="outbound_unify_meet_opening",
             )
             self.pending_opener = ""
