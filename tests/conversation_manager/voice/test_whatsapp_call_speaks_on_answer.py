@@ -180,7 +180,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence, extra_metadata=None):
             self._active_tts = None
             self._tts_seq = 0
             self._hang_up_gate_reason = None
-            self._pending_gated_hang_up = None
+            self._active_reply_handle = None
 
         def set_call_received(self):
             self.call_received = True
@@ -343,6 +343,54 @@ async def test_outbound_whatsapp_agent_speaks_only_after_answer(monkeypatch):
     assert session.current_agent._call_briefing == CALL_BRIEFING
     # The briefing must never have been spoken.
     assert all(CALL_BRIEFING not in text for text, _ in session.say_calls)
+
+
+@pytest.mark.asyncio
+async def test_speech_created_records_reply_handle(monkeypatch):
+    """The observer records each generate_reply speech handle for the turn
+    logic to attach to (continuation registration / gated hang-up), and
+    ignores other speech sources. It must not claim anything itself: it runs
+    before ``llm_node`` streams, so claiming would hand work to the wrong
+    (next) speech."""
+    sequence: list = []
+    call_script, broker, make_ctx, holders = _install_entrypoint_fakes(
+        monkeypatch,
+        sequence,
+    )
+
+    task = asyncio.create_task(call_script.entrypoint(make_ctx()))
+    try:
+        for _ in range(500):
+            if "app:call:status" in broker.callbacks and _has_agent_ready(sequence):
+                break
+            await asyncio.sleep(0.01)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("agent never reached the answered gate")
+        broker.callbacks["app:call:status"]({"type": "call_answered"})
+        await asyncio.wait_for(task, timeout=5.0)
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+
+    session = holders["session"]
+    assistant = session.current_agent
+    observer = session._events["speech_created"]
+
+    reply_handle = object()
+    observer(SimpleNamespace(source="generate_reply", speech_handle=reply_handle))
+    assert assistant._active_reply_handle is reply_handle
+
+    # Non-reply speeches (say / opening lines) never overwrite the record.
+    observer(SimpleNamespace(source="say", speech_handle=object()))
+    assert assistant._active_reply_handle is reply_handle
+
+    # The entrypoint wired the attach callbacks the turn logic invokes.
+    assert callable(assistant._register_reply_continuation)
+    assert callable(assistant._finalize_reply_hang_up)
 
 
 def _hang_up_events(sequence) -> list:

@@ -387,12 +387,16 @@ class Assistant(Agent):
         self._pending_continuation: dict | None = None
         self._tts_seq = 0
         self._publish_voice_interrupt: Callable | None = None
-        # Full text of a continuation reply the fast brain is about to yield this
-        # turn. Read once by the ``speech_created`` observer to register the reply
-        # handle as interruptible (so a resumed line is itself recursively
-        # resumable), then cleared. ``None`` for ordinary buffer fillers, which
-        # carry no substantive content worth re-surfacing.
-        self._continuation_full_text: str | None = None
+        # The speech handle of the in-flight ``generate_reply`` speech, recorded
+        # by the ``speech_created`` observer. That event fires when the reply
+        # speech is scheduled — before ``llm_node`` streams its content — so the
+        # turn logic reads this to attach continuation registration or a gated
+        # hang-up finalizer to the exact speech it is producing.
+        self._active_reply_handle: object | None = None
+        # Entrypoint closure registering a reply handle for barge-in resumption.
+        self._register_reply_continuation: Callable | None = None
+        # Entrypoint closure ending the call after a reply's farewell plays out.
+        self._finalize_reply_hang_up: Callable | None = None
         # Schedules the slow-brain run after the fast brain finishes a user turn.
         self._publish_fast_brain_turn_completed: Callable | None = None
         # Latest user turn for which the slow brain was already scheduled.
@@ -420,10 +424,6 @@ class Assistant(Agent):
         # fast-brain turn so the live voice fully owns the briefed interaction
         # without slow-brain round-trips. Never spoken aloud.
         self._call_briefing: str = ""
-        # Farewell text of a hang_up-classified reply about to be spoken; the
-        # ``speech_created`` observer claims it and finalizes the cut after
-        # playout (with a barge-in grace window).
-        self._pending_gated_hang_up: str | None = None
 
         super().__init__(instructions=instructions)
 
@@ -533,9 +533,6 @@ class Assistant(Agent):
         the real (verbatim-spoken) response.
         """
         self.user_turn_generating = True
-        # Stale-guard: only a continuation set below should be registered for
-        # resumption; clear any leftover so an ordinary buffer reply is not.
-        self._continuation_full_text = None
         my_turn = self._user_turn_seq
         user_text = self._latest_user_text(chat_ctx)
         turn_classification: str | None = None
@@ -616,7 +613,7 @@ class Assistant(Agent):
                     )
                 else:
                     continuation = pending.resume_text.strip()
-                self._continuation_full_text = continuation
+                self._attach_reply_continuation(continuation)
                 turn_classification = FAST_BRAIN_TURN_CONTINUATION
                 intended_speech = continuation
                 yield ChatChunk(
@@ -672,15 +669,16 @@ class Assistant(Agent):
             turn_classification = resolved.classification
             intended_speech = speech
             if turn_classification == FAST_BRAIN_TURN_CONTINUATION:
-                self._continuation_full_text = speech
+                self._attach_reply_continuation(speech)
                 chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
             elif turn_classification == FAST_BRAIN_TURN_SMALLTALK:
                 chunk_id = f"fast-brain-smalltalk-{monotonic_ms()}"
             elif turn_classification == FAST_BRAIN_TURN_HANG_UP:
-                # The farewell is spoken like any reply; the speech_created
-                # observer claims this marker and ends the call once the line
-                # plays out uninterrupted.
-                self._pending_gated_hang_up = speech
+                # The farewell is spoken like any reply; the finalizer ends the
+                # call once this reply's line plays out uninterrupted. It is
+                # deliberately NOT registered as resumable — a barge-in aborts
+                # the cut rather than resuming the goodbye.
+                self._schedule_reply_hang_up(speech)
                 chunk_id = f"fast-brain-hangup-{monotonic_ms()}"
             else:
                 chunk_id = f"fast-brain-buffer-{monotonic_ms()}"
@@ -737,6 +735,30 @@ class Assistant(Agent):
             remainder=remainder,
             spoken_prefix=spoken_prefix,
         )
+
+    def _attach_reply_continuation(self, full_text: str) -> None:
+        """Register the in-flight reply speech for barge-in resumption.
+
+        ``speech_created`` fires when the reply speech is scheduled — before
+        ``llm_node`` streams — so the recorded handle is always this turn's own
+        speech, never a later one.
+        """
+        handle = self._active_reply_handle
+        register = self._register_reply_continuation
+        if handle is None or register is None:
+            return
+        register(handle, full_text)
+
+    def _schedule_reply_hang_up(self, farewell: str) -> None:
+        """Arrange the gated call cut once this reply's farewell plays out."""
+        handle = self._active_reply_handle
+        finalize = self._finalize_reply_hang_up
+        if handle is None or finalize is None:
+            _log.warning(
+                "Gated hang-up dropped: no reply speech handle to finalize",
+            )
+            return
+        finalize(handle, farewell)
 
     def _tee_frames_to_speaker_tracker(
         self,
@@ -3103,7 +3125,8 @@ async def entrypoint(ctx: agents.JobContext):
         """
         try:
             await handle.wait_for_playout()
-        except Exception:
+        except Exception as exc:
+            _log.warning(f"Gated hang-up aborted: farewell playout failed: {exc}")
             return
         if getattr(handle, "interrupted", False):
             _log.info("Gated hang-up aborted: farewell was interrupted")
@@ -3184,41 +3207,30 @@ async def entrypoint(ctx: agents.JobContext):
 
     @session.on("speech_created")
     def _on_speech_created(ev) -> None:
-        """Register a fast-brain continuation reply for interruption-stashing.
+        """Record the reply speech handle for the turn logic to attach to.
 
         Slow-brain lines and live openings register themselves at ``session.say``
-        time. A fast-brain continuation is delivered as a ``generate_reply``
-        reply (yielded from ``llm_node``), so it is registered here instead, using
-        the full text the turn stashed on ``_continuation_full_text``. Ordinary
-        buffer fillers leave that ``None`` and are never registered.
-
-        A hang_up-classified reply is claimed here too: its farewell is spoken
-        like any reply, then ``_finalize_gated_hang_up`` ends the call after
-        clean playout. It is deliberately NOT registered as resumable — a
-        barge-in aborts the cut rather than resuming the goodbye.
+        time. A ``generate_reply`` speech is created (and this fires) before
+        ``llm_node`` streams its content, so the handle is recorded here and
+        ``llm_node`` — which alone knows the turn's classification — attaches
+        continuation registration or the gated hang-up finalizer to it. Claiming
+        markers here instead would race: this observer runs before the turn sets
+        them, handing them to the wrong (next) speech.
         """
         if getattr(ev, "source", "") != "generate_reply":
             return
-        pending_hang_up = assistant._pending_gated_hang_up
-        if pending_hang_up is not None:
-            assistant._pending_gated_hang_up = None
-            asyncio.create_task(
-                _finalize_gated_hang_up(
-                    ev.speech_handle,
-                    pending_hang_up,
-                    trigger="user_turn",
-                ),
-            )
-            return
-        full_text = assistant._continuation_full_text
-        assistant._continuation_full_text = None
-        if not full_text:
-            return
-        _register_interruptible_tts(
-            ev.speech_handle,
-            lambda t=full_text: t,
-            "continuation",
+        assistant._active_reply_handle = ev.speech_handle
+
+    def _register_reply_continuation(handle: object, full_text: str) -> None:
+        _register_interruptible_tts(handle, lambda t=full_text: t, "continuation")
+
+    def _finalize_reply_hang_up(handle: object, farewell: str) -> None:
+        asyncio.create_task(
+            _finalize_gated_hang_up(handle, farewell, trigger="user_turn"),
         )
+
+    assistant._register_reply_continuation = _register_reply_continuation
+    assistant._finalize_reply_hang_up = _finalize_reply_hang_up
 
     def _speak_now(
         text: "str | AsyncIterable[str]",
