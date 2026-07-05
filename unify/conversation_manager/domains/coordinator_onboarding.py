@@ -316,8 +316,12 @@ def _coordinator_onboarding_notification_text(
         )
         call_note = (
             " If the tool starts a call, put the full spoken line in the required "
-            "`opener` argument — verbatim at call start — so the voice agent does "
-            "not need this notification repeated."
+            "`opener` argument — verbatim at call start — AND put the full task "
+            "design in the `briefing` argument (the answer I have in mind, likely "
+            "mishearings to accept, how to confirm a correct guess, and the exact "
+            "wrap-up to say when done). The voice agent runs the whole interaction "
+            "from the briefing by itself; nothing from this notification needs "
+            "repeating via guide_voice_agent."
             if tool_name.startswith("make_") or "call" in channel
             else ""
         )
