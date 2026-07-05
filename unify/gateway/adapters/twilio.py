@@ -604,8 +604,37 @@ async def twilio_whatsapp_webhook(
         "body": body,
         "role": route["role"],
     }
+    if message_sid:
+        event_data["message_sid"] = str(message_sid)
     if attachments:
         event_data["attachments"] = attachments
+
+    reaction_type = str(
+        form_data.get("MessageType") or form_data.get("type") or "",
+    ).lower()
+    reaction_emoji = form_data.get("Reaction") or form_data.get("reaction_emoji")
+    reacted_to_sid = (
+        form_data.get("OriginalRepliedMessageSid")
+        or form_data.get("reaction_message_id")
+        or form_data.get("RepliedMessageSid")
+    )
+    if reaction_type == "reaction" or reacted_to_sid:
+        reaction_event = {
+            "contacts": contacts,
+            "to_number": to_number,
+            "from_number": from_number,
+            "provider_message_sid": str(reacted_to_sid or message_sid or ""),
+            "message_sid": str(reacted_to_sid or message_sid or ""),
+            "emoji": str(reaction_emoji) if reaction_emoji else None,
+        }
+        await publish_runtime_event(
+            context,
+            assistant_id=assistant_id,
+            thread="whatsapp_reaction",
+            event=reaction_event,
+        )
+        return Response(content=str(MessagingResponse()), media_type="text/xml")
+
     await publish_runtime_event(
         context,
         assistant_id=assistant_id,

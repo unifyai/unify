@@ -80,6 +80,9 @@ KNOWN_THREADS: frozenset[str] = frozenset(
         "discord",
         "teams_chat",
         "teams_channel",
+        "unify_message_reaction",
+        "whatsapp_reaction",
+        "unify_message_reaction_outbound",
     },
 )
 

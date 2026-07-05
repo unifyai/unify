@@ -322,6 +322,7 @@ async def send(request: Request):
     window_open = route["window_open"]
 
     twilio_client = build_twilio_wa_client(credentials)
+    message_sid = ""
     if window_open:
         delivered_body = body
         create_kwargs: dict = {
@@ -332,7 +333,8 @@ async def send(request: Request):
         }
         if media_url:
             create_kwargs["media_url"] = [_resolve_media_url(media_url, credentials)]
-        twilio_client.messages.create(**create_kwargs)
+        created = twilio_client.messages.create(**create_kwargs)
+        message_sid = str(getattr(created, "sid", "") or "")
         method = "freeform"
     else:
         if media_url:
@@ -342,7 +344,7 @@ async def send(request: Request):
                 to,
                 assistant_id,
             )
-        twilio_client.messages.create(
+        created = twilio_client.messages.create(
             content_sid=GREETING_TEMPLATE_SID,
             to=f"whatsapp:{to}",
             from_=f"whatsapp:{pool_number}",
@@ -351,10 +353,16 @@ async def send(request: Request):
             ),
             status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
         )
+        message_sid = str(getattr(created, "sid", "") or "")
         method = "template"
         delivered_body = render_greeting_template_text(user_name, agent_name)
 
-    return {"success": True, "method": method, "delivered_body": delivered_body}
+    return {
+        "success": True,
+        "method": method,
+        "delivered_body": delivered_body,
+        "message_sid": message_sid,
+    }
 
 
 @auth_router.get("/window")
@@ -994,7 +1002,7 @@ async def send_call(request: Request):
     assistant_id = data["assistant_id"]
     room_name = data["room_name"]
     allow_permission_probe = bool(data.get("allow_permission_probe"))
-    pending_call_context = str(data.get("pending_call_context") or "")
+    pending_call_opener = str(data.get("pending_call_opener") or "")
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -1020,14 +1028,14 @@ async def send_call(request: Request):
     if (
         allow_permission_probe
         and _is_local_permission_probe_enabled()
-        and pending_call_context
+        and pending_call_opener
         and permission_status in {"unknown", "pending", "unknown_interaction"}
     ):
         await _record_call_permission_pending(pool_number, to)
         await _store_pending_call_intent(
             pool_number=pool_number,
             contact_number=to,
-            context=pending_call_context,
+            context=pending_call_opener,
         )
         permission = await _check_call_permission(pool_number, to)
         permission_status = permission.get("status") or "unknown"

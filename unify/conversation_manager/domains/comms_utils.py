@@ -336,6 +336,46 @@ async def send_unify_message(
         return {"success": False, "error": str(e)}
 
 
+async def publish_unify_reaction_outbound(
+    *,
+    contact_id: int,
+    target_message_id: int,
+    emoji: str | None,
+    action: str,
+    reactions: list[dict],
+) -> dict:
+    """Publish a reaction update to the assistant Pub/Sub topic for Console SSE."""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event_data = {
+        "contact_id": contact_id,
+        "target_message_id": target_message_id,
+        "emoji": emoji,
+        "action": action,
+        "reactions": reactions,
+    }
+    message_data = {
+        "thread": "unify_message_reaction_outbound",
+        "event": event_data,
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(message_data)
+        except Exception as e:
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
+            )
+    try:
+        message_id = _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unify_message_reaction_outbound",
+            event=event_data,
+        )
+        return {"success": bool(message_id)}
+    except Exception as e:
+        LOGGER.error(f"{ICONS['comms_outbound']} Error publishing unify reaction: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def send_unify_meet_ring(
     call_session_id: str,
     reason: str = "",
@@ -348,8 +388,8 @@ async def send_unify_meet_ring(
     signal on the assistant's Pub/Sub topic so the Console shows a pinned
     incoming-call window; when the owner clicks Answer, Console runs its normal
     connect flow (token + ``/unify/meet`` dispatch) which lands as
-    ``UnifyMeetReceived`` here. ``reason`` is the briefing for how I open once
-    answered; Console turns it into a briefed opening config.
+    ``UnifyMeetReceived`` here.     ``reason`` is the verbatim opener for how I open once answered; Console turns
+    it into a simulated opening config.
     """
     agent_id = SESSION_DETAILS.assistant.agent_id
     event_data = {
@@ -1281,7 +1321,7 @@ async def start_whatsapp_call(
     agent_name: str,
     room_name: str,
     allow_permission_probe: bool = False,
-    pending_call_context: str = "",
+    pending_call_opener: str = "",
 ) -> dict:
     """
     Initiate a WhatsApp voice call via the Communication service.
@@ -1312,7 +1352,7 @@ async def start_whatsapp_call(
                 "agent_name": agent_name,
                 "room_name": room_name,
                 "allow_permission_probe": allow_permission_probe,
-                "pending_call_context": pending_call_context,
+                "pending_call_opener": pending_call_opener,
             },
         ) as response:
             try:
@@ -1397,7 +1437,7 @@ async def store_pending_whatsapp_call_intent(
     *,
     pool_number: str,
     contact_number: str,
-    context: str,
+    opener: str,
 ) -> None:
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -1406,7 +1446,7 @@ async def store_pending_whatsapp_call_intent(
             json={
                 "pool_number": pool_number,
                 "contact_number": contact_number,
-                "context": context,
+                "context": opener,
             },
         ) as response:
             response.raise_for_status()

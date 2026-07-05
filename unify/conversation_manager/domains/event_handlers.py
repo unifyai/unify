@@ -3502,6 +3502,38 @@ async def _(event: LogMessageResponse, cm: "ConversationManager", *args, **kwarg
         cm.call_manager.teams_meet_exchange_id = event.exchange_id
 
 
+@EventHandler.register((UnifyMessageReactionChanged, WhatsAppReactionChanged))
+async def _(event, cm: "ConversationManager", *args, **kwargs):
+    action = await managers_utils.log_reaction(cm, event)
+    if action is None:
+        return
+
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id)
+        if contact_id is not None
+        else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+    emoji = getattr(event, "emoji", None)
+    if isinstance(event, UnifyMessageReactionChanged):
+        medium_label = "Unify message"
+    else:
+        medium_label = "WhatsApp message"
+    if action == "removed":
+        notif = f"{sender_name} removed a reaction from your {medium_label.lower()}"
+    elif emoji:
+        notif = f"{sender_name} reacted {emoji} to your {medium_label.lower()}"
+    else:
+        notif = f"{sender_name} reacted to your {medium_label.lower()}"
+    cm.notifications_bar.push_notif("comms", notif, event.timestamp)
+
+    if action in ("added", "changed"):
+        await cm.request_llm_run(triggering_contact_id=contact_id)
+
+
 @EventHandler.register(PreHireMessage)
 async def _(event: PreHireMessage, cm: "ConversationManager", *args, **kwargs):
     await managers_utils.queue_operation(managers_utils.log_message, cm, event)

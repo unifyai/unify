@@ -146,6 +146,48 @@ async def unify_message_webhook(
     return Response(status_code=200)
 
 
+@router.post("/unify/reaction")
+async def unify_reaction_webhook(
+    request: Request,
+    context: GatewayContext = Depends(get_gateway_context),
+) -> Response:
+    payload = await request_payload(request)
+    assistant_id_input = str(payload.get("assistant_id") or "")
+    if not assistant_id_input:
+        return Response(status_code=400, content="assistant_id is required")
+
+    contact_id = payload.get("contact_id")
+    target_message_id = payload.get("target_message_id")
+    if contact_id is None or target_message_id is None:
+        return Response(
+            status_code=400,
+            content="contact_id and target_message_id are required",
+        )
+
+    assistant_data, contacts = await build_internal_context(
+        context,
+        assistant_id=assistant_id_input,
+        reason="unify_reaction",
+    )
+    assistant_id = str(assistant_data["assistant_id"])
+    emoji = payload.get("emoji")
+    if emoji == "":
+        emoji = None
+    await publish_runtime_event(
+        context,
+        assistant_id=assistant_id,
+        thread="unify_message_reaction",
+        event={
+            "contact_id": contact_id,
+            "contacts": contacts,
+            "assistant_id": assistant_id,
+            "target_message_id": target_message_id,
+            "emoji": emoji,
+        },
+    )
+    return Response(status_code=200)
+
+
 @router.post("/api/message")
 async def api_message_webhook(
     request: Request,

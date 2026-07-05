@@ -1,7 +1,7 @@
 import json
 import uuid
 from collections.abc import Mapping as _Mapping
-from typing import Optional, Any, ClassVar
+from typing import Literal, Optional, Any, ClassVar
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 
@@ -538,6 +538,7 @@ class WhatsAppReceived(Event):
     contact: dict
     content: str
     attachments: list[dict] | None = None
+    provider_message_sid: str = ""
 
 
 @dataclass
@@ -905,6 +906,35 @@ class UnifyMessageReceived(Event):
 
 
 @dataclass
+class UnifyMessageReactionChanged(Event):
+    """A user reacted to a Unify console chat message."""
+
+    topic: ClassVar[str | None] = "app:comms:unify_message_reaction"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    target_message_id: int
+    emoji: str | None = None
+    action: Literal["added", "changed", "removed"] = "added"
+    previous_emoji: str | None = None
+
+
+@dataclass
+class WhatsAppReactionChanged(Event):
+    """A user reacted to a WhatsApp message."""
+
+    topic: ClassVar[str | None] = "app:comms:whatsapp_reaction"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    target_message_id: int = 0
+    provider_message_sid: str = ""
+    emoji: str | None = None
+    action: Literal["added", "changed", "removed"] = "added"
+    previous_emoji: str | None = None
+
+
+@dataclass
 class PhoneCallSent(Event):
     topic: ClassVar[str | None] = "app:comms:make_call"
     prominent: ClassVar[bool] = True
@@ -1064,6 +1094,7 @@ class WhatsAppSent(Event):
     via_template: bool = False
     delivered_content: str | None = None
     attachments: list[dict] | None = None
+    provider_message_sid: str = ""
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None

@@ -1145,6 +1145,9 @@ class CommsPrimitives:
                 via_template=via_template,
                 delivered_content=delivered_content,
                 attachments=attachments_for_event or None,
+                provider_message_sid=str(
+                    response.get("message_sid") or response.get("sid") or "",
+                ),
                 **event_onboarding_kwargs,
             )
             await self._publish_comms_event(topic, event)
@@ -3869,7 +3872,7 @@ class CommsPrimitives:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound phone call to an existing contact.
@@ -3888,11 +3891,9 @@ class CommsPrimitives:
         ----------
         contact_id : int | str
             Person to call.
-        context : str
-            Mission briefing for the voice agent. This is the agent's main
-            context for opening and handling the call, so include the purpose,
-            key facts, questions to ask, tone, relationship context, and any
-            constraints or fallback behavior.
+        opener : str
+            Verbatim spoken line at the start of the call once the callee
+            answers (unless interrupted). Write the exact words to speak.
         phone_number : str | None, optional
             Recipient phone number when the contact does not already have one on
             file.
@@ -4001,13 +4002,13 @@ class CommsPrimitives:
 
         to_number = (contact or {}).get("phone_number")
         LOGGER.debug(
-            "%s [make_call] context=%r to_number_present=%s",
+            "%s [make_call] opener=%r to_number_present=%s",
             DEFAULT_ICON,
-            context,
+            opener,
             bool(to_number),
         )
-        if self._cm is not None and context:
-            self._cm.call_manager.initial_notification = context
+        if self._cm is not None:
+            self._cm.call_manager.pending_opener = opener.strip()
 
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
@@ -4058,7 +4059,7 @@ class CommsPrimitives:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound WhatsApp voice call.
@@ -4076,20 +4077,18 @@ class CommsPrimitives:
         WhatsApp Business Calling may require the contact to approve calls from
         this business first. If permission has not yet been granted, this sends
         a WhatsApp call-permission request instead of placing the call. In a live
-        assistant session, the call context is kept ready so the call is placed
+        assistant session, the call opener is kept ready so the call is placed
         automatically after the contact taps "Allow calls" / "Call now".
-        Headless offline task runs cannot queue that follow-up context, so they
+        Headless offline task runs cannot queue that follow-up opener, so they
         only report that an invite was sent.
 
         Parameters
         ----------
         contact_id : int | str
             Person to call.
-        context : str
-            Mission briefing for the voice agent. This is the agent's main
-            context for opening and handling the call, so include the purpose,
-            key facts, questions to ask, tone, relationship context, and any
-            constraints or fallback behavior.
+        opener : str
+            Verbatim spoken line at the start of the call once the callee
+            answers (unless interrupted). Write the exact words to speak.
         whatsapp_number : str | None, optional
             Recipient WhatsApp number when the contact does not already have one
             on file.
@@ -4201,7 +4200,7 @@ class CommsPrimitives:
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         room_name = make_room_name(assistant_id, "whatsapp_call")
         LOGGER.debug(
-            f"{DEFAULT_ICON} [make_whatsapp_call] context: {context}, to_number: {to_number}",
+            f"{DEFAULT_ICON} [make_whatsapp_call] opener: {opener}, to_number: {to_number}",
         )
 
         if self._cm is not None:
@@ -4212,7 +4211,7 @@ class CommsPrimitives:
             agent_name=SESSION_DETAILS.assistant.name or "",
             room_name=room_name,
             allow_permission_probe=self._allow_whatsapp_call_permission_probe(),
-            pending_call_context=context,
+            pending_call_opener=opener,
         )
         if not response.get("success"):
             if self._cm is not None:
@@ -4241,8 +4240,8 @@ class CommsPrimitives:
         fresh_contact = self._get_contact(whatsapp_number=to_number) or contact or {}
         method = response.get("method")
         if method == "direct":
-            if self._cm is not None and context:
-                self._cm.call_manager.initial_notification = context
+            if self._cm is not None:
+                self._cm.call_manager.pending_opener = opener.strip()
             if self._cm is not None:
                 event = self._cm.build_whatsapp_call_sent_event(fresh_contact)
             else:
@@ -4266,25 +4265,25 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
-        pending_contexts = None
+        pending_openers = None
         automatic_callback_available = False
         if self._cm is not None:
             self._cm.call_manager._whatsapp_call_joining = False
-            pending_contexts = getattr(
+            pending_openers = getattr(
                 self._cm,
-                "_pending_whatsapp_call_contexts",
+                "_pending_whatsapp_call_openers",
                 None,
             )
-            if context:
-                if isinstance(pending_contexts, dict):
-                    pending_contexts[contact_id] = context
+            if opener:
+                if isinstance(pending_openers, dict):
+                    pending_openers[contact_id] = opener
                     automatic_callback_available = True
             else:
                 automatic_callback_available = True
 
         pool_number = response.get("pool_number") or self._assistant_whatsapp_number()
         if (
-            context
+            opener
             and pool_number
             and method in {"invite", "invite_pending", "needs_reconciliation"}
         ):
@@ -4292,7 +4291,7 @@ class CommsPrimitives:
                 await comms_utils.store_pending_whatsapp_call_intent(
                     pool_number=pool_number,
                     contact_number=to_number,
-                    context=context,
+                    opener=opener,
                 )
             except Exception as exc:
                 LOGGER.error(
@@ -4310,8 +4309,8 @@ class CommsPrimitives:
             }
 
         if method == "rejected":
-            if isinstance(pending_contexts, dict):
-                pending_contexts.pop(contact_id, None)
+            if isinstance(pending_openers, dict):
+                pending_openers.pop(contact_id, None)
             if pool_number:
                 try:
                     await comms_utils.clear_pending_whatsapp_call_intent(
@@ -4379,7 +4378,7 @@ class CommsPrimitives:
                     "WhatsApp requires the contact to approve calls from this business first. "
                     "A call-permission request was sent instead of the call. Tell the user "
                     "to tap Allow calls / Call now; when they approve, the call will be "
-                    "placed automatically with your briefing context."
+                    "placed automatically with your opener."
                 ),
             }
         return {
@@ -4388,7 +4387,7 @@ class CommsPrimitives:
                 "WhatsApp requires the contact to approve calls from this business first. "
                 "A call-permission request was sent instead of the call. Because this send "
                 "ran without a live assistant session, the callback was not queued with "
-                "your briefing context."
+                "your opener."
             ),
         }
 

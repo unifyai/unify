@@ -725,6 +725,38 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
                 self._sim_messages[i] = msg.model_copy(update={"images": parsed})
                 return
 
+    def update_message_reactions(
+        self,
+        message_id: int,
+        reactions: list[dict],
+    ) -> None:
+        """Simulated: attach reactions to an in-memory message by message_id."""
+        for i, msg in enumerate(self._sim_messages):
+            if msg.message_id == message_id:
+                metadata = dict(msg.metadata or {})
+                metadata["reactions"] = reactions
+                self._sim_messages[i] = msg.model_copy(update={"metadata": metadata})
+                return
+
+    def get_message_by_id(self, message_id: int) -> dict | None:
+        for msg in self._sim_messages:
+            if msg.message_id == message_id:
+                return msg.model_dump(mode="json")
+        return None
+
+    def resolve_message_id_by_provider_sid(
+        self,
+        provider_message_sid: str,
+    ) -> int | None:
+        sid = str(provider_message_sid or "").strip()
+        if not sid:
+            return None
+        for msg in self._sim_messages:
+            metadata = msg.metadata or {}
+            if metadata.get("provider_message_sid") == sid:
+                return int(msg.message_id)
+        return None
+
     def get_exchange_metadata(self, exchange_id: int) -> Exchange:
         """
         Simulated fetch of exchange metadata from in-memory exchanges.

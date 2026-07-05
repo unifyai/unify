@@ -67,6 +67,7 @@ class LocalCommsIngress:
                 web.post("/local/comms/outbox", self._post_outbox),
                 web.post("/local/comms/envelope", self._post_envelope),
                 web.post("/local/comms/unify-message", self._post_unify_message),
+                web.post("/local/comms/unify-reaction", self._post_unify_reaction),
                 web.post("/local/comms/api-message", self._post_api_message),
                 web.post("/local/comms/unify-meet", self._post_unify_meet),
                 web.post("/local/comms/system-event", self._post_system_event),
@@ -232,6 +233,34 @@ class LocalCommsIngress:
                     "assistant_id": self._current_assistant_id(),
                     "body": payload.get("body", "") or payload.get("Body", "") or "",
                     "attachments": payload.get("attachments") or [],
+                },
+            },
+        )
+        return web.json_response({"success": True})
+
+    async def _post_unify_reaction(self, request: web.Request) -> web.Response:
+        await self._require_admin_key(request)
+        payload = await self._json_or_form(request)
+        self._validate_assistant_id(payload.get("assistant_id"))
+        contact_id = payload.get("contact_id")
+        target_message_id = payload.get("target_message_id")
+        if contact_id is None or target_message_id is None:
+            raise web.HTTPBadRequest(
+                text="contact_id and target_message_id are required",
+            )
+        emoji = payload.get("emoji")
+        if emoji == "":
+            emoji = None
+        await self._dispatch_payload(
+            {
+                "thread": "unify_message_reaction",
+                "publish_timestamp": time.time(),
+                "event": {
+                    "contact_id": contact_id,
+                    "contacts": payload.get("contacts") or [],
+                    "assistant_id": self._current_assistant_id(),
+                    "target_message_id": target_message_id,
+                    "emoji": emoji,
                 },
             },
         )
@@ -433,20 +462,47 @@ class LocalCommsIngress:
             )
         else:
             attachments = await local_twilio.fetch_whatsapp_attachments(form)
-            await self._dispatch_payload(
-                {
-                    "thread": "whatsapp",
-                    "publish_timestamp": time.time(),
-                    "event": {
-                        "assistant_id": self._current_assistant_id(),
-                        "contacts": [],
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                        "attachments": attachments,
-                    },
-                },
+            message_sid = form.get("MessageSid") or ""
+            reaction_type = (form.get("MessageType") or form.get("type") or "").lower()
+            reaction_emoji = form.get("Reaction") or form.get("reaction_emoji")
+            reacted_to_sid = (
+                form.get("OriginalRepliedMessageSid")
+                or form.get("reaction_message_id")
+                or form.get("RepliedMessageSid")
+                or ""
             )
+            if reaction_type == "reaction" or reacted_to_sid:
+                await self._dispatch_payload(
+                    {
+                        "thread": "whatsapp_reaction",
+                        "publish_timestamp": time.time(),
+                        "event": {
+                            "assistant_id": self._current_assistant_id(),
+                            "contacts": [],
+                            "from_number": from_number,
+                            "to_number": to_number,
+                            "provider_message_sid": reacted_to_sid or message_sid,
+                            "message_sid": reacted_to_sid or message_sid,
+                            "emoji": reaction_emoji or None,
+                        },
+                    },
+                )
+            else:
+                await self._dispatch_payload(
+                    {
+                        "thread": "whatsapp",
+                        "publish_timestamp": time.time(),
+                        "event": {
+                            "assistant_id": self._current_assistant_id(),
+                            "contacts": [],
+                            "to_number": to_number,
+                            "from_number": from_number,
+                            "body": body,
+                            "attachments": attachments,
+                            "message_sid": message_sid,
+                        },
+                    },
+                )
         return web.Response(
             text=local_twilio.empty_message_response(),
             content_type="text/xml",
