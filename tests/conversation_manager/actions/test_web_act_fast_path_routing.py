@@ -166,7 +166,18 @@ async def test_web_page_scroll_routes_to_web_act(initialized_cm):
     _ensure_mock_computer_primitives()
     cm.cm.vm_ready = True
     cm.cm.file_sync_complete = True
-    _enable_computer_fast_path(cm)
+
+    result = await cm.step_until_wait(
+        SMSReceived(
+            contact=BOSS,
+            content="Help me look up best practices for CRM configuration",
+        ),
+    )
+    assert (
+        "act" in cm.all_tool_calls or "web_act" in cm.all_tool_calls
+    ), f"Bootstrap should trigger act or web_act, got: {cm.all_tool_calls}"
+
+    _setup_computer_fast_path_from_real_act(cm)
     cm.all_tool_calls.clear()
 
     try:

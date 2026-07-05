@@ -101,6 +101,7 @@ def mock_cm():
     cm.event_broker = MagicMock()
     cm.event_broker.publish = AsyncMock()
     cm.call_manager = MagicMock()
+    cm.suppress_duplicate_commissioning_tool = MagicMock(return_value=None)
     return cm
 
 
