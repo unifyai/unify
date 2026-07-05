@@ -57,6 +57,10 @@ def pytest_configure(config) -> None:
     os.environ["UNITY_WEB_ENABLED"] = "false"
     os.environ["UNITY_MEMORY_ENABLED"] = "false"
 
+    # CodeActActor integration tests need a vision-capable model when files or
+    # screenshots flow through the actor (OpenRouter defaults often lack image input).
+    os.environ["UNIFY_MODEL"] = "gpt-4o-mini@openai"
+
     # Ensure NEW marker comparisons are stable in tests.
     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
 
@@ -95,7 +99,7 @@ async def _reset_litellm_logging_worker_per_test():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
+async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
     """
     Start ConversationManager in-process for CodeActActor integration tests.
 
@@ -104,12 +108,40 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
     test's CodeActActor handle. Module-scoped async fixtures run on a different
     loop under pytest-asyncio strict mode, which can prevent ActorResult propagation.
     """
+    import unisdk
+    from tests.settings import SETTINGS
     from unify.conversation_manager.event_broker import reset_event_broker
     from unify.conversation_manager import start_async, stop_async
     from unify.conversation_manager.domains import managers_utils
     from unify.common.prompt_helpers import now as prompt_now
 
+    test_ctx = getattr(request.node, "_unity_unify_test_ctx", None)
+    assert (
+        test_ctx
+    ), "Integration tests require the per-test Unify context from conftest"
+
+    unisdk.activate(SETTINGS.test_project_name, overwrite=False)
+    unisdk.set_context(test_ctx, relative=False, skip_create=False)
+
     reset_event_broker()
+
+    from unify.common.context_registry import ContextRegistry
+    from unify.common.runtime_context import bind_runtime_context_root
+    from unify.contact_manager.contact_manager import ContactManager
+    from unify.file_manager.managers.file_manager import FileManager
+    from unify.task_scheduler.task_scheduler import TaskScheduler
+    from unify.transcript_manager.transcript_manager import TranscriptManager
+
+    bind_runtime_context_root(skip_create=False, strict=True)
+    ContextRegistry.setup_for_managers(
+        [
+            ContactManager,
+            TranscriptManager,
+            TaskScheduler,
+            FileManager,
+        ],
+        base_context=test_ctx,
+    )
 
     cm = await start_async(
         project_name="TestProject",
@@ -117,9 +149,22 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
         apply_test_mocks=True,
     )
 
+    original_init_managers = managers_utils._init_managers
+
+    def _init_managers_with_test_context(cm, loop, actor=None):
+        unisdk.activate(SETTINGS.test_project_name, overwrite=False)
+        unisdk.set_context(test_ctx, relative=False, skip_create=True)
+        bind_runtime_context_root(skip_create=True, strict=True)
+        ContextRegistry.set_base_context(test_ctx)
+        return original_init_managers(cm, loop, actor)
+
+    managers_utils._init_managers = _init_managers_with_test_context
+
     # Initialize managers once. Actor created here is a placeholder; tests override per-test.
-    with scenario_file_lock("cm_integration_codeact"):
-        await managers_utils.init_conv_manager(cm)
+    try:
+        with scenario_file_lock("cm_integration_codeact"):
+            bind_runtime_context_root(skip_create=False, strict=True)
+            await managers_utils.init_conv_manager(cm)
 
         # Ensure system contacts are well-formed for tests.
         if cm.contact_manager is not None:
@@ -158,6 +203,9 @@ async def conversation_manager_codeact() -> AsyncIterator[CMStepDriver]:
                     ),
                 )
 
+    finally:
+        managers_utils._init_managers = original_init_managers
+
     # Reset last_snapshot to the (possibly patched) prompt_now time.
     cm.last_snapshot = prompt_now(as_string=False)
 
@@ -181,7 +229,11 @@ async def code_act_actor() -> AsyncIterator[object]:
     primitives = Primitives(primitive_scope=scope)
     env = StateManagerEnvironment(primitives)
 
-    actor = CodeActActor(environments=[env], function_manager=None)
+    actor = CodeActActor(
+        environments=[env],
+        function_manager=None,
+        model="gpt-4o-mini@openai",
+    )
 
     # Strip FunctionManager tools for determinism (focus on routing via primitives).
     try:

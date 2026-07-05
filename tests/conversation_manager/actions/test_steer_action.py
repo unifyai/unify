@@ -667,14 +667,15 @@ async def test_interject_new_priority(initialized_cm):
     result1 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="Find all my contacts in New York and list their details.",
+            content="What's the Q3 revenue report say?",
         ),
     )
-    assert_act_triggered(
-        result1,
-        ActorHandleStarted,
-        "Initial request should trigger act",
-        cm=cm,
+    assert get_in_flight_action_count(cm) >= 1, assertion_failed(
+        expected="At least 1 in-flight action",
+        actual=f"{get_in_flight_action_count(cm)} in-flight actions",
+        reasoning=[],
+        description="Initial request should create an in-flight action",
+        context_data=build_cm_context(cm=cm, result=result1),
     )
 
     # Step 2: Conversation

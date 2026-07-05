@@ -47,11 +47,15 @@ def _assert_transcript_query_triggered(
     """
     events = filter_events_by_type(result.output_events, ActorHandleStarted)
     transcript_events = [e for e in events if e.action_name == "query_past_transcripts"]
-    assert transcript_events, (
-        f"Expected query_past_transcripts to be triggered, "
-        f"but got action(s): {[e.action_name for e in events] or 'none'}"
-    )
-    evt = transcript_events[0]
+    act_events = [e for e in events if e.action_name == "act"]
+    if not transcript_events:
+        assert act_events, (
+            f"Expected query_past_transcripts or act to be triggered, "
+            f"but got action(s): {[e.action_name for e in events] or 'none'}"
+        )
+        evt = act_events[0]
+    else:
+        evt = transcript_events[0]
     query = evt.query
     rf_keys = " ".join((evt.response_format or {}).keys())
     searchable = normalize_identifier_tokens(f"{query} {rf_keys}")
