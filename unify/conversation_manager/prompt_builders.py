@@ -135,11 +135,21 @@ def build_fast_brain_turn_guidance(
     from unify.conversation_manager.events import (
         FAST_BRAIN_TURN_CONTINUATION,
         FAST_BRAIN_TURN_DEFER,
+        FAST_BRAIN_TURN_HANG_UP,
         FAST_BRAIN_TURN_SMALLTALK,
     )
 
     speech = (intended_speech or "").strip()
     quoted = f'"{speech}"' if speech else "(none)"
+    if classification == FAST_BRAIN_TURN_HANG_UP:
+        return (
+            "[Voice Agent turn completed. Classification: HANG_UP. The caller "
+            f"closed the conversation; farewell being spoken: {quoted}. The "
+            "call ends right after this line plays out (you sanctioned this "
+            "with allow_hang_up), unless the caller speaks again first. Do NOT "
+            "guide further speech and do NOT call hang_up yourself — call "
+            "wait().]"
+        )
     if classification == FAST_BRAIN_TURN_SMALLTALK:
         return (
             "[Voice Agent turn completed. Classification: SMALLTALK. "
@@ -362,7 +372,7 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
+**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. For **HANG_UP** (only possible after I sanctioned ending via `allow_hang_up`) the Voice Agent is speaking its farewell and the call ends right after — I `wait()` and do not guide further speech. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
 
 **Idle small-talk exception.** If absolutely nothing is happening — no in-flight action, no recent assistant comms, and no pending spoken line — the Voice Agent may directly answer a casual "what are you doing?" style question with a playful non-work aside about passing time on the laptop, such as playing Snake, Sudoku, Mario Kart, or Tetris. This is only social banter. If any real work, recent message, call, action, result, or status is involved, I own the answer via `guide_voice_agent`.
 
@@ -439,21 +449,31 @@ def _build_voice_session_scenarios(
     return "\n".join(lines)
 
 
-def _build_active_voice_session_block() -> str:
+def _build_active_voice_session_block(
+    *,
+    hang_up_gate_reason: str | None = None,
+) -> str:
     """Explain the one-voice-session-at-a-time constraint while a call is live.
 
     Rendered only when a voice call/meeting is active, so the slow brain
     understands why the call-starting tools are absent and that they return once
     the session ends. Resolves the contradiction where the prompt would otherwise
-    advertise tools the live tool set has withheld.
+    advertise tools the live tool set has withheld. While the hang-up gate is
+    armed, a standing note keeps the granted permission visible so the model
+    withdraws it if the conversation moves on.
     """
-    return """Active voice session
+    if hang_up_gate_reason is not None:
+        ending_lines = f"""- ⚠️ The hang-up gate is currently ARMED (my stated reason: "{hang_up_gate_reason}"). The live voice will end this call at the natural close — after goodbyes, or after sustained silence. If the conversation has since moved on to something new and ending is no longer right, I use `withdraw_hang_up` NOW to take that permission back. If my boss explicitly tells me to end the call immediately, I use `hang_up`.
+- Ending this session: `hang_up` ends it immediately (only for an explicit "hang up now" or to recover a broken line)."""
+    else:
+        ending_lines = """- Ending this session: when the conversation is clearly wrapping up, I use `allow_hang_up` with a short reason — this sanctions the close, and the live voice ends the call at the natural moment (after goodbyes) without cutting anyone off. I can take it back later with `withdraw_hang_up` if the conversation moves on. I use `hang_up` (immediate) only when my boss explicitly asks me to hang up / end the call / leave the meeting right now, or to recover a broken session."""
+    return f"""Active voice session
 --------------------
 I am currently on a live voice session, and I can only be on ONE voice session at a time — whether that is a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. Because of this:
 - The call-starting tools (`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
 - They reappear automatically the moment this session ends — I do not need to do anything special to get them back.
 - If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
-- To end this session I use `hang_up` — it ends whichever voice session is active (call or meeting). I use it when my boss asks me to hang up / end the call / leave the meeting, or when the conversation is clearly over and it is natural to disconnect.
+{ending_lines}
 - I can still communicate on text channels during the session (SMS, WhatsApp messages, email, Unify messages, etc.). Any controls specific to the current session (such as sharing my screen) appear in my tool list when they are available."""
 
 
@@ -700,7 +720,9 @@ def _build_comms_tool_listing(
                 "live call). A pinned incoming-call window with an Answer button "
                 "appears in their Console; I join when they answer. Use this to "
                 "move us onto the live call (e.g. the home base for onboarding). "
-                "Pass `opener` with the verbatim spoken line once answered.",
+                "Pass `opener` with the verbatim spoken line once answered, and "
+                "`briefing` with unspoken context so the live voice can run the "
+                "call's task itself.",
             )
             lines.append(
                 "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
@@ -801,7 +823,8 @@ def _build_comms_tool_listing(
             "- `start_unify_meet`: Ring a contact on Unify Meet (the in-app live "
             "call). A pinned incoming-call window with an Answer button appears in "
             "their Console; I join when they answer. Pass `opener` with the "
-            "verbatim spoken line once answered.",
+            "verbatim spoken line once answered, and `briefing` with unspoken "
+            "context so the live voice can run the call's task itself.",
         )
         lines.append(
             "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
@@ -983,7 +1006,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  3. When I do send, use the supplied `tool_name` in this same LLM turn. "
             "For message channels, call the outbound comms tool directly; for call "
             "channels, start the call with the full spoken line in the required "
-            "`opener` argument. Do not use `act` for the send. Same turn, also call "
+            "`opener` argument AND the full task design in `briefing`. Do not use "
+            "`act` for the send. Same turn, also call "
             "`send_unify_message` with one short chat line — what I sent, where to "
             "find it, and that they should reply there with their guess. Do not leave "
             "chat silent while only the other channel carries the clue.",
@@ -1000,9 +1024,12 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "the call defeats the point of testing the channel. My spoken line just "
             "points the user to the channel and asks them to reply with their guess. "
             "When the clue goes out on a call channel, the clue and framing are in "
-            "the required `opener` argument — spoken verbatim at call start. I do NOT "
-            "also `guide_voice_agent` the clue on that call. For instant guess "
-            "confirmation on message channels, I bundle the answer into "
+            "the required `opener` argument — spoken verbatim at call start — and "
+            "the full task design goes in `briefing` (the answer, likely "
+            "mishearings to accept, how to confirm, and the exact wrap-up). The "
+            "Voice Agent runs the whole quiz from the briefing by itself; I do NOT "
+            "also `guide_voice_agent` the clue or answer on that call. For instant "
+            "guess confirmation on message channels, I bundle the answer into "
             "`guide_voice_agent`'s `fast_brain_guidance` alongside my spoken line "
             '(for example: "The answer is <title>. If the caller guesses it, '
             'confirm warmly; never state the answer before they guess."), so the '
@@ -1017,7 +1044,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "sci-fi quiz, and they should reply with their guess.",
             "  5. If the event starts a call, put the clue, framing, and any spoken "
             "setup into the required `opener` argument — the exact words spoken at "
-            "call start.",
+            "call start — and put the answer, accepted mishearings, confirmation "
+            "style, and wrap-up line into `briefing` so the Voice Agent runs the "
+            "interaction itself.",
             "  6. Do not mark or describe the trigger as done just because the user "
             "clicked it. Completion is detected only after my outbound message/call "
             "appears in the transcript.",
@@ -2261,6 +2290,7 @@ def build_system_prompt(
     is_voice_call: bool = False,
     is_internal_call: bool = False,
     on_voice_call: bool = False,
+    hang_up_gate_reason: str | None = None,
     outbound_voice_line_ready: bool = True,
     demo_mode: bool = False,
     computer_fast_path: bool = False,
@@ -2314,6 +2344,11 @@ def build_system_prompt(
         so they must not be advertised; a dynamic block explains they return once
         the current call ends. Mirrors ``ConversationManager.in_voice_session`` and
         is broader than ``is_voice_call`` (which only gates the voice-calls guide).
+    hang_up_gate_reason : str | None
+        The armed hang-up gate's reason while the slow brain has sanctioned
+        ending the live call (None = gate disarmed). Renders a standing note in
+        the active-voice-session block so the model remembers to withdraw the
+        permission if the conversation moves on.
     outbound_voice_line_ready : bool
         Whether assistant-initiated phone/WhatsApp calls can start with a
         prepared outbound voice worker. Inbound calls and answered Unify Meet
@@ -2909,7 +2944,12 @@ When contacts communicate in a non-English language, I match their language in m
     #      when the session ends, keeping the prompt consistent with the masked
     #      tool set.
     if on_voice_call:
-        parts.add(_build_active_voice_session_block(), static=False)
+        parts.add(
+            _build_active_voice_session_block(
+                hang_up_gate_reason=hang_up_gate_reason,
+            ),
+            static=False,
+        )
     elif not outbound_voice_line_ready and (
         assistant_has_phone or assistant_has_whatsapp
     ):

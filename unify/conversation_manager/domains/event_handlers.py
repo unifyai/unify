@@ -410,18 +410,20 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     )
     sender_name = _get_sender_name(contact)
 
-    # Inject stashed opener from make_whatsapp_call if a pending permission
-    # grant triggered this inbound WhatsApp call.
+    # Inject stashed opener/briefing from make_whatsapp_call if a pending
+    # permission grant triggered this inbound WhatsApp call.
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
-        stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
-        if stashed_opener:
-            cm.call_manager.pending_opener = stashed_opener
+        stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+        if stashed and stashed.get("opener"):
+            cm.call_manager.pending_opener = stashed["opener"]
+            cm.call_manager.pending_briefing = stashed.get("briefing", "")
 
     if isinstance(event, WhatsAppCallSent) and contact_id is not None:
         if not cm.call_manager.pending_opener:
-            stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
-            if stashed_opener:
-                cm.call_manager.pending_opener = stashed_opener
+            stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+            if stashed and stashed.get("opener"):
+                cm.call_manager.pending_opener = stashed["opener"]
+                cm.call_manager.pending_briefing = stashed.get("briefing", "")
             else:
                 from unify.conversation_manager.domains import comms_utils
 
@@ -1088,8 +1090,12 @@ async def _(
         from unify.conversation_manager.domains.call_manager import make_room_name
 
         opener = None
+        call_briefing = ""
         if isinstance(pending_openers, dict):
-            opener = pending_openers.pop(contact_id, None)
+            stashed = pending_openers.pop(contact_id, None)
+            if stashed:
+                opener = stashed.get("opener")
+                call_briefing = stashed.get("briefing", "")
         if opener is None and pool_number and whatsapp_number:
             try:
                 intent = await comms_utils.get_pending_whatsapp_call_intent(
@@ -1111,6 +1117,7 @@ async def _(
             return
 
         cm.call_manager.pending_opener = opener
+        cm.call_manager.pending_briefing = call_briefing
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1142,6 +1149,7 @@ async def _(
 
         cm.call_manager._whatsapp_call_joining = False
         cm.call_manager.pending_opener = ""
+        cm.call_manager.pending_briefing = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
@@ -1445,6 +1453,19 @@ async def _(
         classification=event.classification,
         intended_speech=event.intended_speech,
     )
+    active_briefing = (
+        getattr(cm.call_manager, "active_call_briefing", "") or ""
+    ).strip()
+    if active_briefing:
+        note += (
+            "\n[This call carries a briefing the Voice Agent holds and fully "
+            f"handles on its own: {active_briefing}\n"
+            "Do NOT re-deliver briefed content via guide_voice_agent — call "
+            "wait() while the briefed interaction plays out. Act only when the "
+            "turn needs something outside the briefing, or the interaction has "
+            "concluded and follow-through is yours (completing steps, ending "
+            "the call, follow-up messages).]"
+        )
     cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
@@ -1542,6 +1563,39 @@ async def _(
         await cm.schedule_proactive_speech()
 
 
+@EventHandler.register(FastBrainHangUp)
+async def _(
+    event: FastBrainHangUp,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Tear down the voice session after the fast brain closed the call.
+
+    Only reachable while the hang-up gate was armed by the slow brain: the
+    voice agent spoke its farewell, confirmed clean playout (no barge-in), and
+    published this event. The farewell utterance itself already landed in the
+    transcript via the normal outbound-utterance path.
+    """
+    from unify.conversation_manager.domains.brain_action_tools import (
+        ConversationManagerBrainActionTools,
+    )
+
+    cm.call_manager.hang_up_gate_reason = None
+    sender_name = _get_sender_name(event.contact)
+    cm.notifications_bar.push_notif(
+        "Comms",
+        (
+            f"I ended the call with {sender_name} at its natural close "
+            f"(sanctioned earlier: {event.gate_reason or 'no reason recorded'}; "
+            f"trigger: {event.trigger or 'user_turn'})."
+        ),
+        event.timestamp,
+    )
+    tools = ConversationManagerBrainActionTools(cm)
+    await tools._perform_hang_up_teardown()
+
+
 @EventHandler.register(VoiceInterrupt)
 async def _(
     event: VoiceInterrupt,
@@ -1627,6 +1681,9 @@ async def _(
                 active_session,
             )
             return
+
+    # The hang-up gate is per-session permission; it never outlives the call.
+    cm.call_manager.hang_up_gate_reason = None
 
     # Persist session identifiers in exchange metadata and stash the
     # exchange_id so the async RecordingReady handler can find it.

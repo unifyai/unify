@@ -124,6 +124,7 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     cm.call_manager.has_teams_presenting = False
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
+    cm.call_manager.hang_up_gate_reason = None
     cm.assistant_has_teams = False
 
     # Create SimulatedContactManager and populate with sample contacts
@@ -232,6 +233,19 @@ class TestScheduleProactiveSpeech:
 
         mock_cm.mode = Mode.CALL
         mock_cm._proactive_speech_enabled = False
+        mock_cm.cancel_proactive_speech = AsyncMock()
+
+        await ConversationManager.schedule_proactive_speech(mock_cm)
+
+        mock_cm.cancel_proactive_speech.assert_called_once()
+        assert mock_cm._proactive_speech_task is None
+
+    async def test_schedule_skipped_while_hang_up_gate_armed(self, mock_cm):
+        """With the hang-up gate armed, silence is the close signal — no filler."""
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+        mock_cm.call_manager.hang_up_gate_reason = "wrap up warmly"
         mock_cm.cancel_proactive_speech = AsyncMock()
 
         await ConversationManager.schedule_proactive_speech(mock_cm)

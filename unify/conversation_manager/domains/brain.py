@@ -220,6 +220,7 @@ def build_brain_spec(
         is_voice_call=cm.mode.is_voice,
         is_internal_call=is_internal_call,
         on_voice_call=cm.in_voice_session,
+        hang_up_gate_reason=cm.call_manager.hang_up_gate_reason,
         outbound_voice_line_ready=cm.call_manager.is_ready_for_outbound_call,
         demo_mode=SETTINGS.DEMO_MODE,
         computer_fast_path=cm.computer_fast_path_eligible,

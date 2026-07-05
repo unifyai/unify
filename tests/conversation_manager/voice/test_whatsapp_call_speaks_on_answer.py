@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 OPENING_LINE = "Hi, this is your assistant calling on WhatsApp."
+CALL_BRIEFING = "Quiz answer: Dune. Confirm warmly, then wrap up."
 UTTERANCE_TOPIC = "app:comms:whatsapp_call_utterance"
 
 
@@ -82,6 +83,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
                         "opening_config": {
                             "mode": "opener",
                             "opener_text": OPENING_LINE,
+                            "briefing": CALL_BRIEFING,
                             "source": "outbound_whatsapp_opening",
                         },
                     },
@@ -111,6 +113,8 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
             sequence.append(("broker", channel, message))
             return 1
 
+    holders: dict = {}
+
     class _FakeSession:
         def __init__(self, *args, **kwargs):
             self._chat_ctx = llm.ChatContext()
@@ -119,6 +123,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
             self.agent_state = "listening"
             self.current_speech = None
             self.say_calls = []
+            holders["session"] = self
 
         @property
         def history(self):
@@ -231,7 +236,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
     # Keep the silence window short so the test does not sleep for real seconds.
     monkeypatch.setattr(call_script, "OPENER_SILENCE_TRIGGER_S", 0.05)
 
-    return call_script, broker, _FakeJobContext
+    return call_script, broker, _FakeJobContext, holders
 
 
 def _has_agent_ready(sequence) -> bool:
@@ -250,7 +255,10 @@ def _utterance_emitted(sequence) -> bool:
 @pytest.mark.asyncio
 async def test_outbound_whatsapp_agent_speaks_only_after_answer(monkeypatch):
     sequence: list = []
-    call_script, broker, make_ctx = _install_entrypoint_fakes(monkeypatch, sequence)
+    call_script, broker, make_ctx, holders = _install_entrypoint_fakes(
+        monkeypatch,
+        sequence,
+    )
 
     task = asyncio.create_task(call_script.entrypoint(make_ctx()))
     try:
@@ -311,3 +319,17 @@ async def test_outbound_whatsapp_agent_speaks_only_after_answer(monkeypatch):
         if item[0] == "broker" and item[1] == UTTERANCE_TOPIC
     )
     assert OPENING_LINE in utter_msg
+
+    # The unspoken briefing was injected into the voice context (system role,
+    # never spoken) and armed on the assistant for per-turn selection.
+    session = holders["session"]
+    history_system_text = "\n".join(
+        str(item.content)
+        for item in session.history.items
+        if getattr(item, "role", None) == "system"
+    )
+    assert CALL_BRIEFING in history_system_text
+    assert "NEVER read the briefing aloud" in history_system_text
+    assert session.current_agent._call_briefing == CALL_BRIEFING
+    # The briefing must never have been spoken.
+    assert all(CALL_BRIEFING not in text for text, _ in session.say_calls)

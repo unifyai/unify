@@ -410,6 +410,20 @@ class Assistant(Agent):
         self._fast_brain_history_provider: Callable[[], list[dict]] | None = None
         self._idle_smalltalk_allowed = False
         self._idle_smalltalk_state_event = asyncio.Event()
+        # Hang-up gate: while the slow brain has sanctioned ending the call,
+        # this holds its stated reason (None = disarmed). Exposes the extra
+        # ``hang_up`` classification to the fast brain, which then picks the
+        # natural close. Set/cleared via ``hang_up_gate`` status messages.
+        self._hang_up_gate_reason: str | None = None
+        # Unspoken call briefing supplied by the slow brain when it placed the
+        # call (``briefing`` on the call-start tools). Injected into every
+        # fast-brain turn so the live voice fully owns the briefed interaction
+        # without slow-brain round-trips. Never spoken aloud.
+        self._call_briefing: str = ""
+        # Farewell text of a hang_up-classified reply about to be spoken; the
+        # ``speech_created`` observer claims it and finalizes the cut after
+        # playout (with a barge-in grace window).
+        self._pending_gated_hang_up: str | None = None
 
         super().__init__(instructions=instructions)
 
@@ -627,6 +641,8 @@ class Assistant(Agent):
                 guidance=self._fast_brain_guidance,
                 idle_status_smalltalk=idle_status_smalltalk,
                 recent_assistant_text=recent_assistant_text,
+                hang_up_gate_reason=self._hang_up_gate_reason,
+                briefing=self._call_briefing,
             )
 
             if (
@@ -660,6 +676,12 @@ class Assistant(Agent):
                 chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
             elif turn_classification == FAST_BRAIN_TURN_SMALLTALK:
                 chunk_id = f"fast-brain-smalltalk-{monotonic_ms()}"
+            elif turn_classification == FAST_BRAIN_TURN_HANG_UP:
+                # The farewell is spoken like any reply; the speech_created
+                # observer claims this marker and ends the call once the line
+                # plays out uninterrupted.
+                self._pending_gated_hang_up = speech
+                chunk_id = f"fast-brain-hangup-{monotonic_ms()}"
             else:
                 chunk_id = f"fast-brain-buffer-{monotonic_ms()}"
             yield ChatChunk(
@@ -960,6 +982,33 @@ OPENER_SILENCE_TRIGGER_S = 3.0
 # what they said) instead of being spoken blindly as though they had only said
 # "Hello?".
 OPENER_SHORT_TURN_MAX_S = 5.0
+
+# Durable system note carrying the slow brain's unspoken call briefing into the
+# voice context (chat ctx + session history) so every voice surface — not just
+# the structured turn selector — knows why the call was placed.
+_CALL_BRIEFING_SYSTEM_NOTE = (
+    "[system] Call briefing — context, not script. This call was placed for "
+    "the reason below. NEVER read the briefing aloud or quote it verbatim; "
+    "speak naturally in your own words. You fully own everything it covers.\n"
+    "\n"
+    "{briefing}"
+)
+
+# After a gated hang-up farewell finishes playing out, wait this long for a
+# barge-in before actually ending the call. A caller who starts speaking in
+# this window ("oh wait, one more thing") aborts the cut entirely — the
+# farewell becomes an ordinary turn and the conversation continues.
+HANG_UP_GRACE_S = 1.0
+
+# With the hang-up gate armed, this much sustained dead air (no speech either
+# way, nothing queued) is treated as the conversation having ended without a
+# classifiable goodbye — the agent speaks a brief courtesy close and hangs up.
+HANG_UP_SILENCE_CLOSE_S = 12.0
+
+# Deterministic courtesy line for the sanctioned-silence close (no LLM call —
+# by this point the substance of the call is over by the slow brain's own
+# judgement, and the line only needs to be polite).
+HANG_UP_SILENCE_FAREWELL = "Alright — I'll let you go. Bye for now!"
 
 
 # Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
@@ -1278,6 +1327,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
     config = {"mode": mode}
     if raw.get("opener_text") is not None:
         config["opener_text"] = str(raw["opener_text"])
+    if raw.get("briefing") is not None:
+        config["briefing"] = str(raw["briefing"])
     if raw.get("simulated_utterance") is not None:
         config["simulated_utterance"] = str(raw["simulated_utterance"])
     if raw.get("source") is not None:
@@ -2211,6 +2262,7 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     credit_gate_task: asyncio.Task | None = None
+    hang_up_gate_watcher_task: asyncio.Task | None = None
     explicit_stop_requested = False
     shutdown_completed = False
 
@@ -2232,6 +2284,8 @@ async def entrypoint(ctx: agents.JobContext):
                 )
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
+        if hang_up_gate_watcher_task is not None:
+            await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
         if mood_classification_task is not None:
             await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
@@ -2677,6 +2731,13 @@ async def entrypoint(ctx: agents.JobContext):
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
     # permission-callback call), where ``outbound`` is False.
     assistant._opening_pending = opening_config["mode"] == "opener"
+    opening_briefing = str(opening_config.get("briefing", "")).strip()
+    if opening_briefing:
+        assistant._call_briefing = opening_briefing
+        briefing_note = _CALL_BRIEFING_SYSTEM_NOTE.format(briefing=opening_briefing)
+        assistant._chat_ctx.add_message(role="system", content=[briefing_note])
+        session.history.add_message(role="system", content=[briefing_note])
+        _log.info("Injected call briefing into voice context")
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
@@ -2795,6 +2856,16 @@ async def entrypoint(ctx: agents.JobContext):
             # _mark_user_joined would early-return without flipping this).
             assistant.set_call_received()
             _mark_user_joined("call_answered")
+        elif event_type == "hang_up_gate":
+            if data.get("armed"):
+                assistant._hang_up_gate_reason = str(data.get("reason") or "")
+                _log.info(
+                    "Hang-up gate armed: "
+                    f"{assistant._hang_up_gate_reason or '(no reason given)'}",
+                )
+            else:
+                assistant._hang_up_gate_reason = None
+                _log.info("Hang-up gate disarmed")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
@@ -3015,6 +3086,88 @@ async def entrypoint(ctx: agents.JobContext):
 
         asyncio.ensure_future(_after_playout())
 
+    async def _finalize_gated_hang_up(handle, farewell: str, trigger: str) -> None:
+        """End the call after a gated farewell plays out uninterrupted.
+
+        The cut is aborted (and the conversation simply continues) if the
+        caller barges in on the farewell, speaks during the grace window, or
+        the slow brain disarms the gate before the window closes.
+        """
+        try:
+            await handle.wait_for_playout()
+        except Exception:
+            return
+        if getattr(handle, "interrupted", False):
+            _log.info("Gated hang-up aborted: farewell was interrupted")
+            return
+        await asyncio.sleep(HANG_UP_GRACE_S)
+        if user_is_speaking or assistant.user_turn_generating:
+            _log.info("Gated hang-up aborted: caller spoke during the grace window")
+            return
+        gate_reason = assistant._hang_up_gate_reason
+        if gate_reason is None:
+            _log.info("Gated hang-up aborted: gate was disarmed")
+            return
+        assistant._hang_up_gate_reason = None
+        _log.call_status(f"gated_hang_up:{trigger}")
+        await event_broker.publish(
+            FastBrainHangUp.topic,
+            FastBrainHangUp(
+                contact=contact,
+                farewell=farewell,
+                trigger=trigger,
+                gate_reason=gate_reason,
+            ).to_json(),
+        )
+
+    async def _hang_up_gate_silence_watcher() -> None:
+        """Close the call after sanctioned dead air (gate armed, line quiet).
+
+        Covers conversations that end without a classifiable goodbye — the
+        caller goes silent (or already left) after the substance is done. The
+        idle counter resets whenever the gate is disarmed or any speech
+        activity occurs.
+        """
+        idle_s = 0.0
+        while True:
+            await asyncio.sleep(1.0)
+            if assistant._hang_up_gate_reason is None:
+                idle_s = 0.0
+                continue
+            if not _is_pipeline_quiescent():
+                idle_s = 0.0
+                continue
+            idle_s += 1.0
+            if idle_s < HANG_UP_SILENCE_CLOSE_S:
+                continue
+            idle_s = 0.0
+            _log.info(
+                "Hang-up gate: line quiet for "
+                f"{HANG_UP_SILENCE_CLOSE_S:.0f}s — closing the call",
+            )
+            _say_meta_queue.append(
+                {
+                    "source": "gated_hang_up",
+                    "text": HANG_UP_SILENCE_FAREWELL,
+                    "llm_log_path": "",
+                },
+            )
+            handle = session.say(
+                HANG_UP_SILENCE_FAREWELL,
+                allow_interruptions=True,
+                add_to_chat_ctx=True,
+            )
+            await _finalize_gated_hang_up(
+                handle,
+                HANG_UP_SILENCE_FAREWELL,
+                trigger="silence",
+            )
+
+    hang_up_gate_watcher_task = asyncio.create_task(
+        _hang_up_gate_silence_watcher(),
+        name="fast_brain_hang_up_gate_watcher",
+    )
+
     @session.on("speech_created")
     def _on_speech_created(ev) -> None:
         """Register a fast-brain continuation reply for interruption-stashing.
@@ -3024,8 +3177,24 @@ async def entrypoint(ctx: agents.JobContext):
         reply (yielded from ``llm_node``), so it is registered here instead, using
         the full text the turn stashed on ``_continuation_full_text``. Ordinary
         buffer fillers leave that ``None`` and are never registered.
+
+        A hang_up-classified reply is claimed here too: its farewell is spoken
+        like any reply, then ``_finalize_gated_hang_up`` ends the call after
+        clean playout. It is deliberately NOT registered as resumable — a
+        barge-in aborts the cut rather than resuming the goodbye.
         """
         if getattr(ev, "source", "") != "generate_reply":
+            return
+        pending_hang_up = assistant._pending_gated_hang_up
+        if pending_hang_up is not None:
+            assistant._pending_gated_hang_up = None
+            asyncio.create_task(
+                _finalize_gated_hang_up(
+                    ev.speech_handle,
+                    pending_hang_up,
+                    trigger="user_turn",
+                ),
+            )
             return
         full_text = assistant._continuation_full_text
         assistant._continuation_full_text = None
