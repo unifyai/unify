@@ -1419,6 +1419,7 @@ async def entrypoint(ctx: agents.JobContext):
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
         opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
         _log.warning(
@@ -1435,6 +1436,7 @@ async def entrypoint(ctx: agents.JobContext):
         opening_config = _normalize_call_opening_config(
             os.environ.get("OPENING_CONFIG"),
         )
+        pre_armed_hang_up_gate = os.environ.get("HANG_UP_GATE_REASON", "").strip()
 
     from unify.coordinator_voice import resolve_runtime_voice
 
@@ -2731,6 +2733,12 @@ async def entrypoint(ctx: agents.JobContext):
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
     # permission-callback call), where ``outbound`` is False.
     assistant._opening_pending = opening_config["mode"] == "opener"
+    # A pre-armed hang-up gate (slow brain sanctioned the close at call
+    # placement, e.g. an expected-short call) starts armed from the first turn
+    # — no IPC round trip needed before the fast brain can end the call.
+    if pre_armed_hang_up_gate:
+        assistant._hang_up_gate_reason = pre_armed_hang_up_gate
+        _log.info(f"Hang-up gate pre-armed at dispatch: {pre_armed_hang_up_gate}")
     opening_briefing = str(opening_config.get("briefing", "")).strip()
     if opening_briefing:
         assistant._call_briefing = opening_briefing
@@ -3126,12 +3134,18 @@ async def entrypoint(ctx: agents.JobContext):
         Covers conversations that end without a classifiable goodbye — the
         caller goes silent (or already left) after the substance is done. The
         idle counter resets whenever the gate is disarmed or any speech
-        activity occurs.
+        activity occurs, and never runs before the call is actually live: a
+        pre-armed gate must not "close" a call that is still ringing or whose
+        opener has not been delivered yet (the pipeline is quiescent in both
+        states).
         """
         idle_s = 0.0
         while True:
             await asyncio.sleep(1.0)
             if assistant._hang_up_gate_reason is None:
+                idle_s = 0.0
+                continue
+            if not assistant.call_received or assistant._opening_pending:
                 idle_s = 0.0
                 continue
             if not _is_pipeline_quiescent():

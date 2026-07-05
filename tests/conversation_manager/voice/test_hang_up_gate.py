@@ -240,3 +240,323 @@ async def test_call_ended_clears_hang_up_gate(monkeypatch):
         pass
 
     assert cm.call_manager.hang_up_gate_reason is None
+
+
+# ---------------------------------------------------------------------------
+# Pre-armed gate at call placement: the slow brain sanctions the close when it
+# places an expected-short call; the gate rides the dispatch metadata so the
+# voice agent starts armed with no IPC round trip.
+# ---------------------------------------------------------------------------
+
+
+def _manager_with_dispatch_capture() -> tuple[LivekitCallManager, dict]:
+    manager = _build_call_manager(MagicMock())
+    proc = MagicMock()
+    proc.poll.return_value = None
+    manager._worker_proc = proc
+
+    captured: dict = {}
+
+    async def _fake_dispatch(
+        room_name,
+        channel,
+        contact,
+        boss,
+        outbound,
+        *,
+        extra_metadata=None,
+    ):
+        captured["extra_metadata"] = extra_metadata
+        captured["outbound"] = outbound
+        return True
+
+    manager._dispatch_job = _fake_dispatch  # type: ignore[assignment]
+    manager._ensure_socket_server = AsyncMock(return_value=None)  # type: ignore[assignment]
+    socket = MagicMock()
+    socket.set_forward_channels = AsyncMock()
+    socket.queue_for_clients = AsyncMock()
+    manager._socket_server = socket
+    return manager, captured
+
+
+@pytest.mark.asyncio
+async def test_pre_armed_gate_rides_call_dispatch_metadata():
+    manager, captured = _manager_with_dispatch_capture()
+    manager.pending_opener = "Hi Dan — quick message for you."
+    manager.pending_hang_up_gate = "Deliver the message, then wrap up."
+
+    await manager.start_call(
+        {"contact_id": 2},
+        {"contact_id": 1},
+        outbound=True,
+        channel="whatsapp_call",
+    )
+
+    meta = captured["extra_metadata"]
+    assert meta["hang_up_gate_reason"] == "Deliver the message, then wrap up."
+    # Consumed into the CM-side mirror so tools/prompt/proactive-speech see it.
+    assert manager.pending_hang_up_gate == ""
+    assert manager.hang_up_gate_reason == "Deliver the message, then wrap up."
+
+
+@pytest.mark.asyncio
+async def test_call_without_pre_armed_gate_has_no_metadata_key():
+    manager, captured = _manager_with_dispatch_capture()
+    manager.pending_opener = "Hi Dan."
+
+    await manager.start_call(
+        {"contact_id": 2},
+        {"contact_id": 1},
+        outbound=True,
+        channel="phone_call",
+    )
+
+    assert "hang_up_gate_reason" not in (captured["extra_metadata"] or {})
+    assert manager.hang_up_gate_reason is None
+
+
+@pytest.mark.asyncio
+async def test_pre_armed_gate_reattached_on_meet_ring_answer():
+    """The Console answer flow round-trips only the opener; the queued gate is
+    consumed CM-side when the meet session starts."""
+    manager, captured = _manager_with_dispatch_capture()
+    manager.pending_hang_up_gate = "Quick check-in, wrap up after."
+
+    await manager.start_unify_meet(
+        {"contact_id": 1},
+        {"contact_id": 1},
+        "unity_1_meet",
+        opening_config={
+            "mode": "opener",
+            "opener_text": "Hi — picking up where we left off.",
+            "source": "unify_meet_ring",
+        },
+    )
+
+    meta = captured["extra_metadata"]
+    assert meta["hang_up_gate_reason"] == "Quick check-in, wrap up after."
+    assert manager.pending_hang_up_gate == ""
+    assert manager.hang_up_gate_reason == "Quick check-in, wrap up after."
+
+
+@pytest.mark.asyncio
+async def test_cleanup_clears_pre_armed_gate_state():
+    manager, _ = _manager_with_dispatch_capture()
+    manager.pending_hang_up_gate = "stale"
+    manager.hang_up_gate_reason = "stale"
+    manager._socket_server = None
+
+    await manager.cleanup_call_proc()
+
+    assert manager.pending_hang_up_gate == ""
+    assert manager.hang_up_gate_reason is None
+
+
+class TestPreArmedToolFlow:
+    """make_call / make_whatsapp_call queue the gate before dialing."""
+
+    def _comms(self, cm):
+        from unify.comms.primitives import CommsPrimitives
+
+        comms = CommsPrimitives(conversation_manager=cm)
+        comms._get_contact = lambda **kwargs: {
+            "contact_id": 5,
+            "first_name": "Alice",
+            "surname": "Owner",
+            "phone_number": "+15555550123",
+            "whatsapp_number": "+15555550123",
+            "should_respond": True,
+        }
+        comms._event_broker.publish = AsyncMock()
+        return comms
+
+    def _cm(self):
+        from types import SimpleNamespace
+
+        from unify.conversation_manager.events import WhatsAppCallSent
+
+        call_manager = SimpleNamespace(
+            has_active_call=False,
+            has_active_google_meet=False,
+            has_active_teams_meet=False,
+            _whatsapp_call_joining=False,
+            pending_opener="",
+            pending_briefing="",
+            pending_hang_up_gate="",
+        )
+        return SimpleNamespace(
+            call_manager=call_manager,
+            _pending_whatsapp_call_openers={},
+            assistant_whatsapp_number="+15555550001",
+            active_pending_onboarding_outbound=lambda: None,
+            build_whatsapp_call_sent_event=lambda contact: WhatsAppCallSent(
+                contact=contact,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_queued_before_whatsapp_dial(self, monkeypatch):
+        from unify.conversation_manager.domains import comms_utils
+
+        cm = self._cm()
+        comms = self._comms(cm)
+        monkeypatch.setattr(
+            comms_utils.SESSION_DETAILS.assistant,
+            "agent_id",
+            42,
+        )
+        seen_at_dial: dict = {}
+
+        async def _fake_start_whatsapp_call(**kwargs):
+            seen_at_dial["gate"] = cm.call_manager.pending_hang_up_gate
+            return {"success": True, "method": "direct"}
+
+        monkeypatch.setattr(
+            comms_utils,
+            "start_whatsapp_call",
+            _fake_start_whatsapp_call,
+        )
+
+        result = await comms.make_whatsapp_call(
+            contact_id=5,
+            opener="Hi Alice — quick question.",
+            allow_hang_up="One question, then wrap up.",
+        )
+
+        assert result["status"] == "ok"
+        assert seen_at_dial["gate"] == "One question, then wrap up."
+
+    @pytest.mark.asyncio
+    async def test_gate_cleared_on_whatsapp_dial_failure(self, monkeypatch):
+        from unify.conversation_manager.domains import comms_utils
+
+        cm = self._cm()
+        comms = self._comms(cm)
+        monkeypatch.setattr(
+            comms_utils.SESSION_DETAILS.assistant,
+            "agent_id",
+            42,
+        )
+
+        async def _fake_start_whatsapp_call(**kwargs):
+            return {"success": False}
+
+        monkeypatch.setattr(
+            comms_utils,
+            "start_whatsapp_call",
+            _fake_start_whatsapp_call,
+        )
+        comms._surface_comms_error = AsyncMock(
+            return_value={"status": "error", "error": "failed"},
+        )
+
+        await comms.make_whatsapp_call(
+            contact_id=5,
+            opener="Hi Alice.",
+            allow_hang_up="wrap up",
+        )
+
+        assert cm.call_manager.pending_hang_up_gate == ""
+
+    @pytest.mark.asyncio
+    async def test_permission_invite_stashes_gate_for_callback(self, monkeypatch):
+        from unify.conversation_manager.domains import comms_utils
+
+        cm = self._cm()
+        comms = self._comms(cm)
+        monkeypatch.setattr(
+            comms_utils.SESSION_DETAILS.assistant,
+            "agent_id",
+            42,
+        )
+
+        async def _fake_start_whatsapp_call(**kwargs):
+            return {
+                "success": True,
+                "method": "invite",
+                "pool_number": "+15555550001",
+            }
+
+        monkeypatch.setattr(
+            comms_utils,
+            "start_whatsapp_call",
+            _fake_start_whatsapp_call,
+        )
+        monkeypatch.setattr(
+            comms_utils,
+            "store_pending_whatsapp_call_intent",
+            AsyncMock(),
+        )
+
+        await comms.make_whatsapp_call(
+            contact_id=5,
+            opener="Hi Alice.",
+            allow_hang_up="One question, then wrap up.",
+        )
+
+        stashed = cm._pending_whatsapp_call_openers[5]
+        assert stashed["hang_up_gate"] == "One question, then wrap up."
+        # The live queue is cleared — no leg exists yet.
+        assert cm.call_manager.pending_hang_up_gate == ""
+
+    @pytest.mark.asyncio
+    async def test_onboarding_quiz_call_force_arms_gate(self, monkeypatch):
+        from unify.comms.primitives import _ONBOARDING_CALL_HANG_UP_REASON
+        from unify.conversation_manager.domains import comms_utils
+
+        cm = self._cm()
+        cm.active_pending_onboarding_outbound = lambda: {
+            "channel": "whatsapp_call",
+            "onboarding_trigger_step_id": "whatsapp-call-reference",
+        }
+        comms = self._comms(cm)
+        monkeypatch.setattr(
+            comms_utils.SESSION_DETAILS.assistant,
+            "agent_id",
+            42,
+        )
+        seen_at_dial: dict = {}
+
+        async def _fake_start_whatsapp_call(**kwargs):
+            seen_at_dial["gate"] = cm.call_manager.pending_hang_up_gate
+            return {"success": True, "method": "direct"}
+
+        monkeypatch.setattr(
+            comms_utils,
+            "start_whatsapp_call",
+            _fake_start_whatsapp_call,
+        )
+
+        # The slow brain passed NO allow_hang_up — onboarding forces it on.
+        await comms.make_whatsapp_call(
+            contact_id=5,
+            opener="Hi Dan — quick quiz.",
+        )
+
+        assert seen_at_dial["gate"] == _ONBOARDING_CALL_HANG_UP_REASON
+
+    @pytest.mark.asyncio
+    async def test_onboarding_force_arm_keeps_llm_reason_when_given(self):
+        from unify.comms.primitives import CommsPrimitives
+
+        cm = self._cm()
+        cm.active_pending_onboarding_outbound = lambda: {
+            "channel": "phone_call",
+            "onboarding_trigger_step_id": "phone-call-reference",
+        }
+        comms = CommsPrimitives(conversation_manager=cm)
+
+        assert comms._pre_armed_hang_up_reason(
+            "One clue then hang up",
+            "phone_call",
+        ) == ("One clue then hang up")
+
+    @pytest.mark.asyncio
+    async def test_no_onboarding_no_allow_hang_up_means_no_gate(self):
+        from unify.comms.primitives import CommsPrimitives
+
+        cm = self._cm()
+        comms = CommsPrimitives(conversation_manager=cm)
+
+        assert comms._pre_armed_hang_up_reason(None, "phone_call") == ""
+        assert comms._pre_armed_hang_up_reason("  ", "whatsapp_call") == ""

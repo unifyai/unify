@@ -18,7 +18,11 @@ from unify.conversation_manager.conversation_manager import ConversationManager
 
 @pytest.mark.asyncio
 async def test_meet_ring_no_answer_falls_back_to_text():
-    """An unanswered ring pushes a continue-over-text notification and re-runs."""
+    """An unanswered ring pushes a continue-over-text notification and re-runs.
+
+    The ring's queued pre-armed hang-up gate must also be dropped so it cannot
+    leak into a later, unrelated call.
+    """
     pushed: list = []
     fake = SimpleNamespace(
         _pending_meet_ring="ring-1",
@@ -26,12 +30,14 @@ async def test_meet_ring_no_answer_falls_back_to_text():
         notifications_bar=SimpleNamespace(
             push_notif=lambda *a, **k: pushed.append(a),
         ),
+        call_manager=SimpleNamespace(pending_hang_up_gate="stale gate"),
         run_llm=AsyncMock(),
     )
 
     await ConversationManager._await_meet_ring_answer(fake, "ring-1")
 
     assert fake._pending_meet_ring is None
+    assert fake.call_manager.pending_hang_up_gate == ""
     assert pushed, "a continue-over-text notification must be pushed"
     fake.run_llm.assert_awaited_once()
 
