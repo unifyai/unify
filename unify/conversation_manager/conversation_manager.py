@@ -37,7 +37,7 @@ from unify.conversation_manager.events import *
 from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
-from unify.common.llm_client import new_llm_client
+from unify.common.llm_client import new_llm_client, new_vision_llm_client
 from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
@@ -1277,7 +1277,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
     # conversation falls back to text.
     _MEET_RING_TIMEOUT_S = 25.0
 
-    async def ring_unify_meet(self, opener: str, briefing: str | None = None) -> dict:
+    async def ring_unify_meet(
+        self,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
+    ) -> dict:
         """Ring the owner on Unify Meet and await an answer (no-answer -> text).
 
         Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
@@ -1285,7 +1290,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         owner's browser for them; when they answer, Console's normal connect flow
         lands here as ``UnifyMeetReceived``. ``opener`` is spoken verbatim once
         the call connects; ``briefing`` is unspoken context the voice agent uses
-        to run the call's task itself. If unanswered within
+        to run the call's task itself; ``allow_hang_up`` pre-arms the hang-up
+        gate for calls expected to be short. If unanswered within
         ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue
         over text.
         """
@@ -1303,8 +1309,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 ),
             }
         # The opener round-trips through the Console's answer flow; the
-        # briefing stays queued here and is reattached by start_unify_meet.
+        # briefing and pre-armed gate stay queued here and are reattached by
+        # start_unify_meet when the owner answers.
         self.call_manager.pending_briefing = (briefing or "").strip()
+        self.call_manager.pending_hang_up_gate = " ".join(
+            (allow_hang_up or "").split(),
+        ).strip()
         call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
         self._pending_meet_ring = call_session_id
         result = await comms_utils.send_unify_meet_ring(
@@ -1334,6 +1344,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         from unify.common.prompt_helpers import now as prompt_now
 
         self._pending_meet_ring = None
+        # The ring died unanswered: drop its queued pre-armed gate so it
+        # cannot leak into a later, unrelated call.
+        self.call_manager.pending_hang_up_gate = ""
         self.notifications_bar.push_notif(
             "Comms",
             (
@@ -2213,15 +2226,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         _t0 = _rl_time.perf_counter()
         _client_step_t0 = _t0
-        client = new_llm_client(
-            SETTINGS.UNIFY_MODEL,
-            origin="ConversationManager",
-            # Slow brain stays at "high"; the system default is "max" (used by
-            # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
-            # hardest tasks at extra latency; on MiniMax M3 all non-none effort
-            # levels enable the same adaptive thinking mode.
-            reasoning_effort="high",
-        )
+        if screenshots:
+            client = new_vision_llm_client(
+                origin="ConversationManager",
+                reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
+            )
+        else:
+            client = new_llm_client(
+                SETTINGS.UNIFY_MODEL,
+                origin="ConversationManager",
+                # Slow brain stays at "high"; the system default is "max" (used by
+                # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
+                # hardest tasks at extra latency; on MiniMax M3 all non-none effort
+                # levels enable the same adaptive thinking mode.
+                reasoning_effort="high",
+            )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
         if hasattr(client, "_pending_thinking_log"):

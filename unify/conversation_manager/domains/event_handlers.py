@@ -410,13 +410,14 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     )
     sender_name = _get_sender_name(contact)
 
-    # Inject stashed opener/briefing from make_whatsapp_call if a pending
-    # permission grant triggered this inbound WhatsApp call.
+    # Inject stashed opener/briefing/pre-armed gate from make_whatsapp_call if
+    # a pending permission grant triggered this inbound WhatsApp call.
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
         stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
         if stashed and stashed.get("opener"):
             cm.call_manager.pending_opener = stashed["opener"]
             cm.call_manager.pending_briefing = stashed.get("briefing", "")
+            cm.call_manager.pending_hang_up_gate = stashed.get("hang_up_gate", "")
 
     if isinstance(event, WhatsAppCallSent) and contact_id is not None:
         if not cm.call_manager.pending_opener:
@@ -424,6 +425,10 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             if stashed and stashed.get("opener"):
                 cm.call_manager.pending_opener = stashed["opener"]
                 cm.call_manager.pending_briefing = stashed.get("briefing", "")
+                cm.call_manager.pending_hang_up_gate = stashed.get(
+                    "hang_up_gate",
+                    "",
+                )
             else:
                 from unify.conversation_manager.domains import comms_utils
 
@@ -1091,11 +1096,13 @@ async def _(
 
         opener = None
         call_briefing = ""
+        call_hang_up_gate = ""
         if isinstance(pending_openers, dict):
             stashed = pending_openers.pop(contact_id, None)
             if stashed:
                 opener = stashed.get("opener")
                 call_briefing = stashed.get("briefing", "")
+                call_hang_up_gate = stashed.get("hang_up_gate", "")
         if opener is None and pool_number and whatsapp_number:
             try:
                 intent = await comms_utils.get_pending_whatsapp_call_intent(
@@ -1118,6 +1125,7 @@ async def _(
 
         cm.call_manager.pending_opener = opener
         cm.call_manager.pending_briefing = call_briefing
+        cm.call_manager.pending_hang_up_gate = call_hang_up_gate
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1150,6 +1158,7 @@ async def _(
         cm.call_manager._whatsapp_call_joining = False
         cm.call_manager.pending_opener = ""
         cm.call_manager.pending_briefing = ""
+        cm.call_manager.pending_hang_up_gate = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
