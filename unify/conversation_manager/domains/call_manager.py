@@ -91,14 +91,19 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 # ``medium_scripts/worker.py``.
 WORKER_REWARM_STALL_S = 60.0
 
-# Fallback briefing for an outbound call that somehow reaches dispatch without a
-# mission context. An agent-initiated call must never open "blind", so even
-# here the agent is told to open with purpose rather than wait in silence.
-_OUTBOUND_OPENER_FALLBACK_CONTEXT = (
-    "You are placing this outbound call. Open by greeting the person warmly, "
-    "saying who you are, and giving the reason you are reaching out, using what "
-    "you already know about this contact and your relationship with them."
-)
+
+def _simulated_outbound_opening_config(opener: str, *, source: str) -> dict:
+    return {
+        "mode": "simulated",
+        "simulated_utterance": opener.strip(),
+        "source": source,
+    }
+
+
+def _opening_config_is_outbound(opening_config: dict | None) -> bool:
+    if not opening_config:
+        return False
+    return opening_config.get("mode") == "simulated"
 
 
 class LivekitCallManager:
@@ -125,7 +130,7 @@ class LivekitCallManager:
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
         self.is_outbound: bool = False
-        self.initial_notification: str = ""
+        self.pending_opener: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
@@ -702,21 +707,13 @@ class LivekitCallManager:
         room_name = room_name or make_room_name(self.assistant_id, medium)
         self.room_name = room_name
 
-        # An agent-initiated (outbound) call must never open "blind". The mission
-        # context becomes a briefed opener the agent speaks the moment the callee
-        # answers — and is injected as a durable system briefing for the rest of
-        # the call — rather than a reactive fast-brain notification. This is the
-        # single outbound choke point, so every outbound path is covered.
         if outbound and opening_config is None:
-            briefing = (self.initial_notification or "").strip()
-            opening_config = {
-                "mode": "briefed",
-                "system_context": briefing or _OUTBOUND_OPENER_FALLBACK_CONTEXT,
-                "source": "outbound_call_opening",
-            }
-            # Delivered as the opener (and the in-call system briefing), so don't
-            # also queue it as a separate notification that would race/double it.
-            self.initial_notification = ""
+            opener = (self.pending_opener or "").strip()
+            opening_config = _simulated_outbound_opening_config(
+                opener,
+                source="outbound_call_opening",
+            )
+            self.pending_opener = ""
 
         extra_metadata = {"opening_config": opening_config} if opening_config else None
         extra_env = (
@@ -743,10 +740,10 @@ class LivekitCallManager:
                 extra_env=extra_env,
             )
 
-        if self.initial_notification:
+        if self.pending_opener and not outbound:
             notification_event = FastBrainNotification(
                 contact=contact,
-                message=self.initial_notification,
+                message=self.pending_opener,
                 source="initial_call",
             )
             await self._socket_server.queue_for_clients(
@@ -758,9 +755,9 @@ class LivekitCallManager:
                 notification_event.to_json(),
             )
             LOGGER.debug(
-                f"{ICONS['ipc']} {trace_kv('CALL_MANAGER_INITIAL_NOTIFICATION', content_preview=self.initial_notification[:80])}",
+                f"{ICONS['ipc']} {trace_kv('CALL_MANAGER_PENDING_OPENER', content_preview=self.pending_opener[:80])}",
             )
-            self.initial_notification = ""
+            self.pending_opener = ""
 
     async def start_unify_meet(
         self,
@@ -784,7 +781,17 @@ class LivekitCallManager:
                 )
                 return
 
-        self.is_outbound = False
+        outbound = _opening_config_is_outbound(opening_config)
+        if opening_config is None and (self.pending_opener or "").strip():
+            opener = self.pending_opener.strip()
+            opening_config = _simulated_outbound_opening_config(
+                opener,
+                source="outbound_unify_meet_opening",
+            )
+            self.pending_opener = ""
+            outbound = True
+
+        self.is_outbound = outbound
         self._call_channel = "unify_meet"
         self._disconnect_contact = contact
         self.reset_speaker_engagement(contact, boss)
@@ -822,7 +829,7 @@ class LivekitCallManager:
                 "unify_meet",
                 contact,
                 boss,
-                False,
+                outbound,
                 extra_metadata=extra_metadata or None,
             )
         if not dispatched:
@@ -831,7 +838,7 @@ class LivekitCallManager:
                 "unify_meet",
                 contact,
                 boss,
-                False,
+                outbound,
                 extra_env=extra_env,
             )
 
@@ -912,6 +919,16 @@ class LivekitCallManager:
         self._disconnect_contact = contact
         self.reset_speaker_engagement(contact, boss)
 
+        opener = (self.pending_opener or "").strip()
+        meet_opening_config = None
+        if opener:
+            meet_opening_config = _simulated_outbound_opening_config(
+                opener,
+                source="outbound_meet_opening",
+            )
+            self.pending_opener = ""
+        meet_outbound = meet_opening_config is not None
+
         display_name = display_name or self.assistant_name or "Unity Assistant"
 
         from unify.session_details import SESSION_DETAILS
@@ -964,6 +981,10 @@ class LivekitCallManager:
             "meet_display_name": display_name,
             "agent_service_url": "http://localhost:3000",
         }
+        if meet_opening_config:
+            meet_extra["opening_config"] = meet_opening_config
+
+        self.is_outbound = meet_outbound
 
         dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
@@ -972,17 +993,20 @@ class LivekitCallManager:
                 channel,
                 contact,
                 boss,
-                False,
+                meet_outbound,
                 extra_metadata=meet_extra,
             )
         if not dispatched:
+            meet_env = dict(meet_extra)
+            if meet_opening_config:
+                meet_env["opening_config"] = json.dumps(meet_opening_config)
             await self._start_call_subprocess(
                 room_name,
                 channel,
                 contact,
                 boss,
-                False,
-                extra_env=meet_extra,
+                meet_outbound,
+                extra_env=meet_env,
             )
 
         # Browser join runs after dispatch — fast brain initializes in parallel.
@@ -1016,6 +1040,12 @@ class LivekitCallManager:
                 json.dumps(
                     {"type": "meet_session_id", "session_id": self._meet_session_id},
                 ),
+            )
+
+        if meet_outbound and self._event_broker:
+            await self._event_broker.publish(
+                "app:call:status",
+                json.dumps({"type": "call_answered"}),
             )
 
         return True
@@ -1353,7 +1383,7 @@ class LivekitCallManager:
         self._whatsapp_call_joining = False
 
         self.is_outbound = False
-        self.initial_notification = ""
+        self.pending_opener = ""
         self._call_channel = None
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""

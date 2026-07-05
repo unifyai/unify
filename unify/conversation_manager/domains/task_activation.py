@@ -408,11 +408,11 @@ def _voice_fast_brain_available(cm: "ConversationManager") -> bool:
 def _append_initial_call_notification(cm: "ConversationManager", content: str) -> None:
     """Append silent task context to the next call-start notification payload."""
 
-    existing = getattr(cm.call_manager, "initial_notification", "") or ""
+    existing = getattr(cm.call_manager, "pending_opener", "") or ""
     if existing:
-        cm.call_manager.initial_notification = f"{existing}\n\n{content}"
+        cm.call_manager.pending_opener = f"{existing}\n\n{content}"
     else:
-        cm.call_manager.initial_notification = content
+        cm.call_manager.pending_opener = content
 
 
 async def _queue_fast_brain_task_context(

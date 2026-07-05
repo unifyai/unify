@@ -446,10 +446,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # was closed, a free-form outbound proves it was open.
         self._whatsapp_window_open: dict[int, bool] = {}
 
-        # Outbound WhatsApp call contexts stashed while awaiting call permission.
-        # When the contact grants permission (taps "Call now"), the context is
-        # injected as call_manager.initial_notification.  Maps contact_id → context.
-        self._pending_whatsapp_call_contexts: dict[int, str] = {}
+        # Outbound WhatsApp call openers stashed while awaiting call permission.
+        # When the contact grants permission (taps "Call now"), the opener is
+        # injected as call_manager.pending_opener. Maps contact_id → opener.
+        self._pending_whatsapp_call_openers: dict[int, str] = {}
         self._pending_onboarding_outbound: dict[str, Any] | None = None
         self._active_learning_beat: dict[str, str] | None = None
         self._startup_wake_reasons: list[dict[str, Any]] = []
@@ -1267,25 +1267,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
     # conversation falls back to text.
     _MEET_RING_TIMEOUT_S = 25.0
 
-    async def ring_unify_meet(self, context: str = "") -> dict:
+    async def ring_unify_meet(self, opener: str) -> dict:
         """Ring the owner on Unify Meet and await an answer (no-answer -> text).
 
         Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
         incoming-call window with an Answer button. The assistant cannot join the
         owner's browser for them; when they answer, Console's normal connect flow
-        lands here as ``UnifyMeetReceived``. ``context`` becomes a briefed opener
-        so the answered call opens purposefully. If unanswered within
-        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue over
-        text.
+        lands here as ``UnifyMeetReceived``. ``opener`` is spoken verbatim once
+        the call connects. If unanswered within ``_MEET_RING_TIMEOUT_S``, a
+        notification tells the brain to continue over text.
         """
         import uuid
 
         from unify.conversation_manager.domains import comms_utils
 
         call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
-        reason = (context or "").strip() or (
-            "Continuing our conversation on the live call."
-        )
+        reason = opener.strip()
         self._pending_meet_ring = call_session_id
         result = await comms_utils.send_unify_meet_ring(
             call_session_id=call_session_id,

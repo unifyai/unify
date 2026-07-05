@@ -799,19 +799,19 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_call(
             contact_id=contact_id,
-            context=context,
+            opener=opener,
             phone_number=phone_number,
         )
 
     async def make_call_to_boss(
         self,
         *,
-        context: str,
+        opener: str,
     ) -> dict[str, Any]:
         """Start an outbound phone call to my boss only.
 
@@ -822,12 +822,12 @@ class ConversationManagerBrainActionTools:
 
         Parameters
         ----------
-        context : str
-            Mission briefing for the voice agent speaking with my boss.
+        opener : str
+            Verbatim spoken line at the start of the call once my boss answers.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
-            context=context,
+            opener=opener,
         )
 
     @wraps(CommsPrimitives.make_whatsapp_call)
@@ -835,19 +835,19 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_whatsapp_call(
             contact_id=contact_id,
-            context=context,
+            opener=opener,
             whatsapp_number=whatsapp_number,
         )
 
     async def make_whatsapp_call_to_boss(
         self,
         *,
-        context: str,
+        opener: str,
     ) -> dict[str, Any]:
         """Start a WhatsApp voice call to my boss only.
 
@@ -858,18 +858,18 @@ class ConversationManagerBrainActionTools:
 
         Parameters
         ----------
-        context : str
-            Mission briefing for the voice agent speaking with my boss.
+        opener : str
+            Verbatim spoken line at the start of the call once my boss answers.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),
-            context=context,
+            opener=opener,
         )
 
     async def join_google_meet(
         self,
         meet_url: str,
-        context: str = "",
+        opener: str,
     ) -> dict[str, Any]:
         """Join a Google Meet call.
 
@@ -880,9 +880,8 @@ class ConversationManagerBrainActionTools:
 
         Args:
             meet_url: The full Google Meet URL (e.g. https://meet.google.com/abc-defg-hij).
-            context: Briefing for the voice agent about the meeting purpose,
-                expected participants, topics to cover, and how to behave.
-                Same guidance principles as make_call's context parameter.
+            opener: Verbatim spoken line once the meeting is live and someone
+                is listening. Write the exact words to speak.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -894,8 +893,7 @@ class ConversationManagerBrainActionTools:
                 "message": "A call or meeting is already active.",
             }
 
-        if context:
-            self._cm.call_manager.initial_notification = context
+        self._cm.call_manager.pending_opener = opener.strip()
 
         from unify.conversation_manager.events import GoogleMeetReceived
 
@@ -970,7 +968,7 @@ class ConversationManagerBrainActionTools:
     async def join_teams_meet(
         self,
         meet_url: str,
-        context: str = "",
+        opener: str,
     ) -> dict[str, Any]:
         """Join a Microsoft Teams meeting.
 
@@ -983,9 +981,8 @@ class ConversationManagerBrainActionTools:
             meet_url: The full Teams meeting URL (e.g.
                 https://teams.microsoft.com/l/meetup-join/... or
                 https://teams.live.com/meet/...).
-            context: Briefing for the voice agent about the meeting purpose,
-                expected participants, topics to cover, and how to behave.
-                Same guidance principles as make_call's context parameter.
+            opener: Verbatim spoken line once the meeting is live and someone
+                is listening. Write the exact words to speak.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -997,8 +994,7 @@ class ConversationManagerBrainActionTools:
                 "message": "A call or meeting is already active.",
             }
 
-        if context:
-            self._cm.call_manager.initial_notification = context
+        self._cm.call_manager.pending_opener = opener.strip()
 
         from unify.conversation_manager.events import TeamsMeetReceived
 
@@ -1033,7 +1029,7 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
 
-    async def start_unify_meet(self, context: str = "") -> dict[str, Any]:
+    async def start_unify_meet(self, opener: str) -> dict[str, Any]:
         """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
 
         Unify Meet is the in-app live call inside the Console - the canonical
@@ -1050,10 +1046,8 @@ class ConversationManagerBrainActionTools:
         phone or WhatsApp call I must ``hang_up`` first, then ring the Meet.
 
         Args:
-            context: A short briefing for how I should open the call once it is
-                answered (why I'm calling / what we're continuing), spoken as a
-                purposeful greeting. Same guidance principles as make_call's
-                context parameter.
+            opener: Verbatim spoken line once the call connects. Write the exact
+                words to speak.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -1067,7 +1061,7 @@ class ConversationManagerBrainActionTools:
                     "ring the Unify Meet."
                 ),
             }
-        return await self._cm.ring_unify_meet(context=context)
+        return await self._cm.ring_unify_meet(opener=opener)
 
     async def hang_up(self) -> dict[str, Any]:
         """End the current call or meeting, whatever kind it is.
