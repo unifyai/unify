@@ -43,7 +43,7 @@ from unify.provider_proxy.classify import (
     Locator,
     classify,
 )
-from unify.provider_proxy.filter import filter_listing
+from unify.provider_proxy.filter import filter_changes, filter_listing
 from unify.provider_proxy.session import ProxySession, current_session, set_session
 
 logger = logging.getLogger(__name__)
@@ -298,6 +298,7 @@ async def _handle_batch(
     synth: dict[str, dict[str, Any]] = {}
     forward: list[dict[str, Any]] = []
     listing_parent: dict[str, Optional[Locator]] = {}
+    changes_list_ids: set[str] = set()
 
     for sub in requests:
         sub_id = str(sub.get("id"))
@@ -322,11 +323,14 @@ async def _handle_batch(
                 synth[sub_id] = {"id": sub_id, "status": 404}
                 continue
         if c.kind == KIND_FILE_READ and c.is_listing:
-            parent_loc = c.parent
-            if parent_loc is not None and parent_loc.is_path:
-                pids, _ = await _resolve_ids(provider, parent_loc)
-                parent_loc = Locator(pids[0], pids[1]) if pids is not None else None
-            listing_parent[sub_id] = parent_loc
+            if c.changes_list:
+                changes_list_ids.add(sub_id)
+            else:
+                parent_loc = c.parent
+                if parent_loc is not None and parent_loc.is_path:
+                    pids, _ = await _resolve_ids(provider, parent_loc)
+                    parent_loc = Locator(pids[0], pids[1]) if pids is not None else None
+                listing_parent[sub_id] = parent_loc
         forward.append(sub)
 
     upstream_by_id: dict[str, dict[str, Any]] = {}
@@ -356,13 +360,20 @@ async def _handle_batch(
         if item is None:
             responses.append({"id": sub_id, "status": 502})
             continue
-        if sub_id in listing_parent and isinstance(item.get("body"), dict):
-            item["body"] = await filter_listing(
-                provider,
-                item["body"],
-                listing_parent[sub_id],
-                rewrite,
-            )
+        if isinstance(item.get("body"), dict):
+            if sub_id in changes_list_ids:
+                item["body"] = await filter_changes(
+                    provider,
+                    item["body"],
+                    rewrite,
+                )
+            elif sub_id in listing_parent:
+                item["body"] = await filter_listing(
+                    provider,
+                    item["body"],
+                    listing_parent[sub_id],
+                    rewrite,
+                )
         responses.append(item)
 
     return JSONResponse(content={"responses": responses})
@@ -461,12 +472,16 @@ async def _dispatch(provider: str, rest_path: str, request: Request) -> Response
             payload = resp.json()
         except (ValueError, TypeError):
             return _passthrough_response(resp)
-        filtered = await filter_listing(
-            provider,
-            payload,
-            parent_loc,
-            _rewriter(provider, session),
-        )
+        rewrite = _rewriter(provider, session)
+        if c.changes_list:
+            filtered = await filter_changes(provider, payload, rewrite)
+        else:
+            filtered = await filter_listing(
+                provider,
+                payload,
+                parent_loc,
+                rewrite,
+            )
         return JSONResponse(content=filtered, status_code=resp.status_code)
 
     if c.target is not None:

@@ -134,6 +134,50 @@ async def test_next_link_is_rewritten(monkeypatch):
     assert out["@odata.nextLink"].startswith("http://127.0.0.1:9/microsoft/")
 
 
+@pytest.mark.asyncio
+async def test_delta_link_is_rewritten(monkeypatch):
+    get_policy_store().set_policies(
+        [{"provider": "microsoft", "default_allow": True, "decisions": []}],
+    )
+    monkeypatch.setattr(flt, "is_allowed", _always(True))
+
+    payload = {
+        "value": [_ms_item("A")],
+        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/drive/root/delta?token=abc",
+    }
+
+    def rewrite(url: str) -> str:
+        return url.replace(
+            "https://graph.microsoft.com",
+            "http://127.0.0.1:9/microsoft",
+        )
+
+    out = await flt.filter_listing("microsoft", payload, Locator("D", "root"), rewrite)
+    assert out["@odata.deltaLink"].startswith("http://127.0.0.1:9/microsoft/")
+
+
+@pytest.mark.asyncio
+async def test_google_changes_filtered(monkeypatch):
+    get_policy_store().set_policies(
+        [{"provider": "google", "default_allow": False, "decisions": []}],
+    )
+
+    async def _is_allowed(provider, drive_id, item_id):
+        return item_id == "keep"
+
+    monkeypatch.setattr(flt, "is_allowed", _is_allowed)
+
+    payload = {
+        "changes": [
+            {"file": {"id": "keep", "driveId": "D"}},
+            {"file": {"id": "drop", "driveId": "D"}},
+            {"removed": True, "fileId": "gone"},
+        ],
+    }
+    out = await flt.filter_changes("google", payload, _identity)
+    assert [c["file"]["id"] for c in out["changes"]] == ["keep"]
+
+
 def _always(value: bool):
     async def _fn(provider, drive_id, item_id):
         return value
