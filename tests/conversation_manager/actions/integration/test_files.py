@@ -150,6 +150,10 @@ async def test_file_missing_path_returns_helpful_error(initialized_cm_codeact):
         "no file at",
         "no such file",
         "missing",
+        "does not point to a valid file",
+        "not point to a valid file",
+        "unable to read",
+        "unable to summarize",
         # The LLM also describes path violations as "outside ... workspace"
         # which is semantically the same thing as "missing" from the
         # assistant's perspective (it can't access the path).

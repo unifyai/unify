@@ -36,6 +36,11 @@ def pytest_configure(config) -> None:
     several optional managers. We inject CodeActActor directly, so we do NOT rely
     on UNITY_ACTOR_IMPL, but we DO override manager enablement as needed.
     """
+    os.environ["UNIFY_PRETEST_CONTEXT_CREATE"] = "true"
+    import tests.settings as test_settings_module
+
+    test_settings_module._SettingsProxy._instance = None
+
     os.environ.setdefault("TEST", "true")
     os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
 
@@ -143,12 +148,6 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
         base_context=test_ctx,
     )
 
-    cm = await start_async(
-        project_name="TestProject",
-        enable_comms_manager=False,
-        apply_test_mocks=True,
-    )
-
     original_init_managers = managers_utils._init_managers
 
     def _init_managers_with_test_context(cm, loop, actor=None):
@@ -160,14 +159,28 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
 
     managers_utils._init_managers = _init_managers_with_test_context
 
+    cm = await start_async(
+        project_name="TestProject",
+        enable_comms_manager=False,
+        apply_test_mocks=True,
+    )
+
     # Initialize managers once. Actor created here is a placeholder; tests override per-test.
     try:
+        cm.initialized = False
         with scenario_file_lock("cm_integration_codeact"):
             bind_runtime_context_root(skip_create=False, strict=True)
             await managers_utils.init_conv_manager(cm)
+        await managers_utils.wait_for_initialization(cm)
+
+        unisdk.activate(SETTINGS.test_project_name, overwrite=False)
+        unisdk.set_context(test_ctx, relative=False, skip_create=True)
+        bind_runtime_context_root(skip_create=True, strict=True)
+        ContextRegistry.set_base_context(test_ctx)
 
         # Ensure system contacts are well-formed for tests.
         if cm.contact_manager is not None:
+            cm.contact_manager._sync_required_contacts()
             cm.contact_manager.update_contact(
                 contact_id=0,
                 first_name="Default",
