@@ -383,10 +383,10 @@ def _coordinator_onboarding_notification_text(
         )
         if medium == "chat":
             guidance = (
-                "The onboarding picker resolved to chat and the fixed opener "
-                "was already delivered verbatim in the transcript. Stay silent "
-                "until the user sends their next message — do not send another "
-                "opening turn or replay the intro/overview."
+                "The onboarding picker resolved to chat. A fixed scripted opener "
+                "is being delivered as a unify_message on a short delay — do not "
+                "send it yourself. Stay silent until the user sends their next "
+                "message; do not send another opening turn or replay the intro/overview."
             )
         medium_note = ""
         if medium == "call":
@@ -396,7 +396,7 @@ def _coordinator_onboarding_notification_text(
             )
         elif medium == "chat":
             medium_note = (
-                " (Chat: the scripted opener is already in the transcript — "
+                " (Chat: the scripted opener is scheduled for delivery — "
                 "no chat reply on this event.)"
             )
         text = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
