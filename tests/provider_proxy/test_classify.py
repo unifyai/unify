@@ -335,3 +335,110 @@ def test_google_get_shared_drive():
 def test_google_unknown_drive_endpoint_denied():
     c = classify("google", "GET", "drive/v3/files/F1/notReal", {})
     assert c.kind == KIND_UNKNOWN
+
+
+def test_google_upload_create_is_write():
+    c = classify("google", "POST", "upload/drive/v3/files", {})
+    assert c.kind == KIND_FILE_WRITE
+    assert c.operation == "create"
+
+
+def test_google_upload_update_is_write():
+    c = classify("google", "PATCH", "upload/drive/v3/files/F1", {})
+    assert c.kind == KIND_FILE_WRITE
+    assert c.target.item_id == "F1"
+
+
+def test_google_file_download_post():
+    c = classify("google", "POST", "drive/v3/files/F1/download", {})
+    assert c.kind == KIND_FILE_WRITE
+    assert c.target.item_id == "F1"
+
+
+def test_google_files_trash_delete():
+    c = classify("google", "DELETE", "drive/v3/files/trash", {})
+    assert c.kind == KIND_FILE_WRITE
+
+
+def test_google_generate_ids_non_file():
+    c = classify("google", "GET", "drive/v3/files/generateIds", {})
+    assert c.kind == KIND_NON_FILE
+
+
+def test_google_apps_non_file():
+    c = classify("google", "GET", "drive/v3/apps", {})
+    assert c.kind == KIND_NON_FILE
+
+
+def test_google_file_comments():
+    c = classify("google", "GET", "drive/v3/files/F1/comments", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.target.item_id == "F1"
+
+
+def test_google_file_list_labels():
+    c = classify("google", "GET", "drive/v3/files/F1/listLabels", {})
+    assert c.kind == KIND_FILE_READ
+    assert c.target.item_id == "F1"
+
+
+def test_google_approvals_start():
+    c = classify("google", "POST", "drive/v3/files/F1/approvals:start", {})
+    assert c.kind == KIND_FILE_WRITE
+    assert c.target.item_id == "F1"
+
+
+def test_google_drive_hide():
+    c = classify("google", "POST", "drive/v3/drives/SD1/hide", {})
+    assert c.kind == KIND_FILE_WRITE
+
+
+def test_google_create_shared_drive():
+    c = classify("google", "POST", "drive/v3/drives", {})
+    assert c.kind == KIND_FILE_WRITE
+
+
+_GOOGLE_DRIVE_TABLE = [
+    ("GET", "drive/v3/files", KIND_FILE_READ),
+    ("GET", "drive/v3/files/{id}", KIND_FILE_READ),
+    ("GET", "drive/v3/files/{id}/export", KIND_FILE_READ),
+    ("POST", "drive/v3/files/{id}/copy", KIND_FILE_WRITE),
+    ("GET", "drive/v3/files/{id}/permissions", KIND_FILE_READ),
+    ("GET", "drive/v3/files/{id}/revisions", KIND_FILE_READ),
+    ("POST", "drive/v3/files/{id}/download", KIND_FILE_WRITE),
+    ("GET", "drive/v3/files/{id}/listLabels", KIND_FILE_READ),
+    ("POST", "drive/v3/files/{id}/modifyLabels", KIND_FILE_WRITE),
+    ("GET", "drive/v3/files/{id}/comments", KIND_FILE_READ),
+    ("GET", "drive/v3/files/{id}/accessproposals", KIND_FILE_READ),
+    ("GET", "drive/v3/files/{id}/approvals", KIND_FILE_READ),
+    ("POST", "drive/v3/files/{id}/approvals:start", KIND_FILE_WRITE),
+    ("GET", "drive/v3/changes", KIND_FILE_READ),
+    ("GET", "drive/v3/drives", KIND_FILE_READ),
+    ("GET", "drive/v3/drives/{driveId}", KIND_FILE_READ),
+    ("POST", "drive/v3/drives/{driveId}/hide", KIND_FILE_WRITE),
+    ("POST", "upload/drive/v3/files", KIND_FILE_WRITE),
+    ("PATCH", "upload/drive/v3/files/{id}", KIND_FILE_WRITE),
+    ("GET", "drive/v3/apps", KIND_NON_FILE),
+    ("POST", "drive/v3/channels/stop", KIND_NON_FILE),
+    ("GET", "drive/v3/operations/op123", KIND_NON_FILE),
+]
+
+
+@pytest.mark.parametrize(
+    "method,path,expected_kind",
+    _GOOGLE_DRIVE_TABLE,
+    ids=[p[1] for p in _GOOGLE_DRIVE_TABLE],
+)
+def test_google_drive_template_table(method, path, expected_kind):
+    c = classify("google", method, path, {})
+    assert c.kind == expected_kind, f"{path} -> {c.kind}"
+
+
+_GOOGLE_UNKNOWN = [
+    "drive/v3/files/{id}/fakeOp",
+]
+
+
+@pytest.mark.parametrize("path", _GOOGLE_UNKNOWN)
+def test_google_unknown_suffixes_denied(path):
+    assert classify("google", "GET", path, {}).kind == KIND_UNKNOWN

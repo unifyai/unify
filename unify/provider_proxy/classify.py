@@ -527,6 +527,153 @@ def _classify_microsoft(
 # ── Google Drive ────────────────────────────────────────────────────────────
 
 
+@dataclass
+class GoogleDriveRest:
+    """Segments after ``drive/v3`` plus whether the path uses the upload host prefix."""
+
+    rest: list[str]
+    upload: bool = False
+
+
+def _google_normalize_segs(segs: list[str]) -> GoogleDriveRest | None:
+    if segs[:2] == ["drive", "v3"]:
+        return GoogleDriveRest(segs[2:])
+    if segs[:4] == ["upload", "drive", "v3"]:
+        return GoogleDriveRest(segs[4:], upload=True)
+    return None
+
+
+def _google_is_file_domain(segs: list[str]) -> bool:
+    return _google_normalize_segs(segs) is not None
+
+
+def _google_colon_action(segment: str) -> tuple[str, str] | None:
+    if ":" not in segment:
+        return None
+    name, _, action = segment.partition(":")
+    if not name or not action:
+        return None
+    return (name, action)
+
+
+def _classify_google_comments_subresource(
+    method: str,
+    drive_id: str,
+    file_id: str,
+    sub: list[str],
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+    loc = Locator(drive_id, file_id)
+    if sub == ["comments"]:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "comments",
+            target=loc,
+        )
+    if len(sub) == 2 and sub[0] == "comments":
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "comment",
+            target=loc,
+        )
+    if len(sub) == 3 and sub[0] == "comments" and sub[2] == "replies":
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "replies",
+            target=loc,
+        )
+    if len(sub) == 4 and sub[0] == "comments" and sub[2] == "replies":
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "reply",
+            target=loc,
+        )
+    return None
+
+
+def _classify_google_accessproposals_subresource(
+    method: str,
+    drive_id: str,
+    file_id: str,
+    sub: list[str],
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+    loc = Locator(drive_id, file_id)
+    if sub == ["accessproposals"]:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "accessproposals",
+            target=loc,
+        )
+    if sub[:1] == ["accessproposals"] and len(sub) == 2:
+        action = _google_colon_action(sub[1])
+        if action is not None and action[1] == "resolve" and write:
+            return Classification(
+                "google",
+                KIND_FILE_WRITE,
+                "accessproposal_resolve",
+                target=loc,
+            )
+        if action is None and not write:
+            return Classification(
+                "google",
+                KIND_FILE_READ,
+                "accessproposal",
+                target=loc,
+            )
+    return None
+
+
+def _classify_google_approvals_subresource(
+    method: str,
+    drive_id: str,
+    file_id: str,
+    sub: list[str],
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+    loc = Locator(drive_id, file_id)
+    if not sub:
+        return None
+    head = sub[0]
+    head_action = _google_colon_action(head)
+    if head == "approvals":
+        return Classification(
+            "google",
+            KIND_FILE_WRITE if write else KIND_FILE_READ,
+            "approvals",
+            target=loc,
+        )
+    if head_action is not None and head_action[0] == "approvals" and write:
+        return Classification(
+            "google",
+            KIND_FILE_WRITE,
+            f"approval_{head_action[1]}",
+            target=loc,
+        )
+    if len(sub) == 2 and sub[0] == "approvals":
+        tail_action = _google_colon_action(sub[1])
+        if tail_action is not None and write:
+            return Classification(
+                "google",
+                KIND_FILE_WRITE,
+                f"approval_{tail_action[1]}",
+                target=loc,
+            )
+        if tail_action is None and not write:
+            return Classification(
+                "google",
+                KIND_FILE_READ,
+                "approval",
+                target=loc,
+            )
+    return None
+
+
 def _classify_google_file_subresource(
     method: str,
     drive_id: str,
@@ -535,105 +682,127 @@ def _classify_google_file_subresource(
     query: dict[str, str],
 ) -> Classification | None:
     write = method in _WRITE_METHODS
+    loc = Locator(drive_id, file_id)
     if sub == ["export"]:
         return Classification(
             "google",
             KIND_FILE_READ,
             "export",
-            target=Locator(drive_id, file_id),
+            target=loc,
             is_content=True,
         )
     if sub == ["copy"]:
-        return Classification(
-            "google",
-            KIND_FILE_WRITE,
-            "copy",
-            target=Locator(drive_id, file_id),
-        )
+        return Classification("google", KIND_FILE_WRITE, "copy", target=loc)
+    if sub == ["download"] and write:
+        return Classification("google", KIND_FILE_WRITE, "download", target=loc)
+    if sub == ["listLabels"] and not write:
+        return Classification("google", KIND_FILE_READ, "listLabels", target=loc)
+    if sub == ["modifyLabels"] and write:
+        return Classification("google", KIND_FILE_WRITE, "modifyLabels", target=loc)
     if sub == ["permissions"]:
         return Classification(
             "google",
             KIND_FILE_WRITE if write else KIND_FILE_READ,
             "permissions",
-            target=Locator(drive_id, file_id),
+            target=loc,
         )
     if sub[:1] == ["permissions"] and len(sub) == 2:
         return Classification(
             "google",
             KIND_FILE_WRITE if write else KIND_FILE_READ,
             "permission",
-            target=Locator(drive_id, file_id),
+            target=loc,
         )
     if sub == ["revisions"] and not write:
         return Classification(
             "google",
             KIND_FILE_READ,
             "revisions",
-            target=Locator(drive_id, file_id),
+            target=loc,
         )
     if sub[:1] == ["revisions"] and len(sub) == 2:
         if write:
-            return Classification(
-                "google",
-                KIND_FILE_WRITE,
-                "revision",
-                target=Locator(drive_id, file_id),
-            )
+            return Classification("google", KIND_FILE_WRITE, "revision", target=loc)
         if (query.get("alt") or "").lower() == "media":
             return Classification(
                 "google",
                 KIND_FILE_READ,
                 "revision_content",
-                target=Locator(drive_id, file_id),
+                target=loc,
                 is_content=True,
             )
-        return Classification(
-            "google",
-            KIND_FILE_READ,
-            "revision",
-            target=Locator(drive_id, file_id),
-        )
+        return Classification("google", KIND_FILE_READ, "revision", target=loc)
     if sub == ["watch"] and write:
-        return Classification(
-            "google",
-            KIND_FILE_WRITE,
-            "watch",
-            target=Locator(drive_id, file_id),
-        )
+        return Classification("google", KIND_FILE_WRITE, "watch", target=loc)
     if sub == ["trash"] and write:
-        return Classification(
-            "google",
-            KIND_FILE_WRITE,
-            "trash",
-            target=Locator(drive_id, file_id),
-        )
+        return Classification("google", KIND_FILE_WRITE, "trash", target=loc)
+    for classifier in (
+        _classify_google_comments_subresource,
+        _classify_google_accessproposals_subresource,
+        _classify_google_approvals_subresource,
+    ):
+        result = classifier(method, drive_id, file_id, sub)
+        if result is not None:
+            return result
     return None
 
 
-def _classify_google(
+def _classify_google_drives_tail(
     method: str,
-    segs: list[str],
-    query: dict[str, str],
-) -> Classification:
-    if segs[:2] != ["drive", "v3"]:
-        return Classification("google", KIND_NON_FILE, "/".join(segs))
-
-    rest = segs[2:]
-    if not rest:
-        return Classification("google", KIND_NON_FILE, "drive_root")
-
+    rest: list[str],
+    segs_path: str,
+) -> Classification | None:
     write = method in _WRITE_METHODS
-    drive_id = query.get("driveId") or _MY_DRIVE
-
     if rest == ["drives"]:
+        if write:
+            return Classification("google", KIND_FILE_WRITE, "create_drive")
         return Classification(
             "google",
             KIND_FILE_READ,
             "list_drives",
             root_listing=True,
         )
+    if rest[:1] == ["drives"] and len(rest) >= 2:
+        if len(rest) == 2:
+            return Classification(
+                "google",
+                KIND_FILE_WRITE if write else KIND_FILE_READ,
+                "get_drive",
+            )
+        if rest[2:] == ["emptyTrash"] and write:
+            return Classification("google", KIND_FILE_WRITE, "empty_trash")
+        if rest[2:] == ["hide"] and write:
+            return Classification("google", KIND_FILE_WRITE, "hide_drive")
+        if rest[2:] == ["unhide"] and write:
+            return Classification("google", KIND_FILE_WRITE, "unhide_drive")
+    return None
+
+
+def _classify_google_top_level(
+    method: str,
+    rest: list[str],
+    query: dict[str, str],
+    segs_path: str,
+) -> Classification | None:
+    write = method in _WRITE_METHODS
+
+    drives = _classify_google_drives_tail(method, rest, segs_path)
+    if drives is not None:
+        return drives
+
     if rest == ["about"]:
         return Classification("google", KIND_NON_FILE, "about")
+
+    if rest == ["apps"] and not write:
+        return Classification("google", KIND_NON_FILE, "list_apps")
+    if rest[:1] == ["apps"] and len(rest) == 2 and not write:
+        return Classification("google", KIND_NON_FILE, "get_app")
+
+    if rest == ["channels", "stop"] and write:
+        return Classification("google", KIND_NON_FILE, "channels_stop")
+
+    if rest[:1] == ["operations"] and len(rest) == 2 and not write:
+        return Classification("google", KIND_NON_FILE, "operation")
 
     if rest == ["changes"]:
         if write:
@@ -650,24 +819,41 @@ def _classify_google(
     if rest == ["changes", "watch"] and write:
         return Classification("google", KIND_FILE_WRITE, "changes_watch")
 
-    if rest == ["files", "download"] and write:
-        return Classification("google", KIND_FILE_WRITE, "download")
-
-    if rest[:1] == ["drives"] and len(rest) >= 2:
-        if len(rest) == 2:
-            return Classification(
-                "google",
-                KIND_FILE_WRITE if write else KIND_FILE_READ,
-                "get_drive",
-            )
-        if rest[2:] == ["emptyTrash"] and write:
-            return Classification("google", KIND_FILE_WRITE, "empty_trash")
-        return Classification("google", KIND_UNKNOWN, "/".join(segs))
+    if rest == ["files", "generateIds"] and not write:
+        return Classification("google", KIND_NON_FILE, "generate_ids")
+    if rest == ["files", "generateCseToken"] and not write:
+        return Classification("google", KIND_NON_FILE, "generate_cse_token")
+    if rest == ["files", "trash"] and write:
+        return Classification("google", KIND_FILE_WRITE, "empty_trash")
 
     if rest == ["files"]:
         if write:
             return Classification("google", KIND_FILE_WRITE, "create")
         return Classification("google", KIND_FILE_READ, "list", is_listing=True)
+
+    return None
+
+
+def _classify_google(
+    method: str,
+    segs: list[str],
+    query: dict[str, str],
+) -> Classification:
+    normalized = _google_normalize_segs(segs)
+    if normalized is None:
+        return Classification("google", KIND_NON_FILE, "/".join(segs))
+
+    rest = normalized.rest
+    segs_path = "/".join(segs)
+    if not rest:
+        return Classification("google", KIND_NON_FILE, "drive_root")
+
+    write = method in _WRITE_METHODS
+    drive_id = query.get("driveId") or _MY_DRIVE
+
+    top = _classify_google_top_level(method, rest, query, segs_path)
+    if top is not None:
+        return top
 
     if rest[:1] == ["files"] and len(rest) >= 2:
         file_id = rest[1]
@@ -704,7 +890,7 @@ def _classify_google(
                 target=Locator(drive_id, file_id),
             )
 
-    return Classification("google", KIND_UNKNOWN, "/".join(segs))
+    return Classification("google", KIND_UNKNOWN, segs_path)
 
 
 def classify(

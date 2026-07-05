@@ -102,6 +102,21 @@ class _Forwarder:
                     ],
                 },
             )
+        if method == "GET" and rest_path == "drive/v3/files":
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {"id": "HR", "driveId": "D"},
+                        {"id": "FIN", "driveId": "D"},
+                    ],
+                },
+            )
+        if method == "GET" and rest_path.endswith("/comments"):
+            return httpx.Response(
+                200,
+                json={"comments": [{"id": "c1", "content": "hi"}]},
+            )
         return httpx.Response(200, json={"ok": rest_path})
 
 
@@ -342,3 +357,36 @@ async def test_google_changes_list_masks_disallowed_items(client):
     assert resp.status_code == 200
     body = resp.json()
     assert [c["file"]["id"] for c in body["changes"]] == ["HR"]
+
+
+@pytest.mark.asyncio
+async def test_google_upload_create_in_masked_folder_is_forbidden(client):
+    get_policy_store().set_policies(
+        [{"provider": "google", "default_allow": False, "decisions": []}],
+    )
+    resp = await client.post(
+        "/google/upload/drive/v3/files",
+        json={"name": "new.txt", "parents": ["FIN"]},
+    )
+    assert resp.status_code == 403
+    assert client._forwarder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_google_comments_on_masked_file_is_not_found(client):
+    get_policy_store().set_policies(
+        [{"provider": "google", "default_allow": False, "decisions": []}],
+    )
+    resp = await client.get("/google/drive/v3/files/FIN/comments")
+    assert resp.status_code == 404
+    assert client._forwarder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_google_files_list_masks_disallowed_items(client):
+    get_policy_store().set_policies(
+        [{"provider": "google", "default_allow": False, "decisions": []}],
+    )
+    resp = await client.get("/google/drive/v3/files")
+    assert resp.status_code == 200
+    assert [f["id"] for f in resp.json()["files"]] == ["HR"]
