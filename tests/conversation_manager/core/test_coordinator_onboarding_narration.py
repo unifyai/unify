@@ -75,6 +75,20 @@ def test_reset_notification_omits_trigger_ack_suffix() -> None:
     assert "Mandatory:" not in text
 
 
+def test_session_started_chat_notification_pending_scripted_delivery() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_session_started",
+        message="User just opened the onboarding chat with you.",
+        details={"medium": "chat"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "onboarding_session_started" in text
+    assert "already delivered" not in text.lower()
+    assert "already in the transcript" not in text.lower()
+    assert "scheduled for delivery" in text.lower()
+    assert "Mandatory:" not in text
+
+
 def test_reference_quiz_notification_stays_minimal() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="reference_quiz_clue_requested",
