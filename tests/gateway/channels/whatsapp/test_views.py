@@ -794,6 +794,9 @@ class TestSendCall:
         # answer and immediately hear ringing.
         assert 'waitUrl=""' in twiml
         assert "ring-tone" not in twiml
+        # No join beep either: the default conference beep plays an artificial
+        # "call answered" tone at the callee the moment they pick up.
+        assert 'beep="false"' in twiml
         # Hosted mode: the answered-status callback points at the public adapters.
         assert twilio_client.calls.create.call_args_list[1].kwargs[
             "status_callback"

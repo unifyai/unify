@@ -982,6 +982,11 @@ def _conference_twiml(conference_name: str) -> str:
     played into the LiveKit room at the agent's STT). ``wait_url=""`` keeps the
     lone first leg in silence instead — the callee's only ringing experience is
     WhatsApp's native pre-answer ring.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
     """
     from twilio.twiml.voice_response import VoiceResponse
 
@@ -992,6 +997,7 @@ def _conference_twiml(conference_name: str) -> str:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
+        beep=False,
         wait_url="",
     )
     return str(resp)

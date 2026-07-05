@@ -82,6 +82,11 @@ def _conference_response(
     audio until a second joins. ``ringback`` stays True only for an inbound
     caller's leg (a human waiting for us to answer); SIP/agent legs wait in
     silence so ring audio never plays into the LiveKit room.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
     """
     from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL
 
@@ -92,6 +97,7 @@ def _conference_response(
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
+        beep=False,
         wait_url=CONFERENCE_WAIT_URL if ringback else "",
     )
     return resp
