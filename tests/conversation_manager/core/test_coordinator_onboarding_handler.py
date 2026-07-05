@@ -39,6 +39,8 @@ def _fake_cm() -> SimpleNamespace:
         notifications_bar=SimpleNamespace(push_notif=MagicMock()),
         _session_logger=SimpleNamespace(info=MagicMock()),
         _current_event_trace={},
+        _coordinator_state_checked_at=0.0,
+        _refresh_coordinator_onboarding_state=AsyncMock(),
     )
 
 
@@ -84,21 +86,16 @@ async def test_render_updated_refreshes_render_without_notif_or_run(
 
 
 @pytest.mark.anyio
-async def test_session_started_chat_delivers_scripted_intro_without_run(
+async def test_session_started_chat_schedules_scripted_intro_without_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
-    sleep = AsyncMock()
+    schedule = MagicMock(return_value=True)
     monkeypatch.setattr(
-        "unify.conversation_manager.domains.coordinator_onboarding.asyncio.sleep",
-        sleep,
+        "unify.conversation_manager.domains.coordinator_onboarding.schedule_coordinator_chat_intro_delivery",
+        schedule,
     )
     cm = _fake_cm()
-    send_intro = AsyncMock()
-    monkeypatch.setattr(
-        "unify.conversation_manager.domains.brain_action_tools.ConversationManagerBrainActionTools",
-        lambda _cm: SimpleNamespace(send_unify_message_to_boss=send_intro),
-    )
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_session_started",
         message="User just opened the onboarding chat with you.",
@@ -108,13 +105,8 @@ async def test_session_started_chat_delivers_scripted_intro_without_run(
     should_run = await _handle_coordinator_onboarding_event(event, cm)
 
     assert should_run is False
-    sleep.assert_awaited_once()
-    send_intro.assert_awaited_once()
-    assert send_intro.await_args.kwargs["content"]
-    assert "T-W1N" in send_intro.await_args.kwargs["content"]
-    assert "Any questions before we start with the onboarding?" not in (
-        send_intro.await_args.kwargs["content"]
-    )
+    cm._refresh_coordinator_onboarding_state.assert_awaited_once_with(force=True)
+    schedule.assert_called_once_with(cm)
     cm.notifications_bar.push_notif.assert_called_once()
 
 

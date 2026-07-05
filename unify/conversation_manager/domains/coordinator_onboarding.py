@@ -23,12 +23,14 @@ onboarding the helper simply never runs.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from unify.conversation_manager.events import CoordinatorOnboardingEvent
 from unify.conversation_manager.medium_scripts.call import (
     COORDINATOR_ONBOARDING_CHAT_INTRO,
 )
+from unify.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -36,9 +38,9 @@ if TYPE_CHECKING:
 
 _NOTIFICATION_TYPE = "CoordinatorOnboarding"
 
-# Paired with Console's coordinator onboarding chat typing indicator so the
-# scripted opener lands after ~5s rather than instantly on a warm CM.
-_COORDINATOR_ONBOARDING_CHAT_INTRO_TYPING_SECONDS = 5.0
+# Total wall-clock delay from ``chat_intro_armed_at`` until the scripted
+# opener is sent. Pairs with Console's typing indicator timing.
+_COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS = 3.5
 
 # Per-subtype default instruction used when the orchestra-side
 # ``message`` field is missing or empty — the live emit path always
@@ -96,6 +98,75 @@ _SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 _LEARNING_BEAT_CHANNEL = "learning_beat"
 _ONBOARDING_STEP_LEARN_FROM_CORRECTION = "learn-from-correction"
 _ONBOARDING_LEARNING_PHASE_FIRST = "first_attempt"
+
+
+def _boss_thread_has_assistant_unify_message(cm: "ConversationManager") -> bool:
+    from unify.comms.medium import Medium
+    from unify.conversation_manager.domains.contact_index import UnifyMessage
+
+    boss_id = int(
+        getattr(cm, "boss_contact_id", None) or SESSION_DETAILS.boss_contact_id or 1,
+    )
+    contact_index = getattr(cm, "contact_index", None)
+    if contact_index is None:
+        return False
+    for msg in contact_index.get_messages_for_contact(boss_id, Medium.UNIFY_MESSAGE):
+        if isinstance(msg, UnifyMessage) and msg.role == "assistant":
+            return True
+    return False
+
+
+def _should_deliver_coordinator_chat_intro(cm: "ConversationManager") -> bool:
+    return (
+        cm.coordinator_onboarding_active
+        and cm.coordinator_intro_watched
+        and cm.coordinator_pending_chat_intro
+        and not _boss_thread_has_assistant_unify_message(cm)
+    )
+
+
+def _remaining_chat_intro_delay_seconds(cm: "ConversationManager") -> float:
+    armed_at = cm.coordinator_chat_intro_armed_at
+    if not isinstance(armed_at, str) or not armed_at.strip():
+        return _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS
+    try:
+        armed = datetime.fromisoformat(armed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS
+    elapsed = (datetime.now(timezone.utc) - armed).total_seconds()
+    return max(0.0, _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS - elapsed)
+
+
+async def _deliver_coordinator_chat_intro_task(cm: "ConversationManager") -> None:
+    from unify.conversation_manager.domains.brain_action_tools import (
+        ConversationManagerBrainActionTools,
+    )
+
+    delay = _remaining_chat_intro_delay_seconds(cm)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    if not _should_deliver_coordinator_chat_intro(cm):
+        return
+    tools = ConversationManagerBrainActionTools(cm)
+    await tools.send_unify_message_to_boss(content=COORDINATOR_ONBOARDING_CHAT_INTRO)
+    await cm._patch_coordinator_pending_chat_intro(pending=False)
+    cm._session_logger.info(
+        "coordinator_onboarding_event",
+        "Coordinator onboarding chat intro delivered.",
+    )
+
+
+def schedule_coordinator_chat_intro_delivery(cm: "ConversationManager") -> bool:
+    """Arm the scripted chat opener when durable state says it is due."""
+    if not _should_deliver_coordinator_chat_intro(cm):
+        return False
+    task = getattr(cm, "_coordinator_chat_intro_delivery_task", None)
+    if task is not None and not task.done():
+        return True
+    cm._coordinator_chat_intro_delivery_task = asyncio.create_task(
+        _deliver_coordinator_chat_intro_task(cm),
+    )
+    return True
 
 
 def _detail_string(details: dict[str, Any], key: str) -> str:
@@ -593,15 +664,9 @@ async def _handle_coordinator_onboarding_event(
         details = event.details if isinstance(event.details, dict) else {}
         medium = details.get("medium")
         if medium == "chat":
-            from unify.conversation_manager.domains.brain_action_tools import (
-                ConversationManagerBrainActionTools,
-            )
-
-            tools = ConversationManagerBrainActionTools(cm)
-            await asyncio.sleep(_COORDINATOR_ONBOARDING_CHAT_INTRO_TYPING_SECONDS)
-            await tools.send_unify_message_to_boss(
-                content=COORDINATOR_ONBOARDING_CHAT_INTRO,
-            )
+            cm._coordinator_state_checked_at = 0.0
+            await cm._refresh_coordinator_onboarding_state(force=True)
+            schedule_coordinator_chat_intro_delivery(cm)
             return False
         if medium == "call":
             return False

@@ -21,6 +21,7 @@ from unify.conversation_manager.domains.comms_utils import (
 )
 from unify.conversation_manager.domains.coordinator_onboarding import (
     _handle_coordinator_onboarding_event,
+    schedule_coordinator_chat_intro_delivery,
 )
 from unify.conversation_manager.domains.coordinator_delegate import (
     _handle_coordinator_delegate_event,
@@ -3260,7 +3261,17 @@ async def _(
         )
 
     await _consume_startup_wake_reasons(cm)
-    await cm.request_llm_run(delay=0)
+
+    from unify.settings import SETTINGS
+
+    scheduled_chat_intro = False
+    if cm.is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
+        cm._coordinator_state_checked_at = 0.0
+        await cm._refresh_coordinator_onboarding_state(force=True)
+        scheduled_chat_intro = schedule_coordinator_chat_intro_delivery(cm)
+
+    if not scheduled_chat_intro:
+        await cm.request_llm_run(delay=0)
 
 
 # --------------------------------------------------------------------------- #
