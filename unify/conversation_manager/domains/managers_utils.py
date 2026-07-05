@@ -2,7 +2,7 @@ from datetime import timedelta
 import asyncio
 import os
 from time import perf_counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import unify
 
@@ -18,7 +18,10 @@ from unify.conversation_manager.metrics import (
 )
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.contact_manager.types.contact import UNASSIGNED
-from unify.conversation_manager.domains.comms_utils import publish_system_error
+from unify.conversation_manager.domains.comms_utils import (
+    publish_system_error,
+    publish_unify_reaction_outbound,
+)
 from unify.conversation_manager.event_broker import get_event_broker
 from unify.conversation_manager.events import *
 from unify.common.prompt_helpers import now as prompt_now
@@ -1268,6 +1271,11 @@ async def log_message(
                 metadata = metadata or {}
                 metadata.update(onboarding_metadata)
 
+            provider_message_sid = getattr(event, "provider_message_sid", None)
+            if isinstance(provider_message_sid, str) and provider_message_sid.strip():
+                metadata = metadata or {}
+                metadata["provider_message_sid"] = provider_message_sid.strip()
+
             tm_message_id = None
             if exchange_id == UNASSIGNED:
                 msg_data = {
@@ -1396,6 +1404,203 @@ async def log_message(
     LOGGER.debug(
         f"{ICONS['managers_worker']} [ManagersWorker] Published exchange_id {exchange_id}",
     )
+
+
+def _reaction_contact_name(contact: dict | None) -> str:
+    if not contact:
+        return "Someone"
+    return _get_sender_name(contact)
+
+
+def _normalize_reaction_emoji(emoji: str | None) -> str | None:
+    if emoji is None:
+        return None
+    cleaned = str(emoji).strip()
+    return cleaned or None
+
+
+def _apply_reaction_delta(
+    existing: list[dict],
+    *,
+    contact_id: int,
+    emoji: str | None,
+    timestamp,
+) -> tuple[list[dict], str | None, Literal["added", "changed", "removed"]]:
+    reactions = [dict(item) for item in existing if isinstance(item, dict)]
+    previous = next(
+        (item for item in reactions if item.get("contact_id") == contact_id),
+        None,
+    )
+    previous_emoji = previous.get("emoji") if previous else None
+    reactions = [item for item in reactions if item.get("contact_id") != contact_id]
+    normalized = _normalize_reaction_emoji(emoji)
+    if normalized is None:
+        if previous_emoji is None:
+            return reactions, None, "removed"
+        return reactions, previous_emoji, "removed"
+    if previous_emoji is None:
+        action: Literal["added", "changed", "removed"] = "added"
+    elif previous_emoji == normalized:
+        return reactions, previous_emoji, "removed"
+    else:
+        action = "changed"
+    reactions.append(
+        {
+            "contact_id": contact_id,
+            "emoji": normalized,
+            "updated_at": timestamp.isoformat(),
+        },
+    )
+    return reactions, previous_emoji, action
+
+
+def _build_reaction_audit_content(
+    *,
+    reactor_name: str,
+    action: str,
+    target_message_id: int,
+    target_content: str,
+    emoji: str | None,
+    previous_emoji: str | None,
+) -> str:
+    preview = (target_content or "").strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "..."
+    quoted = f'"{preview}"' if preview else f"message #{target_message_id}"
+    if action == "added" and emoji:
+        return f"[{reactor_name} reacted {emoji} to message #{target_message_id}: {quoted}]"
+    if action == "changed" and emoji:
+        return (
+            f"[{reactor_name} changed reaction on message #{target_message_id} "
+            f"from {previous_emoji} to {emoji}]"
+        )
+    if action == "removed" and previous_emoji:
+        return f"[{reactor_name} removed {previous_emoji} from message #{target_message_id}]"
+    return f"[{reactor_name} updated reaction on message #{target_message_id}]"
+
+
+async def log_reaction(
+    cm: "ConversationManager",
+    event: Event,
+) -> Literal["added", "changed", "removed"] | None:
+    """Patch emoji reactions on a transcript message and append an audit row."""
+    ensure_runtime_context()
+    if isinstance(event, UnifyMessageReactionChanged):
+        reaction_medium = Medium.UNIFY_REACTION
+    elif isinstance(event, WhatsAppReactionChanged):
+        reaction_medium = Medium.WHATSAPP_REACTION
+    else:
+        LOGGER.error(
+            f"{DEFAULT_ICON} Unsupported reaction event: {event.__class__.__name__}",
+        )
+        return None
+
+    contact_id = event.contact.get("contact_id")
+    if contact_id is None:
+        LOGGER.error(f"{DEFAULT_ICON} Reaction event missing contact_id")
+        return None
+
+    implicit_destinations = ContextRegistry.implicit_shared_destinations()
+    primary_destination = implicit_destinations[0]
+    target_message_id = int(getattr(event, "target_message_id", 0) or 0)
+    if target_message_id <= 0:
+        provider_sid = getattr(event, "provider_message_sid", "") or ""
+        target_message_id = (
+            cm.transcript_manager.resolve_message_id_by_provider_sid(
+                provider_sid,
+                destination=primary_destination,
+            )
+            or 0
+        )
+    if target_message_id <= 0:
+        LOGGER.error(
+            f"{DEFAULT_ICON} Could not resolve target transcript message for reaction",
+        )
+        return None
+
+    target_row = cm.transcript_manager.get_message_by_id(
+        target_message_id,
+        destination=primary_destination,
+    )
+    if not target_row:
+        LOGGER.error(
+            f"{DEFAULT_ICON} Reaction target message_id={target_message_id} not found",
+        )
+        return None
+
+    target_metadata = dict(target_row.get("metadata") or {})
+    existing_reactions = list(target_metadata.get("reactions") or [])
+    requested_emoji = _normalize_reaction_emoji(getattr(event, "emoji", None))
+    reactions, previous_emoji, action = _apply_reaction_delta(
+        existing_reactions,
+        contact_id=contact_id,
+        emoji=requested_emoji,
+        timestamp=event.timestamp,
+    )
+
+    exchange_id = int(target_row.get("exchange_id") or UNASSIGNED)
+    target_content = str(target_row.get("content") or "")
+    reactor_name = _reaction_contact_name(event.contact)
+    audit_content = _build_reaction_audit_content(
+        reactor_name=reactor_name,
+        action=action,
+        target_message_id=target_message_id,
+        target_content=target_content,
+        emoji=requested_emoji if action != "removed" else None,
+        previous_emoji=previous_emoji,
+    )
+
+    def _persist_reaction() -> None:
+        for destination in implicit_destinations:
+            cm.transcript_manager.update_message_reactions(
+                target_message_id,
+                reactions,
+                destination=destination,
+            )
+        audit_metadata = {
+            "target_message_id": target_message_id,
+            "reaction_action": action,
+        }
+        if previous_emoji:
+            audit_metadata["previous_emoji"] = previous_emoji
+        if requested_emoji and action != "removed":
+            audit_metadata["emoji"] = requested_emoji
+        audit_message = {
+            "medium": reaction_medium,
+            "sender_id": contact_id,
+            "receiver_ids": [SESSION_DETAILS.self_contact_id],
+            "timestamp": event.timestamp,
+            "content": audit_content,
+            "exchange_id": exchange_id,
+            "metadata": audit_metadata,
+        }
+        if exchange_id == UNASSIGNED:
+            cm.transcript_manager.log_first_message_in_new_exchange(
+                audit_message,
+                destination=primary_destination,
+            )
+        else:
+            cm.transcript_manager.log_messages(
+                audit_message,
+                synchronous=True,
+                destination=primary_destination,
+            )
+
+    await asyncio.to_thread(_persist_reaction)
+
+    if isinstance(event, UnifyMessageReactionChanged):
+        await publish_unify_reaction_outbound(
+            contact_id=contact_id,
+            target_message_id=target_message_id,
+            emoji=requested_emoji if action != "removed" else None,
+            action=action,
+            reactions=reactions,
+        )
+
+    LOGGER.debug(
+        f"{DEFAULT_ICON} Logged reaction on message_id={target_message_id} action={action}",
+    )
+    return action
 
 
 # OAuth secret sync

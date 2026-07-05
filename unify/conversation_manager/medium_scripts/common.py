@@ -50,6 +50,8 @@ from unify.conversation_manager.events import (
     EmailSent,
     UnifyMessageReceived,
     UnifyMessageSent,
+    UnifyMessageReactionChanged,
+    WhatsAppReactionChanged,
     DiscordMessageReceived,
     DiscordMessageSent,
     DiscordChannelMessageReceived,
@@ -1273,6 +1275,18 @@ def render_participant_comms(event_json: str, participant_ids: set[int]) -> str 
         )
     if isinstance(event, UnifyMessageReceived):
         return f"[Message from {name}] {event.content}"
+    if isinstance(event, UnifyMessageReactionChanged):
+        emoji = getattr(event, "emoji", None) or ""
+        action = getattr(event, "action", "added")
+        if action == "removed":
+            return f"[{name} removed a reaction from a message]"
+        return f"[{name} reacted {emoji}]".strip()
+    if isinstance(event, WhatsAppReactionChanged):
+        emoji = getattr(event, "emoji", None) or ""
+        action = getattr(event, "action", "added")
+        if action == "removed":
+            return f"[{name} removed a WhatsApp reaction]"
+        return f"[{name} reacted {emoji} on WhatsApp]".strip()
     if isinstance(event, (DiscordMessageReceived, DiscordChannelMessageReceived)):
         return f"[Discord from {name}] {event.content}"
 

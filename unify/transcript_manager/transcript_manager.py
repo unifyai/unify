@@ -1155,6 +1155,92 @@ class TranscriptManager(BaseTranscriptManager):
                 overwrite=True,
             )
 
+    def update_message_reactions(
+        self,
+        message_id: int,
+        reactions: list[dict],
+        *,
+        destination: str | None = None,
+    ) -> None:
+        """Attach or replace emoji reactions on an already-logged transcript message."""
+        try:
+            context = self._transcripts_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+        log_ids = unisdk.get_logs(
+            context=context,
+            filter=f"message_id == {int(message_id)}",
+            return_ids_only=True,
+        )
+        if not log_ids:
+            return
+        rows = unisdk.get_logs(
+            context=context,
+            filter=f"message_id == {int(message_id)}",
+            limit=1,
+        )
+        metadata = {}
+        if rows:
+            metadata = dict(
+                (getattr(rows[0], "entries", {}) or {}).get("metadata") or {},
+            )
+        metadata["reactions"] = reactions
+        unisdk.update_logs(
+            logs=log_ids,
+            context=context,
+            entries={"metadata": metadata},
+            overwrite=True,
+        )
+
+    def get_message_by_id(
+        self,
+        message_id: int,
+        *,
+        destination: str | None = None,
+    ) -> dict | None:
+        """Return stored transcript row entries for a message_id."""
+        try:
+            context = self._transcripts_context_for_destination(destination)
+        except ToolErrorException:
+            return None
+        rows = unisdk.get_logs(
+            context=context,
+            filter=f"message_id == {int(message_id)}",
+            limit=1,
+        )
+        if not rows:
+            return None
+        return dict(getattr(rows[0], "entries", {}) or {})
+
+    def resolve_message_id_by_provider_sid(
+        self,
+        provider_message_sid: str,
+        *,
+        destination: str | None = None,
+    ) -> int | None:
+        """Look up transcript message_id by provider_message_sid metadata."""
+        sid = str(provider_message_sid or "").strip()
+        if not sid:
+            return None
+        escaped = sid.replace("\\", "\\\\").replace('"', '\\"')
+        try:
+            context = self._transcripts_context_for_destination(destination)
+        except ToolErrorException:
+            return None
+        rows = unisdk.get_logs(
+            context=context,
+            filter=f'metadata.provider_message_sid == "{escaped}"',
+            limit=1,
+        )
+        if not rows:
+            return None
+        entries = getattr(rows[0], "entries", {}) or {}
+        message_id = entries.get("message_id")
+        try:
+            return int(message_id)
+        except (TypeError, ValueError):
+            return None
+
     # ──────────────────────────────────────────────────────────────────────
     #  Image tools
     # ──────────────────────────────────────────────────────────────────────

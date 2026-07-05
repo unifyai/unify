@@ -550,6 +550,31 @@ def test_console_message_dispatch_publishes_runtime_event(
     assert envelope["event"]["body"] == "hello"
 
 
+def test_console_reaction_dispatch_publishes_runtime_event(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    response = client.post(
+        "/unify/reaction",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": "123",
+            "contact_id": 456,
+            "target_message_id": 42,
+            "emoji": "👍",
+        },
+    )
+
+    assert response.status_code == 200
+    sink = gateway_context.envelope_sink
+    assert isinstance(sink, FakeEnvelopeSink)
+    _assistant_id, envelope, thread = sink.published[-1]
+    assert thread == "inbound"
+    assert envelope["thread"] == "unify_message_reaction"
+    assert envelope["event"]["target_message_id"] == 42
+    assert envelope["event"]["emoji"] == "👍"
+
+
 def test_console_meet_dispatch_publishes_runtime_event(
     client: TestClient,
     gateway_context: GatewayContext,

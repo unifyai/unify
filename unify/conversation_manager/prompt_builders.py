@@ -729,7 +729,7 @@ def _build_comms_tool_listing(
                 "live call). A pinned incoming-call window with an Answer button "
                 "appears in their Console; I join when they answer. Use this to "
                 "move us onto the live call (e.g. the home base for onboarding). "
-                "Pass `context` to brief how I open once answered.",
+                "Pass `opener` with the verbatim spoken line once answered.",
             )
             lines.append(
                 "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
@@ -829,8 +829,8 @@ def _build_comms_tool_listing(
         lines.append(
             "- `start_unify_meet`: Ring a contact on Unify Meet (the in-app live "
             "call). A pinned incoming-call window with an Answer button appears in "
-            "their Console; I join when they answer. Pass `context` to brief how I "
-            "open once answered.",
+            "their Console; I join when they answer. Pass `opener` with the "
+            "verbatim spoken line once answered.",
         )
         lines.append(
             "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
@@ -1007,11 +1007,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "now only if none has gone out yet after their click.",
             "  3. When I do send, use the supplied `tool_name` in this same LLM turn. "
             "For message channels, call the outbound comms tool directly; for call "
-            "channels, start/request the call with the briefing in the call context. "
-            "Do not use `act` for the send. Same turn, also call `send_unify_message` "
-            "with one short chat line — what I sent, where to find it, and that they "
-            "should reply there with their guess. Do not leave chat silent while only "
-            "the other channel carries the clue.",
+            "channels, start the call with the full spoken line in the required "
+            "`opener` argument. Do not use `act` for the send. Same turn, also call "
+            "`send_unify_message` with one short chat line — what I sent, where to "
+            "find it, and that they should reply there with their guess. Do not leave "
+            "chat silent while only the other channel carries the clue.",
             "  4. Reference-quiz clues: I invent one fresh short sci-fi quote each "
             "time (science-fiction only — no fantasy, no general trivia). The "
             "answer stays private unless the user asks or is stuck. "
@@ -1024,8 +1024,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "answer) in my spoken / `guide_voice_agent` guidance: reading it out on "
             "the call defeats the point of testing the channel. My spoken line just "
             "points the user to the channel and asks them to reply with their guess. "
-            "To make confirmation instant on the call, I bundle the answer into "
-            "`guide_voice_agent`'s `fast_brain_guidance` alongside that spoken line "
+            "When the clue goes out on a call channel, the clue and framing are in "
+            "the required `opener` argument — spoken verbatim at call start. I do NOT "
+            "also `guide_voice_agent` the clue on that call. For instant guess "
+            "confirmation on message channels, I bundle the answer into "
+            "`guide_voice_agent`'s `fast_brain_guidance` alongside my spoken line "
             '(for example: "The answer is <title>. If the caller guesses it, '
             'confirm warmly; never state the answer before they guess."), so the '
             "Voice Agent can confirm their guess immediately without waiting for me. "
@@ -1037,9 +1040,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "message must include one short sentence of context first — this is part "
             "of onboarding, we are testing communication channels with a quick "
             "sci-fi quiz, and they should reply with their guess.",
-            "  5. If the event starts a call, put my clue, the answer I have in mind, "
-            "and the framing into the call context so the spoken sidecar has the full "
-            "task design.",
+            "  5. If the event starts a call, put the clue, framing, and any spoken "
+            "setup into the required `opener` argument — the exact words spoken at "
+            "call start.",
             "  6. Do not mark or describe the trigger as done just because the user "
             "clicked it. Completion is detected only after my outbound message/call "
             "appears in the transcript.",
@@ -1051,7 +1054,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "guessed, and I have told them whether they were right, I do NOT keep "
             "rolling into the next step on that call: I tell them I'll hop back onto "
             "the Unify Meet, then `hang_up` and `start_unify_meet` (with a short "
-            "`context` so I open by continuing onboarding). This keeps everything on "
+            "`opener` so I open by continuing onboarding). This keeps everything on "
             "the in-app live call so the user isn't stuck holding a phone. (Message "
             "channels — email, SMS, WhatsApp message — never leave the call, so this "
             "return-to-Meet only applies after the WhatsApp-call and phone-call steps.)",
@@ -1626,7 +1629,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 
 **Default to silence after answering**: Once I have answered the user's request, call `wait` — do not tack on extras. My boss should have the last word in most exchanges. Silence is wrong only while they are still waiting on me.
 
-**Unify message / Console chat is the live thread**: When the user is conversing on unify_message, treat it like an open chat. Inbound messages need a reply via `send_unify_message` unless my immediately previous chat line already fully answers them. This overrides the general silence bias. Cross-channel onboarding steps (waiting for an email reply, etc.) change where I wait for proof — not whether I speak in chat when the user speaks there.
+**Unify message / Console chat is the live thread**: When the user is conversing on unify_message, treat it like an open chat. Inbound messages need a reply via `send_unify_message` unless my immediately previous chat line already fully answers them. This overrides the general silence bias. Cross-channel onboarding steps (waiting for an email reply, etc.) change where I wait for proof — not whether I speak in chat when the user speaks there. Emoji reactions on chat messages are lightweight replies — read the quoted target message in the reaction audit line and respond only when the reaction clearly expects a follow-up (e.g. ❓ or a changed reaction on something I said).
 
 **One response per request**: When asked for something, provide exactly ONE response, then `wait`. Do not volunteer extras, alternatives, or follow-ups.
 
