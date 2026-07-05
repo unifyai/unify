@@ -106,30 +106,11 @@ _OPENING_GREETING_GUARDRAIL = (
     "not assume silence, and do not assume they already spoke."
 )
 
-_BRIEFED_OPENING_GUARDRAIL = (
-    "[system] Opening line rule: your opening turn is governed by the most "
-    "recent system briefing in this context. Deliver that briefing as a "
-    "natural, spoken opening — this overrides the default 'start with a "
-    "generic hello / how can I help?' rule. If the briefing contains a script, "
-    "stay close to the script instead of compressing it into a generic "
-    "summary. Follow any tone guidance in the briefing, especially deadpan or "
-    "tongue-in-cheek humor cues. Treat any scripted comedic framing as an "
-    "opening bit, not an ongoing persona: after the caller starts interacting, "
-    "return to normal helpful conversation unless they explicitly continue the "
-    "joke. The caller can interrupt at any time; if they do, address what they "
-    "say and then continue any remaining points from the briefing later only "
-    "if they are still relevant. This opening line may be the very first thing "
-    'said after they answer, OR a direct reply to their "Hello?" / "Who\'s '
-    'this?" (the usual way someone answers) — phrase it so it works naturally '
-    "either way: do not assume silence, and do not assume they already spoke."
-)
-
 
 def build_opening_greeting_messages(
     *,
     system_prompt: str,
     history_messages: Sequence[dict[str, Any]],
-    authoritative_briefing: bool,
 ) -> list[dict[str, Any]]:
     """Build the sidecar prompt used for the startup greeting.
 
@@ -137,21 +118,11 @@ def build_opening_greeting_messages(
     greeting sidecar should keep buffered notification context available for
     later turns while still biasing the first spoken line toward a simple,
     social hello.
-
-    When ``authoritative_briefing`` is set, the opening turn is steered by the
-    most recent system briefing in ``history_messages`` (the caller-supplied
-    context for a ``briefed`` call opening) rather than defaulting to a generic
-    hello.
     """
 
-    guardrail = (
-        _BRIEFED_OPENING_GUARDRAIL
-        if authoritative_briefing
-        else _OPENING_GREETING_GUARDRAIL
-    )
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     messages.extend(dict(message) for message in history_messages)
-    messages.append({"role": "system", "content": guardrail})
+    messages.append({"role": "system", "content": _OPENING_GREETING_GUARDRAIL})
     return messages
 
 

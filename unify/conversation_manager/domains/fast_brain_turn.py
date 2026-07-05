@@ -98,6 +98,22 @@ content if not silence.
 continuation is the strong default for greetings ("Hello?"), "go on", agreeing,
 partial overlap, or asking why you are calling — lean hard toward continuation."""
 
+_HELD_OPENER_CONTEXT = """\
+[system] You just placed this call and have NOT spoken yet — the other person
+answered and spoke first, at some length. The EXACT planned opening line for
+this call is provided below. You do NOT write those words in content — the
+runtime speaks them verbatim.
+
+Planned opening line: {resume_text}
+
+Choose classification continuation to deliver the planned line now if it still
+works as a natural reply to what they said — greetings, "who's this?", small
+talk, or a long answer that doesn't redirect all favour continuation. If what
+they said makes the planned line inappropriate as-is (they raised something
+urgent, asked you not to speak, or clearly need something else addressed
+first), pick defer, smalltalk, or silence as appropriate and put a brief line
+in content if not silence."""
+
 FAST_BRAIN_TURN_PROMPT = """\
 You are the fast, in-the-moment voice on a live call. A slower, smarter version
 of you will answer substantive turns moments later. Your job THIS turn: pick ONE
@@ -161,9 +177,20 @@ class FastBrainInterruptedTurnDecision(BaseModel):
 
 @dataclass(frozen=True)
 class PendingContinuation:
+    """A substantive line the caller has not heard (fully or partially).
+
+    ``spoken_prefix`` empty means nothing of the line was ever heard — either a
+    barge-in landed before any audio, or this is a held call opener that was
+    never spoken. Such lines resume verbatim with no "as I was saying" lead-in.
+    """
+
     resume_text: str
     remainder: str
     spoken_prefix: str
+
+    @property
+    def heard_prefix(self) -> bool:
+        return bool(self.spoken_prefix.strip())
 
 
 @dataclass(frozen=True)
@@ -209,10 +236,15 @@ def build_fast_brain_turn_messages(
     messages.extend(dict(message) for message in history_messages)
     messages.append({"role": "system", "content": FAST_BRAIN_TURN_PROMPT})
     if pending_continuation is not None:
+        template = (
+            _INTERRUPTED_CONTEXT
+            if pending_continuation.heard_prefix
+            else _HELD_OPENER_CONTEXT
+        )
         messages.append(
             {
                 "role": "system",
-                "content": _INTERRUPTED_CONTEXT.format(
+                "content": template.format(
                     resume_text=pending_continuation.resume_text.strip(),
                 ),
             },
@@ -261,7 +293,12 @@ def _resolve_content(
                 declined_continuation=False,
             )
         resume = pending_continuation.resume_text.strip()
-        speech = f"{pick_resume_lead_in()} {resume}".strip()
+        # A lead-in only makes sense when the caller actually heard the start
+        # of the line; a held/unheard line is delivered verbatim.
+        if pending_continuation.heard_prefix:
+            speech = f"{pick_resume_lead_in()} {resume}".strip()
+        else:
+            speech = resume
         return ResolvedFastBrainTurn(
             classification=FAST_BRAIN_TURN_CONTINUATION,
             intended_speech=speech,

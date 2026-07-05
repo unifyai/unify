@@ -744,12 +744,12 @@ async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback
 
     result = await comms.make_whatsapp_call(
         contact_id=5,
-        context="Ask whether Alice is free to chat now.",
+        opener="Ask whether Alice is free to chat now.",
     )
 
     assert result["status"] == "ok"
     assert "pending_callback" not in result
-    assert "not queued with your briefing context" in result["note"]
+    assert "not queued with your opener" in result["note"]
     assert transcript_calls
     assert updated_records
     assert updated_records[0][1]["status"] == "completed"
@@ -907,10 +907,15 @@ async def test_make_whatsapp_call_waits_for_voice_session_to_clear(monkeypatch):
             return False
 
     call_manager = ClearingCallManager()
+    from unify.conversation_manager.events import WhatsAppCallSent
+
     cm = SimpleNamespace(
         call_manager=call_manager,
         _pending_whatsapp_call_openers={},
         assistant_whatsapp_number="+15555550001",
+        build_whatsapp_call_sent_event=lambda contact: WhatsAppCallSent(
+            contact=contact,
+        ),
     )
     comms = CommsPrimitives(conversation_manager=cm)
     comms._get_contact = lambda **kwargs: {
@@ -934,6 +939,8 @@ async def test_make_whatsapp_call_waits_for_voice_session_to_clear(monkeypatch):
     assert result["status"] == "ok"
     assert call_manager.polls >= 3
     assert seen_kwargs["pending_call_opener"] == "Call Alice."
+    # The opener is queued on the live call leg before the dial resolves.
+    assert call_manager.pending_opener == "Call Alice."
 
 
 @pytest.mark.anyio

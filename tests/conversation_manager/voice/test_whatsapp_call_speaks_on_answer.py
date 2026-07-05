@@ -1,21 +1,21 @@
-"""Demonstration: an outbound WhatsApp call's agent speaks the moment the
-callee answers — and stays silent until then.
+"""Demonstration: an outbound WhatsApp call's agent speaks its verbatim opener
+after the callee answers — and stays silent until then.
 
 This drives the real ``call.entrypoint`` for ``channel="whatsapp_call"`` with
-``outbound=True`` (the exact configuration used after a Meet -> WhatsApp-call
-handoff), using the established fake LiveKit / AgentSession / broker stack so no
-real LiveKit, Twilio, LLM, or TTS is involved. It proves the speak-on-answer
-contract that a real call must honour:
+``outbound=True`` and an ``opener`` opening config, using the established fake
+LiveKit / AgentSession / broker stack so no real LiveKit, Twilio, LLM, or TTS
+is involved. It proves the opener contract that a real call must honour:
 
 1. After the agent is ready it WAITS — it does not speak before the callee
    answers (no outbound utterance is emitted while unanswered).
-2. The instant a ``call_answered`` status arrives (what the Twilio
-   ``in-progress`` webhook ultimately triggers via ``app:call:status``), the
-   agent announces it is ready to speak and then emits its opening utterance.
+2. After a ``call_answered`` status arrives (what the Twilio ``in-progress``
+   webhook ultimately triggers via ``app:call:status``), the agent holds the
+   opener through the silence window (no utterance yet), then announces it is
+   ready to speak and speaks the pre-decided opener verbatim.
 
 Together with the worker-readiness gating tests, this closes the loop: the
 worker is only dispatched when ready, the agent activates, and on answer it
-speaks.
+delivers the exact opener the slow brain queued before dialing.
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
                         "user_id": "user-123",
                         "assistant_name": "Assistant",
                         "opening_config": {
-                            "mode": "simulated",
-                            "simulated_utterance": OPENING_LINE,
+                            "mode": "opener",
+                            "opener_text": OPENING_LINE,
                             "source": "outbound_whatsapp_opening",
                         },
                     },
@@ -139,6 +139,15 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
 
         def say(self, text, **kwargs):
             self.say_calls.append((text, kwargs))
+            # A real AgentSession commits the spoken line to history and emits
+            # conversation_item_added, which is what publishes the utterance.
+            handler = self._events.get("conversation_item_added")
+            if handler is not None:
+                handler(
+                    SimpleNamespace(
+                        item=SimpleNamespace(role="assistant", text_content=text),
+                    ),
+                )
             return _ImmediateAwaitable()
 
         def interrupt(self):
@@ -149,6 +158,14 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
             self._chat_ctx = llm.ChatContext()
             self.call_received = False
             self.user_turn_generating = False
+            self._user_speech_logged = False
+            self._opening_pending = False
+            self._first_user_turn = asyncio.Event()
+            self._first_turn_speaking_started_at = None
+            self._first_turn_duration_s = None
+            self._pending_continuation = None
+            self._active_tts = None
+            self._tts_seq = 0
 
         def set_call_received(self):
             self.call_received = True
@@ -211,6 +228,8 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
         monkeypatch.setattr(call_script.noise_cancellation, "BVC", lambda: object())
     monkeypatch.setattr(call_script, "STT", object())
     monkeypatch.setattr(call_script, "VAD", object())
+    # Keep the silence window short so the test does not sleep for real seconds.
+    monkeypatch.setattr(call_script, "OPENER_SILENCE_TRIGGER_S", 0.05)
 
     return call_script, broker, _FakeJobContext
 

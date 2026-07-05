@@ -357,3 +357,96 @@ def test_general_fast_brain_prompts_have_no_domain_concepts():
         assert "quiz" not in low
         assert "clue" not in low
         assert "onboard" not in low
+
+
+# ---------------------------------------------------------------------------
+# Held opener (never-spoken line): a pending continuation with an empty
+# spoken_prefix is a planned line the caller has not heard at all — it gets the
+# held-opener context block and is delivered verbatim with no resume lead-in.
+# ---------------------------------------------------------------------------
+
+
+def _held_opener() -> PendingContinuation:
+    return PendingContinuation(
+        resume_text="Hi Dan — quick sci-fi quiz to test this channel.",
+        remainder="Hi Dan — quick sci-fi quiz to test this channel.",
+        spoken_prefix="",
+    )
+
+
+def test_build_messages_uses_held_opener_context_when_nothing_spoken():
+    msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="Hello, who is this? I was just in the middle of something.",
+        pending_continuation=_held_opener(),
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+    )
+    system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+    assert "have NOT spoken yet" in system_text
+    assert "cut you off mid-sentence" not in system_text
+    assert "Hi Dan — quick sci-fi quiz to test this channel." in system_text
+
+
+def test_build_messages_uses_interrupted_context_when_prefix_was_heard():
+    pending = PendingContinuation(
+        resume_text="Next, click Connect Slack.",
+        remainder="Next, click Connect Slack.",
+        spoken_prefix="Saved.",
+    )
+    msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="okay",
+        pending_continuation=pending,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+    )
+    system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+    assert "cut you off mid-sentence" in system_text
+    assert "have NOT spoken yet" not in system_text
+
+
+@pytest.mark.asyncio
+async def test_held_opener_continuation_is_verbatim_with_no_lead_in(monkeypatch):
+    _patch_client(monkeypatch, {"classification": "continuation", "content": ""})
+    resolved = await select_fast_brain_turn(
+        user_text="Hello? Sorry, I was walking the dog, hang on a second.",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=_held_opener(),
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_CONTINUATION
+    assert resolved.intended_speech == (
+        "Hi Dan — quick sci-fi quiz to test this channel."
+    )
+    assert not any(
+        resolved.intended_speech.startswith(lead) for lead in _RESUME_LEAD_INS
+    )
+
+
+@pytest.mark.asyncio
+async def test_held_opener_declined_reports_declined_continuation(monkeypatch):
+    _patch_client(
+        monkeypatch,
+        {"classification": "defer", "content": "Of course — go ahead."},
+    )
+    resolved = await select_fast_brain_turn(
+        user_text="Please don't talk right now, I need a second.",
+        system_prompt="PERSONA",
+        history_messages=[],
+        pending_continuation=_held_opener(),
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+    )
+    assert resolved.classification == FAST_BRAIN_TURN_DEFER
+    assert resolved.declined_continuation is True

@@ -1285,8 +1285,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         from unify.conversation_manager.domains import comms_utils
 
+        reason = (opener or "").strip()
+        if not reason:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak when "
+                    "the call connects. No ring was sent."
+                ),
+            }
         call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
-        reason = opener.strip()
         self._pending_meet_ring = call_session_id
         result = await comms_utils.send_unify_meet_ring(
             call_session_id=call_session_id,

@@ -3433,16 +3433,18 @@ class TestFastBrainSmalltalk:
 
 
 # =============================================================================
-# Outbound opener: held until the callee's first utterance (or fallback)
+# Agent-initiated opener: held until the callee's first short utterance or a
+# short silence window; a substantive first turn routes it to the fast brain
 # =============================================================================
 
 
 class TestOutboundOpenerTrigger:
-    """The outbound opener is held until the callee finishes their first turn.
+    """The verbatim opener is held while ``_opening_pending``.
 
-    A minimal "Hello" seed is spoken before that turn so a substantive first
-    turn can defer the held opener through the standard continuation path.
-    Short first turns still play the opener immediately after the turn completes.
+    Nothing is spoken before the trigger (no seed): the fast-brain filler and
+    the slow-brain turn are suppressed for the callee's first turn, which either
+    triggers the opener directly (short turn / silence) or hands it to the fast
+    brain as a held continuation (substantive turn).
     """
 
     def _assistant(self, boss_contact, *, outbound: bool):
@@ -3487,20 +3489,3 @@ class TestOutboundOpenerTrigger:
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
         # The opener is the reply to the triggering turn; no filler is emitted.
         assert chunks == []
-
-
-class TestDeferredOutboundOpenerContinuation:
-    def test_builds_standard_continuation_candidate(self):
-        from unify.conversation_manager.medium_scripts.call import (
-            OUTBOUND_OPENING_SEED_PREFIX,
-            build_deferred_outbound_opener_continuation,
-        )
-
-        pending = build_deferred_outbound_opener_continuation(
-            "I'm calling about your appointment tomorrow.",
-        )
-        assert pending["spoken_prefix"] == OUTBOUND_OPENING_SEED_PREFIX
-        assert pending["remainder"] == "I'm calling about your appointment tomorrow."
-        assert pending["resume_text"] == pending["remainder"]
-        assert pending["source"] == "opening"
-        assert pending["consumed"] is False

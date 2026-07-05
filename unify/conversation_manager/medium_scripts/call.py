@@ -348,10 +348,13 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
-        # On outbound calls the opener is held until the callee's first utterance
-        # (or a fallback timeout). While pending, the opener is the sole response
-        # to that first turn: the fast-brain filler and the slow-brain turn are
-        # suppressed for it. Cleared once the opener has been dispatched.
+        # On agent-initiated calls the verbatim opener is held until the
+        # callee's first utterance or a short silence window. While pending,
+        # the opener is the sole response to that first turn: the fast-brain
+        # filler and the slow-brain turn are suppressed for it. The entrypoint
+        # overrides this from the opening config (an ``opener`` opening can
+        # also arrive on an inbound-shaped leg, e.g. the WhatsApp
+        # permission-callback call); cleared once the opener is dispatched.
         self._opening_pending = outbound
         self._first_user_turn = asyncio.Event()
         self._first_turn_speaking_started_at: float | None = None
@@ -376,8 +379,8 @@ class Assistant(Agent):
         # The callable enqueues the bridge synchronously (no playout await) so
         # the fast-brain reply generates concurrently and queues behind it.
         self._pending_opening_bridge: Callable[[], None] | None = None
-        # The in-flight TTS say handle (slow-brain speech or a briefed/speak
-        # opener) registered for resumption, and the claimable resume candidate
+        # The in-flight TTS say handle (slow-brain speech or a spoken opener)
+        # registered for resumption, and the claimable resume candidate
         # produced when it is interrupted. Pre-recorded audio is never registered
         # here, so its hand-crafted tone is never continued by the live voice.
         self._active_tts: dict | None = None
@@ -593,7 +596,12 @@ class Assistant(Agent):
                     _log.info("Continuation suppressed: slow brain already responded")
                     return
                 self._buffers_since_slow_reply += 1
-                continuation = f"{pick_resume_lead_in()} {pending.resume_text}".strip()
+                if pending.heard_prefix:
+                    continuation = (
+                        f"{pick_resume_lead_in()} {pending.resume_text}".strip()
+                    )
+                else:
+                    continuation = pending.resume_text.strip()
                 self._continuation_full_text = continuation
                 turn_classification = FAST_BRAIN_TURN_CONTINUATION
                 intended_speech = continuation
@@ -938,42 +946,20 @@ def _voice_call_channel_defers_desktop_binding(channel: str) -> bool:
     )
 
 
-_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+_CALL_OPENING_MODES = {"speak", "opener", "simulated", "silent", "recorded"}
 
-# On an outbound call, hold the opener until the earliest of the callee's first
-# completed utterance (their "Hello?") or this fallback timeout. Triggering on
-# their speech ensures the opener lands when they are actually listening, instead
-# of into dead air right after the line connects.
-OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
+# On an agent-initiated call, the verbatim opener is held until the earlier of
+# the callee's first completed utterance or this much silence after they answer
+# (with the audio pipeline live). Triggering on their speech ensures the opener
+# lands when they are actually listening; the silence fallback covers callees
+# who answer and wait for the caller to speak first.
+OPENER_SILENCE_TRIGGER_S = 3.0
 
-# Minimal assistant prefix spoken before the callee's first turn on outbound calls.
-# Establishes a spoken prefix so a substantive first turn can defer the held opener
-# through the standard continuation path (Hello + unheard briefing tail).
-OUTBOUND_OPENING_SEED_PREFIX = "Hello"
-
-# Callee first-turn speaking duration at or above this threshold is treated as
-# substantive: the held opener is stashed as an unheard continuation tail instead
-# of playing immediately as though they had only said hello.
-OUTBOUND_OPENING_LONG_TURN_THRESHOLD_S = 5.0
-
-
-def build_deferred_outbound_opener_continuation(
-    opener_text: str,
-    *,
-    seed: str = OUTBOUND_OPENING_SEED_PREFIX,
-) -> dict:
-    """Build a continuation candidate for a held opener after a long first turn."""
-    full = f"{seed} {opener_text}".strip()
-    spoken = seed.strip()
-    remainder = opener_text.strip()
-    resume_text = compute_resume_text(full, spoken) or remainder
-    return {
-        "resume_text": resume_text,
-        "remainder": remainder,
-        "spoken_prefix": spoken,
-        "source": "opening",
-        "consumed": False,
-    }
+# A callee first turn at or above this speaking duration is substantive: the
+# held opener goes to the fast brain to decide (deliver verbatim vs respond to
+# what they said) instead of being spoken blindly as though they had only said
+# "Hello?".
+OPENER_SHORT_TURN_MAX_S = 5.0
 
 
 # Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
@@ -1286,14 +1272,14 @@ def _normalize_call_opening_config(raw: object) -> dict:
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
         raise ValueError(
-            "opening_config.mode must be one of speak, simulated, silent, briefed, recorded",
+            "opening_config.mode must be one of speak, opener, simulated, silent, recorded",
         )
 
     config = {"mode": mode}
+    if raw.get("opener_text") is not None:
+        config["opener_text"] = str(raw["opener_text"])
     if raw.get("simulated_utterance") is not None:
         config["simulated_utterance"] = str(raw["simulated_utterance"])
-    if raw.get("system_context") is not None:
-        config["system_context"] = str(raw["system_context"])
     if raw.get("source") is not None:
         config["source"] = str(raw["source"])
     if raw.get("transcript") is not None:
@@ -1305,8 +1291,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
     if raw.get("recording_url") is not None:
         config["recording_url"] = str(raw["recording_url"])
 
-    if mode == "briefed" and not config.get("system_context", "").strip():
-        raise ValueError("briefed opening requires system_context")
+    if mode == "opener" and not config.get("opener_text", "").strip():
+        raise ValueError("opener opening requires opener_text")
     if mode == "recorded" and config.get("recording_asset", "").strip() not in (
         _RECORDED_OPENINGS
     ):
@@ -1953,21 +1939,30 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as exc:  # noqa: BLE001
             _log.llm_error(str(exc))
 
-    def _say_opening_seed(text: str = OUTBOUND_OPENING_SEED_PREFIX) -> None:
-        session.say(
-            text,
-            allow_interruptions=True,
-            add_to_chat_ctx=True,
-        )
-
     def _say_opening(text: str) -> None:
         speech_handle = session.say(
             text,
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        # A briefed/speak opener is live TTS (not pre-recorded), so a barge-in
+        # A speak-mode opener is live TTS (not pre-recorded), so a barge-in
         # can be resumed by the fast brain just like any slow-brain line.
+        _register_interruptible_tts(speech_handle, lambda: text, "opening")
+
+    def _say_verbatim_opener(text: str) -> None:
+        """Speak the slow-brain's pre-decided opener word-for-word."""
+        _say_meta_queue.append(
+            {
+                "source": opening_config.get("source", "call_opener"),
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        speech_handle = session.say(
+            text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
         _register_interruptible_tts(speech_handle, lambda: text, "opening")
 
     def _say_recorded_opening(text: str, recording_source: str):
@@ -2678,6 +2673,10 @@ async def entrypoint(ctx: agents.JobContext):
     assistant._turn_engaged_provider = lambda: _speaker_is_engaged(
         _meet_last_speaker_id,
     )
+    # The opener hold applies whenever an ``opener`` opening config is present,
+    # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
+    # permission-callback call), where ``outbound`` is False.
+    assistant._opening_pending = opening_config["mode"] == "opener"
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
@@ -2725,7 +2724,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     @session.on("user_state_changed")
     def _on_outbound_first_turn_speaking_duration(ev) -> None:
-        if not outbound or not assistant._opening_pending:
+        if not assistant._opening_pending:
             return
         if assistant._first_user_turn.is_set():
             return
@@ -2791,6 +2790,10 @@ async def entrypoint(ctx: agents.JobContext):
 
         if event_type == "call_answered":
             call_answered_flag.set()
+            # Answered implies received even when the joined gate was already
+            # open (e.g. unify_meet, where the gate is pre-set at startup and
+            # _mark_user_joined would early-return without flipping this).
+            assistant.set_call_received()
             _mark_user_joined("call_answered")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
@@ -2804,8 +2807,6 @@ async def entrypoint(ctx: agents.JobContext):
     @ctx.room.on("participant_connected")
     def _on_room_participant_connected(participant):
         if joined_gate_required and not outbound:
-            _mark_user_joined("participant_connected")
-        elif outbound and channel == "unify_meet":
             _mark_user_joined("participant_connected")
 
     def _is_pipeline_quiescent() -> bool:
@@ -2929,7 +2930,10 @@ async def entrypoint(ctx: agents.JobContext):
         resume_text = (pending.get("resume_text") or "").strip()
         if not resume_text:
             return
-        line = f"{pick_resume_lead_in()} {resume_text}".strip()
+        if (pending.get("spoken_prefix") or "").strip():
+            line = f"{pick_resume_lead_in()} {resume_text}".strip()
+        else:
+            line = resume_text
         _log.info("Resuming line interrupted by non-engaged background speech")
         handle = session.say(line, allow_interruptions=True, add_to_chat_ctx=True)
         _register_interruptible_tts(handle, lambda: line, "continuation")
@@ -3492,12 +3496,12 @@ async def entrypoint(ctx: agents.JobContext):
             comms_utils.request_deferred_desktop_binding(agent_id),
         )
 
-    async def _generate_opening_greeting(*, authoritative_briefing: bool) -> str:
+    async def _generate_opening_greeting() -> str:
         """Pre-generate the opening line via a sidecar LLM call.
 
         Returns the cached depleted-credits response when the credit gate is
         closed, otherwise generates from the voice system prompt plus the
-        current call history (which includes any injected system briefing).
+        current call history.
         """
         from unify.common.llm_client import new_llm_client
 
@@ -3512,7 +3516,6 @@ async def entrypoint(ctx: agents.JobContext):
         greeting_messages = build_opening_greeting_messages(
             system_prompt=system_prompt,
             history_messages=_extract_chat_messages(session.history),
-            authoritative_briefing=authoritative_briefing,
         )
         return await greeting_client.generate(messages=greeting_messages)
 
@@ -3522,30 +3525,13 @@ async def entrypoint(ctx: agents.JobContext):
         tail=8,
     )
 
-    def _inject_opening_system_context(text: str) -> None:
-        """Seed the call with a durable system briefing before the opener.
-
-        The briefing is a ``system`` message — never an assistant turn — so the
-        model retains the full intended context to fall back on (e.g. after an
-        interruption) without ever assuming the caller heard un-uttered content.
-        """
-        assistant._chat_ctx.add_message(role="system", content=[text])
-        session.history.add_message(role="system", content=[text])
-
     opening_mode = opening_config["mode"]
 
     async def _prepare_opening() -> tuple[str, str | dict | None]:
         if opening_mode == "speak":
-            return (
-                "speak",
-                await _generate_opening_greeting(authoritative_briefing=False),
-            )
-        if opening_mode == "briefed":
-            _inject_opening_system_context(opening_config["system_context"])
-            return (
-                "speak",
-                await _generate_opening_greeting(authoritative_briefing=True),
-            )
+            return "speak", await _generate_opening_greeting()
+        if opening_mode == "opener":
+            return "opener", opening_config["opener_text"].strip()
         if opening_mode == "recorded":
             preloaded = await asyncio.to_thread(
                 _preload_recorded_opening_pcm,
@@ -3574,35 +3560,42 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    if outbound:
-        _log.info("Outbound call — waiting for callee to answer…")
+    if outbound or (opening_mode == "opener" and channel == "unify_meet"):
+        _log.info("Agent-initiated call — waiting for callee to answer…")
         await call_answered_flag.wait()
         _log.call_status("call_answered — opening turn")
 
     await user_joined_event.wait()
     speech_gate_open = True
 
-    if outbound:
-        # Seed a minimal assistant prefix before the callee speaks so a
-        # substantive first turn can route the held opener through the standard
-        # continuation machinery (spoken "Hello" + unheard briefing tail).
-        _say_opening_seed()
-        # Hold the opener until the callee's first completed utterance (their
-        # "Hello?") or a fallback timeout — so it lands when they are actually
-        # listening, not into dead air right after the line connects. The first
-        # turn is logged to the transcript but does not schedule the slow brain
-        # (filler suppressed via _opening_pending in llm_node); a later turn is a
-        # normal barge-in.
+    opener_trigger: str | None = None
+    if opening_mode == "opener":
+        # Hold the verbatim opener until the earlier of the callee's first
+        # completed utterance (their "Hello?") or OPENER_SILENCE_TRIGGER_S of
+        # silence — so it lands when they are actually listening, not into dead
+        # air right after the line connects. The assistant says nothing until
+        # then. A short first turn is logged to the transcript but does not
+        # schedule the slow brain (filler suppressed via _opening_pending in
+        # llm_node); a substantive first turn routes the held opener through
+        # the fast brain's continuation decision instead.
         try:
             await asyncio.wait_for(
                 assistant._first_user_turn.wait(),
-                OUTBOUND_OPENING_TRIGGER_TIMEOUT_S,
+                OPENER_SILENCE_TRIGGER_S,
             )
         except asyncio.TimeoutError:
             if user_is_speaking:
-                # Timed out mid-"Hello?" — let them finish before we speak.
+                # The silence window elapsed mid-utterance — not silence; let
+                # them finish and judge the completed turn's duration.
                 await assistant._first_user_turn.wait()
-        _log.call_status("outbound_opener_triggered")
+        if assistant._first_user_turn.is_set():
+            first_turn_s = assistant._first_turn_duration_s or 0.0
+            opener_trigger = (
+                "short_turn" if first_turn_s < OPENER_SHORT_TURN_MAX_S else "long_turn"
+            )
+        else:
+            opener_trigger = "silence"
+        _log.call_status(f"opener_trigger:{opener_trigger}")
 
     try:
         prepared_mode, prepared_payload = await opening_task
@@ -3610,52 +3603,34 @@ async def entrypoint(ctx: agents.JobContext):
         _log.llm_error(f"opening preload failed: {exc}")
         prepared_mode, prepared_payload = "speak", "Hello — I'm here."
 
-    defer_opener_to_continuation = (
-        outbound
-        and assistant._first_user_turn.is_set()
-        and (assistant._first_turn_duration_s or 0.0)
-        >= OUTBOUND_OPENING_LONG_TURN_THRESHOLD_S
-    )
-
-    def _outbound_opener_text() -> str:
-        if prepared_mode == "speak":
-            return str(prepared_payload or "Hello — I'm here.").strip()
-        if prepared_mode == "simulated":
-            return str(prepared_payload or "").strip()
-        if prepared_mode == "recorded":
-            payload = prepared_payload or opening_config
-            if isinstance(payload, dict) and "config" in payload:
-                recorded_config = payload["config"]
-            else:
-                recorded_config = payload
-            return _recorded_opening_transcript(recorded_config).strip()
-        return ""
-
-    if defer_opener_to_continuation:
-        opener_text = _outbound_opener_text()
+    if prepared_mode == "opener":
+        opener_text = str(prepared_payload or "").strip()
         await _publish_ready_to_speak()
         assistant._opening_pending = False
-        if opener_text:
-            pending = build_deferred_outbound_opener_continuation(opener_text)
-            pending["seq"] = assistant._tts_seq
-            assistant._pending_continuation = pending
+        if opener_trigger == "long_turn":
+            # The callee opened with a substantive turn; parroting the planned
+            # line as though they had only said hello would ignore them. Hold
+            # the never-spoken opener as a claimable continuation and let the
+            # fast brain decide: deliver it verbatim (continuation) or respond
+            # to what they actually said.
+            assistant._pending_continuation = {
+                "resume_text": opener_text,
+                "remainder": opener_text,
+                "spoken_prefix": "",
+                "source": "opening",
+                "seq": assistant._tts_seq,
+                "consumed": False,
+            }
             _log.info(
-                "Outbound opener deferred to continuation after substantive "
-                f"first turn ({assistant._first_turn_duration_s:.1f}s)",
+                "Opener held for fast-brain decision after substantive first "
+                f"turn ({assistant._first_turn_duration_s or 0.0:.1f}s)",
             )
             trigger_generate_reply(
-                reason="outbound_long_first_turn",
-                source_id="deferred_opener",
+                reason="opener_substantive_first_turn",
+                source_id="held_opener",
             )
         else:
-            _log.info(
-                "Outbound substantive first turn with no opener text; resuming "
-                "normal fast-brain handling",
-            )
-            trigger_generate_reply(
-                reason="outbound_long_first_turn",
-                source_id="deferred_opener",
-            )
+            _say_verbatim_opener(opener_text)
     elif prepared_mode == "speak":
         await _publish_ready_to_speak()
         _say_opening(str(prepared_payload or "Hello — I'm here."))

@@ -3892,8 +3892,11 @@ class CommsPrimitives:
         contact_id : int | str
             Person to call.
         opener : str
-            Verbatim spoken line at the start of the call once the callee
-            answers (unless interrupted). Write the exact words to speak.
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after the callee's brief "Hello?" (or a few seconds
+            of silence if they say nothing). Write it so it reads naturally
+            either way. If they instead open with something substantive, the
+            live voice decides whether to still deliver it or respond to them.
         phone_number : str | None, optional
             Recipient phone number when the contact does not already have one on
             file.
@@ -3906,6 +3909,16 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
+
+        opener = (opener or "").strip()
+        if not opener:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak the "
+                    "moment the callee answers. No call was placed."
+                ),
+            }
 
         if self._cm is not None and not await self._await_ready_for_outbound_call():
             return {
@@ -4007,8 +4020,10 @@ class CommsPrimitives:
             opener,
             bool(to_number),
         )
+        # Queue the opener BEFORE dialing: a call must never be attempted
+        # without its verbatim opening line already in place.
         if self._cm is not None:
-            self._cm.call_manager.pending_opener = opener.strip()
+            self._cm.call_manager.pending_opener = opener
 
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
@@ -4034,6 +4049,10 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
+        # The dial failed — clear the queued opener so it cannot leak into a
+        # later, unrelated call.
+        if self._cm is not None:
+            self._cm.call_manager.pending_opener = ""
         if not self._assistant_number():
             error_msg = "You don't have a number, please provision one."
         else:
@@ -4087,8 +4106,11 @@ class CommsPrimitives:
         contact_id : int | str
             Person to call.
         opener : str
-            Verbatim spoken line at the start of the call once the callee
-            answers (unless interrupted). Write the exact words to speak.
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after the callee's brief "Hello?" (or a few seconds
+            of silence if they say nothing). Write it so it reads naturally
+            either way. If they instead open with something substantive, the
+            live voice decides whether to still deliver it or respond to them.
         whatsapp_number : str | None, optional
             Recipient WhatsApp number when the contact does not already have one
             on file.
@@ -4103,6 +4125,17 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
+
+        opener = (opener or "").strip()
+        if not opener:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak the "
+                    "moment the callee answers. No call was placed."
+                ),
+            }
+
         if not await self._await_ready_for_outbound_call():
             return {
                 "status": "retry_later_active_voice_session",
@@ -4203,7 +4236,12 @@ class CommsPrimitives:
             f"{DEFAULT_ICON} [make_whatsapp_call] opener: {opener}, to_number: {to_number}",
         )
 
+        # Queue the opener BEFORE dialing: a call must never be attempted
+        # without its verbatim opening line already in place. Non-direct
+        # outcomes below (invite / pending / rejected / failure) clear it so a
+        # stale opener cannot leak into a later, unrelated call.
         if self._cm is not None:
+            self._cm.call_manager.pending_opener = opener
             self._cm.call_manager._whatsapp_call_joining = True
 
         response = await comms_utils.start_whatsapp_call(
@@ -4215,6 +4253,7 @@ class CommsPrimitives:
         )
         if not response.get("success"):
             if self._cm is not None:
+                self._cm.call_manager.pending_opener = ""
                 self._cm.call_manager._whatsapp_call_joining = False
             if not self._assistant_whatsapp_number():
                 error_msg = "You don't have a WhatsApp number configured."
@@ -4241,8 +4280,6 @@ class CommsPrimitives:
         method = response.get("method")
         if method == "direct":
             if self._cm is not None:
-                self._cm.call_manager.pending_opener = opener.strip()
-            if self._cm is not None:
                 event = self._cm.build_whatsapp_call_sent_event(fresh_contact)
             else:
                 event = WhatsAppCallSent(contact=fresh_contact)
@@ -4265,20 +4302,21 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
+        # Not a direct dial (permission invite / pending / rejected): no live
+        # call leg exists yet, so the opener moves from the live queue to the
+        # per-contact stash consumed when the permission callback fires.
         pending_openers = None
         automatic_callback_available = False
         if self._cm is not None:
+            self._cm.call_manager.pending_opener = ""
             self._cm.call_manager._whatsapp_call_joining = False
             pending_openers = getattr(
                 self._cm,
                 "_pending_whatsapp_call_openers",
                 None,
             )
-            if opener:
-                if isinstance(pending_openers, dict):
-                    pending_openers[contact_id] = opener
-                    automatic_callback_available = True
-            else:
+            if isinstance(pending_openers, dict):
+                pending_openers[contact_id] = opener
                 automatic_callback_available = True
 
         pool_number = response.get("pool_number") or self._assistant_whatsapp_number()
