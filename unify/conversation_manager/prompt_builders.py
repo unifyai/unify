@@ -943,6 +943,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "`[CoordinatorOnboarding]` notification whenever an "
             "onboarding milestone lands or the user starts an onboarding "
             "step. Milestone notifications need a short acknowledgement.",
+            "Every step-trigger notification (checklist row click) ends with "
+            "mandatory immediate-ack guidance in the notification body. Follow "
+            "that suffix even when the main deliverable requires act or arrives "
+            "on a later turn.",
             "Communication reference-quiz steps (email, SMS, WhatsApp "
             "message, phone call, WhatsApp call, etc.) advance only when the "
             'user clicks the matching "Trigger ... from T-W1N" row in the '

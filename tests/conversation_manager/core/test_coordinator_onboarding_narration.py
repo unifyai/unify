@@ -46,6 +46,9 @@ def test_workspace_demo_notification_requires_full_task_then_explicit_completion
     assert "set_onboarding_task_state" in text
     assert "does NOT" in text
     assert "not finished until" in text
+    assert "after acking that I am on it" in text
+    assert "Mandatory:" in text
+    assert "checklist click has no visible UI feedback" in text
 
 
 def test_step_completed_notification_requires_no_action() -> None:
@@ -59,6 +62,17 @@ def test_step_completed_notification_requires_no_action() -> None:
     assert "`workspace-mailbox`" in text
     # This confirms the brain's own completion; it must not prompt a second turn.
     assert "No action needed now" in text
+    assert "Mandatory:" not in text
+
+
+def test_reset_notification_omits_trigger_ack_suffix() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_step_reset",
+        message="User reset the 'workspace-mailbox' onboarding step.",
+        details={"step_id": "workspace-mailbox"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "Mandatory:" not in text
 
 
 def test_reference_quiz_notification_stays_minimal() -> None:
@@ -78,5 +92,6 @@ def test_reference_quiz_notification_stays_minimal() -> None:
     assert "sci-fi quote clue" in text
     assert "never list genres or franchises" in text
     assert "clicked the trigger row" in text
+    assert "Mandatory:" in text
     assert "Star Wars" not in text
     assert "pop-culture" not in text

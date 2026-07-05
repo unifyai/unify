@@ -99,6 +99,33 @@ _LEARNING_BEAT_CHANNEL = "learning_beat"
 _ONBOARDING_STEP_LEARN_FROM_CORRECTION = "learn-from-correction"
 _ONBOARDING_LEARNING_PHASE_FIRST = "first_attempt"
 
+_IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
+    "Mandatory: the user's checklist click has no visible UI feedback until I "
+    "speak. In this same LLM turn, send one brief acknowledgement on the active "
+    "channel (e.g. 'Checking your mailbox now', 'On it — pulling that up'). "
+    "If I also call act or another long-running tool, the acknowledgement and "
+    "that tool call MUST be in the same response — never wait for act to finish. "
+    "The main deliverable (summary, clue, demo output) is separate and may come "
+    "on a later turn; the ack only confirms the click registered."
+)
+
+_SUBTYPES_WITHOUT_USER_ACK = frozenset(
+    {
+        _SUBTYPE_ONBOARDING_SESSION_STARTED,
+        _SUBTYPE_STEP_RESET,
+        _SUBTYPE_STEP_COMPLETED,
+        _SUBTYPE_ONBOARDING_RENDER_UPDATED,
+    },
+)
+
+
+def _append_onboarding_trigger_ack_guidance(text: str, subtype: str) -> str:
+    """Append mandatory immediate-ack suffix for step-trigger notifications."""
+    stripped = text.strip()
+    if subtype in _SUBTYPES_WITHOUT_USER_ACK:
+        return stripped
+    return f"{stripped} {_IMMEDIATE_TRIGGER_ACK_GUIDANCE}".strip()
+
 
 def _boss_thread_has_assistant_unify_message(cm: "ConversationManager") -> bool:
     from unify.comms.medium import Medium
@@ -294,10 +321,11 @@ def _coordinator_onboarding_notification_text(
             if tool_name.startswith("make_") or "call" in channel
             else ""
         )
-        return (
+        text = (
             f"{subtype_hint} {body}{channel_note}{step_note}{poll_note}{clue_note}"
             f"{tool_note}{framing_note}{interaction_note}{call_note}"
         ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
         medium = ""
@@ -371,8 +399,8 @@ def _coordinator_onboarding_notification_text(
                 " (Chat: the scripted opener is already in the transcript — "
                 "no chat reply on this event.)"
             )
-        composed = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
-        return composed.strip()
+        text = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
+        return _append_onboarding_trigger_ack_guidance(text.strip(), event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_SKIPPED:
         details = event.details if isinstance(event.details, dict) else {}
@@ -394,7 +422,8 @@ def _coordinator_onboarding_notification_text(
             "Frame the next target as clicking its row in the Onboarding "
             "checklist. Do not say the skipped step is complete."
         )
-        return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
+        text = f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_RESET:
         details = event.details if isinstance(event.details, dict) else {}
@@ -411,7 +440,8 @@ def _coordinator_onboarding_notification_text(
             "only source of truth for what is done — ignore any earlier "
             "transcript memory of having finished this step."
         )
-        return f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_STARTED:
         details = event.details if isinstance(event.details, dict) else {}
@@ -439,7 +469,10 @@ def _coordinator_onboarding_notification_text(
             "for the channel event. Do not skip ahead to Connect or Delegate "
             "until this step is done or skipped."
         )
-        return f"{subtype_hint} {body}{step_note}{progress_note}{skipped_note} {guidance}".strip()
+        text = (
+            f"{subtype_hint} {body}{step_note}{progress_note}{skipped_note} {guidance}"
+        ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype in (_SUBTYPE_TASK_BEAT_REQUESTED, _SUBTYPE_TASK_CHIP_REQUESTED):
         # The orchestra-supplied ``body`` already carries the full directive
@@ -458,7 +491,8 @@ def _coordinator_onboarding_notification_text(
             'guide_voice_agent(message="...") rather than sending a chat '
             "message; otherwise send a single chat message."
         )
-        return f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
+        text = f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
         from unify.conversation_manager.domains.learning_expenses_fixtures import (
@@ -516,19 +550,21 @@ def _coordinator_onboarding_notification_text(
             "run the tutorial; say it is a Console exercise and offer to start "
             "when the user is back in the app."
         )
-        return (
+        text = (
             f"{subtype_hint} {body}{framing_note}{scenario_note}{replay_note}"
             f"{medium_note}"
         ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
         details = event.details if isinstance(event.details, dict) else {}
         step_id = _detail_string(details, "step_id")
         step_note = f" The demo step id is `{step_id}`." if step_id else ""
         guidance = (
-            "The user clicked a workspace demo row: do the demo task now with my "
-            "own tools. Read the relevant part of their connected workspace and "
-            "deliver one short unify_message summary. The checklist does NOT "
+            "The user clicked a workspace demo row: after acking that I am on it, "
+            "do the demo task now with my own tools. Read the relevant part of "
+            "their connected workspace and deliver one short unify_message summary. "
+            "The checklist does NOT "
             "auto-detect that summary, so handling this demo is not finished until "
             "I mark it done by calling set_onboarding_task_state(step_id, "
             "completed=True) after sending the summary. Any reply, tidy-up, or "
@@ -538,7 +574,8 @@ def _coordinator_onboarding_notification_text(
             "and do not redo it or send a duplicate. If a voice call is active I "
             'speak via guide_voice_agent(message="...") instead of a chat message.'
         )
-        return f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_COMPLETED:
         # This event confirms a completion the brain itself just made via
@@ -549,11 +586,12 @@ def _coordinator_onboarding_notification_text(
         details = event.details if isinstance(event.details, dict) else {}
         step_id = _detail_string(details, "step_id")
         step_note = f" Completed step id: `{step_id}`." if step_id else ""
-        return (
+        text = (
             f"{subtype_hint} {body}{step_note} No action needed now — this "
             "confirms a step I just marked complete; the live progress block is "
             "already updated."
         ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
@@ -567,8 +605,10 @@ def _coordinator_onboarding_notification_text(
         "single chat message."
     )
     if not body:
-        return f"{subtype_hint} {guidance}"
-    return f"{subtype_hint} {body} {guidance}"
+        text = f"{subtype_hint} {guidance}"
+    else:
+        text = f"{subtype_hint} {body} {guidance}"
+    return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
 
 async def _handle_coordinator_onboarding_event(
