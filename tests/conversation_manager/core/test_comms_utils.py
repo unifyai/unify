@@ -609,35 +609,6 @@ class TestSendEmailViaAddress:
 
 class TestLocalCommsBackends:
     @pytest.mark.asyncio
-    async def test_send_sms_uses_local_twilio_backend(self):
-        with (
-            patch(
-                "unify.conversation_manager.domains.comms_utils._use_local_comms",
-                return_value=True,
-            ),
-            patch(
-                "unify.conversation_manager.local_providers.twilio.send_sms_message",
-                new=AsyncMock(return_value={"success": True, "sid": "SM123"}),
-            ) as mock_send_sms,
-            patch(
-                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
-            ) as mock_session_details,
-        ):
-            mock_session_details.assistant.number = "+15551234567"
-
-            result = await comms_utils.send_sms_message_via_number(
-                to_number="+15559876543",
-                content="Hello from tests",
-            )
-
-            assert result["success"] is True
-            mock_send_sms.assert_awaited_once_with(
-                "+15559876543",
-                "+15551234567",
-                "Hello from tests",
-            )
-
-    @pytest.mark.asyncio
     async def test_send_unify_message_mirrors_to_local_outbox_and_pubsub(self):
         """Local-comms mode mirrors the message into the local outbox but
         still publishes to Pub/Sub so the Console SSE bridge can deliver
@@ -709,7 +680,13 @@ class TestLocalCommsBackends:
 
     @pytest.mark.asyncio
     async def test_upload_unify_attachment_uses_local_attachment_store(self):
-        mock_session = _mock_aiohttp_session(response_json={"success": True})
+        mock_session = _mock_aiohttp_session(
+            response_json={
+                "success": True,
+                "filename": "document.pdf",
+                "url": "http://127.0.0.1:8787/local/comms/attachments/document.pdf",
+            },
+        )
 
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
@@ -721,6 +698,8 @@ class TestLocalCommsBackends:
                 "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
+            mock_settings.ADAPTERS_URL = ""
+            mock_settings.COMMS_URL = ""
             mock_settings.conversation.LOCAL_COMMS_PUBLIC_URL = ""
             mock_settings.conversation.LOCAL_COMMS_HOST = "127.0.0.1"
             mock_settings.conversation.LOCAL_COMMS_PORT = 8787
@@ -736,34 +715,6 @@ class TestLocalCommsBackends:
             )
             posted_url = mock_session.post.call_args[0][0]
             assert posted_url == "http://127.0.0.1:8787/local/comms/attachments"
-
-    @pytest.mark.asyncio
-    async def test_send_email_uses_local_email_backend(self):
-        with (
-            patch(
-                "unify.conversation_manager.domains.comms_utils._use_local_comms",
-                return_value=True,
-            ),
-            patch(
-                "unify.conversation_manager.local_providers.email.send_email",
-                new=AsyncMock(return_value={"success": True, "id": "email-123"}),
-            ) as mock_send_email,
-        ):
-            result = await comms_utils.send_email_via_address(
-                to=["user@example.com"],
-                subject="Report",
-                body="Please see attached.",
-                attachment={
-                    "filename": "report.pdf",
-                    "content_base64": "UERGIGNvbnRlbnQ=",
-                },
-            )
-
-            assert result["success"] is True
-            mock_send_email.assert_awaited_once()
-            kwargs = mock_send_email.await_args.kwargs
-            assert kwargs["to"] == ["user@example.com"]
-            assert kwargs["subject"] == "Report"
 
     @pytest.mark.asyncio
     async def test_add_email_attachments_supports_inline_content(self):

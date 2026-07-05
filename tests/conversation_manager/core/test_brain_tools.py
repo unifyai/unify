@@ -594,6 +594,7 @@ class TestActionToolsAsTools:
             contact_id=SESSION_DETAILS.boss_contact_id,
             opener="Hi — quick call.",
             briefing="Full task design.",
+            allow_hang_up=None,
         )
 
         await tools["make_whatsapp_call"](
@@ -604,6 +605,7 @@ class TestActionToolsAsTools:
             contact_id=SESSION_DETAILS.boss_contact_id,
             opener="Hi — quick call.",
             briefing="Full task design.",
+            allow_hang_up=None,
         )
 
         await tools["send_email"](

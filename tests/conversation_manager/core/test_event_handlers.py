@@ -210,6 +210,9 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.schedule_proactive_speech = AsyncMock()
     cm.handle_voice_user_turn = AsyncMock()
     cm.get_active_contact = MagicMock(return_value=sample_contacts[1])
+    cm.is_coordinator = False
+    cm.coordinator_onboarding_active = False
+    cm._refresh_coordinator_onboarding_state = AsyncMock()
 
     return cm
 
