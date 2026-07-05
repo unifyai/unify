@@ -31,7 +31,7 @@ CALL_BRIEFING = "Quiz answer: Dune. Confirm warmly, then wrap up."
 UTTERANCE_TOPIC = "app:comms:whatsapp_call_utterance"
 
 
-def _install_entrypoint_fakes(monkeypatch, sequence):
+def _install_entrypoint_fakes(monkeypatch, sequence, extra_metadata=None):
     """Patch call.py's LiveKit / session / broker / model deps with fakes.
 
     Returns ``(call_script, broker, make_ctx)`` where ``broker`` exposes the
@@ -47,11 +47,18 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
     boss = {"contact_id": 1, "first_name": "User", "surname": "Example"}
 
     class _ImmediateAwaitable:
+        # Mimics a completed SpeechHandle: awaitable, playout resolves at
+        # once, never interrupted (so gated hang-up finalization can proceed).
+        interrupted = False
+
         def __await__(self):
             async def _done():
                 return None
 
             return _done().__await__()
+
+        async def wait_for_playout(self):
+            return None
 
     class _FakeLocalParticipant:
         async def publish_data(self, payload, *, topic=None, reliable=False):
@@ -86,6 +93,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
                             "briefing": CALL_BRIEFING,
                             "source": "outbound_whatsapp_opening",
                         },
+                        **(extra_metadata or {}),
                     },
                 ),
             )
@@ -171,6 +179,8 @@ def _install_entrypoint_fakes(monkeypatch, sequence):
             self._pending_continuation = None
             self._active_tts = None
             self._tts_seq = 0
+            self._hang_up_gate_reason = None
+            self._pending_gated_hang_up = None
 
         def set_call_received(self):
             self.call_received = True
@@ -333,3 +343,67 @@ async def test_outbound_whatsapp_agent_speaks_only_after_answer(monkeypatch):
     assert session.current_agent._call_briefing == CALL_BRIEFING
     # The briefing must never have been spoken.
     assert all(CALL_BRIEFING not in text for text, _ in session.say_calls)
+
+
+def _hang_up_events(sequence) -> list:
+    return [
+        item
+        for item in sequence
+        if item[0] == "broker" and item[1] == "app:comms:fast_brain_hang_up"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pre_armed_gate_never_closes_before_answer(monkeypatch):
+    """A pre-armed hang-up gate must not fire while the call is still ringing
+    (the pipeline is quiescent pre-answer), and the sanctioned-silence close
+    only runs once the call is live and the opener has been dispatched."""
+    sequence: list = []
+    call_script, broker, make_ctx, holders = _install_entrypoint_fakes(
+        monkeypatch,
+        sequence,
+        extra_metadata={
+            "hang_up_gate_reason": "Deliver the message, then wrap up.",
+        },
+    )
+    # Tiny close/grace windows so the watcher (1s tick) fires fast once live.
+    monkeypatch.setattr(call_script, "HANG_UP_SILENCE_CLOSE_S", 0.5)
+    monkeypatch.setattr(call_script, "HANG_UP_GRACE_S", 0.01)
+
+    task = asyncio.create_task(call_script.entrypoint(make_ctx()))
+    try:
+        for _ in range(500):
+            if "app:call:status" in broker.callbacks and _has_agent_ready(sequence):
+                break
+            await asyncio.sleep(0.01)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("agent never reached the answered gate")
+
+        # Phase 1: still ringing (no call_answered). The gate is armed, the
+        # pipeline is quiescent — the watcher must NOT close the call.
+        await asyncio.sleep(2.5)
+        assert not _hang_up_events(
+            sequence,
+        ), "gated hang-up fired while the call was still ringing"
+
+        # Phase 2: answer the call; opener flows; the line then goes silent.
+        # The sanctioned-silence close now fires and ends the call.
+        broker.callbacks["app:call:status"]({"type": "call_answered"})
+        await asyncio.wait_for(task, timeout=5.0)
+
+        for _ in range(600):
+            if _hang_up_events(sequence):
+                break
+            await asyncio.sleep(0.01)
+        hang_ups = _hang_up_events(sequence)
+        assert hang_ups, "sanctioned-silence close never fired after answer"
+        payload = hang_ups[0][2]
+        assert '"silence"' in payload
+        assert "Deliver the message, then wrap up." in payload
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass

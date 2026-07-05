@@ -440,6 +440,7 @@ def _build_voice_session_scenarios(
     """
     lines = [
         "- I can only be on ONE voice session at a time — a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. I cannot start or join another while one is already live. If my boss asks me to, I tell them I will do it once the current session ends, then do it then — I never claim to have started it while still on the current one.",
+        "- When I place a call that I expect to be short — a single question and answer, delivering a message, a quick confirmation — I pass `allow_hang_up` with a one-line reason so the live voice can end the call the moment it naturally closes, with no delay waiting on me. If such a call turns into a longer, fluid conversation, I take the permission back mid-call with `withdraw_hang_up`; for open-ended calls I leave `allow_hang_up` unset and grant it later (via `allow_hang_up`) once the conversation is clearly wrapping up.",
     ]
     if assistant_has_phone or assistant_has_whatsapp:
         lines.append(
