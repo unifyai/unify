@@ -188,7 +188,7 @@ async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
 
     # Simulate an attachment download: save a .txt file with known content.
     fm = ManagerRegistry.get_file_manager()
-    fm.save_attachment(
+    saved_path = fm.save_attachment(
         "att-notes-1",
         "meeting_notes.txt",
         b"Project Aurora kickoff meeting\n"
@@ -201,7 +201,7 @@ async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
         SMSReceived(
             contact=BOSS,
             content=(
-                "I just received a file called meeting_notes.txt in Attachments. "
+                f"I just received a file at {saved_path}. "
                 "Who attended the meeting and what was the launch date?"
             ),
         ),

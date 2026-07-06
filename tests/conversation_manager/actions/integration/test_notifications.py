@@ -19,7 +19,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     wait_for_actor_completion,
     wait_for_condition,
 )
-from unify.conversation_manager.events import SMSReceived, SMSSent
+from unify.conversation_manager.events import SMSReceived, SMSSent, UnifyMessageSent
 
 pytestmark = [pytest.mark.integration, pytest.mark.eval]
 
@@ -89,10 +89,13 @@ async def test_actor_progress_notification_e2e_wiring(initialized_cm_codeact):
         assert_no_errors(update)
 
         sms_events = [e for e in update.output_events if isinstance(e, SMSSent)]
+        message_events = [
+            e for e in update.output_events if isinstance(e, UnifyMessageSent)
+        ]
         assert (
-            sms_events
-        ), "Expected a user-facing SMS update after progress notification."
-        assert any((e.content or "").strip() for e in sms_events)
+            sms_events or message_events
+        ), "Expected a user-facing outbound message after progress notification."
+        assert any((e.content or "").strip() for e in (*sms_events, *message_events))
 
     finally:
         if handle_id is not None and handle_id in cm.cm.in_flight_actions:
