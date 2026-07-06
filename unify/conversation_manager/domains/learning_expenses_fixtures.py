@@ -54,8 +54,7 @@ def learning_expenses_storage_check_nudge() -> str:
 def learning_expenses_stop_act_for_storage_rule() -> str:
     """CM must end the persist act after the improved deliverable to run StorageCheck."""
     return (
-        "After sending the improved deliverable tagged "
-        "onboarding_learning_phase=improved, call stop_* on the running "
+        "After sending the improved deliverable, call stop_* on the running "
         "persist act in the SAME turn — StorageCheck only starts once the "
         "persist session ends, not while it sits in awaiting_input. Tell the "
         "user in plain language that you are stopping the action so Brain can "
