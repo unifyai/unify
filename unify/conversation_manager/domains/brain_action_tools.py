@@ -641,13 +641,11 @@ class ConversationManagerBrainActionTools:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
-        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.send_unify_message(
             content=content,
             contact_id=contact_id,
             attachment_filepath=attachment_filepath,
-            onboarding_learning_phase=onboarding_learning_phase,
         )
 
     @slow_brain_direct_comms
@@ -656,7 +654,6 @@ class ConversationManagerBrainActionTools:
         *,
         content: str,
         attachment_filepath: str | None = None,
-        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         """Send a Unify inbox message directly to my boss only.
 
@@ -671,14 +668,11 @@ class ConversationManagerBrainActionTools:
             Message body to send to my boss.
         attachment_filepath : str | None, optional
             Workspace-relative path for one attachment.
-        onboarding_learning_phase : str | None, optional
-            Learning-beat phase tag for onboarding derivation.
         """
         return await self._comms.send_unify_message(
             content=content,
             contact_id=self._boss_contact_id(),
             attachment_filepath=attachment_filepath,
-            onboarding_learning_phase=onboarding_learning_phase,
         )
 
     @slow_brain_direct_comms
@@ -2156,19 +2150,24 @@ class ConversationManagerBrainActionTools:
         """Mark one onboarding checklist step complete or incomplete.
 
         Use the ``step_id`` values from my live onboarding progress block
-        (for example ``apps``, ``create-scheduled-task``, and the workspace
-        demos ``workspace-mailbox`` / ``workspace-drive`` /
-        ``workspace-calendar``). Communication rows still complete on their own
-        when messages are sent and received — if this tool returns an error,
-        relay that explanation rather than guessing which steps are settable.
+        (for example ``apps``, ``create-scheduled-task``, ``learn-from-correction``,
+        ``my-computer-demo``, and the workspace demos ``workspace-mailbox`` /
+        ``workspace-drive`` / ``workspace-calendar``). Communication rows still
+        complete on their own when messages are sent and received — if this tool
+        returns an error, relay that explanation rather than guessing which steps
+        are settable.
 
-        **Workspace demos are completed here, explicitly.** A demo never
-        auto-completes, so the checklist cannot detect it on its own. I do the
-        demo task — read the relevant area and deliver one short summary as a
-        single ``unify_message`` (e.g. for ``workspace-mailbox`` I summarise the
-        recent mail) — and then call this with ``completed=True``; the demo is
-        not finished until I make that call. Any reply, tidy-up, or flag I offer
-        afterwards is an optional follow-up and never gates completion.
+        **Workspace demos, the Learning tutorial, and the My Computer live demo
+        are completed here, explicitly.** A demo never auto-completes, so the
+        checklist cannot detect it on its own. I do the demo task — read the
+        relevant area and deliver one short summary as a single ``unify_message``
+        (e.g. for ``workspace-mailbox`` I summarise the recent mail), for
+        ``learn-from-correction`` I finish the full correction loop including the
+        replay deliverable, or for ``my-computer-demo`` I run the call-anchored
+        desktop errand and deliver the downloaded file as a chat attachment —
+        and then call this with ``completed=True``; the step is not finished until
+        I make that call. Any reply, tidy-up, or flag I offer afterwards is an
+        optional follow-up and never gates completion.
 
         **Call when:** I have finished onboarding work the checklist cannot
         detect yet (a workspace demo task, semantic setup, or a guided

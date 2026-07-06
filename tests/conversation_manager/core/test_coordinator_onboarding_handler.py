@@ -35,7 +35,6 @@ def _fake_cm() -> SimpleNamespace:
         set_pending_onboarding_outbound=MagicMock(),
         record_onboarding_trigger_clicked=MagicMock(),
         clear_onboarding_clicked_trigger_steps=MagicMock(),
-        clear_active_learning_beat=MagicMock(),
         notifications_bar=SimpleNamespace(push_notif=MagicMock()),
         _session_logger=SimpleNamespace(info=MagicMock()),
         _current_event_trace={},

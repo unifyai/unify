@@ -575,7 +575,6 @@ class TestActionToolsAsTools:
             content="hello",
             contact_id=SESSION_DETAILS.boss_contact_id,
             attachment_filepath=None,
-            onboarding_learning_phase=None,
         )
 
         await tools["send_api_response"](content="done", tags=["route"])

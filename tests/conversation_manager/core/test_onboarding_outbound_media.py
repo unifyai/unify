@@ -30,10 +30,10 @@ from unify.conversation_manager.conversation_manager import ConversationManager
 # Canonical channel -> accepted outbound mediums. Source of truth:
 #   orchestra/services/onboarding_graph.py
 #     _CHANNEL_TO_OUTBOUND_MEDIUMS   (reference-quiz comms channels)
-#     BEAT_CHANNEL_TO_OUTBOUND_MEDIUMS   (non-quiz onboarding beats)
 # Keep this mirror in lockstep with those mappings and with the expected_media
 # table in ConversationManager.consume_pending_onboarding_outbound. Workspace
-# demos are intentionally excluded — they complete explicitly, not via outbound.
+# demos and the Learning tutorial are intentionally excluded — they complete
+# explicitly, not via outbound tagging.
 CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "email": frozenset({"email"}),
     "sms_message": frozenset({"sms_message"}),
@@ -42,7 +42,6 @@ CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "phone_call": frozenset({"phone_call"}),
     "slack_message": frozenset({"slack_message", "slack_channel_message"}),
     "discord_message": frozenset({"discord_message", "discord_channel_message"}),
-    "learning_beat": frozenset({"unify_message"}),
 }
 
 _ALL_MEDIA: frozenset[str] = frozenset(
