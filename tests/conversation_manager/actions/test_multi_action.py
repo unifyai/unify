@@ -571,11 +571,13 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
     """
     cm = initialized_cm
 
-    # Step 1: First task
+    # Step 1: First task (transcript search reliably starts an in-flight actor handle)
     result1 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="Search the web for competitor pricing information.",
+            content=(
+                "Search my transcripts for anything about competitor pricing information."
+            ),
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, "Expected at least one in-flight action"
@@ -600,7 +602,7 @@ async def test_pause_first_start_second_resume_first(initialized_cm):
     result4 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="OK, go ahead with that competitor pricing search now.",
+            content="OK, go ahead with that competitor pricing transcript search now.",
         ),
     )
 
