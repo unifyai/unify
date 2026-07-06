@@ -236,6 +236,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_discord_bot_id: str = "",
         assistant_email_provider: str = "",
         assistant_slack_bot_user_id: str = "",
+        assistant_slack_team_id: str = "",
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -262,6 +263,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_whatsapp_number = assistant_whatsapp_number
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
+        self.assistant_slack_team_id = assistant_slack_team_id
         # Global onboarding scaffolding gate, mirrored from Orchestra's
         # ``Coordinator/State`` and refreshed on a short TTL. When False the
         # slow-brain drops all onboarding scaffolding. Defaults to True until
@@ -2722,6 +2724,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_bot_user_id",
             "",
         )
+        self.assistant_slack_team_id = payload.get(
+            "assistant_slack_team_id",
+            "",
+        )
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -2762,6 +2768,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
+            assistant_slack_team_id=self.assistant_slack_team_id,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,
