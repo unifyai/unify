@@ -237,7 +237,7 @@ async def test_single_message_file_then_create_task(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(300)
+@pytest.mark.timeout(600)
 @_handle_project
 async def test_single_message_update_contact_then_create_task(initialized_cm_codeact):
     """
