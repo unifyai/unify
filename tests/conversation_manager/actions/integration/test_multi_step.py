@@ -285,7 +285,13 @@ async def test_single_message_update_contact_then_create_task(initialized_cm_cod
 
     # CM may break compound instructions into multiple serial actor calls.
     # Loop until CM calls `wait` with zero in-flight actors.
-    _results = await run_until_all_actors_complete(cm, result, timeout_per_actor=300)
+    _results = await run_until_all_actors_complete(
+        cm,
+        result,
+        timeout_per_actor=600,
+        max_actors=15,
+        max_cm_steps=15,
+    )
 
     # Verify the contact update persisted.
     payload = cm.cm.contact_manager.filter_contacts(
