@@ -516,6 +516,20 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2
     echo "  Set ORCHESTRA_REPO_PATH or clone orchestra repo to ../orchestra" >&2
   fi
+
+  # Local pytest must authenticate as the seeded test user. UnityTests/.env
+  # often carries a hosted UNIFY_KEY whose tenant has no billing_account row in
+  # this Postgres, so /v0/credits/deduct returns 400 "Billing is not set up".
+  export SELF_HOST=1
+  export UNIFY_KEY="local-test-api-key"
+  if [[ -x "$_local_orchestra_script" ]]; then
+    if "$_local_orchestra_script" seed; then
+      echo "Local orchestra test user + billing seeded"
+    else
+      echo "Warning: orchestra seed failed; credit-deduct tests may fail" >&2
+    fi
+  fi
+
   unset _local_url
 else
   echo "Using remote orchestra: $ORCHESTRA_URL"
