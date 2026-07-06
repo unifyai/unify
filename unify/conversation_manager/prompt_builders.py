@@ -1141,8 +1141,8 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "act(persist=True) with genuinely computed numbers (never assert "
             "totals). The act query MUST include the naive algorithm from the "
             "scenario context verbatim so the actor double-counts INTERNAL XFER "
-            "rows on both files. Tag the first-attempt deliverable with "
-            "onboarding_learning_phase=`first_attempt`.",
+            "rows on both files. When the act completes, send the first-attempt "
+            "deliverable as a unify_message in the same turn.",
             "  4. State the naive total and explain the mistake in plain language "
             "(see rule 0) — never forward act tables or row-by-row math. Suggest "
             "the exact correction text for the user to send, and WAIT — never "
@@ -1151,8 +1151,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "persist act (do not start a new act) with the corrected algorithm "
             "from scenario context and include this StorageCheck memoization "
             f"request verbatim: {learning_expenses_storage_check_nudge()} "
-            "Then tag the improved deliverable with "
-            "onboarding_learning_phase=`improved`. "
+            "Then send the improved deliverable as a unify_message. "
             f"{learning_expenses_stop_act_for_storage_rule()} "
             "The doing loop must not call "
             "GuidanceManager or FunctionManager store tools — StorageCheck runs "
@@ -1163,19 +1162,21 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  6. Invite the user to ask for next month's report and WAIT; the "
             "replay only runs once they ask.",
             "  7. Replay via a second act(persist=True) over the month-N+1 files "
-            "and tag the replay deliverable with onboarding_learning_phase=`replay`.",
+            "and send the replay deliverable as a unify_message.",
             "  8. Tell the user to open the Actions tab themselves before and "
             "during each act run so they can watch the work live — I have no "
             "tool to navigate the Console for them; call out the storage node "
             "when it appears. Brain nudges and attachment intro messages are not "
-            "phase deliverables.",
+            "deliverables.",
             "  9. On a live in-app Unify Meet call: narrate spoken beats via "
-            "`guide_voice_agent`, but the CSV attachments and all three phase "
-            "deliverables (`first_attempt`, `improved`, `replay`) MUST still be "
-            "sent as tagged unify_message chat messages — a report is a document, "
-            "not a spoken line. The milestone rule about not sending chat during "
-            "a call does NOT apply to these Learning deliverables.",
-            "  10. On off-console channels (plain phone call, WhatsApp call): do "
+            "`guide_voice_agent`, but the CSV attachments and all three "
+            "deliverables MUST still be sent as unify_message chat messages — a "
+            "report is a document, not a spoken line. The milestone rule about not "
+            "sending chat during a call does NOT apply to these Learning deliverables.",
+            "  10. After sending the replay deliverable, mark the step done with "
+            "`set_onboarding_task_state('learn-from-correction', True)` — the "
+            "checklist does not auto-detect the tutorial.",
+            "  11. On off-console channels (plain phone call, WhatsApp call): do "
             "not run the tutorial; say it is a Console exercise and offer to start "
             "when the user is back in the app.",
         ],

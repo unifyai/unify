@@ -273,12 +273,7 @@ class CommsPrimitives:
             return reason or _ONBOARDING_CALL_HANG_UP_REASON
         return reason
 
-    def _onboarding_event_kwargs(
-        self,
-        medium: Medium,
-        *,
-        learning_phase: str | None = None,
-    ) -> dict[str, str]:
+    def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
             return {}
         consume = getattr(self._cm, "consume_pending_onboarding_outbound", None)
@@ -286,10 +281,6 @@ class CommsPrimitives:
             pending = consume(medium.value)
             if pending:
                 return pending
-        if learning_phase:
-            build = getattr(self._cm, "build_learning_beat_onboarding_kwargs", None)
-            if callable(build):
-                return build(medium.value, learning_phase=learning_phase) or {}
         return {}
 
     def _stash_whatsapp_resend_onboarding_kwargs(
@@ -2854,7 +2845,6 @@ class CommsPrimitives:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
-        onboarding_learning_phase: str | None = None,
     ) -> dict[str, Any]:
         """Send an assistant-owned Unify inbox message to one contact.
 
@@ -2878,10 +2868,6 @@ class CommsPrimitives:
             Integer contact id for the recipient. Not a ``team:<id>`` token.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment to upload and include.
-        onboarding_learning_phase : str | None, optional
-            Learning-beat phase tag for onboarding derivation: ``first_attempt``,
-            ``improved``, or ``replay``. The first attempt is usually armed by
-            pending onboarding outbound; later phases must pass this explicitly.
 
         Returns
         -------
@@ -3045,10 +3031,7 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
-                **self._onboarding_event_kwargs(
-                    Medium.UNIFY_MESSAGE,
-                    learning_phase=onboarding_learning_phase,
-                ),
+                **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
             )
             await self._publish_comms_event(topic, event)
             self._record_offline_success(
