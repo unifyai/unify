@@ -241,7 +241,12 @@ def _managed_test_organization() -> Iterator[LiveOrganization]:
             timeout=30,
         )
         assert assistants_response.status_code == 200, assistants_response.text
-        assistants = assistants_response.json()
+        assistants_body = assistants_response.json()
+        assistants = (
+            assistants_body.get("info", assistants_body)
+            if isinstance(assistants_body, dict)
+            else assistants_body
+        )
         coordinator_row = next(
             (
                 row
@@ -471,6 +476,7 @@ async def test_coordinator_persists_confirmed_shared_team_guidance():
             "support handoffs, launch SOPs, and escalation rules."
         )
         team = unisdk.create_team(
+            organization.organization_id,
             name=f"Launch War Room {suffix}",
             description=team_description,
             api_key=organization.api_key,
