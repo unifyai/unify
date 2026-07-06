@@ -112,9 +112,13 @@ _STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "slack-reference": "Clicking sends the next clue via Slack.",
     "slack-message": "The user guesses the Slack clue.",
+    "discord-id": (
+        "Clicking the 'Add your Discord ID' row opens Account → Contact info so "
+        "the user can copy their Discord user ID (Developer Mode) and save it."
+    ),
     "discord-connect": (
         "Clicking the 'Connect Discord' row opens the Discord setup path for "
-        "adding their Discord ID and installing the public Discord bot."
+        "installing the public Discord bot."
     ),
     "discord-reference": "Clicking sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
