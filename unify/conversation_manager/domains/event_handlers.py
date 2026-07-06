@@ -235,13 +235,15 @@ def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
     """Enable Slack send capability from an inbound Slack event.
 
     Slack's ``bot_user_id`` is workteam-scoped (it lives on the
-    ``slack_installs`` row), not on the assistant record, so the
-    per-assistant ``assistant_slack_bot_user_id`` is never populated at
-    session bootstrap. The brain gates the ``send_slack_message`` /
-    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
-    on that flag, so without it the assistant can never reply on Slack.
-    Adopt the workspace bot id from the inbound event so this session's
-    subsequent brain run exposes the Slack tools.
+    ``slack_installs`` row), not on the assistant record. The bootstrap
+    payload resolves it from the workspace install so outbound-first
+    sessions (e.g. a Console trigger) expose the Slack tools without a
+    prior inbound event. This fallback covers the case where the
+    bootstrap value is absent (no resolvable install at wake time) by
+    adopting the workspace bot id from the inbound event, so this
+    session's subsequent brain run exposes the Slack tools. The brain
+    gates ``send_slack_message`` / ``send_slack_channel_message`` (and
+    the Slack reply guidelines) on that flag.
     """
     inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
     if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
