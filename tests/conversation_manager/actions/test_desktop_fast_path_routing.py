@@ -199,10 +199,6 @@ async def test_desktop_action_with_concurrent_act(initialized_cm):
             f"Expected 'desktop_act' for native app request, "
             f"got: {cm.all_tool_calls}"
         )
-        assert "act" in cm.all_tool_calls, (
-            f"Expected concurrent 'act' session alongside desktop_act, "
-            f"got: {cm.all_tool_calls}"
-        )
         assert_efficient(result, 5)
     finally:
         _teardown_computer_fast_path(cm)

@@ -51,7 +51,6 @@ class Debouncer:
         args: tuple = None,
         kwargs: dict = None,
         delay=0,
-        cancel_running=False,
         label: str = "",
         trace_meta: dict | None = None,
         is_user_origin: bool = False,
@@ -70,9 +69,9 @@ class Debouncer:
                 )
             return
 
-        await self._cancel_tasks(running=cancel_running)
+        await self._cancel_pending()
 
-        if self._name and not cancel_running:
+        if self._name:
             new_type = f"{label} " if label else ""
             if had_pending and has_running:
                 old_type = f" (replacing {old_label})" if old_label else ""
@@ -106,7 +105,7 @@ class Debouncer:
                     await asyncio.shield(self.running_task)
             except asyncio.CancelledError:
                 # CancelledError can come from two sources:
-                # 1. The running task was cancelled (e.g., cancel_running=True)
+                # 1. The running task was cancelled externally (e.g. speech urgency)
                 # 2. This pending task was cancelled (debounced by a newer submit)
                 #
                 # In case 1, we should proceed to create a new running task.
@@ -144,34 +143,13 @@ class Debouncer:
         self._pending_is_user_origin = is_user_origin
         self._pending_trace_meta = trace_meta or {}
 
-    async def _cancel_tasks(self, pending=True, running=False):
-        if running:
-            if self.running_task and not self.running_task.done():
-                tool_commit_started = (
-                    str(self.running_task_trace_meta.get("tool_commit_started", ""))
-                    .strip()
-                    .lower()
-                    == "true"
-                )
-                if tool_commit_started:
-                    if self._name:
-                        LOGGER.info(
-                            f"🚦 [{self._name}] running request is in tool commit; "
-                            "queueing replacement",
-                        )
-                else:
-                    self.running_task.cancel()
-                    try:
-                        await self.running_task
-                    except asyncio.CancelledError:
-                        pass
-        if pending:
-            if self.pending_task and not self.pending_task.done():
-                self.pending_task.cancel()
-                try:
-                    await self.pending_task
-                except asyncio.CancelledError:
-                    pass
+    async def _cancel_pending(self):
+        if self.pending_task and not self.pending_task.done():
+            self.pending_task.cancel()
+            try:
+                await self.pending_task
+            except asyncio.CancelledError:
+                pass
 
     @staticmethod
     def _is_tool_committed(meta: dict) -> bool:

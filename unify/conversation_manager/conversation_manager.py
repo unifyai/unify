@@ -10,6 +10,7 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.common.startup_timing import log_startup_timing
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
 from unify.session_details import SESSION_DETAILS
+from unify.coordinator_voice import resolve_runtime_voice
 from unify.settings import SETTINGS
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
@@ -36,8 +37,8 @@ from unify.conversation_manager.events import *
 from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
-from unify.common.llm_client import new_llm_client
-from unify.common.single_shot import single_shot_tool_decision
+from unify.common.llm_client import new_llm_client, new_vision_llm_client
+from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.domains.utils import Debouncer, log_task_exc
@@ -149,6 +150,15 @@ def _log_slow_brain_single_shot_failure(
     )
 
 
+def _format_tool_thoughts_for_log(tools: list[ToolExecution]) -> str:
+    parts: list[str] = []
+    for tool_exec in tools:
+        thoughts = getattr(tool_exec, "thoughts", None)
+        if isinstance(thoughts, str) and thoughts.strip():
+            parts.append(f"[{tool_exec.name}] {thoughts.strip()}")
+    return " | ".join(parts)
+
+
 def _append_context_to_state_message(message: dict, context: str) -> dict:
     if not context:
         return message
@@ -226,7 +236,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_discord_bot_id: str = "",
         assistant_email_provider: str = "",
         assistant_slack_bot_user_id: str = "",
-        assistant_is_coordinator: bool = False,
+        assistant_slack_team_id: str = "",
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -253,19 +263,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_whatsapp_number = assistant_whatsapp_number
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
-        self.is_coordinator = assistant_is_coordinator
-        # Global "do onboarding later" switch, mirrored from Orchestra's
-        # ``Coordinator/State`` and refreshed on a short TTL (see
-        # ``_refresh_coordinator_onboarding_deferred``). When True the
-        # slow-brain drops all onboarding scaffolding so the Coordinator
-        # behaves as if onboarding never existed. Defaults to False until
+        self.assistant_slack_team_id = assistant_slack_team_id
+        # Global onboarding scaffolding gate, mirrored from Orchestra's
+        # ``Coordinator/State`` and refreshed on a short TTL. When False the
+        # slow-brain drops all onboarding scaffolding. Defaults to True until
         # the first refresh resolves.
-        self.coordinator_onboarding_deferred: bool = False
+        self.coordinator_onboarding_active: bool = True
         # Precomputed depends_on-aware onboarding picture (steps + statuses
         # + valid next targets with nudge copy), mirrored from Orchestra so
         # the slow brain reads a standing progress block instead of
         # deriving "what's next". None outside active onboarding.
         self.coordinator_onboarding_render: dict[str, Any] | None = None
+        self.coordinator_intro_watched: bool = False
+        self.coordinator_pending_chat_intro: bool = False
+        self.coordinator_chat_intro_armed_at: str | None = None
+        self._coordinator_chat_intro_delivery_task: asyncio.Task[None] | None = None
         # Trigger-step ids the user clicked in THIS session (ephemeral by
         # design): unlocks the matching reference-quiz comms tool until the
         # send durably completes the step. Lost on restart on purpose — the
@@ -276,6 +288,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # every prompt build so console_ui never re-declares onboarding copy.
         self.onboarding_catalog: dict[str, Any] | None = None
         self._coordinator_state_checked_at: float = 0.0
+        # Shared keep-alive HTTP client for Orchestra state reads/writes, plus
+        # the in-flight background refresh (see
+        # _schedule_coordinator_onboarding_state_refresh). Closed in cleanup().
+        self._coordinator_state_http: Any | None = None
+        self._coordinator_state_refresh_task: asyncio.Task | None = None
         self.assistant_email_provider = assistant_email_provider
         self.user_first_name = user_first_name
         self.user_surname = user_surname
@@ -293,7 +310,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.project_name = project_name
 
         # inactivity & shutdown
-        self.inactivity_timeout = 420  # 7 minutes in seconds
+        self.inactivity_timeout = 3600  # 1 hour in seconds
         self.inactivity_check_interval = 30  # seconds
         self.last_activity_time = self.loop.time()
         self.shutdown_reason: str | None = None
@@ -315,6 +332,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.call_manager.on_screenshot = self._buffer_screenshot
         self.call_manager.on_fast_brain_generating = self._on_fast_brain_generating
         self.call_manager.on_pipeline_quiescent = self._on_pipeline_quiescent
+        self.call_manager.voice_profile_provider = self._get_voice_profiles
 
         # renderer
         self.prompt_renderer = Renderer()
@@ -415,9 +433,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._llm_request_seq: int = 0
         self._llm_run_seq: int = 0
         self._llm_gen: int = 0
-        self._outbound_suppress_gen: int = -1
         self._active_llm_trace_meta: dict[str, Any] | None = None
         self._credit_gate_reply_sent_at: dict[tuple[str, str], float] = {}
+        self._last_inbound_reply_context: dict[str, Any] | None = None
         self._recent_tool_executions: list[dict[str, Any]] = []
         self._recent_commissioning_successes: dict[str, int] = {}
 
@@ -439,10 +457,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # was closed, a free-form outbound proves it was open.
         self._whatsapp_window_open: dict[int, bool] = {}
 
-        # Outbound WhatsApp call contexts stashed while awaiting call permission.
-        # When the contact grants permission (taps "Call now"), the context is
-        # injected as call_manager.initial_notification.  Maps contact_id → context.
-        self._pending_whatsapp_call_contexts: dict[int, str] = {}
+        # Outbound WhatsApp call openers stashed while awaiting call permission.
+        # When the contact grants permission (taps "Call now"), the stash is
+        # injected as call_manager.pending_opener / pending_briefing. Maps
+        # contact_id → {"opener": str, "briefing": str}.
+        self._pending_whatsapp_call_openers: dict[int, dict[str, str]] = {}
         self._pending_onboarding_outbound: dict[str, Any] | None = None
         self._startup_wake_reasons: list[dict[str, Any]] = []
 
@@ -592,6 +611,22 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             if generation < self._llm_gen - 1:
                 del self._recent_commissioning_successes[fingerprint]
+
+    @property
+    def is_coordinator(self) -> bool:
+        """Whether this session is the workspace Coordinator.
+
+        Delegates to ``SESSION_DETAILS`` so there is a single source of truth
+        for the Coordinator role. Tool registration reads
+        ``SESSION_DETAILS.is_coordinator``; if this returned a separately-stored
+        attribute the two could disagree — offering a Coordinator-only tool that
+        the runtime guards then reject.
+        """
+        return SESSION_DETAILS.is_coordinator
+
+    @is_coordinator.setter
+    def is_coordinator(self, value: bool) -> None:
+        SESSION_DETAILS.is_coordinator = bool(value)
 
     @property
     def assistant_has_teams(self) -> bool:
@@ -1122,85 +1157,50 @@ class ConversationManager(metaclass=SingletonABCMeta):
         except Exception:
             return messages
 
-    _USER_ORIGIN_EVENTS = frozenset(
-        {
-            "InboundPhoneUtterance",
-            "InboundUnifyMeetUtterance",
-            "InboundWhatsAppCallUtterance",
-        },
-    )
-
     async def cancel_slow_brain_run(self, turn_id) -> None:
         """Cancel exactly the slow-brain run spawned by ``turn_id``.
 
-        Invoked when the fast brain resolves that turn itself
-        (``FastBrainContinued`` - resuming an interrupted line or fully answering
-        a small-talk turn): the eagerly-started run for that turn would otherwise
-        also answer. Targets only that turn's run wherever it sits in the queue
-        (no-op if it was already debounced out), so a prior still-thinking run or
-        an unrelated act/SMS run is never cancelled. A run already in tool commit
-        (speaking) is spared.
+        Used when a voice turn must be dropped before it produces speech (e.g.
+        superseded by a newer user utterance). Targets only that turn's run
+        wherever it sits in the queue (no-op if already gone). A run already in
+        tool commit (speaking) is spared.
         """
         await self.debouncer.cancel_run_by_turn(turn_id)
 
-    async def interject_or_run(
+    async def handle_voice_user_turn(
         self,
         content: str,
         triggering_contact_id: int | None = None,
         turn_id: int | None = None,
     ):
-        """Interject the ask handle or run the LLM"""
+        """Route a completed voice user turn to the active ask handle or slow brain."""
         prev_utterance = getattr(self, "_last_inbound_utterance", None)
         self._last_inbound_utterance = content
 
         if self.active_ask_handle and not self.active_ask_handle.done():
             await self.active_ask_handle.interject(content)
-        else:
-            if self.mode.is_voice:
-                running_origin = self.debouncer.running_task_trace_meta.get(
-                    "origin_event_name",
-                    "",
-                )
-                running_is_known_non_user = (
-                    running_origin != ""
-                    and running_origin not in self._USER_ORIGIN_EVENTS
-                )
-                has_running = (
-                    self.debouncer.running_task is not None
-                    and not self.debouncer.running_task.done()
-                )
-                # Deterministically preempt non-user slow-brain runs.
-                # Only cancel when the running task is *known* to be a
-                # non-user event. Unknown origin (empty) defaults to the
-                # safe queue-of-2 behavior.
-                cancel_running = has_running and running_is_known_non_user
-            else:
-                # Text mode: rapid messages should get fresh responses.
-                cancel_running = True
+            return
 
-            await self.request_llm_run(
-                delay=0,
-                cancel_running=cancel_running,
-                triggering_contact_id=triggering_contact_id,
-                is_user_origin=True,
-                turn_id=turn_id,
+        await self.request_llm_run(
+            delay=0,
+            triggering_contact_id=triggering_contact_id,
+            is_user_origin=True,
+            turn_id=turn_id,
+        )
+
+        if (
+            SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
+            and self.debouncer.running_task
+            and not self.debouncer.running_task.done()
+        ):
+            stale_task = self.debouncer.running_task
+            asyncio.create_task(
+                self._evaluate_speech_urgency(
+                    content,
+                    stale_task,
+                    prev_utterance,
+                ),
             )
-
-            if (
-                self.mode.is_voice
-                and not cancel_running
-                and SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
-                and self.debouncer.running_task
-                and not self.debouncer.running_task.done()
-            ):
-                stale_task = self.debouncer.running_task
-                asyncio.create_task(
-                    self._evaluate_speech_urgency(
-                        content,
-                        stale_task,
-                        prev_utterance,
-                    ),
-                )
 
     async def _evaluate_speech_urgency(
         self,
@@ -1262,7 +1262,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def run_llm(
         self,
         delay: float = 0,
-        cancel_running: bool = False,
         trace_meta: dict[str, str] | None = None,
         is_user_origin: bool = False,
     ):
@@ -1270,7 +1269,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self._run_llm_with_failure_notification,
             kwargs={"trace_meta": trace_meta or {}},
             delay=delay,
-            cancel_running=cancel_running,
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
             is_user_origin=is_user_origin,
@@ -1280,25 +1278,45 @@ class ConversationManager(metaclass=SingletonABCMeta):
     # conversation falls back to text.
     _MEET_RING_TIMEOUT_S = 25.0
 
-    async def ring_unify_meet(self, context: str = "") -> dict:
+    async def ring_unify_meet(
+        self,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
+    ) -> dict:
         """Ring the owner on Unify Meet and await an answer (no-answer -> text).
 
         Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
         incoming-call window with an Answer button. The assistant cannot join the
         owner's browser for them; when they answer, Console's normal connect flow
-        lands here as ``UnifyMeetReceived``. ``context`` becomes a briefed opener
-        so the answered call opens purposefully. If unanswered within
-        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue over
-        text.
+        lands here as ``UnifyMeetReceived``. ``opener`` is spoken verbatim once
+        the call connects; ``briefing`` is unspoken context the voice agent uses
+        to run the call's task itself; ``allow_hang_up`` pre-arms the hang-up
+        gate for calls expected to be short. If unanswered within
+        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue
+        over text.
         """
         import uuid
 
         from unify.conversation_manager.domains import comms_utils
 
+        reason = (opener or "").strip()
+        if not reason:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak when "
+                    "the call connects. No ring was sent."
+                ),
+            }
+        # The opener round-trips through the Console's answer flow; the
+        # briefing and pre-armed gate stay queued here and are reattached by
+        # start_unify_meet when the owner answers.
+        self.call_manager.pending_briefing = (briefing or "").strip()
+        self.call_manager.pending_hang_up_gate = " ".join(
+            (allow_hang_up or "").split(),
+        ).strip()
         call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
-        reason = (context or "").strip() or (
-            "Continuing our conversation on the live call."
-        )
         self._pending_meet_ring = call_session_id
         result = await comms_utils.send_unify_meet_ring(
             call_session_id=call_session_id,
@@ -1327,6 +1345,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
         from unify.common.prompt_helpers import now as prompt_now
 
         self._pending_meet_ring = None
+        # The ring died unanswered: drop its queued pre-armed gate so it
+        # cannot leak into a later, unrelated call.
+        self.call_manager.pending_hang_up_gate = ""
         self.notifications_bar.push_notif(
             "Comms",
             (
@@ -1448,6 +1469,72 @@ class ConversationManager(metaclass=SingletonABCMeta):
             event_json,
         )
 
+    async def set_speaker_engagement(
+        self,
+        *,
+        speaker: str,
+        engaged: bool,
+    ) -> dict[str, Any]:
+        """Promote or demote a call voice's conversational standing.
+
+        Resolves ``speaker`` against the permanently engaged call participants
+        (by name — engaging them is a no-op, demoting them is refused) and
+        otherwise treats it as a session speaker label ("Speaker 2"). The
+        update is mirrored locally for prompt/tool rendering and pushed to the
+        voice agent over IPC, where it takes effect on the floor/turn/reply
+        gates immediately.
+        """
+        cmgr = self.call_manager
+        if not self.in_voice_session:
+            return {"status": "no_active_call"}
+        name = (speaker or "").strip()
+        if not name:
+            return {
+                "status": "error",
+                "reason": "speaker must be a non-empty name or label",
+            }
+        low = name.lower()
+
+        for cid, cname in cmgr.engaged_contacts.items():
+            cname_low = cname.lower()
+            if low == cname_low or low == cname_low.split()[0]:
+                if not engaged:
+                    return {
+                        "status": "refused",
+                        "reason": (
+                            f"{cname} is a primary call participant and always "
+                            "remains engaged."
+                        ),
+                    }
+                return {"status": "already_engaged", "speaker": cname}
+
+        # Anonymous session label: use the canonical casing if already heard.
+        canonical = next(
+            (lbl for lbl in cmgr.known_speaker_labels if lbl.lower() == low),
+            name,
+        )
+        if engaged:
+            cmgr.engaged_labels.add(canonical)
+        else:
+            cmgr.engaged_labels.discard(canonical)
+        await self.event_broker.publish(
+            "app:call:speaker_engagement",
+            json.dumps(
+                {
+                    "action": "engage" if engaged else "disengage",
+                    "label": canonical,
+                },
+            ),
+        )
+        self._session_logger.info(
+            "speaker_engagement",
+            f"{'Engaged' if engaged else 'Disengaged'} speaker: {canonical}",
+        )
+        return {
+            "status": "engaged" if engaged else "disengaged",
+            "speaker": canonical,
+        }
+
     async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
         """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
 
@@ -1499,6 +1586,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
             raise
 
+    def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:
+        self._last_inbound_reply_context = reply_context
+
     def _credit_gate_throttle_key(
         self,
         reply_context: dict[str, Any],
@@ -1540,99 +1630,94 @@ class ConversationManager(metaclass=SingletonABCMeta):
         contact_id = reply_context.get("contact_id")
         tools = ConversationManagerBrainActionTools(self)
 
-        previous_suppress_gen = self._outbound_suppress_gen
-        self._outbound_suppress_gen = self._llm_gen
-        try:
-            if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
-                await tools.send_unify_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+        if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
+            await tools.send_unify_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
+            await tools.send_sms(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
+            await tools.send_whatsapp(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.EMAIL.value:
+            email_id = reply_context.get("email_id")
+            thread_id = reply_context.get("thread_id")
+            if email_id:
+                await tools.send_email(
+                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    reply_all=True,
+                    email_id_to_reply_to=email_id,
+                    thread_id=thread_id,
                 )
-            elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
-                await tools.send_sms(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
-                await tools.send_whatsapp(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.EMAIL.value:
-                email_id = reply_context.get("email_id")
-                thread_id = reply_context.get("thread_id")
-                if email_id:
-                    await tools.send_email(
-                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                        reply_all=True,
-                        email_id_to_reply_to=email_id,
-                        thread_id=thread_id,
-                    )
-                elif contact_id is not None:
-                    await tools.send_email(
-                        to=[contact_id],
-                        subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                        body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    )
-                else:
-                    return False
-            elif medium == Medium.API_MESSAGE.value:
-                await tools.send_api_response(
-                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    tags=reply_context.get("tags"),
-                )
-            elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
-                await tools.send_discord_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_discord_channel_message(
-                    channel_id=reply_context["channel_id"],
-                    guild_id=reply_context.get("guild_id") or "",
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
-                await tools.send_slack_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    team_id=reply_context.get("team_id") or "",
-                    thread_ts=reply_context.get("thread_ts"),
-                )
-            elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_slack_channel_message(
-                    channel_id=reply_context["channel_id"],
-                    team_id=reply_context.get("team_id") or "",
-                    thread_ts=reply_context.get("thread_ts"),
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                )
-            elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
-                await tools.send_teams_message(
-                    contact_id=contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    chat_id=reply_context.get("chat_id"),
-                )
-            elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
-                "channel_id",
-            ):
-                await tools.send_teams_message(
-                    contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                    content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-                    channel_id=reply_context.get("channel_id"),
-                    team_id=reply_context.get("team_id"),
+            elif contact_id is not None:
+                await tools.send_email(
+                    to=[contact_id],
+                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
                 )
             else:
                 return False
-        finally:
-            self._outbound_suppress_gen = previous_suppress_gen
+        elif medium == Medium.API_MESSAGE.value:
+            await tools.send_api_response(
+                contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tags=reply_context.get("tags"),
+            )
+        elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
+            await tools.send_discord_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_discord_channel_message(
+                channel_id=reply_context["channel_id"],
+                guild_id=reply_context.get("guild_id") or "",
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
+            await tools.send_slack_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                team_id=reply_context.get("team_id") or "",
+                thread_ts=reply_context.get("thread_ts"),
+            )
+        elif medium == Medium.SLACK_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_slack_channel_message(
+                channel_id=reply_context["channel_id"],
+                team_id=reply_context.get("team_id") or "",
+                thread_ts=reply_context.get("thread_ts"),
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            )
+        elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
+            await tools.send_teams_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                chat_id=reply_context.get("chat_id"),
+            )
+        elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
+            "channel_id",
+        ):
+            await tools.send_teams_message(
+                contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                channel_id=reply_context.get("channel_id"),
+                team_id=reply_context.get("team_id"),
+            )
+        else:
+            return False
 
         return True
 
@@ -1669,7 +1754,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def request_llm_run(
         self,
         delay=0,
-        cancel_running=False,
         triggering_contact_id: int | None = None,
         is_user_origin: bool = False,
         credit_gate_reply_context: dict[str, Any] | None = None,
@@ -1696,19 +1780,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
         }
         if credit_gate_reply_context is not None:
             request_meta["credit_gate_reply_context"] = credit_gate_reply_context
-        self._pending_llm_requests.append((delay, cancel_running, is_user_origin))
+        self._pending_llm_requests.append((delay, is_user_origin))
         self._pending_llm_request_meta.append(request_meta)
         log_startup_timing(
             LOGGER,
             (
                 "⏱️ [StartupTiming] first_reply.request_llm_run queued "
-                "request_id=%s origin_event=%s delay=%s cancel_running=%s "
+                "request_id=%s origin_event=%s delay=%s "
                 "is_user_origin=%s pending=%d ready_for_brain=%s"
             ),
             request_id,
             request_meta["origin_event_name"] or "-",
             delay,
-            cancel_running,
             is_user_origin,
             len(self._pending_llm_requests),
             self.ready_for_brain,
@@ -1719,8 +1802,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"Queued slow-brain run request_id={request_id} "
                 f"origin_event_id={request_meta['origin_event_id'] or '-'} "
                 f"origin_event={request_meta['origin_event_name'] or '-'} "
-                f"delay={delay} cancel_running={cancel_running} "
-                f"is_user_origin={is_user_origin}"
+                f"delay={delay} is_user_origin={is_user_origin}"
             ),
         )
         return request_id
@@ -1738,12 +1820,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Prefer the newest user-origin request; fall back to the newest overall.
         selected_idx = len(requests) - 1
         for i in range(len(requests) - 1, -1, -1):
-            if requests[i][2]:  # is_user_origin
+            if requests[i][1]:  # is_user_origin
                 selected_idx = i
                 break
 
         dropped_requests = len(requests) - 1
-        delay, cancel_running, is_user_origin = requests[selected_idx]
+        delay, is_user_origin = requests[selected_idx]
         selected_meta = dict(metas[selected_idx]) if metas else {}
 
         self._pending_llm_requests.clear()
@@ -1758,14 +1840,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             (
                 "⏱️ [StartupTiming] first_reply.flush_llm_requests dispatch "
                 "run_id=%s request_id=%s origin_event=%s dropped=%d delay=%s "
-                "cancel_running=%s is_user_origin=%s"
+                "is_user_origin=%s"
             ),
             run_id,
             selected_meta.get("request_id", "-"),
             selected_meta.get("origin_event_name", "-") or "-",
             dropped_requests,
             delay,
-            cancel_running,
             is_user_origin,
         )
 
@@ -1777,7 +1858,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"origin_event_id={selected_meta.get('origin_event_id', '-') or '-'} "
                 f"origin_event={selected_meta.get('origin_event_name', '-') or '-'} "
                 f"dropped_requests={dropped_requests} delay={delay} "
-                f"cancel_running={cancel_running} is_user_origin={is_user_origin}"
+                f"is_user_origin={is_user_origin}"
             ),
         )
         if await self._maybe_handle_depleted_credit_gate(selected_meta):
@@ -1807,10 +1888,29 @@ class ConversationManager(metaclass=SingletonABCMeta):
         )
         await self.run_llm(
             delay=delay,
-            cancel_running=cancel_running,
             trace_meta=selected_meta,
             is_user_origin=is_user_origin,
         )
+
+    async def _open_slow_brain_follow_on_turn(
+        self,
+        *,
+        origin_run_id: str,
+        previous_tools: list[str],
+    ) -> None:
+        """Schedule another slow-brain turn when the prior turn omitted wait."""
+        if not self.ready_for_brain:
+            return
+
+        from unify.conversation_manager.domains.event_handlers import EventHandler
+        from unify.conversation_manager.events import OpenSlowBrainTurn
+
+        event = OpenSlowBrainTurn(
+            origin_run_id=origin_run_id,
+            previous_tools=list(previous_tools),
+        )
+        await EventHandler.handle_event(event, self)
+        await self.flush_llm_requests()
 
     async def _run_llm(self, trace_meta: dict[str, str] | None = None) -> list[str]:
         """Run a single LLM decision and return all tool names that were called."""
@@ -2019,9 +2119,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Mirror the Coordinator's onboarding state (defer switch + the
         # precomputed progress render) so the prompt builder reads a
         # standing "what's done / what's next" block and can drop
-        # scaffolding when deferred. TTL-cached + event-refreshed, so this
-        # is a no-op on most turns.
-        await self._refresh_coordinator_onboarding_state()
+        # scaffolding when deferred. TTL-cached + event-refreshed, and
+        # fetched in the background: a turn never blocks on the HTTP
+        # round-trip — it builds with the previous values and the fresh
+        # snapshot lands for the next turn.
+        self._schedule_coordinator_onboarding_state_refresh()
 
         _t0 = _rl_time.perf_counter()
         brain_spec = build_brain_spec(
@@ -2059,8 +2161,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "llm_thinking",
             f"LLM thinking... ({reason})" if reason else "LLM thinking...",
         )
-
-        response_model = brain_spec.response_model
 
         _t0 = _rl_time.perf_counter()
         _tools_step_t0 = _t0
@@ -2126,15 +2226,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         _t0 = _rl_time.perf_counter()
         _client_step_t0 = _t0
-        client = new_llm_client(
-            SETTINGS.UNIFY_MODEL,
-            origin="ConversationManager",
-            # Slow brain stays at "high"; the system default is "max" (used by
-            # the CodeActActor). On deepseek-v4 "max" buys marginal gains on the
-            # hardest tasks at extra latency, which the live conversation loop
-            # cannot afford.
-            reasoning_effort="high",
-        )
+        if screenshots:
+            client = new_vision_llm_client(
+                origin="ConversationManager",
+                reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
+            )
+        else:
+            client = new_llm_client(
+                SETTINGS.UNIFY_MODEL,
+                origin="ConversationManager",
+                # Slow brain stays at "high"; the system default is "max" (used by
+                # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
+                # hardest tasks at extra latency; on MiniMax M3 all non-none effort
+                # levels enable the same adaptive thinking mode.
+                reasoning_effort="high",
+            )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
         if hasattr(client, "_pending_thinking_log"):
@@ -2216,12 +2322,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         try:
             try:
+                from unify.conversation_manager.domains.prose_send_healing import (
+                    build_slow_brain_completion_mutator,
+                )
+
+                completion_mutator = build_slow_brain_completion_mutator(
+                    self,
+                    trace_meta=trace_meta,
+                    available_tool_names=set(tools.keys()),
+                )
                 result = await single_shot_tool_decision(
                     client,
                     messages,
                     tools,
                     tool_choice="required" if tools else "auto",
-                    response_format=response_model,
+                    inject_tool_thoughts=True,
                     exclusive_tools={
                         "make_call",
                         "make_whatsapp_call",
@@ -2232,6 +2347,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                         trace_meta,
                         run_id,
                     ),
+                    completion_mutator=completion_mutator,
                 )
             except Exception:
                 _log_slow_brain_single_shot_failure(
@@ -2265,11 +2381,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             trace_meta=trace_meta or {},
         )
 
-        # Extract structured output (thoughts)
-        structured = result.structured_output
-        thoughts = ""
-        if structured is not None:
-            thoughts = getattr(structured, "thoughts", "")
+        thoughts_summary = _format_tool_thoughts_for_log(result.tools)
 
         # Handle guide_voice_agent tool calls for voice modes. The slow brain
         # either SPEAKs (guide_voice_agent with a message, spoken verbatim by the
@@ -2322,15 +2434,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     awaiting_speech=bool(guidance_message),
                 )
 
-        self._session_logger.debug(
-            "llm_response",
-            (
-                f"run_id={run_id} thoughts: {thoughts[:100]}..."
-                if len(thoughts) > 100
-                else f"run_id={run_id} thoughts: {thoughts}"
+        llm_response_msg = f"run_id={run_id}"
+        if thoughts_summary:
+            preview = (
+                f"{thoughts_summary[:100]}..."
+                if len(thoughts_summary) > 100
+                else thoughts_summary
             )
-            + (f" | actions: {tool_names}" if tool_names else ""),
-        )
+            llm_response_msg += f" thoughts: {preview}"
+        if tool_names:
+            llm_response_msg += f" | actions: {tool_names}"
+        self._session_logger.debug("llm_response", llm_response_msg)
 
         self._session_logger.debug(
             "perf",
@@ -2363,9 +2477,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
 
         # Build assistant message for chat history
-        assistant_content = (
-            structured.model_dump_json() if structured else result.text_response or ""
-        )
+        assistant_content = result.text_response or ""
         self.chat_history.append(input_message)
         self.chat_history.append({"role": "assistant", "content": assistant_content})
 
@@ -2382,6 +2494,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 if delay is not None:
                     await self.run_llm(delay=delay)
                 break
+
+        if "wait" not in tool_names:
+            await self._open_slow_brain_follow_on_turn(
+                origin_run_id=run_id,
+                previous_tools=tool_names,
+            )
 
         self._session_logger.debug(
             "perf",
@@ -2604,7 +2722,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_bot_user_id",
             "",
         )
-        self.is_coordinator = bool(payload.get("assistant_is_coordinator", False))
+        self.assistant_slack_team_id = payload.get(
+            "assistant_slack_team_id",
+            "",
+        )
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -2624,7 +2745,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
-        is_coordinator = payload.get("is_coordinator", False)
+        is_coordinator = bool(payload.get("is_coordinator", False))
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -2645,7 +2766,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_whatsapp_number=self.assistant_whatsapp_number,
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
-            assistant_is_coordinator=self.is_coordinator,
+            assistant_slack_team_id=self.assistant_slack_team_id,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,
@@ -2693,6 +2814,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.voice_provider or SESSION_DETAILS.voice.provider or "cartesia"
         )
         voice_id = self.voice_id or SESSION_DETAILS.voice.id or ""
+        voice_provider, voice_id = resolve_runtime_voice(
+            is_coordinator=SESSION_DETAILS.is_coordinator,
+            voice_provider=voice_provider,
+            voice_id=voice_id,
+        )
         return CallConfig(
             assistant_id=self.assistant_id,
             user_id=self.user_id,
@@ -2705,17 +2831,55 @@ class ConversationManager(metaclass=SingletonABCMeta):
             is_coordinator=SESSION_DETAILS.is_coordinator,
         )
 
-    async def _refresh_coordinator_onboarding_state(self) -> None:
+    def _orchestra_state_client(self) -> Any:
+        """Shared keep-alive HTTP client for Orchestra state calls.
+
+        A fresh client per call paid a new TCP+TLS handshake against the
+        (cross-region) Orchestra endpoint every time, eating a large slice of
+        the request budget before the server even responded. One pooled
+        client amortises that to the first call; ``cleanup`` closes it.
+        """
+        import httpx as _httpx
+
+        client = self._coordinator_state_http
+        if client is None or client.is_closed:
+            client = _httpx.AsyncClient(timeout=5.0)
+            self._coordinator_state_http = client
+        return client
+
+    def _schedule_coordinator_onboarding_state_refresh(self) -> None:
+        """Kick the onboarding-state refresh without blocking the caller.
+
+        The refresh is a TTL backstop — onboarding events already push fresh
+        renders in real time — so a slow-brain turn must never sit on its HTTP
+        round-trip. The previous values stay in place until the background
+        fetch lands; a still-running fetch is simply left to finish.
+        """
+        task = self._coordinator_state_refresh_task
+        if task is not None and not task.done():
+            return
+        self._coordinator_state_refresh_task = asyncio.create_task(
+            self._refresh_coordinator_onboarding_state(),
+        )
+
+    async def _refresh_coordinator_onboarding_state(
+        self,
+        *,
+        force: bool = False,
+    ) -> None:
         """Best-effort refresh of the cached onboarding state for the brain.
 
-        Mirrors two things from Orchestra's ``Coordinator/State`` onto the
-        session so ``build_brain_spec`` never has to derive anything:
-          - ``coordinator_onboarding_deferred``: the global "do onboarding
-            later" switch (drops all onboarding scaffolding when set).
+        Mirrors onboarding gate, render, and chat-intro intent from
+        Orchestra's ``Coordinator/State`` onto the session so
+        ``build_brain_spec`` never has to derive anything:
+          - ``coordinator_onboarding_active``: whether onboarding scaffolding
+            is live (narration, progress block, tool masking).
           - ``coordinator_onboarding_render``: the precomputed
             depends_on-aware picture (steps + statuses + valid next
             targets with nudge copy) that drives the standing progress
             block.
+          - ``coordinator_intro_watched`` / ``coordinator_pending_chat_intro`` /
+            ``coordinator_chat_intro_armed_at``: durable chat-opener intent.
 
         TTL-cached so we don't pay an HTTP round-trip every turn; the
         render is also refreshed in real time from each onboarding event
@@ -2731,51 +2895,277 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Refresh more eagerly while actively onboarding (a render is
         # present) so "what's next" stays fresh during a fast-moving
         # setup conversation; back off once onboarding is done/deferred.
-        ttl = 10.0 if self.coordinator_onboarding_render else 30.0
+        ttl = 10.0 if self.coordinator_onboarding_active else 30.0
         # Stamp before the await so concurrent runs don't stampede the
         # endpoint; a failed fetch still respects the TTL backoff.
-        if now - self._coordinator_state_checked_at < ttl:
+        if not force and now - self._coordinator_state_checked_at < ttl:
             return
         self._coordinator_state_checked_at = now
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
             return
-        import httpx as _httpx
 
         try:
-            async with _httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
-                )
-                resp.raise_for_status()
-                info = (resp.json() or {}).get("info") or {}
-                # The onboarding catalog is static + deployment-gated; fetch it
-                # once and reuse it for every subsequent prompt build.
-                if self.onboarding_catalog is None:
-                    cat_resp = await client.get(
-                        f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                        headers={
-                            "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                        },
-                    )
-                    cat_resp.raise_for_status()
-                    catalog = (cat_resp.json() or {}).get("info") or {}
-                    self.onboarding_catalog = (
-                        catalog if isinstance(catalog, dict) else None
-                    )
-            self.coordinator_onboarding_deferred = bool(info.get("onboarding_deferred"))
-            render = info.get("onboarding")
-            self.coordinator_onboarding_render = (
-                render if isinstance(render, dict) else None
+            client = self._orchestra_state_client()
+            resp = await client.get(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
             )
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            # The onboarding catalog is static + deployment-gated; fetch it
+            # once and reuse it for every subsequent prompt build.
+            if self.onboarding_catalog is None:
+                cat_resp = await client.get(
+                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
+                    headers={
+                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                    },
+                )
+                cat_resp.raise_for_status()
+                catalog = (cat_resp.json() or {}).get("info") or {}
+                self.onboarding_catalog = catalog if isinstance(catalog, dict) else None
+            self._apply_coordinator_state_info(info)
         except Exception as exc:
+            # repr, not str: httpx timeout exceptions stringify to "".
             LOGGER.warning(
                 "Coordinator onboarding-state refresh failed; "
-                "keeping previous values (deferred=%s): %s",
-                self.coordinator_onboarding_deferred,
+                "keeping previous values (active=%s): %r",
+                self.coordinator_onboarding_active,
                 exc,
             )
+
+    def _apply_coordinator_state_info(self, info: dict[str, Any]) -> None:
+        """Mirror onboarding gate + render from a Coordinator/State snapshot."""
+        self.coordinator_onboarding_active = bool(info.get("onboarding_active"))
+        render = info.get("onboarding")
+        self.coordinator_onboarding_render = (
+            render if isinstance(render, dict) else None
+        )
+        self.coordinator_intro_watched = bool(info.get("intro_watched"))
+        self.coordinator_pending_chat_intro = bool(info.get("pending_chat_intro"))
+        armed_at = info.get("chat_intro_armed_at")
+        self.coordinator_chat_intro_armed_at = (
+            armed_at if isinstance(armed_at, str) and armed_at.strip() else None
+        )
+
+    async def _patch_coordinator_pending_chat_intro(
+        self,
+        *,
+        pending: bool,
+    ) -> dict[str, Any]:
+        """PATCH ``pending_chat_intro`` on Orchestra and refresh the session cache."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": "Chat intro state can only be changed for the Coordinator.",
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        import time as _time
+
+        try:
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json={"pending_chat_intro": pending},
+            )
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            return {"status": "ok", "pending_chat_intro": pending}
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator pending_chat_intro PATCH failed (pending=%s): %r",
+                pending,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update chat intro state: {exc!r}",
+            }
+
+    async def _patch_coordinator_onboarding_active(
+        self,
+        *,
+        active: bool,
+        clear_onboarding_step: bool = False,
+    ) -> dict[str, Any]:
+        """PATCH ``onboarding_active`` on Orchestra and refresh the session cache."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": "Onboarding can only be toggled for the workspace Coordinator.",
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        body: dict[str, Any] = {"onboarding_active": active}
+        if clear_onboarding_step:
+            body["clear_onboarding_step"] = True
+        import time as _time
+
+        try:
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json=body,
+            )
+            if resp.status_code == 403:
+                return {
+                    "status": "error",
+                    "message": (
+                        "I do not have permission to change onboarding state "
+                        "in this workspace."
+                    ),
+                }
+            resp.raise_for_status()
+            info = (resp.json() or {}).get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            if active:
+                message = (
+                    "Onboarding is live again — the setup checklist and nudges "
+                    "are back."
+                )
+            else:
+                message = (
+                    "Onboarding is paused — they can use the platform normally "
+                    "and resume setup anytime from the Onboarding tab or by "
+                    "asking me."
+                )
+            return {
+                "status": "ok",
+                "message": message,
+                "onboarding_active": self.coordinator_onboarding_active,
+            }
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator onboarding_active PATCH failed (active=%s): %r",
+                active,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update onboarding state: {exc!r}",
+            }
+
+    async def _patch_coordinator_onboarding_step_state(
+        self,
+        *,
+        step_id: str,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """PATCH manual onboarding step completion on Orchestra."""
+        from unify.settings import SETTINGS
+
+        if not self.is_coordinator or not SETTINGS.UNITY_CONSOLE_UI:
+            return {
+                "status": "error",
+                "message": (
+                    "Onboarding step completion can only be changed for the "
+                    "workspace Coordinator."
+                ),
+            }
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return {
+                "status": "error",
+                "message": "Coordinator agent id is missing.",
+            }
+        import time as _time
+
+        try:
+            resp = await self._orchestra_state_client().patch(
+                f"{SETTINGS.ORCHESTRA_URL}/assistant/{agent_id}/state",
+                headers={
+                    "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
+                },
+                json={
+                    "onboarding_step_completion": {
+                        "step_id": step_id,
+                        "completed": completed,
+                    },
+                },
+                timeout=30.0,
+            )
+            payload = resp.json() if resp.content else {}
+            if resp.status_code == 403:
+                return {
+                    "status": "error",
+                    "message": (
+                        "I do not have permission to change onboarding step "
+                        "completion in this workspace."
+                    ),
+                }
+            if resp.status_code == 400:
+                detail = payload.get("detail")
+                if isinstance(detail, dict):
+                    message = detail.get("message") or detail.get("code")
+                else:
+                    message = detail
+                return {
+                    "status": "error",
+                    "message": message or "Invalid onboarding step completion.",
+                    "step_id": step_id,
+                }
+            resp.raise_for_status()
+            info = payload.get("info") or {}
+            if isinstance(info, dict):
+                self._apply_coordinator_state_info(info)
+            self._coordinator_state_checked_at = _time.monotonic()
+            completed_step_ids = (
+                info.get("completed_step_ids")
+                if isinstance(info.get("completed_step_ids"), list)
+                else []
+            )
+            if completed:
+                message = f"Marked '{step_id}' complete in the onboarding checklist."
+            elif step_id in completed_step_ids:
+                message = (
+                    f"Removed my manual completion for '{step_id}', but the "
+                    "checklist still shows it as done because the platform "
+                    "detects it is already complete."
+                )
+            else:
+                message = f"Marked '{step_id}' incomplete in the onboarding checklist."
+            return {
+                "status": "ok",
+                "message": message,
+                "step_id": step_id,
+                "completed": completed,
+            }
+        except Exception as exc:
+            LOGGER.warning(
+                "Coordinator onboarding step completion PATCH failed "
+                "(step_id=%s, completed=%s): %r",
+                step_id,
+                completed,
+                exc,
+            )
+            return {
+                "status": "error",
+                "message": f"Failed to update onboarding step completion: {exc!r}",
+                "step_id": step_id,
+            }
 
     def set_coordinator_onboarding_render(self, render: Any) -> None:
         """Update the cached onboarding render from a fresh event payload.
@@ -2786,6 +3176,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """
         if isinstance(render, dict):
             self.coordinator_onboarding_render = render
+            self._coordinator_state_checked_at = 0.0
 
     @property
     def onboarding_clicked_trigger_steps(self) -> set[str]:
@@ -2805,6 +3196,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
         self._onboarding_clicked_trigger_steps.clear()
 
+    def active_pending_onboarding_outbound(self) -> dict[str, Any] | None:
+        """Return armed onboarding outbound metadata, or None if unset or expired."""
+        pending = self._pending_onboarding_outbound
+        if not pending:
+            return None
+        if self.loop.time() > float(pending.get("expires_at", 0)):
+            self._pending_onboarding_outbound = None
+            return None
+        return pending
+
     def set_pending_onboarding_outbound(
         self,
         details: dict[str, Any],
@@ -2818,7 +3219,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
         if not isinstance(channel, str) or not channel.strip():
             return
-        self._pending_onboarding_outbound = {
+        pending: dict[str, Any] = {
             "onboarding_trigger_step_id": trigger_step_id.strip(),
             "onboarding_reply_step_id": (
                 details.get("reply_step_id").strip()
@@ -2831,6 +3232,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "tool_name": tool_name.strip() if isinstance(tool_name, str) else "",
             "expires_at": self.loop.time() + ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS,
         }
+        self._pending_onboarding_outbound = pending
 
     def set_pending_onboarding_request_id(self, request_id: str) -> None:
         if self._pending_onboarding_outbound:
@@ -2927,12 +3329,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
-            # Workspace demo rows deliver their proof-of-completion summary over the unify_message medium.
-            "workspace_mailbox": {"unify_message"},
-            "workspace_drive": {"unify_message"},
-            "workspace_calendar": {"unify_message"},
-            "workspace_contacts": {"unify_message"},
-            "workspace_tasks": {"unify_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None
@@ -2948,6 +3344,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if isinstance((value := pending.get(key)), str) and value
         }
 
+    def build_whatsapp_call_sent_event(self, contact: dict) -> WhatsAppCallSent:
+        """Publish-ready outbound WhatsApp call event with onboarding metadata."""
+        kwargs = self.consume_pending_onboarding_outbound("whatsapp_call") or {}
+        return WhatsAppCallSent(contact=contact, **kwargs)
+
     async def store_chat_history(self):
         if len(self.chat_history) >= 2:
             await self.event_broker.publish(
@@ -2959,6 +3360,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
     async def cleanup(self):
         """Clean up any running call processes and file sync."""
         await self.store_chat_history()
+        refresh_task = self._coordinator_state_refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+        state_client = self._coordinator_state_http
+        if state_client is not None and not state_client.is_closed:
+            await state_client.aclose()
         local_ingress = getattr(self, "_local_comms_ingress", None)
         if local_ingress is not None:
             await local_ingress.stop()
@@ -3024,6 +3431,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
     PROACTIVE_DEBOUNCE_SECONDS = 5
 
+    def _get_voice_profiles(self, contact_ids: list[int]) -> dict[int, list[float]]:
+        """Return enrolled voice embeddings for the given contacts."""
+        if self.contact_manager is None:
+            return {}
+        return self.contact_manager.get_voice_profiles(contact_ids)
+
     def _on_fast_brain_generating(self) -> dict[str, bool]:
         """Called via IPC when the fast brain starts generating a reply.
 
@@ -3056,6 +3469,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return
 
         if not self._proactive_speech_enabled:
+            return
+
+        # While the hang-up gate is armed, silence is the close signal the
+        # voice agent's own watcher acts on — proactive filler would keep a
+        # finished conversation alive indefinitely.
+        if self.call_manager.hang_up_gate_reason is not None:
             return
 
         if self._proactive_speech_gen != my_gen:
@@ -3214,6 +3633,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 await asyncio.sleep(decision.delay)
 
             if _superseded():
+                return
+
+            # The hang-up gate may have armed while the decision was in flight
+            # (scheduling-time suppression cannot see that): silence is now the
+            # close signal the voice agent's watcher acts on, so the pending
+            # line is dropped rather than delivered.
+            if self.call_manager.hang_up_gate_reason is not None:
+                _log.proactive_deferred("hang-up gate armed")
                 return
 
             # Do not pre-write to contact_index here: the line is recorded once,

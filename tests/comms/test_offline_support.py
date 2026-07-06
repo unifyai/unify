@@ -8,7 +8,7 @@ from unify.comms import primitives as primitives_module
 from unify.comms.primitives import CommsPrimitives
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.domains import comms_utils
-from unify.conversation_manager.events import Event, UnifyMessageSent, WhatsAppSent
+from unify.conversation_manager.events import Event, WhatsAppSent
 from unify.task_scheduler.machine_state import (
     TaskOutboundOperationRecord,
     TaskOutboundOperationReference,
@@ -708,63 +708,6 @@ async def test_send_whatsapp_template_live_tracks_delivered_template_and_pending
 
 
 @pytest.mark.anyio
-async def test_send_unify_message_live_stamps_workspace_demo_onboarding_metadata(
-    monkeypatch,
-):
-    # A workspace-demo click arms a pending onboarding outbound on the channel
-    # ``unify_message``; the next unify_message send must carry the onboarding
-    # metadata so Orchestra can derive the demo step as complete.
-    pending_outbound = {
-        "metadata": {
-            "onboarding_trigger_step_id": "workspace-mailbox",
-            "onboarding_reply_step_id": "",
-            "onboarding_request_id": "req-9",
-            "onboarding_origin_event_id": "evt-9",
-        },
-    }
-
-    def consume_pending_onboarding_outbound(medium):
-        assert medium == "unify_message"
-        return pending_outbound.pop("metadata", None)
-
-    cm = SimpleNamespace(
-        consume_pending_onboarding_outbound=consume_pending_onboarding_outbound,
-    )
-    comms = CommsPrimitives(conversation_manager=cm)
-    comms._get_contact = lambda **kwargs: {
-        "contact_id": 5,
-        "first_name": "Alice",
-        "surname": "Owner",
-        "should_respond": True,
-    }
-    comms._event_broker.publish = AsyncMock()
-
-    async def _fake_send_unify_message(**kwargs):
-        assert kwargs["content"] == "Mailbox summary"
-        assert kwargs["contact_id"] == 5
-        return {"success": True}
-
-    monkeypatch.setattr(
-        comms_utils,
-        "send_unify_message",
-        _fake_send_unify_message,
-    )
-
-    result = await comms.send_unify_message(content="Mailbox summary", contact_id=5)
-
-    assert result == {"status": "ok"}
-    published = Event.from_json(comms._event_broker.publish.await_args.args[1])
-    assert isinstance(published, UnifyMessageSent)
-    assert published.content == "Mailbox summary"
-    assert published.onboarding_trigger_step_id == "workspace-mailbox"
-    assert published.onboarding_reply_step_id == ""
-    assert published.onboarding_request_id == "req-9"
-    assert published.onboarding_origin_event_id == "evt-9"
-    # The pending outbound is consumed exactly once.
-    assert pending_outbound == {}
-
-
-@pytest.mark.anyio
 async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback(
     monkeypatch,
 ):
@@ -801,12 +744,12 @@ async def test_make_whatsapp_call_invite_offline_does_not_claim_pending_callback
 
     result = await comms.make_whatsapp_call(
         contact_id=5,
-        context="Ask whether Alice is free to chat now.",
+        opener="Ask whether Alice is free to chat now.",
     )
 
     assert result["status"] == "ok"
     assert "pending_callback" not in result
-    assert "not queued with your briefing context" in result["note"]
+    assert "not queued with your opener" in result["note"]
     assert transcript_calls
     assert updated_records
     assert updated_records[0][1]["status"] == "completed"
@@ -830,7 +773,7 @@ async def test_make_whatsapp_call_live_selfhost_requests_permission_probe(monkey
             has_active_teams_meet=False,
             _whatsapp_call_joining=False,
         ),
-        _pending_whatsapp_call_contexts={},
+        _pending_whatsapp_call_openers={},
         assistant_whatsapp_number="+15555550001",
     )
     comms = CommsPrimitives(conversation_manager=cm)
@@ -858,11 +801,11 @@ async def test_make_whatsapp_call_live_selfhost_requests_permission_probe(monkey
         AsyncMock(),
     )
 
-    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+    result = await comms.make_whatsapp_call(contact_id=5, opener="Call Alice.")
 
     assert result["status"] == "ok"
     assert seen_kwargs["allow_permission_probe"] is True
-    assert seen_kwargs["pending_call_context"] == "Call Alice."
+    assert seen_kwargs["pending_call_opener"] == "Call Alice."
 
 
 @pytest.mark.anyio
@@ -891,7 +834,7 @@ async def test_make_whatsapp_call_live_hosted_does_not_probe(monkeypatch):
             has_active_teams_meet=False,
             _whatsapp_call_joining=False,
         ),
-        _pending_whatsapp_call_contexts={},
+        _pending_whatsapp_call_openers={},
         assistant_whatsapp_number="+15555550001",
     )
     comms = CommsPrimitives(conversation_manager=cm)
@@ -919,11 +862,11 @@ async def test_make_whatsapp_call_live_hosted_does_not_probe(monkeypatch):
         AsyncMock(),
     )
 
-    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+    result = await comms.make_whatsapp_call(contact_id=5, opener="Call Alice.")
 
     assert result["status"] == "ok"
     assert seen_kwargs["allow_permission_probe"] is False
-    assert seen_kwargs["pending_call_context"] == "Call Alice."
+    assert seen_kwargs["pending_call_opener"] == "Call Alice."
 
 
 @pytest.mark.anyio
@@ -964,10 +907,15 @@ async def test_make_whatsapp_call_waits_for_voice_session_to_clear(monkeypatch):
             return False
 
     call_manager = ClearingCallManager()
+    from unify.conversation_manager.events import WhatsAppCallSent
+
     cm = SimpleNamespace(
         call_manager=call_manager,
-        _pending_whatsapp_call_contexts={},
+        _pending_whatsapp_call_openers={},
         assistant_whatsapp_number="+15555550001",
+        build_whatsapp_call_sent_event=lambda contact: WhatsAppCallSent(
+            contact=contact,
+        ),
     )
     comms = CommsPrimitives(conversation_manager=cm)
     comms._get_contact = lambda **kwargs: {
@@ -986,11 +934,13 @@ async def test_make_whatsapp_call_waits_for_voice_session_to_clear(monkeypatch):
 
     monkeypatch.setattr(comms_utils, "start_whatsapp_call", _fake_start_whatsapp_call)
 
-    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+    result = await comms.make_whatsapp_call(contact_id=5, opener="Call Alice.")
 
     assert result["status"] == "ok"
     assert call_manager.polls >= 3
-    assert seen_kwargs["pending_call_context"] == "Call Alice."
+    assert seen_kwargs["pending_call_opener"] == "Call Alice."
+    # The opener is queued on the live call leg before the dial resolves.
+    assert call_manager.pending_opener == "Call Alice."
 
 
 @pytest.mark.anyio
@@ -1017,7 +967,7 @@ async def test_make_whatsapp_call_returns_retry_later_if_voice_session_stays_act
     )
     cm = SimpleNamespace(
         call_manager=call_manager,
-        _pending_whatsapp_call_contexts={},
+        _pending_whatsapp_call_openers={},
         assistant_whatsapp_number="+15555550001",
     )
     comms = CommsPrimitives(conversation_manager=cm)
@@ -1030,7 +980,7 @@ async def test_make_whatsapp_call_returns_retry_later_if_voice_session_stays_act
 
     monkeypatch.setattr(comms_utils, "start_whatsapp_call", _fake_start_whatsapp_call)
 
-    result = await comms.make_whatsapp_call(contact_id=5, context="Call Alice.")
+    result = await comms.make_whatsapp_call(contact_id=5, opener="Call Alice.")
 
     assert result["status"] == "retry_later_active_voice_session"
     assert called is False

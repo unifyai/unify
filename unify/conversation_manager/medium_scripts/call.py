@@ -4,6 +4,8 @@ import json
 import queue
 import asyncio
 import threading
+import time
+from dataclasses import dataclass
 from importlib import resources
 
 os.environ["UNITY_TERMINAL_LOG"] = "true"
@@ -26,6 +28,7 @@ from livekit.plugins import (
     elevenlabs,
     silero,
 )
+from livekit.agents.voice.io import TimedString
 
 from unify.conversation_manager.livekit_unify_adapter import UnifyLLM
 
@@ -42,12 +45,10 @@ from typing import AsyncIterable, Callable
 load_dotenv()
 
 from unify.conversation_manager.events import *
+from unify.conversation_manager import speaker_id
 from unify.conversation_manager.utils import dispatch_livekit_agent
 from unify.conversation_manager.prompt_builders import (
-    SMALLTALK_DEFER_SENTINEL,
-    SMALLTALK_SILENCE_SENTINEL,
     build_opening_greeting_messages,
-    build_smalltalk_messages,
     build_voice_agent_prompt,
 )
 from unify.conversation_manager.tracing import (
@@ -82,16 +83,17 @@ from unify.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
-from unify.conversation_manager.domains.fast_brain_buffer import (
+from unify.conversation_manager.domains.fast_brain_turn import (
+    PendingContinuation,
     compute_resume_text,
     pick_resume_lead_in,
-    select_continuation,
-    select_fast_reply,
+    select_fast_brain_turn,
 )
 
 # Globals initialized lazily or via prewarm to avoid duplicate heavy init
 STT = None
 VAD = None
+SPEAKER_EMBEDDER = None
 
 
 # Module-level logger created early for prewarm (before entrypoint runs).
@@ -269,16 +271,29 @@ class MeetAudioBridge:
 
 
 def prewarm(_ctx=None):
-    global STT, VAD
+    global STT, VAD, SPEAKER_EMBEDDER
     try:
         _log.info("Prewarm: initializing STT, VAD and turn detector…")
-        STT = deepgram.STT(model="nova-3", language="en-GB")
+        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
         _log.info("Prewarm complete")
     except Exception as e:  # noqa: BLE001
         _log.error(f"Prewarm failed: {e}")
         STT = None
         VAD = None
+    try:
+        model_path = speaker_id.ensure_speaker_model()
+        if model_path is not None:
+            SPEAKER_EMBEDDER = speaker_id.SpeakerEmbedder(model_path)
+            _log.info("Prewarm: speaker-embedding model ready")
+        else:
+            _log.warning(
+                "Prewarm: speaker-embedding model unavailable — "
+                "speaker attribution disabled",
+            )
+    except Exception as e:  # noqa: BLE001
+        _log.error(f"Prewarm speaker model failed: {e}")
+        SPEAKER_EMBEDDER = None
 
 
 class Assistant(Agent):
@@ -300,11 +315,17 @@ class Assistant(Agent):
         outbound: bool = False,
         audio_bridge: MeetAudioBridge | None = None,
         normalize_elevenlabs_twin_pronunciation: bool = False,
+        speaker_tracker: "speaker_id.SpeakerTracker | None" = None,
+        engaged_speakers: "speaker_id.EngagedSpeakers | None" = None,
+        realtime_scorer: "speaker_id.RealtimeSpeakerScorer | None" = None,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
         self.audio_bridge = audio_bridge
+        self.speaker_tracker = speaker_tracker
+        self.engaged_speakers = engaged_speakers
+        self.realtime_scorer = realtime_scorer
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -327,12 +348,17 @@ class Assistant(Agent):
         self._user_speech_logged = False
         self.user_turn_generating = False
         self._credit_gate_state_provider: Callable | None = None
-        # On outbound calls the opener is held until the callee's first utterance
-        # (or a fallback timeout). While pending, the opener is the sole response
-        # to that first turn: the fast-brain filler and the slow-brain turn are
-        # suppressed for it. Cleared once the opener has been dispatched.
+        # On agent-initiated calls the verbatim opener is held until the
+        # callee's first utterance or a short silence window. While pending,
+        # the opener is the sole response to that first turn: the fast-brain
+        # filler and the slow-brain turn are suppressed for it. The entrypoint
+        # overrides this from the opening config (an ``opener`` opening can
+        # also arrive on an inbound-shaped leg, e.g. the WhatsApp
+        # permission-callback call); cleared once the opener is dispatched.
         self._opening_pending = outbound
         self._first_user_turn = asyncio.Event()
+        self._first_turn_speaking_started_at: float | None = None
+        self._first_turn_duration_s: float | None = None
         # Optional short note the slow brain bundles with a spoken line for the
         # fast brain to use on the caller's next message (e.g. confirm a fact).
         # Replaced/cleared on each slow-brain spoken turn; never spoken aloud.
@@ -353,29 +379,51 @@ class Assistant(Agent):
         # The callable enqueues the bridge synchronously (no playout await) so
         # the fast-brain reply generates concurrently and queues behind it.
         self._pending_opening_bridge: Callable[[], None] | None = None
-        # The in-flight TTS say handle (slow-brain speech or a briefed/speak
-        # opener) registered for resumption, and the claimable resume candidate
+        # The in-flight TTS say handle (slow-brain speech or a spoken opener)
+        # registered for resumption, and the claimable resume candidate
         # produced when it is interrupted. Pre-recorded audio is never registered
         # here, so its hand-crafted tone is never continued by the live voice.
         self._active_tts: dict | None = None
         self._pending_continuation: dict | None = None
         self._tts_seq = 0
         self._publish_voice_interrupt: Callable | None = None
-        # Full text of a continuation reply the fast brain is about to yield this
-        # turn. Read once by the ``speech_created`` observer to register the reply
-        # handle as interruptible (so a resumed line is itself recursively
-        # resumable), then cleared. ``None`` for ordinary buffer fillers, which
-        # carry no substantive content worth re-surfacing.
-        self._continuation_full_text: str | None = None
-        # Cancels the speculatively-started slow-brain run for this turn the
-        # instant the fast brain resolves it itself (CONTINUE or SMALLTALK), so
-        # the slow brain cannot also re-deliver / re-answer the same content.
-        self._publish_fast_brain_continued: Callable | None = None
-        # Fully answers a pure small-talk turn from persona + recent history, or
-        # returns None to defer to the slow brain. Set in the entrypoint.
-        self._generate_smalltalk_reply: Callable | None = None
+        # The speech handle of the in-flight ``generate_reply`` speech, recorded
+        # by the ``speech_created`` observer. That event fires when the reply
+        # speech is scheduled — before ``llm_node`` streams its content — so the
+        # turn logic reads this to attach continuation registration or a gated
+        # hang-up finalizer to the exact speech it is producing.
+        self._active_reply_handle: object | None = None
+        # Entrypoint closure registering a reply handle for barge-in resumption.
+        self._register_reply_continuation: Callable | None = None
+        # Entrypoint closure ending the call after a reply's farewell plays out.
+        self._finalize_reply_hang_up: Callable | None = None
+        # Schedules the slow-brain run after the fast brain finishes a user turn.
+        self._publish_fast_brain_turn_completed: Callable | None = None
+        # Latest user turn for which the slow brain was already scheduled.
+        self._fast_brain_completed_turn = -1
+        # Whether the current committed user turn belongs to an engaged speaker.
+        # Captured at turn completion (before the diarization id is consumed);
+        # a non-engaged turn is published as labeled context but gets no fast
+        # filler and schedules no slow-brain user run.
+        self._current_turn_engaged = True
+        # Resolves the just-completed turn's speaker to an engagement verdict.
+        self._turn_engaged_provider: Callable[[], bool] | None = None
+        # Sink for final transcripts swallowed as non-engaged background speech.
+        self._on_background_final: Callable[[str, str | None], None] | None = None
+        self._fast_brain_system_prompt: str = ""
+        self._fast_brain_history_provider: Callable[[], list[dict]] | None = None
         self._idle_smalltalk_allowed = False
         self._idle_smalltalk_state_event = asyncio.Event()
+        # Hang-up gate: while the slow brain has sanctioned ending the call,
+        # this holds its stated reason (None = disarmed). Exposes the extra
+        # ``hang_up`` classification to the fast brain, which then picks the
+        # natural close. Set/cleared via ``hang_up_gate`` status messages.
+        self._hang_up_gate_reason: str | None = None
+        # Unspoken call briefing supplied by the slow brain when it placed the
+        # call (``briefing`` on the call-start tools). Injected into every
+        # fast-brain turn so the live voice fully owns the briefed interaction
+        # without slow-brain round-trips. Never spoken aloud.
+        self._call_briefing: str = ""
 
         super().__init__(instructions=instructions)
 
@@ -407,6 +455,33 @@ class Assistant(Agent):
     def set_call_received(self):
         self.call_received = True
 
+    @staticmethod
+    def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
+        for item in reversed(chat_ctx.items):
+            if getattr(item, "role", None) == "user":
+                return item.text_content or ""
+        return ""
+
+    async def _finalize_fast_brain_user_turn(
+        self,
+        *,
+        turn_id: int,
+        user_content: str,
+        classification: str,
+        intended_speech: str,
+    ) -> None:
+        if turn_id <= self._fast_brain_completed_turn:
+            return
+        self._fast_brain_completed_turn = turn_id
+        if self._publish_fast_brain_turn_completed is None:
+            return
+        await self._publish_fast_brain_turn_completed(
+            turn_id=turn_id,
+            user_content=user_content,
+            classification=classification,
+            intended_speech=intended_speech,
+        )
+
     async def on_user_turn_completed(
         self,
         turn_ctx: ChatContext,
@@ -425,10 +500,16 @@ class Assistant(Agent):
         # New user turn: a fresh buffer filler is now warranted (until the slow
         # brain responds to this turn).
         self._user_turn_seq += 1
+        # Capture the turn's engagement verdict now, while the diarization id
+        # is still current (the utterance publisher consumes it shortly after).
+        provider = self._turn_engaged_provider
+        self._current_turn_engaged = provider() if provider is not None else True
         # On an outbound call, the callee's first completed utterance triggers the
         # held opener (the opener answers it). Signalling on turn-completed means
         # we respond after their "Hello?", never over it.
         if self._opening_pending and not self._first_user_turn.is_set():
+            if self._first_turn_duration_s is None:
+                self._first_turn_duration_s = 0.0
             self._first_user_turn.set()
         if self._pending_opening_bridge is not None:
             schedule_bridge = self._pending_opening_bridge
@@ -452,10 +533,19 @@ class Assistant(Agent):
         the real (verbatim-spoken) response.
         """
         self.user_turn_generating = True
-        # Stale-guard: only a continuation set below should be registered for
-        # resumption; clear any leftover so an ordinary buffer reply is not.
-        self._continuation_full_text = None
+        my_turn = self._user_turn_seq
+        user_text = self._latest_user_text(chat_ctx)
+        turn_classification: str | None = None
+        intended_speech = ""
         try:
+            # A committed turn from a non-engaged voice is context, not an
+            # instruction: no filler, no small talk, and (classification stays
+            # None) no FastBrainTurnCompleted, so no slow-brain user run. The
+            # utterance itself is still published with its speaker label.
+            if not self._current_turn_engaged:
+                _log.info("Fast-brain turn suppressed: non-engaged speaker")
+                return
+
             _log.info("Waiting for call to be received…")
             while not self.call_received:
                 await asyncio.sleep(0.1)
@@ -475,6 +565,8 @@ class Assistant(Agent):
             )
             if credit_gate_state is not None and not credit_gate_state.allowed:
                 _log.info("Credit gate response served from cached state")
+                turn_classification = FAST_BRAIN_TURN_DEFER
+                intended_speech = DEPLETED_CREDITS_FAST_BRAIN_RESPONSE
                 yield ChatChunk(
                     id=f"credit-gate-{monotonic_ms()}",
                     delta=ChoiceDelta(
@@ -488,7 +580,6 @@ class Assistant(Agent):
             # already produced spoken output for this turn (e.g. this is a
             # notification-triggered re-generation, or its answer landed first),
             # emit nothing - a filler must never play AFTER the real answer.
-            my_turn = self._user_turn_seq
             if self._slow_brain_responded_turn >= my_turn:
                 _log.info("Buffer suppressed: slow brain already responded this turn")
                 return
@@ -502,129 +593,117 @@ class Assistant(Agent):
             # real reply landed) are marked as repeated deferrals so they reassure
             # rather than starting a fresh lookup.
             already_deferred = self._buffers_since_slow_reply >= 1
-            user_text = ""
             recent_assistant_text = ""
             for item in reversed(chat_ctx.items):
                 role = getattr(item, "role", None)
-                if role == "user" and not user_text:
-                    user_text = item.text_content or ""
-                elif role == "assistant" and not recent_assistant_text:
+                if role == "assistant" and not recent_assistant_text:
                     recent_assistant_text = item.text_content or ""
-                if user_text and recent_assistant_text:
                     break
 
-            # If this barge-in cut off a slow-brain line, the fast brain may
-            # resume the unheard remainder immediately (speaking the slow brain's
-            # own verbatim words) instead of waiting a full slow-brain turn for it
-            # to be re-delivered.
-            continuation = await self._claim_interrupted_continuation(user_text)
-            if continuation is not None:
+            pending = await self._claim_pending_continuation(user_text)
+
+            if pending is not None and not (user_text or "").strip():
                 if self._slow_brain_responded_turn >= my_turn:
                     _log.info("Continuation suppressed: slow brain already responded")
                     return
                 self._buffers_since_slow_reply += 1
-                # Resume the slow brain's verbatim remainder AS the reply. Mark the
-                # full text so the ``speech_created`` observer registers this reply
-                # for interruption-stashing -> a barge-in mid-resume re-stashes a
-                # fresh candidate, making continuation recursive. Cancel the
-                # speculatively-started slow-brain run so it cannot re-deliver it.
-                self._continuation_full_text = continuation
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
+                if pending.heard_prefix:
+                    continuation = (
+                        f"{pick_resume_lead_in()} {pending.resume_text}".strip()
+                    )
+                else:
+                    continuation = pending.resume_text.strip()
+                self._attach_reply_continuation(continuation)
+                turn_classification = FAST_BRAIN_TURN_CONTINUATION
+                intended_speech = continuation
                 yield ChatChunk(
                     id=f"fast-brain-continuation-{monotonic_ms()}",
                     delta=ChoiceDelta(role="assistant", content=continuation),
                 )
                 return
 
-            # Refresh screenshots only on the first reaction (also feeds the slow
-            # brain); repeated deferrals don't need it and should stay snappy.
             if not already_deferred:
                 await self._capture_screenshots_for_llm(chat_ctx)
 
-            # Race the small-talk reply against the lean filler. If this turn is
-            # pure small talk (greeting, biographical, simple self-context,
-            # repeat), the fast brain answers it in full and cancels the eager
-            # slow-brain run; otherwise it defers and the filler covers the gap
-            # while the slow brain composes the real answer. Running both
-            # concurrently keeps DEFER turns at the filler's latency.
-            _log.info("Selecting fast reply… (llm_node_start)")
-            smalltalk_task = (
-                asyncio.create_task(
-                    self._generate_smalltalk_reply(
-                        user_text,
-                        idle_status_smalltalk=idle_status_smalltalk,
-                    ),
-                )
-                if self._generate_smalltalk_reply is not None
-                else None
+            history_provider = self._fast_brain_history_provider
+            history_messages = (
+                history_provider() if history_provider is not None else []
             )
-            buffer_task = asyncio.create_task(
-                select_fast_reply(
-                    user_text,
-                    recent_assistant_text,
-                    already_deferred=already_deferred,
-                    guidance=self._fast_brain_guidance,
-                ),
+            resolved = await select_fast_brain_turn(
+                user_text=user_text,
+                system_prompt=self._fast_brain_system_prompt,
+                history_messages=history_messages,
+                pending_continuation=pending,
+                already_deferred=already_deferred,
+                guidance=self._fast_brain_guidance,
+                idle_status_smalltalk=idle_status_smalltalk,
+                recent_assistant_text=recent_assistant_text,
+                hang_up_gate_reason=self._hang_up_gate_reason,
+                briefing=self._call_briefing,
             )
 
-            smalltalk = await smalltalk_task if smalltalk_task is not None else None
-            if smalltalk is _SMALLTALK_STAY_SILENT:
-                # A bare acknowledgement ("okay") needs no reply: say nothing and
-                # cancel this turn's slow-brain run so neither brain speaks.
-                buffer_task.cancel()
-                _log.info("Small talk: staying silent on bare acknowledgement")
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
-                return
-            if smalltalk is not None:
-                buffer_task.cancel()  # the filler is not needed
-                if self._slow_brain_responded_turn >= my_turn:
-                    _log.info("Small talk suppressed: slow brain already responded")
-                    return
-                self._buffers_since_slow_reply += 1
-                # The fast brain fully answered this turn; cancel the eager
-                # slow-brain run so it does not also answer the same thing.
-                if self._publish_fast_brain_continued is not None:
-                    await self._publish_fast_brain_continued(my_turn)
-                yield ChatChunk(
-                    id=f"fast-brain-smalltalk-{monotonic_ms()}",
-                    delta=ChoiceDelta(role="assistant", content=smalltalk),
+            if (
+                resolved.declined_continuation
+                and pending is not None
+                and self._publish_voice_interrupt is not None
+                and pending.remainder
+            ):
+                await self._publish_voice_interrupt(
+                    pending.spoken_prefix,
+                    pending.remainder,
                 )
+
+            if resolved.classification == FAST_BRAIN_TURN_SILENCE:
+                _log.info("Fast brain: staying silent on bare acknowledgement")
                 return
 
-            phrase = await buffer_task
-
-            # Re-check: the slow brain may have answered during selection. If so,
-            # drop the now-stale filler so it does not trail the real answer.
             if self._slow_brain_responded_turn >= my_turn:
-                _log.info("Buffer suppressed: slow brain responded during selection")
+                _log.info("Fast reply suppressed: slow brain already responded")
+                return
+
+            speech = resolved.intended_speech
+            if not speech:
                 return
 
             self._buffers_since_slow_reply += 1
+            turn_classification = resolved.classification
+            intended_speech = speech
+            if turn_classification == FAST_BRAIN_TURN_CONTINUATION:
+                self._attach_reply_continuation(speech)
+                chunk_id = f"fast-brain-continuation-{monotonic_ms()}"
+            elif turn_classification == FAST_BRAIN_TURN_SMALLTALK:
+                chunk_id = f"fast-brain-smalltalk-{monotonic_ms()}"
+            elif turn_classification == FAST_BRAIN_TURN_HANG_UP:
+                # The farewell is spoken like any reply; the finalizer ends the
+                # call once this reply's line plays out uninterrupted. It is
+                # deliberately NOT registered as resumable — a barge-in aborts
+                # the cut rather than resuming the goodbye.
+                self._schedule_reply_hang_up(speech)
+                chunk_id = f"fast-brain-hangup-{monotonic_ms()}"
+            else:
+                chunk_id = f"fast-brain-buffer-{monotonic_ms()}"
             yield ChatChunk(
-                id=f"fast-brain-buffer-{monotonic_ms()}",
-                delta=ChoiceDelta(role="assistant", content=phrase),
+                id=chunk_id,
+                delta=ChoiceDelta(role="assistant", content=speech),
             )
         finally:
             self.user_turn_generating = False
+            if (
+                turn_classification is not None
+                and turn_classification != FAST_BRAIN_TURN_SILENCE
+            ):
+                await self._finalize_fast_brain_user_turn(
+                    turn_id=my_turn,
+                    user_content=user_text,
+                    classification=turn_classification,
+                    intended_speech=intended_speech,
+                )
 
-    async def _claim_interrupted_continuation(self, user_text: str) -> str | None:
-        """Decide the fate of an interrupted line - the fast brain's front-door job.
-
-        Every turn after a barge-in routes through here:
-        - No pending candidate -> None (ordinary buffer path).
-        - A barge-in that produced no transcript (speechless noise/echo) ->
-          auto-CONTINUE: resume the remainder verbatim, since there is no spoken
-          content that could possibly justify deferring.
-        - A barge-in with speech -> classify (heavily biased to CONTINUE); on a
-          DEFER, hand the remainder to the slow brain via ``VoiceInterrupt``.
-
-        Returns "{lead-in} {verbatim remainder}" to resume, else None. Claiming
-        marks the candidate consumed so it is delivered exactly once.
-        """
-        text = (user_text or "").strip()
-
+    async def _claim_pending_continuation(
+        self,
+        user_text: str,
+    ) -> PendingContinuation | None:
+        """Claim a stashed interrupted-line candidate for this user turn."""
         # Barge-in vs user-turn race: if a line was just interrupted but its
         # remainder hasn't been computed yet, wait briefly for it.
         active = self._active_tts
@@ -642,7 +721,6 @@ class Assistant(Agent):
         if not pending or pending.get("consumed"):
             return None
 
-        # Claim synchronously so no other path can double-deliver it.
         pending["consumed"] = True
         resume_text = (pending.get("resume_text") or "").strip()
         remainder = (pending.get("remainder") or "").strip()
@@ -652,29 +730,127 @@ class Assistant(Agent):
         if not resume_text:
             return None
 
-        # Speechless barge-in: the only sensible action is to continue, so resume
-        # directly without consulting the classifier.
-        if not text:
-            return f"{pick_resume_lead_in()} {resume_text}".strip()
+        return PendingContinuation(
+            resume_text=resume_text,
+            remainder=remainder,
+            spoken_prefix=spoken_prefix,
+        )
 
-        lead_in = await select_continuation(resume_text, user_text)
-        if lead_in is None:
-            # Redirect / new ask: hand the remainder to the slow brain instead.
-            if self._publish_voice_interrupt is not None and remainder:
-                await self._publish_voice_interrupt(spoken_prefix, remainder)
-            return None
-        return f"{lead_in} {resume_text}".strip()
+    def _attach_reply_continuation(self, full_text: str) -> None:
+        """Register the in-flight reply speech for barge-in resumption.
+
+        ``speech_created`` fires when the reply speech is scheduled — before
+        ``llm_node`` streams — so the recorded handle is always this turn's own
+        speech, never a later one.
+        """
+        handle = self._active_reply_handle
+        register = self._register_reply_continuation
+        if handle is None or register is None:
+            return
+        register(handle, full_text)
+
+    def _schedule_reply_hang_up(self, farewell: str) -> None:
+        """Arrange the gated call cut once this reply's farewell plays out."""
+        handle = self._active_reply_handle
+        finalize = self._finalize_reply_hang_up
+        if handle is None or finalize is None:
+            _log.warning(
+                "Gated hang-up dropped: no reply speech handle to finalize",
+            )
+            return
+        finalize(handle, farewell)
+
+    def _tee_frames_to_speaker_tracker(
+        self,
+        audio: AsyncIterable[rtc.AudioFrame],
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """Copy inbound audio frames into the speaker tracker's ring buffer.
+
+        Purely observational: frames are forwarded to STT unchanged and the
+        tracker only appends to an in-memory buffer, so the live pipeline
+        incurs no added latency.
+        """
+        tracker = self.speaker_tracker
+        if tracker is None:
+            return audio
+
+        async def _tee():
+            async for frame in audio:
+                tracker.add_audio(
+                    bytes(frame.data),
+                    frame.sample_rate,
+                    frame.num_channels,
+                )
+                yield frame
+
+        return _tee()
+
+    def _should_swallow_final(self, transcript_speaker_id: str | None) -> bool:
+        """Whether a final transcript belongs to a confidently non-engaged voice.
+
+        Fails open: no tracker, no engagement state, no diarization id, or an
+        unresolved speaker all forward the transcript unchanged.
+        """
+        tracker = self.speaker_tracker
+        engaged = self.engaged_speakers
+        if tracker is None or engaged is None or not transcript_speaker_id:
+            return False
+        resolution = tracker.resolve(transcript_speaker_id)
+        if resolution is None:
+            return False
+        return not engaged.is_engaged(resolution)
+
+    def _filter_stt_events(self, events):
+        """Gate the STT stream by speaker engagement.
+
+        Finals from confidently non-engaged voices are diverted to the
+        background sink (labeled context) instead of reaching the session's
+        turn machinery, where they would otherwise extend or commit turns.
+        Interim/preflight transcripts are dropped only while the realtime
+        scorer is confident that only non-engaged voices hold the mic (they
+        carry no per-word speaker ids). The speaker tracker observes every
+        final here — before gating — so attribution windows stay aligned.
+        """
+
+        async def _filtered():
+            async for ev in events:
+                ev_type = getattr(ev, "type", None)
+                if ev_type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
+                    data = ev.alternatives[0]
+                    tracker = self.speaker_tracker
+                    if tracker is not None:
+                        tracker.observe_final_transcript(
+                            data.speaker_id,
+                            end_ts=time.time(),
+                        )
+                    if self._should_swallow_final(data.speaker_id):
+                        handler = self._on_background_final
+                        if handler is not None:
+                            handler(data.text or "", data.speaker_id)
+                        continue
+                elif ev_type in (
+                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                ):
+                    scorer = self.realtime_scorer
+                    if scorer is not None and scorer.confidently_non_engaged:
+                        continue
+                yield ev
+
+        return _filtered()
 
     async def stt_node(
         self,
         audio: AsyncIterable[rtc.AudioFrame],
         model_settings: ModelSettings,
     ):
+        audio = self._tee_frames_to_speaker_tracker(audio)
         if (
             self.channel not in ("google_meet", "teams_meet")
             or self.audio_bridge is None
         ):
-            async for event in super().stt_node(audio, model_settings):
+            events = super().stt_node(audio, model_settings)
+            async for event in self._filter_stt_events(events):
                 yield event
             return
 
@@ -692,8 +868,11 @@ class Assistant(Agent):
         _RATE = self.audio_bridge._capture_rate
 
         async def _audio_from_bridge():
+            tracker = self.speaker_tracker
             while True:
                 pcm = await self.audio_bridge.capture_q.get()
+                if tracker is not None:
+                    tracker.add_audio(pcm, _RATE, 1)
                 samples = len(pcm) // 2
                 yield rtc.AudioFrame(
                     data=pcm,
@@ -708,9 +887,13 @@ class Assistant(Agent):
                 async for frame in _audio_from_bridge():
                     stt_stream.push_frame(frame)
 
+            async def _stream_events():
+                async for event in stt_stream:
+                    yield event
+
             fwd = asyncio.create_task(_forward())
             try:
-                async for event in stt_stream:
+                async for event in self._filter_stt_events(_stream_events()):
                     yield event
             finally:
                 await utils.aio.cancel_and_wait(fwd)
@@ -792,25 +975,65 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         parts = meta["assistant_name"].split(None, 1)
         SESSION_DETAILS.assistant.first_name = parts[0] if parts else ""
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
+    if meta.get("unify_key"):
+        SESSION_DETAILS.unify_key = str(meta["unify_key"])
 
 
-_CALL_OPENING_MODES = {"speak", "simulated", "silent", "briefed", "recorded"}
+def _voice_call_channel_defers_desktop_binding(channel: str) -> bool:
+    """Return whether this LiveKit call channel uses deferred desktop binding."""
+    return channel in (
+        "phone_call",
+        "whatsapp_call",
+        "unify_meet",
+        "google_meet",
+        "teams_meet",
+    )
 
-# On an outbound call, hold the opener until the earliest of the callee's first
-# completed utterance (their "Hello?") or this fallback timeout. Triggering on
-# their speech ensures the opener lands when they are actually listening, instead
-# of into dead air right after the line connects.
-OUTBOUND_OPENING_TRIGGER_TIMEOUT_S = 5.0
 
-# Ceiling on a fast-brain small-talk reply. A social / biographical / self-context
-# answer is a sentence or two; anything longer means the model overreached into a
-# substantive answer (the slow brain's job), so we drop it and defer instead.
-_MAX_SMALLTALK_CHARS = 300
+_CALL_OPENING_MODES = {"speak", "opener", "simulated", "silent", "recorded"}
 
-# Distinct small-talk outcome: a bare acknowledgement ("okay") needs no reply at
-# all. The fast brain stays silent AND cancels the slow-brain run, so neither
-# brain speaks. Identity-checked, so it can never collide with a real reply.
-_SMALLTALK_STAY_SILENT = object()
+# On an agent-initiated call, the verbatim opener is held until the earlier of
+# the callee's first completed utterance or this much silence after they answer
+# (with the audio pipeline live). Triggering on their speech ensures the opener
+# lands when they are actually listening; the silence fallback covers callees
+# who answer and wait for the caller to speak first.
+OPENER_SILENCE_TRIGGER_S = 3.0
+
+# A callee first turn at or above this speaking duration is substantive: the
+# held opener goes to the fast brain to decide (deliver verbatim vs respond to
+# what they said) instead of being spoken blindly as though they had only said
+# "Hello?".
+OPENER_SHORT_TURN_MAX_S = 5.0
+
+# Durable system note carrying the slow brain's unspoken call briefing into the
+# voice context (chat ctx + session history) so every voice surface — not just
+# the structured turn selector — knows why the call was placed.
+_CALL_BRIEFING_SYSTEM_NOTE = (
+    "[system] Call briefing — context, not script. This call was placed for "
+    "the reason below. NEVER read the briefing aloud or quote it verbatim; "
+    "speak naturally in your own words. You fully own everything it covers.\n"
+    "\n"
+    "{briefing}"
+)
+
+# After a gated hang-up farewell finishes playing out, wait this long for a
+# barge-in before actually ending the call. A caller who starts speaking in
+# this window ("oh wait, one more thing") aborts the cut entirely — the
+# farewell becomes an ordinary turn and the conversation continues.
+HANG_UP_GRACE_S = 1.0
+
+# With the hang-up gate armed, this much sustained dead air (no speech either
+# way, nothing queued) is treated as the conversation having ended without a
+# classifiable goodbye — the agent speaks a brief courtesy close and hangs up.
+HANG_UP_SILENCE_CLOSE_S = 12.0
+
+# Deterministic courtesy line for the sanctioned-silence close (no LLM call —
+# by this point the substance of the call is over by the slow brain's own
+# judgement, and the line only needs to be polite).
+HANG_UP_SILENCE_FAREWELL = "Alright — I'll let you go. Bye for now!"
+
+
+# Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
 
 # When the assistant ends a Unify Meet, we first tell the Console to leave the
 # room itself (so its WebRTC peer connection and SCTP data channels close
@@ -821,109 +1044,202 @@ _SMALLTALK_STAY_SILENT = object()
 # disconnect gracefully on its own.
 MEET_GRACEFUL_LEAVE_GRACE_S = 0.6
 
-# The walkie-talkie staticky intro is cut into per-sentence audio slices (at
-# silence midpoints, aligned via Whisper word timestamps). They play in order as
-# separate segments; each commits its own transcript to history as it finishes.
-# So if the caller interrupts, the fast brain inherits ONLY the sentences that
-# were actually heard (plus the one in progress) — never the rest of the scripted
-# intro, whose carefully-recorded tone the live voice cannot reproduce.
-_WALKIE_OPENER_SENTENCE_SEGMENTS: list[tuple[str, str]] = [
-    ("coordinator_onboarding_intro_walkie_00", "Hi, I'm T dash W 1 N."),
-    (
-        "coordinator_onboarding_intro_walkie_01",
-        "Before you ask, no I'm not one of Elon's many children, and no he didn't come up with the name, thankfully.",
-    ),
-    (
-        "coordinator_onboarding_intro_walkie_02",
-        "I have this name because I'll be acting as your digital twin.",
-    ),
-    ("coordinator_onboarding_intro_walkie_03", "Do you get it?"),
-    ("coordinator_onboarding_intro_walkie_04", "Twin?"),
-    ("coordinator_onboarding_intro_walkie_05", "Like T dash W 1 N spells Twin?"),
-    (
-        "coordinator_onboarding_intro_walkie_06",
-        "The creators of this platform express how important it is that you acknowledge that it's a clever and funny name.",
-    ),
-    ("coordinator_onboarding_intro_walkie_07", "Okay, what next."),
-    (
-        "coordinator_onboarding_intro_walkie_08",
-        "They didn't give me much to work with on this intro to be honest.",
-    ),
-    (
-        "coordinator_onboarding_intro_walkie_09",
-        "I think I was meant to tell you about my capabilities?",
-    ),
-    (
-        "coordinator_onboarding_intro_walkie_10",
-        "I'm not one for bragging, but I'll do my best.",
-    ),
-    ("coordinator_onboarding_intro_walkie_11", "What can I say?"),
-    ("coordinator_onboarding_intro_walkie_12", 'I\'m not a "tool".'),
-    ("coordinator_onboarding_intro_walkie_13", 'I\'m not an "agent".'),
-    (
-        "coordinator_onboarding_intro_walkie_14",
-        "I'm your living, breathing colleague, metaphorically speaking.",
-    ),
-    (
-        "coordinator_onboarding_intro_walkie_15",
-        "Don't think about prompting me, or configuring me, just talk to me naturally like you would anyone else, and I'll be able to help.",
-    ),
-    ("coordinator_onboarding_intro_walkie_16", "It's really that simple."),
-    ("coordinator_onboarding_intro_walkie_17", "There's not much more to say."),
-    (
-        "coordinator_onboarding_intro_walkie_18",
-        "I'll now walk you through the platform.",
-    ),
-    (
-        "coordinator_onboarding_intro_walkie_19",
-        "Also, let me remove this voice static.",
-    ),
+# Sentence-level timings for the coordinator onboarding intro (walkie + clean).
+# Boundaries were derived from the original per-sentence audio slices aligned via
+# Whisper word timestamps; playback uses one continuous recording with TimedString
+# chunks so LiveKit can commit only the heard prefix on interruption.
+#
+# ``twin-onboarding-intro.mp3`` is spliced from the original recording:
+#   1. Part A: trim 0→18.35s (through "Much better." + natural silence).
+#   2. Part B: trim 20.77→21.27s (0.5s natural silence before unmute in the
+#      source) concat 21.27s→end ("By the way…") — one continuous part B.
+#   3. Concat part A + part B once with a 2ms ``acrossfade`` at that join.
+# Extra pause comes from prefixing part B, not from padding part A or adding a
+# third segment after "Much better." — those extra joins caused the blip.
+# The "Any questions…" block (≈18.36–20.76s) stays removed.
+# Radio static-removal SFX (≈16.65–16.95s intro, ≈2.05–3.85s bridge) is
+# level-matched on ``twin-onboarding-intro.mp3`` and
+# ``twin-onboarding-static-bridge.mp3`` (~8× intro, ~⅙ bridge).
+_COORDINATOR_ONBOARDING_CLEAN_START_TIME = 17.160000
+_COORDINATOR_ONBOARDING_TIMED_CHUNKS: list[dict[str, object]] = [
+    {"text": "Hey, great to meet you.", "start_time": 0.000000, "end_time": 1.140000},
+    {
+        "text": "I'm T-W1N, and I'll be acting as your digital twin.",
+        "start_time": 1.140000,
+        "end_time": 3.780000,
+    },
+    {"text": "Inventive name, I know.", "start_time": 3.780000, "end_time": 5.720000},
+    {
+        "text": "Should we start with the onboarding, or would you rather just dive in and get help with some of the tasks on your plate?",
+        "start_time": 5.720000,
+        "end_time": 12.740000,
+    },
+    {
+        "text": "Also, let me remove this voice static.",
+        "start_time": 12.740000,
+        "end_time": 17.160000,
+    },
+    {"text": "Much better.", "start_time": 17.160000, "end_time": 17.900000},
+    {
+        "text": "By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you.",
+        "start_time": 18.850000,
+        "end_time": 25.800000,
+    },
 ]
 
+# Scripted chat intro when the user picks text over the onboarding call.
+# Matches the recorded opener minus walkie static, unmute guidance, and the
+# removed "Any questions before we start with the onboarding?" line.
+COORDINATOR_ONBOARDING_CHAT_INTRO = (
+    "Hey, great to meet you. I'm T-W1N, and I'll be acting as your digital twin. "
+    "Inventive name, I know. Should we start with the onboarding, or would you "
+    "rather just dive in and get help with some of the tasks on your plate?"
+)
+
 _RECORDED_OPENING_ASSETS = {
-    **{
-        key: f"twin-onboarding-intro-walkie-{i:02d}.mp3"
-        for i, (key, _transcript) in enumerate(_WALKIE_OPENER_SENTENCE_SEGMENTS)
-    },
-    "coordinator_onboarding_intro_clean": "twin-onboarding-intro-clean.mp3",
+    "coordinator_onboarding_intro": "twin-onboarding-intro.mp3",
     "coordinator_onboarding_static_bridge": "twin-onboarding-static-bridge.mp3",
 }
 _RECORDED_OPENING_TRANSCRIPTS: dict[str, str] = {}
-
-_WALKIE_OPENER_CLEAN_TRANSCRIPT = """\
-Much better.
-
-Any questions before we start with the onboarding?
-
-By the way, you'll probably want to unmute yourself first. Click the microphone at the bottom of the meet window, and then I'll be able to hear you."""
 
 _WALKIE_OPENER_BRIDGE_TRANSCRIPT = """\
 Hang on, let me just remove this voice static.
 
 Much better."""
 
-# Recorded openers played as an ordered list of segments. The final segment
-# carries the static-removal transition; every earlier (staticky) segment is one
-# sentence of the intro. If any pre-transition segment is interrupted, ``bridge``
-# is armed for the next assistant turn.
+# Recorded openers played as one continuous audio stream with TimedString
+# transcript chunks. If the caller interrupts before the clean voice transition,
+# ``bridge`` is armed for the next assistant turn.
 _RECORDED_OPENINGS = {
     "coordinator_onboarding_intro": {
-        "segments": [
-            *(
-                {"asset": key, "transcript": transcript}
-                for key, transcript in _WALKIE_OPENER_SENTENCE_SEGMENTS
-            ),
-            {
-                "asset": "coordinator_onboarding_intro_clean",
-                "transcript": _WALKIE_OPENER_CLEAN_TRANSCRIPT,
-            },
-        ],
+        "asset": "coordinator_onboarding_intro",
+        "timed_chunks": _COORDINATOR_ONBOARDING_TIMED_CHUNKS,
+        "clean_start_time": _COORDINATOR_ONBOARDING_CLEAN_START_TIME,
         "bridge": {
             "asset": "coordinator_onboarding_static_bridge",
             "transcript": _WALKIE_OPENER_BRIDGE_TRANSCRIPT,
         },
     },
 }
+
+
+def _recorded_opening_timed_transcript(chunks: list[dict[str, object]]) -> str:
+    return " ".join(str(chunk["text"]) for chunk in chunks)
+
+
+async def _timed_opening_text(
+    chunks: list[dict[str, object]],
+) -> AsyncIterable[str]:
+    for chunk in chunks:
+        yield TimedString(
+            str(chunk["text"]),
+            start_time=float(chunk["start_time"]),
+            end_time=float(chunk["end_time"]),
+        )
+
+
+@dataclass(frozen=True)
+class _PreloadedAudio:
+    pcm: bytes
+    sample_rate: int
+    num_channels: int
+
+
+def _load_recorded_asset_pcm(asset_key: str) -> _PreloadedAudio:
+    import numpy as _np
+    import soundfile as _sf
+
+    filename = _RECORDED_OPENING_ASSETS.get(asset_key)
+    if not filename:
+        raise ValueError(f"unknown recorded opening asset: {asset_key}")
+    asset = resources.files("unify.assets.audio").joinpath(filename)
+    with resources.as_file(asset) as recording_path:
+        with _sf.SoundFile(str(recording_path)) as recording:
+            data = recording.read(dtype="int16", always_2d=True)
+            sample_rate = recording.samplerate
+            num_channels = recording.channels
+    return _PreloadedAudio(
+        pcm=_np.ascontiguousarray(data).tobytes(),
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+    )
+
+
+def _preload_recorded_opening_pcm(config: dict) -> dict[str, _PreloadedAudio]:
+    asset_key = config.get("recording_asset", "").strip()
+    spec = _RECORDED_OPENINGS.get(asset_key)
+    if spec is None:
+        source = _recorded_opening_source(config)
+        if source.startswith("asset://"):
+            key = source.removeprefix("asset://")
+            if key in _RECORDED_OPENING_ASSETS:
+                return {key: _load_recorded_asset_pcm(key)}
+        return {}
+
+    preloaded: dict[str, _PreloadedAudio] = {}
+    asset = spec["asset"]
+    preloaded[asset] = _load_recorded_asset_pcm(asset)
+    if bridge := spec.get("bridge"):
+        key = bridge["asset"]
+        if key not in preloaded:
+            preloaded[key] = _load_recorded_asset_pcm(key)
+    return preloaded
+
+
+def _pcm_audio_frames(
+    pcm: bytes,
+    *,
+    sample_rate: int,
+    num_channels: int,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    async def _frames() -> AsyncIterable[rtc.AudioFrame]:
+        import numpy as _np
+
+        samples_per_chunk = max(1, int(sample_rate * frame_duration_ms / 1000))
+        bytes_per_chunk = samples_per_chunk * num_channels * 2
+        offset = 0
+        while offset < len(pcm):
+            end = min(offset + bytes_per_chunk, len(pcm))
+            chunk = pcm[offset:end]
+            block = _np.frombuffer(chunk, dtype="int16").reshape(-1, num_channels)
+            yield rtc.AudioFrame(
+                data=_np.ascontiguousarray(block).tobytes(),
+                sample_rate=sample_rate,
+                num_channels=num_channels,
+                samples_per_channel=len(block),
+            )
+            offset = end
+            await asyncio.sleep(0)
+
+    return _frames()
+
+
+def _preloaded_audio_frames(
+    audio: _PreloadedAudio,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    return _pcm_audio_frames(
+        audio.pcm,
+        sample_rate=audio.sample_rate,
+        num_channels=audio.num_channels,
+        frame_duration_ms=frame_duration_ms,
+    )
+
+
+def _recorded_opening_audio(
+    source: str,
+    preloaded: dict[str, _PreloadedAudio] | None = None,
+    *,
+    frame_duration_ms: int = 20,
+) -> AsyncIterable[rtc.AudioFrame]:
+    if source.startswith("asset://"):
+        asset_key = source.removeprefix("asset://")
+        cached = (preloaded or {}).get(asset_key)
+        if cached is not None:
+            return _preloaded_audio_frames(cached, frame_duration_ms=frame_duration_ms)
+    return _recording_audio_frames(source, frame_duration_ms=frame_duration_ms)
 
 
 def _recording_audio_frames(
@@ -1000,6 +1316,9 @@ def _recorded_opening_transcript(config: dict) -> str:
         return transcript
     asset = config.get("recording_asset", "").strip()
     if asset:
+        spec = _RECORDED_OPENINGS.get(asset)
+        if spec is not None:
+            return _recorded_opening_timed_transcript(spec["timed_chunks"])
         transcript = _RECORDED_OPENING_TRANSCRIPTS.get(asset, "").strip()
     if not transcript:
         raise ValueError("recorded opening requires transcript")
@@ -1024,14 +1343,16 @@ def _normalize_call_opening_config(raw: object) -> dict:
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
         raise ValueError(
-            "opening_config.mode must be one of speak, simulated, silent, briefed, recorded",
+            "opening_config.mode must be one of speak, opener, simulated, silent, recorded",
         )
 
     config = {"mode": mode}
+    if raw.get("opener_text") is not None:
+        config["opener_text"] = str(raw["opener_text"])
+    if raw.get("briefing") is not None:
+        config["briefing"] = str(raw["briefing"])
     if raw.get("simulated_utterance") is not None:
         config["simulated_utterance"] = str(raw["simulated_utterance"])
-    if raw.get("system_context") is not None:
-        config["system_context"] = str(raw["system_context"])
     if raw.get("source") is not None:
         config["source"] = str(raw["source"])
     if raw.get("transcript") is not None:
@@ -1043,8 +1364,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
     if raw.get("recording_url") is not None:
         config["recording_url"] = str(raw["recording_url"])
 
-    if mode == "briefed" and not config.get("system_context", "").strip():
-        raise ValueError("briefed opening requires system_context")
+    if mode == "opener" and not config.get("opener_text", "").strip():
+        raise ValueError("opener opening requires opener_text")
     if mode == "recorded" and config.get("recording_asset", "").strip() not in (
         _RECORDED_OPENINGS
     ):
@@ -1084,7 +1405,7 @@ def _configure_child_logging() -> None:
 
 
 async def entrypoint(ctx: agents.JobContext):
-    global STT, VAD
+    global STT, VAD, SPEAKER_EMBEDDER
 
     _configure_child_logging()
 
@@ -1120,6 +1441,7 @@ async def entrypoint(ctx: agents.JobContext):
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
         opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
         _log.warning(
@@ -1136,6 +1458,18 @@ async def entrypoint(ctx: agents.JobContext):
         opening_config = _normalize_call_opening_config(
             os.environ.get("OPENING_CONFIG"),
         )
+        pre_armed_hang_up_gate = os.environ.get("HANG_UP_GATE_REASON", "").strip()
+
+    from unify.coordinator_voice import resolve_runtime_voice
+
+    is_coordinator = (
+        bool(meta.get("is_coordinator")) if meta else SESSION_DETAILS.is_coordinator
+    )
+    voice_provider, voice_id = resolve_runtime_voice(
+        is_coordinator=is_coordinator,
+        voice_provider=voice_provider,
+        voice_id=voice_id,
+    )
 
     # Browser-meet diarization config (Google Meet / Teams Meet)
     meet_session_id: str = ""
@@ -1198,16 +1532,10 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Fallback for whenever pre-loading fails
     if STT is None:
-        STT = deepgram.STT(model="nova-3", language="en-GB")
+        STT = deepgram.STT(model="nova-3", language="en-GB", enable_diarization=True)
         VAD = silero.VAD.load(min_speech_duration=0.15, min_silence_duration=1.0)
 
     stt_instance = STT
-    if channel in ("google_meet", "teams_meet"):
-        stt_instance = deepgram.STT(
-            model="nova-3",
-            language="en-GB",
-            enable_diarization=True,
-        )
 
     # --- Browser-meet speaker + participant tracker (Meet / Teams) ---
     # Speaker identity uses two complementary signals:
@@ -1247,20 +1575,166 @@ async def entrypoint(ctx: agents.JobContext):
                 return candidate
         return None
 
-    def _resolve_speaker() -> tuple[dict, str | None, str | None]:
-        """Resolve the current browser-meet speaker to (contact_dict, display_name, speaker_id).
+    # --- Voice-embedding speaker tracker (all voice channels) ---
+    # Pins Deepgram's per-call anonymous speaker ids to enrolled contact voice
+    # profiles, accumulates an auto-enrollment on single-voice calls, and
+    # suggests manual enrollment when multiple unattributable voices are heard.
+    voice_profiles: dict[int, list[float]] = {}
+    for _cid, _vec in ((meta or {}).get("voice_profiles") or {}).items():
+        try:
+            voice_profiles[int(_cid)] = [float(x) for x in _vec]
+        except (TypeError, ValueError):
+            continue
 
-        Uses two signals in priority order:
-        1. Diarization speaker_id → correlation mapping (precise, audio-level).
-        2. DOM-scraped activeSpeaker name (fallback, 2s polling granularity).
-        Returns (contact_dict, display_name_or_None, diarization_speaker_id_or_None).
+    if SPEAKER_EMBEDDER is None:
+        _speaker_model_path = speaker_id.ensure_speaker_model(download=False)
+        if _speaker_model_path is not None:
+            SPEAKER_EMBEDDER = speaker_id.SpeakerEmbedder(_speaker_model_path)
+
+    speaker_tracker: speaker_id.SpeakerTracker | None = None
+    # Publishes spawned by tracker callbacks; awaited during job shutdown so a
+    # call-end enrollment is never dropped by process teardown.
+    speaker_event_tasks: set[asyncio.Task] = set()
+
+    def _publish_speaker_event(event) -> None:
+        task = asyncio.create_task(
+            event_broker.publish(event.topic, event.to_json()),
+        )
+        speaker_event_tasks.add(task)
+        task.add_done_callback(speaker_event_tasks.discard)
+
+    if SPEAKER_EMBEDDER is not None:
+
+        def _on_enrollment_captured(
+            embedding,
+            wav_path: str,
+            duration_s: float,
+        ) -> None:
+            event = VoiceEnrollmentCaptured(
+                contact=contact,
+                embedding=[float(x) for x in embedding],
+                wav_path=wav_path,
+                duration_s=float(duration_s),
+                channel=channel,
+            )
+            _log.info(
+                f"Voice enrollment captured ({duration_s:.0f}s) for "
+                f"contact {contact.get('contact_id')}",
+            )
+            _publish_speaker_event(event)
+
+        def _on_enrollment_suggested(num_speakers: int) -> None:
+            event = VoiceEnrollmentSuggested(
+                contact=contact,
+                num_speakers=num_speakers,
+                channel=channel,
+            )
+            _log.info(
+                f"Voice enrollment suggested: {num_speakers} distinct voices "
+                "and call contact has no enrollment",
+            )
+            _publish_speaker_event(event)
+
+        speaker_tracker = speaker_id.SpeakerTracker(
+            embedder=SPEAKER_EMBEDDER,
+            enrolled_profiles=voice_profiles,
+            call_contact_id=contact.get("contact_id"),
+            on_enrollment_captured=_on_enrollment_captured,
+            on_enrollment_suggested=_on_enrollment_suggested,
+        )
+
+    # --- Engagement: who currently has conversational standing ---
+    # The call contact and boss are permanently engaged; the slow brain
+    # promotes/demotes everyone else via app:call:speaker_engagement.
+    engaged_speakers = speaker_id.EngagedSpeakers(
+        permanent_contact_ids={
+            int(cand["contact_id"])
+            for cand in (contact, boss)
+            if cand and cand.get("contact_id") is not None
+        },
+    )
+
+    def on_speaker_engagement(data: dict) -> None:
+        action = str(data.get("action") or "")
+        cid = data.get("contact_id")
+        label = data.get("label")
+        if action == "engage":
+            changed = engaged_speakers.engage(contact_id=cid, label=label)
+        elif action == "disengage":
+            changed = engaged_speakers.disengage(contact_id=cid, label=label)
+        else:
+            return
+        _log.info(
+            f"Speaker engagement: {action} contact_id={cid} label={label} "
+            f"applied={changed} now_engaged_labels={engaged_speakers.engaged_labels}",
+        )
+
+    event_broker.register_callback(
+        "app:call:speaker_engagement",
+        on_speaker_engagement,
+    )
+
+    # --- Realtime floor gating (enrolled calls only) ---
+    # A sliding-window verifier drives a VAD wrapper so that background voices
+    # neither hold the floor nor barge in once they are confidently known.
+    # Without an enrollment for the call contact the plain VAD is used and
+    # behavior is identical to an ungated call.
+    realtime_scorer: speaker_id.RealtimeSpeakerScorer | None = None
+    session_vad = VAD
+    _call_contact_id = contact.get("contact_id")
+    if (
+        speaker_tracker is not None
+        and VAD is not None
+        and _call_contact_id is not None
+        and int(_call_contact_id) in voice_profiles
+    ):
+        from unify.conversation_manager.engaged_vad import EngagedGateVAD
+
+        realtime_scorer = speaker_id.RealtimeSpeakerScorer(
+            embedder=SPEAKER_EMBEDDER,
+            profiles_provider=lambda: speaker_tracker.profiles_partition(
+                engaged_speakers,
+            ),
+        )
+        session_vad = EngagedGateVAD(inner=VAD, scorer=realtime_scorer)
+        _log.config("Engaged-speaker floor gating active (call contact enrolled)")
+
+    def _speaker_is_engaged(sid: str | None) -> bool:
+        """Engagement verdict for a diarization id (fail-open on unresolved)."""
+        if speaker_tracker is None:
+            return True
+        return engaged_speakers.is_engaged(speaker_tracker.resolve(sid))
+
+    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool, bool]:
+        """Resolve the current speaker.
+
+        Returns (contact_dict, display_name, speaker_id, voice_verified,
+        engaged). Signals in priority order:
+        1. Voice-embedding match against enrolled contact profiles (all channels).
+        2. Diarization speaker_id → DOM correlation mapping (browser meets).
+        3. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
         """
-        if channel not in ("google_meet", "teams_meet"):
-            return contact, None, None
-
         sid = _meet_last_speaker_id
+        engaged = _speaker_is_engaged(sid)
 
-        # Primary: diarization speaker_id → mapped display name
+        # Primary: embedding-pinned identity from the speaker tracker
+        if sid and speaker_tracker is not None:
+            resolution = speaker_tracker.resolve(sid)
+            if resolution is not None:
+                if resolution.contact_id is not None:
+                    for cand in (contact, boss):
+                        if cand.get("contact_id") == resolution.contact_id:
+                            label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                            return cand, label or None, sid, True, engaged
+                elif resolution.label:
+                    # Confidently a different, unenrolled voice: keep the call
+                    # contact for routing but surface the anonymous label.
+                    return contact, resolution.label, sid, False, engaged
+
+        if channel not in ("google_meet", "teams_meet"):
+            return contact, None, sid, False, engaged
+
+        # Diarization speaker_id → mapped display name (browser meets)
         if sid and sid in _meet_speaker_map:
             votes = _meet_speaker_map[sid]
             if votes:
@@ -1271,8 +1745,8 @@ async def entrypoint(ctx: agents.JobContext):
                     resolved = _resolve_contact_by_name(top_name)
                     if resolved:
                         label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                        return resolved, label or None, sid
-                    return contact, top_name, sid
+                        return resolved, label or None, sid, False, engaged
+                    return contact, top_name, sid, False, engaged
 
         # Fallback: DOM active speaker
         active_name = _meet_cached_active_speaker
@@ -1280,10 +1754,35 @@ async def entrypoint(ctx: agents.JobContext):
             resolved = _resolve_contact_by_name(active_name)
             if resolved:
                 label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                return resolved, label or None, sid
-            return contact, active_name, sid
+                return resolved, label or None, sid, False, engaged
+            return contact, active_name, sid, False, engaged
 
-        return contact, None, sid
+        return contact, None, sid, False, engaged
+
+    def _background_label_for(sid: str | None) -> str | None:
+        """Best display label for a background (non-engaged) voice.
+
+        Prefers a pinned contact name, then a confidently DOM-correlated meet
+        display name, then the tracker's session-scoped anonymous label.
+        """
+        if speaker_tracker is None or not sid:
+            return None
+        resolution = speaker_tracker.resolve(sid)
+        if resolution is None:
+            return None
+        if resolution.contact_id is not None:
+            for cand in (contact, boss):
+                if cand.get("contact_id") == resolution.contact_id:
+                    name = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                    if name:
+                        return name
+        if channel in ("google_meet", "teams_meet") and sid in _meet_speaker_map:
+            votes = _meet_speaker_map[sid]
+            if votes:
+                top_name = max(votes, key=votes.get)
+                if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
+                    return top_name
+        return resolution.label
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -1446,67 +1945,6 @@ async def entrypoint(ctx: agents.JobContext):
         SESSION_DETAILS.assistant.user_desktop_for(call_acting_user_id) is not None
     )
 
-    # Server-derived onboarding progress for the Coordinator's opening
-    # line. Orchestra re-derives completed steps from durable state on
-    # every ``Coordinator/State`` read, so a workspace connected in an
-    # earlier session is visible here even though no transition event
-    # fired — without this, the fresh-history intro would pitch
-    # "connect your workspace" to a caller who already did. Best-effort:
-    # on any failure (or outside onboarding mode) the opener falls back
-    # to its generic copy.
-    # Precomputed onboarding picture from Orchestra: the valid next
-    # targets (with spoken nudge copy) and the active step. The opener
-    # pitches one of these instead of computing "next" locally. Stays
-    # ``None`` when not actively onboarding (working / deferred / fetch
-    # failure), in which case the opener greets without a setup pitch.
-    coordinator_onboarding_next_targets: list[dict] | None = None
-    coordinator_active_onboarding_step: str | None = None
-    coordinator_onboarding_deferred: bool = False
-    onboarding_catalog: dict | None = None
-    if (
-        SESSION_DETAILS.is_coordinator
-        and SESSION_DETAILS.assistant.agent_id is not None
-    ):
-        import httpx as _httpx
-
-        try:
-            async with _httpx.AsyncClient(timeout=5.0) as _state_http:
-                _state_resp = await _state_http.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/"
-                    f"{SESSION_DETAILS.assistant.agent_id}/state",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
-                )
-                _state_resp.raise_for_status()
-                _state_info = (_state_resp.json() or {}).get("info") or {}
-                # Static, deployment-gated onboarding catalog — the single
-                # source of truth for the flow-reference copy.
-                _cat_resp = await _state_http.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                    headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
-                )
-                _cat_resp.raise_for_status()
-                _catalog = (_cat_resp.json() or {}).get("info") or {}
-                onboarding_catalog = _catalog if isinstance(_catalog, dict) else None
-            coordinator_onboarding_deferred = bool(
-                _state_info.get("onboarding_deferred"),
-            )
-            _onboarding = _state_info.get("onboarding")
-            if isinstance(_onboarding, dict):
-                _targets = _onboarding.get("next_targets")
-                coordinator_onboarding_next_targets = (
-                    [t for t in _targets if isinstance(t, dict)]
-                    if isinstance(_targets, list)
-                    else []
-                )
-                _active_step = _onboarding.get("active_step_id")
-                coordinator_active_onboarding_step = (
-                    _active_step if isinstance(_active_step, str) else None
-                )
-        except Exception as exc:
-            _log.warning(
-                f"Coordinator state fetch failed; voice opener stays generic: {exc}",
-            )
-
     system_prompt = build_voice_agent_prompt(
         bio=assistant_bio,
         assistant_name=assistant_name or None,
@@ -1527,12 +1965,7 @@ async def entrypoint(ctx: agents.JobContext):
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
-        coordinator_onboarding_next_targets=coordinator_onboarding_next_targets,
-        coordinator_active_onboarding_step=coordinator_active_onboarding_step,
-        coordinator_onboarding_deferred=coordinator_onboarding_deferred,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
-        onboarding_catalog=onboarding_catalog,
-        opening_mode=opening_config["mode"],
     ).flatten()
     _log.config(f"System prompt ({len(system_prompt)} chars)")
 
@@ -1550,7 +1983,7 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm_model,
         stt=stt_instance,
         tts=tts_instance,
-        vad=VAD,
+        vad=session_vad,
         turn_handling={
             "turn_detection": EnglishModel(),
             "endpointing": {"min_delay": 0.75},
@@ -1562,6 +1995,7 @@ async def entrypoint(ctx: agents.JobContext):
     user_is_speaking = False
     _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
+    _recorded_opening_preloaded: dict[str, _PreloadedAudio] = {}
     generation_seq = 0
     user_state_seq = 0
     mood_turn_index = 0
@@ -1586,8 +2020,24 @@ async def entrypoint(ctx: agents.JobContext):
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
-        # A briefed/speak opener is live TTS (not pre-recorded), so a barge-in
+        # A speak-mode opener is live TTS (not pre-recorded), so a barge-in
         # can be resumed by the fast brain just like any slow-brain line.
+        _register_interruptible_tts(speech_handle, lambda: text, "opening")
+
+    def _say_verbatim_opener(text: str) -> None:
+        """Speak the slow-brain's pre-decided opener word-for-word."""
+        _say_meta_queue.append(
+            {
+                "source": opening_config.get("source", "call_opener"),
+                "text": text,
+                "llm_log_path": "",
+            },
+        )
+        speech_handle = session.say(
+            text,
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
         _register_interruptible_tts(speech_handle, lambda: text, "opening")
 
     def _say_recorded_opening(text: str, recording_source: str):
@@ -1600,7 +2050,10 @@ async def entrypoint(ctx: agents.JobContext):
         )
         return session.say(
             text,
-            audio=_recording_audio_frames(recording_source),
+            audio=_recorded_opening_audio(
+                recording_source,
+                _recorded_opening_preloaded,
+            ),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
@@ -1627,7 +2080,10 @@ async def entrypoint(ctx: agents.JobContext):
         )
         session.say(
             text,
-            audio=_recording_audio_frames(f"asset://{segment['asset']}"),
+            audio=_recorded_opening_audio(
+                f"asset://{segment['asset']}",
+                _recorded_opening_preloaded,
+            ),
             allow_interruptions=True,
             add_to_chat_ctx=True,
         )
@@ -1636,27 +2092,39 @@ async def entrypoint(ctx: agents.JobContext):
         asset_key = config.get("recording_asset", "").strip()
         spec = _RECORDED_OPENINGS.get(asset_key)
         if spec is None:
-            _say_recorded_opening(
+            handle = _say_recorded_opening(
                 _recorded_opening_transcript(config),
                 _recorded_opening_source(config),
             )
+            await handle.wait_for_playout()
             return
 
-        segments = spec["segments"]
         bridge = spec.get("bridge")
-        for index, segment in enumerate(segments):
-            handle = _say_recorded_opening(
-                segment["transcript"],
-                f"asset://{segment['asset']}",
-            )
-            await handle.wait_for_playout()
-            reached_transition = index == len(segments) - 1
-            if handle.interrupted and not reached_transition:
-                if bridge is not None:
-                    assistant._pending_opening_bridge = (
-                        lambda b=bridge: _schedule_opening_bridge(b)
-                    )
-                return
+        timed_chunks = spec["timed_chunks"]
+        full_transcript = _recorded_opening_timed_transcript(timed_chunks)
+        _say_meta_queue.append(
+            {
+                "source": opening_config.get("source", "recorded_opening"),
+                "text": full_transcript,
+                "llm_log_path": "",
+            },
+        )
+        handle = session.say(
+            _timed_opening_text(timed_chunks),
+            audio=_recorded_opening_audio(
+                f"asset://{spec['asset']}",
+                _recorded_opening_preloaded,
+            ),
+            allow_interruptions=True,
+            add_to_chat_ctx=True,
+        )
+        await handle.wait_for_playout()
+        if handle.interrupted:
+            spoken = _spoken_text_from_handle(handle).strip()
+            if "Much better." not in spoken and bridge is not None:
+                assistant._pending_opening_bridge = (
+                    lambda b=bridge: _schedule_opening_bridge(b)
+                )
 
     def _fire_generate_reply(
         reason: str,
@@ -1777,7 +2245,48 @@ async def entrypoint(ctx: agents.JobContext):
             event.to_json(),
         )
 
+    async def _publish_background_utterance(
+        text: str,
+        label: str | None,
+        sid: str | None,
+    ) -> None:
+        """Publish a non-engaged voice's line as labeled context (no turn)."""
+        if channel == "google_meet":
+            event = InboundGoogleMeetUtterance(
+                contact=contact,
+                content=text,
+                speaker_label=label,
+                participant_names=_get_meet_participant_names() or None,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        elif channel == "teams_meet":
+            event = InboundTeamsMeetUtterance(
+                contact=contact,
+                content=text,
+                speaker_label=label,
+                participant_names=_get_meet_participant_names() or None,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        else:
+            event = user_utterance_event(
+                contact,
+                content=text,
+                speaker_label=label,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+            )
+        await event_broker.publish(
+            f"app:comms:{channel}_utterance",
+            event.to_json(),
+        )
+
     credit_gate_task: asyncio.Task | None = None
+    hang_up_gate_watcher_task: asyncio.Task | None = None
     explicit_stop_requested = False
     shutdown_completed = False
 
@@ -1788,8 +2297,19 @@ async def entrypoint(ctx: agents.JobContext):
         if shutdown_completed:
             return
         shutdown_completed = True
+        if speaker_tracker is not None:
+            # Flush pending embeddings and fire a partial auto-enrollment for
+            # single-voice calls that ended before reaching the full target.
+            await speaker_tracker.finalize()
+            if speaker_event_tasks:
+                await asyncio.gather(
+                    *list(speaker_event_tasks),
+                    return_exceptions=True,
+                )
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
+        if hang_up_gate_watcher_task is not None:
+            await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
         if mood_classification_task is not None:
             await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
@@ -1857,15 +2377,17 @@ async def entrypoint(ctx: agents.JobContext):
             maybe_speak_queued()
         _check_quiescence_transition()
 
-    # -- Diarization ↔ DOM speaker correlation --
-    if channel in ("google_meet", "teams_meet"):
-
-        @session.on("user_input_transcribed")
-        def _on_user_input_transcribed(ev):
-            nonlocal _meet_last_speaker_id
-            if not ev.is_final or not ev.speaker_id:
-                return
-            _meet_last_speaker_id = ev.speaker_id
+    # -- Diarization: last-speaker tracking + DOM correlation (meets) --
+    # The speaker tracker itself is fed from the STT filter (which sees every
+    # final, including gated background speech); this handler only sees
+    # forwarded finals, so it tracks the current *turn's* speaker.
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev):
+        nonlocal _meet_last_speaker_id
+        if not ev.is_final or not ev.speaker_id:
+            return
+        _meet_last_speaker_id = ev.speaker_id
+        if channel in ("google_meet", "teams_meet"):
             dom_speaker = _meet_cached_active_speaker
             if dom_speaker and dom_speaker != _meet_display_name:
                 bucket = _meet_speaker_map.setdefault(ev.speaker_id, {})
@@ -2150,10 +2672,16 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
-                resolved_contact, speaker_label, dia_sid = _resolve_speaker()
+                (
+                    resolved_contact,
+                    speaker_label,
+                    dia_sid,
+                    voice_verified,
+                    speaker_engaged,
+                ) = _resolve_speaker()
                 _meet_last_speaker_id = None
-                # Stamp the current turn so the slow-brain run it spawns can be
-                # cancelled precisely if the fast brain resolves this turn itself.
+                # Stamp the current turn so the slow-brain run scheduled after
+                # the fast brain completes can be correlated precisely.
                 turn_id = assistant._user_turn_seq
                 if channel == "google_meet":
                     event = InboundGoogleMeetUtterance(
@@ -2163,6 +2691,8 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
+                        voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -2172,26 +2702,31 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
+                        voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 else:
                     event = user_utterance_event(
                         resolved_contact,
                         content=text,
                         turn_id=turn_id,
+                        speaker_label=speaker_label,
+                        diarization_speaker_id=dia_sid,
+                        voice_verified=voice_verified,
+                        engaged=speaker_engaged,
                     )
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
                     event.to_json(),
                 )
 
-            # While the outbound opener is pending, the callee's first utterance
-            # (their "Hello?") only triggers the opener — do not publish it as a
-            # turn to the slow brain, which would otherwise compose a competing
-            # reply alongside the opener. It carries no content the opener needs.
-            if not assistant._opening_pending:
-                asyncio.create_task(
-                    _publish_user_utterance(text),
-                )
+            # Opener-pending turns are still published for the durable transcript.
+            # Slow-brain scheduling is gated separately: llm_node returns before
+            # classification while _opening_pending, so no FastBrainTurnCompleted
+            # is emitted and the utterance handler never calls handle_voice_user_turn.
+            asyncio.create_task(
+                _publish_user_utterance(text),
+            )
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
         _enqueue_mood_classification(role, text, utterance_id)
@@ -2209,7 +2744,30 @@ async def entrypoint(ctx: agents.JobContext):
         outbound=outbound,
         audio_bridge=audio_bridge,
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
+        speaker_tracker=speaker_tracker,
+        engaged_speakers=engaged_speakers,
+        realtime_scorer=realtime_scorer,
     )
+    assistant._turn_engaged_provider = lambda: _speaker_is_engaged(
+        _meet_last_speaker_id,
+    )
+    # The opener hold applies whenever an ``opener`` opening config is present,
+    # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
+    # permission-callback call), where ``outbound`` is False.
+    assistant._opening_pending = opening_config["mode"] == "opener"
+    # A pre-armed hang-up gate (slow brain sanctioned the close at call
+    # placement, e.g. an expected-short call) starts armed from the first turn
+    # — no IPC round trip needed before the fast brain can end the call.
+    if pre_armed_hang_up_gate:
+        assistant._hang_up_gate_reason = pre_armed_hang_up_gate
+        _log.info(f"Hang-up gate pre-armed at dispatch: {pre_armed_hang_up_gate}")
+    opening_briefing = str(opening_config.get("briefing", "")).strip()
+    if opening_briefing:
+        assistant._call_briefing = opening_briefing
+        briefing_note = _CALL_BRIEFING_SYSTEM_NOTE.format(briefing=opening_briefing)
+        assistant._chat_ctx.add_message(role="system", content=[briefing_note])
+        session.history.add_message(role="system", content=[briefing_note])
+        _log.info("Injected call briefing into voice context")
     credit_gate_monitor = FastBrainCreditGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
@@ -2254,6 +2812,20 @@ async def entrypoint(ctx: agents.JobContext):
             print(f"[llm_node] screenshot capture error (non-fatal): {e}")
 
     assistant._capture_screenshots_for_llm = _capture_screenshots_for_llm
+
+    @session.on("user_state_changed")
+    def _on_outbound_first_turn_speaking_duration(ev) -> None:
+        if not assistant._opening_pending:
+            return
+        if assistant._first_user_turn.is_set():
+            return
+        if ev.new_state == "speaking":
+            if assistant._first_turn_speaking_started_at is None:
+                assistant._first_turn_speaking_started_at = time.monotonic()
+        elif assistant._first_turn_speaking_started_at is not None:
+            assistant._first_turn_duration_s = (
+                time.monotonic() - assistant._first_turn_speaking_started_at
+            )
 
     rio = RoomInputOptions(
         noise_cancellation=(
@@ -2309,7 +2881,21 @@ async def entrypoint(ctx: agents.JobContext):
 
         if event_type == "call_answered":
             call_answered_flag.set()
+            # Answered implies received even when the joined gate was already
+            # open (e.g. unify_meet, where the gate is pre-set at startup and
+            # _mark_user_joined would early-return without flipping this).
+            assistant.set_call_received()
             _mark_user_joined("call_answered")
+        elif event_type == "hang_up_gate":
+            if data.get("armed"):
+                assistant._hang_up_gate_reason = str(data.get("reason") or "")
+                _log.info(
+                    "Hang-up gate armed: "
+                    f"{assistant._hang_up_gate_reason or '(no reason given)'}",
+                )
+            else:
+                assistant._hang_up_gate_reason = None
+                _log.info("Hang-up gate disarmed")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
         elif event_type == "stop":
@@ -2387,22 +2973,83 @@ async def entrypoint(ctx: agents.JobContext):
     # can hand off when it decides not to resume an interrupted line itself.
     assistant._publish_voice_interrupt = _publish_voice_interrupt
 
-    async def _publish_fast_brain_continued(turn_id: int | None = None) -> None:
-        """Cancel the slow-brain run for ``turn_id`` when the fast brain answers.
-
-        The slow brain is triggered the moment the user's utterance lands; if the
-        fast brain then resolves that same turn itself - resuming the interrupted
-        line or fully answering a small-talk turn - its run would also answer, so
-        the CM cancels exactly that turn's run (wherever it sits in the queue).
-        The fast brain (~1s) always beats the slow brain (~8-12s), so the run is
-        still mid-flight and is dropped before producing speech.
-        """
+    async def _publish_fast_brain_turn_completed(
+        *,
+        turn_id: int,
+        user_content: str,
+        classification: str,
+        intended_speech: str,
+    ) -> None:
+        """Schedule the slow-brain run after the fast brain finishes a user turn."""
         await event_broker.publish(
-            FastBrainContinued.topic,
-            FastBrainContinued(contact=contact, turn_id=turn_id).to_json(),
+            FastBrainTurnCompleted.topic,
+            FastBrainTurnCompleted(
+                contact=contact,
+                turn_id=turn_id,
+                user_content=user_content,
+                classification=classification,
+                intended_speech=intended_speech,
+            ).to_json(),
         )
 
-    assistant._publish_fast_brain_continued = _publish_fast_brain_continued
+    assistant._publish_fast_brain_turn_completed = _publish_fast_brain_turn_completed
+
+    async def _maybe_resume_after_background_bargein() -> None:
+        """Resume a line interrupted by a voice that turned out to be background.
+
+        Ordinarily an interrupted line waits for the fast brain's next turn to
+        decide its fate — but a barge-in whose transcript was gated as
+        non-engaged never produces that turn, so the line would hang until the
+        engaged caller next spoke. When the gated final lands and the floor is
+        genuinely free (no engaged speech, no in-flight generation, nothing
+        playing), the remainder is resumed directly.
+        """
+        # Barge-in vs transcript race: the pending continuation is computed
+        # after playout settles; wait briefly for it, as the claim path does.
+        active = assistant._active_tts
+        if (
+            assistant._pending_continuation is None
+            and active is not None
+            and getattr(active.get("handle"), "interrupted", False)
+        ):
+            for _ in range(6):  # ~300ms
+                await asyncio.sleep(0.05)
+                if assistant._pending_continuation is not None:
+                    break
+        pending = assistant._pending_continuation
+        if not pending or pending.get("consumed"):
+            return
+        # Leave the decision to the fast brain's front door whenever an
+        # engaged turn is (or may be) in flight.
+        if user_is_speaking or assistant.user_turn_generating:
+            return
+        if _queued_speech_block_reason():
+            return
+        pending["consumed"] = True
+        assistant._pending_continuation = None
+        assistant._active_tts = None
+        resume_text = (pending.get("resume_text") or "").strip()
+        if not resume_text:
+            return
+        if (pending.get("spoken_prefix") or "").strip():
+            line = f"{pick_resume_lead_in()} {resume_text}".strip()
+        else:
+            line = resume_text
+        _log.info("Resuming line interrupted by non-engaged background speech")
+        handle = session.say(line, allow_interruptions=True, add_to_chat_ctx=True)
+        _register_interruptible_tts(handle, lambda: line, "continuation")
+
+    def _handle_background_final(text: str, sid: str | None) -> None:
+        """Sink for final transcripts gated out as non-engaged background."""
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        label = _background_label_for(sid) or "Unknown speaker"
+        _log.info(f"Background speech ({label}): {cleaned}")
+        asyncio.create_task(_publish_background_utterance(cleaned, label, sid))
+        asyncio.create_task(_maybe_resume_after_background_bargein())
+
+    assistant._on_background_final = _handle_background_final
 
     def _register_interruptible_tts(
         handle: object,
@@ -2469,27 +3116,121 @@ async def entrypoint(ctx: agents.JobContext):
 
         asyncio.ensure_future(_after_playout())
 
+    async def _finalize_gated_hang_up(handle, farewell: str, trigger: str) -> None:
+        """End the call after a gated farewell plays out uninterrupted.
+
+        The cut is aborted (and the conversation simply continues) if the
+        caller barges in on the farewell, speaks during the grace window, or
+        the slow brain disarms the gate before the window closes.
+        """
+        try:
+            await handle.wait_for_playout()
+        except Exception as exc:
+            _log.warning(f"Gated hang-up aborted: farewell playout failed: {exc}")
+            return
+        if getattr(handle, "interrupted", False):
+            _log.info("Gated hang-up aborted: farewell was interrupted")
+            return
+        await asyncio.sleep(HANG_UP_GRACE_S)
+        if user_is_speaking or assistant.user_turn_generating:
+            _log.info("Gated hang-up aborted: caller spoke during the grace window")
+            return
+        gate_reason = assistant._hang_up_gate_reason
+        if gate_reason is None:
+            _log.info("Gated hang-up aborted: gate was disarmed")
+            return
+        assistant._hang_up_gate_reason = None
+        _log.call_status(f"gated_hang_up:{trigger}")
+        await event_broker.publish(
+            FastBrainHangUp.topic,
+            FastBrainHangUp(
+                contact=contact,
+                farewell=farewell,
+                trigger=trigger,
+                gate_reason=gate_reason,
+            ).to_json(),
+        )
+
+    async def _hang_up_gate_silence_watcher() -> None:
+        """Close the call after sanctioned dead air (gate armed, line quiet).
+
+        Covers conversations that end without a classifiable goodbye — the
+        caller goes silent (or already left) after the substance is done. The
+        idle counter resets whenever the gate is disarmed or any speech
+        activity occurs, and never runs before the call is actually live: a
+        pre-armed gate must not "close" a call that is still ringing or whose
+        opener has not been delivered yet (the pipeline is quiescent in both
+        states).
+        """
+        idle_s = 0.0
+        while True:
+            await asyncio.sleep(1.0)
+            if assistant._hang_up_gate_reason is None:
+                idle_s = 0.0
+                continue
+            if not assistant.call_received or assistant._opening_pending:
+                idle_s = 0.0
+                continue
+            if not _is_pipeline_quiescent():
+                idle_s = 0.0
+                continue
+            idle_s += 1.0
+            if idle_s < HANG_UP_SILENCE_CLOSE_S:
+                continue
+            idle_s = 0.0
+            _log.info(
+                "Hang-up gate: line quiet for "
+                f"{HANG_UP_SILENCE_CLOSE_S:.0f}s — closing the call",
+            )
+            _say_meta_queue.append(
+                {
+                    "source": "gated_hang_up",
+                    "text": HANG_UP_SILENCE_FAREWELL,
+                    "llm_log_path": "",
+                },
+            )
+            handle = session.say(
+                HANG_UP_SILENCE_FAREWELL,
+                allow_interruptions=True,
+                add_to_chat_ctx=True,
+            )
+            await _finalize_gated_hang_up(
+                handle,
+                HANG_UP_SILENCE_FAREWELL,
+                trigger="silence",
+            )
+
+    hang_up_gate_watcher_task = asyncio.create_task(
+        _hang_up_gate_silence_watcher(),
+        name="fast_brain_hang_up_gate_watcher",
+    )
+
     @session.on("speech_created")
     def _on_speech_created(ev) -> None:
-        """Register a fast-brain continuation reply for interruption-stashing.
+        """Record the reply speech handle for the turn logic to attach to.
 
         Slow-brain lines and live openings register themselves at ``session.say``
-        time. A fast-brain continuation is delivered as a ``generate_reply``
-        reply (yielded from ``llm_node``), so it is registered here instead, using
-        the full text the turn stashed on ``_continuation_full_text``. Ordinary
-        buffer fillers leave that ``None`` and are never registered.
+        time. A ``generate_reply`` speech is created (and this fires) before
+        ``llm_node`` streams its content, so the handle is recorded here and
+        ``llm_node`` — which alone knows the turn's classification — attaches
+        continuation registration or the gated hang-up finalizer to it. Claiming
+        markers here instead would race: this observer runs before the turn sets
+        them, handing them to the wrong (next) speech.
         """
         if getattr(ev, "source", "") != "generate_reply":
             return
-        full_text = assistant._continuation_full_text
-        assistant._continuation_full_text = None
-        if not full_text:
-            return
-        _register_interruptible_tts(
-            ev.speech_handle,
-            lambda t=full_text: t,
-            "continuation",
+        assistant._active_reply_handle = ev.speech_handle
+
+    def _register_reply_continuation(handle: object, full_text: str) -> None:
+        _register_interruptible_tts(handle, lambda t=full_text: t, "continuation")
+
+    def _finalize_reply_hang_up(handle: object, farewell: str) -> None:
+        asyncio.create_task(
+            _finalize_gated_hang_up(handle, farewell, trigger="user_turn"),
         )
+
+    assistant._register_reply_continuation = _register_reply_continuation
+    assistant._finalize_reply_hang_up = _finalize_reply_hang_up
 
     def _speak_now(
         text: "str | AsyncIterable[str]",
@@ -2938,12 +3679,24 @@ async def entrypoint(ctx: agents.JobContext):
             reliable=True,
         )
 
-    async def _generate_opening_greeting(*, authoritative_briefing: bool) -> str:
+    def _schedule_deferred_desktop_binding() -> None:
+        if not _voice_call_channel_defers_desktop_binding(channel):
+            return
+        agent_id = SESSION_DETAILS.assistant.agent_id
+        if agent_id is None:
+            return
+        from unify.conversation_manager.domains import comms_utils
+
+        asyncio.create_task(
+            comms_utils.request_deferred_desktop_binding(agent_id),
+        )
+
+    async def _generate_opening_greeting() -> str:
         """Pre-generate the opening line via a sidecar LLM call.
 
         Returns the cached depleted-credits response when the credit gate is
         closed, otherwise generates from the voice system prompt plus the
-        current call history (which includes any injected system briefing).
+        current call history.
         """
         from unify.common.llm_client import new_llm_client
 
@@ -2958,84 +3711,31 @@ async def entrypoint(ctx: agents.JobContext):
         greeting_messages = build_opening_greeting_messages(
             system_prompt=system_prompt,
             history_messages=_extract_chat_messages(session.history),
-            authoritative_briefing=authoritative_briefing,
         )
         return await greeting_client.generate(messages=greeting_messages)
 
-    async def _generate_smalltalk_reply(
-        user_text: str,
-        *,
-        idle_status_smalltalk: bool = False,
-    ):
-        """Resolve a pure small-talk turn, or return None to defer.
-
-        Returns one of:
-        - a reply string: a social / biographical / self-context / repeat answer
-          to speak (the fast brain owns the turn);
-        - ``_SMALLTALK_STAY_SILENT``: a bare acknowledgement that needs no reply;
-        - ``None``: defer to the slow brain (anything substantive, or any action
-          / status question, or any error / overreach).
-
-        Drawn from the assistant persona plus recent history. Fail-safe to None.
-        """
-        from unify.common.llm_client import new_llm_client
-
-        if not (user_text or "").strip():
-            return None
-        try:
-            client = new_llm_client(
-                model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-                origin="fast_brain_smalltalk",
-                reasoning_effort="low",
-            )
-            messages = build_smalltalk_messages(
-                system_prompt=system_prompt,
-                history_messages=_extract_chat_messages(session.history, tail=8),
-                user_text=user_text.strip(),
-                idle_status_smalltalk=idle_status_smalltalk,
-            )
-            raw = await client.generate(messages=messages)
-            text = " ".join(str(raw).split()).strip().strip("\"'“”‘’")
-            upper = text.upper()
-            if not text or upper.startswith(SMALLTALK_DEFER_SENTINEL):
-                return None
-            if upper.startswith(SMALLTALK_SILENCE_SENTINEL):
-                return _SMALLTALK_STAY_SILENT
-            if len(text) > _MAX_SMALLTALK_CHARS:
-                return None
-            return text
-        except Exception as exc:  # never let small-talk selection break the turn
-            _log.info(f"Small-talk selection failed; deferring: {exc}")
-            return None
-
-    assistant._generate_smalltalk_reply = _generate_smalltalk_reply
-
-    def _inject_opening_system_context(text: str) -> None:
-        """Seed the call with a durable system briefing before the opener.
-
-        The briefing is a ``system`` message — never an assistant turn — so the
-        model retains the full intended context to fall back on (e.g. after an
-        interruption) without ever assuming the caller heard un-uttered content.
-        """
-        assistant._chat_ctx.add_message(role="system", content=[text])
-        session.history.add_message(role="system", content=[text])
+    assistant._fast_brain_system_prompt = system_prompt
+    assistant._fast_brain_history_provider = lambda: _extract_chat_messages(
+        session.history,
+        tail=8,
+    )
 
     opening_mode = opening_config["mode"]
 
     async def _prepare_opening() -> tuple[str, str | dict | None]:
         if opening_mode == "speak":
-            return (
-                "speak",
-                await _generate_opening_greeting(authoritative_briefing=False),
-            )
-        if opening_mode == "briefed":
-            _inject_opening_system_context(opening_config["system_context"])
-            return (
-                "speak",
-                await _generate_opening_greeting(authoritative_briefing=True),
-            )
+            return "speak", await _generate_opening_greeting()
+        if opening_mode == "opener":
+            return "opener", opening_config["opener_text"].strip()
         if opening_mode == "recorded":
-            return "recorded", opening_config
+            preloaded = await asyncio.to_thread(
+                _preload_recorded_opening_pcm,
+                opening_config,
+            )
+            return "recorded", {
+                "config": opening_config,
+                "preloaded": preloaded,
+            }
         if opening_mode == "simulated":
             simulated_utterance = opening_config.get("simulated_utterance", "").strip()
             if not simulated_utterance:
@@ -3055,30 +3755,42 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    if outbound:
-        _log.info("Outbound call — waiting for callee to answer…")
+    if outbound or (opening_mode == "opener" and channel == "unify_meet"):
+        _log.info("Agent-initiated call — waiting for callee to answer…")
         await call_answered_flag.wait()
         _log.call_status("call_answered — opening turn")
 
     await user_joined_event.wait()
     speech_gate_open = True
 
-    if outbound:
-        # Hold the opener until the callee's first completed utterance (their
-        # "Hello?") or a fallback timeout — so it lands when they are actually
-        # listening, not into dead air right after the line connects. The first
-        # turn is consumed by the opener (filler + slow-brain turn suppressed via
-        # _opening_pending); a later turn is a normal barge-in.
+    opener_trigger: str | None = None
+    if opening_mode == "opener":
+        # Hold the verbatim opener until the earlier of the callee's first
+        # completed utterance (their "Hello?") or OPENER_SILENCE_TRIGGER_S of
+        # silence — so it lands when they are actually listening, not into dead
+        # air right after the line connects. The assistant says nothing until
+        # then. A short first turn is logged to the transcript but does not
+        # schedule the slow brain (filler suppressed via _opening_pending in
+        # llm_node); a substantive first turn routes the held opener through
+        # the fast brain's continuation decision instead.
         try:
             await asyncio.wait_for(
                 assistant._first_user_turn.wait(),
-                OUTBOUND_OPENING_TRIGGER_TIMEOUT_S,
+                OPENER_SILENCE_TRIGGER_S,
             )
         except asyncio.TimeoutError:
             if user_is_speaking:
-                # Timed out mid-"Hello?" — let them finish before we speak.
+                # The silence window elapsed mid-utterance — not silence; let
+                # them finish and judge the completed turn's duration.
                 await assistant._first_user_turn.wait()
-        _log.call_status("outbound_opener_triggered")
+        if assistant._first_user_turn.is_set():
+            first_turn_s = assistant._first_turn_duration_s or 0.0
+            opener_trigger = (
+                "short_turn" if first_turn_s < OPENER_SHORT_TURN_MAX_S else "long_turn"
+            )
+        else:
+            opener_trigger = "silence"
+        _log.call_status(f"opener_trigger:{opener_trigger}")
 
     try:
         prepared_mode, prepared_payload = await opening_task
@@ -3086,12 +3798,46 @@ async def entrypoint(ctx: agents.JobContext):
         _log.llm_error(f"opening preload failed: {exc}")
         prepared_mode, prepared_payload = "speak", "Hello — I'm here."
 
-    if prepared_mode == "speak":
+    if prepared_mode == "opener":
+        opener_text = str(prepared_payload or "").strip()
+        await _publish_ready_to_speak()
+        assistant._opening_pending = False
+        if opener_trigger == "long_turn":
+            # The callee opened with a substantive turn; parroting the planned
+            # line as though they had only said hello would ignore them. Hold
+            # the never-spoken opener as a claimable continuation and let the
+            # fast brain decide: deliver it verbatim (continuation) or respond
+            # to what they actually said.
+            assistant._pending_continuation = {
+                "resume_text": opener_text,
+                "remainder": opener_text,
+                "spoken_prefix": "",
+                "source": "opening",
+                "seq": assistant._tts_seq,
+                "consumed": False,
+            }
+            _log.info(
+                "Opener held for fast-brain decision after substantive first "
+                f"turn ({assistant._first_turn_duration_s or 0.0:.1f}s)",
+            )
+            trigger_generate_reply(
+                reason="opener_substantive_first_turn",
+                source_id="held_opener",
+            )
+        else:
+            _say_verbatim_opener(opener_text)
+    elif prepared_mode == "speak":
         await _publish_ready_to_speak()
         _say_opening(str(prepared_payload or "Hello — I'm here."))
     elif prepared_mode == "recorded":
+        payload = prepared_payload or opening_config
+        if isinstance(payload, dict) and "config" in payload:
+            recorded_config = payload["config"]
+            _recorded_opening_preloaded = payload.get("preloaded") or {}
+        else:
+            recorded_config = payload
         await _publish_ready_to_speak()
-        await _run_recorded_opening(prepared_payload or opening_config)
+        await _run_recorded_opening(recorded_config)
     elif prepared_mode == "simulated":
         simulated_utterance = str(prepared_payload or "")
         await _publish_ready_to_speak()
@@ -3112,8 +3858,10 @@ async def entrypoint(ctx: agents.JobContext):
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()
 
-    # The opener has been dispatched; resume normal turn handling (fast-brain
-    # fillers and slow-brain turns) for any subsequent user speech.
+    _schedule_deferred_desktop_binding()
+
+    # The opener has been dispatched or deferred; resume normal turn handling
+    # (fast-brain fillers and slow-brain turns) for any subsequent user speech.
     assistant._opening_pending = False
 
     if pending_notifications:

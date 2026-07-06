@@ -32,6 +32,7 @@ from unify.conversation_manager.domains.brain_tools import (
 from unify.conversation_manager.domains.brain_action_tools import (
     ConversationManagerBrainActionTools,
 )
+from unify.comms.outbound_origin import slow_brain_direct_outbound_active
 from unify.file_manager.filesystem_adapters.local_adapter import (
     LocalFileSystemAdapter,
 )
@@ -108,6 +109,8 @@ def mock_cm():
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
     cm.call_manager._call_channel = None
+    cm.call_manager.hang_up_gate_reason = None
+    cm.call_manager.set_hang_up_gate = AsyncMock()
     cm.in_voice_session = False
     cm.assistant_has_teams = False
     # Set up SimulatedContactManager (starts with system contacts 0 and 1)
@@ -582,16 +585,26 @@ class TestActionToolsAsTools:
             tags=["route"],
         )
 
-        await tools["make_call"](context="briefing")
+        await tools["make_call"](
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+        )
         brain_action_tools._comms.make_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
-            context="briefing",
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+            allow_hang_up=None,
         )
 
-        await tools["make_whatsapp_call"](context="briefing")
+        await tools["make_whatsapp_call"](
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+        )
         brain_action_tools._comms.make_whatsapp_call.assert_called_once_with(
             contact_id=SESSION_DETAILS.boss_contact_id,
-            context="briefing",
+            opener="Hi — quick call.",
+            briefing="Full task design.",
+            allow_hang_up=None,
         )
 
         await tools["send_email"](
@@ -678,6 +691,27 @@ class TestActionToolsAsTools:
         )
 
 
+class TestSlowBrainDirectOutboundMarker:
+    @pytest.mark.asyncio
+    async def test_send_email_wrapper_marks_outbound_origin(self, brain_action_tools):
+        active_during_send: list[bool] = []
+
+        async def capture_send(*args, **kwargs):
+            active_during_send.append(slow_brain_direct_outbound_active())
+            return {"status": "ok"}
+
+        brain_action_tools._comms.send_email = AsyncMock(side_effect=capture_send)
+
+        await brain_action_tools.send_email(
+            to=[2],
+            subject="Hello",
+            body="World",
+        )
+
+        assert active_during_send == [True]
+        assert slow_brain_direct_outbound_active() is False
+
+
 class TestHangUpTool:
     """Tests for the universal hang_up tool and its exposure in as_tools."""
 
@@ -704,6 +738,89 @@ class TestHangUpTool:
         tools = brain_action_tools.as_tools()
         assert "hang_up" not in tools
         assert "make_call" in tools
+
+    def test_gate_tools_swap_on_armed_state(self, mock_cm):
+        """allow_hang_up is offered while the gate is disarmed; withdraw_hang_up
+        replaces it once armed. Neither exists outside a voice session."""
+        with patch(
+            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "allow_hang_up" not in tools
+            assert "withdraw_hang_up" not in tools
+
+            mock_cm.in_voice_session = True
+            mock_cm.call_manager._call_channel = "phone_call"
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "allow_hang_up" in tools
+            assert "withdraw_hang_up" not in tools
+
+            mock_cm.call_manager.hang_up_gate_reason = "wrap up"
+            tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+            assert "withdraw_hang_up" in tools
+            assert "allow_hang_up" not in tools
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_arms_gate(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+
+        result = await brain_action_tools.allow_hang_up(
+            reason="channel test complete — wrap up warmly",
+        )
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(
+            "channel test complete — wrap up warmly",
+        )
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_requires_reason(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+
+        result = await brain_action_tools.allow_hang_up(reason="   ")
+
+        assert result["status"] == "error"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_allow_hang_up_requires_voice_session(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        mock_cm.in_voice_session = False
+
+        result = await brain_action_tools.allow_hang_up(reason="wrap up")
+
+        assert result["status"] == "error"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_hang_up_disarms_gate(self, brain_action_tools, mock_cm):
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager.hang_up_gate_reason = "wrap up"
+
+        result = await brain_action_tools.withdraw_hang_up()
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_awaited_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_withdraw_hang_up_noop_when_disarmed(
+        self,
+        brain_action_tools,
+        mock_cm,
+    ):
+        mock_cm.in_voice_session = True
+        mock_cm.call_manager.hang_up_gate_reason = None
+
+        result = await brain_action_tools.withdraw_hang_up()
+
+        assert result["status"] == "ok"
+        mock_cm.call_manager.set_hang_up_gate.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_hang_up_defers_then_teardown_ends_phone_call(
@@ -1480,7 +1597,7 @@ class TestMakeCallTool:
         assert brain_action_tools.make_call.__doc__ is not None
         assert "call" in brain_action_tools.make_call.__doc__.lower()
         assert (
-            "Mission briefing for the voice agent"
+            "exact words spoken to open the call"
             in brain_action_tools.make_call.__doc__
         )
 
@@ -1502,7 +1619,7 @@ class TestMakeCallTool:
 
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context="Calling to confirm the Thursday meeting",
+            opener="Calling to confirm the Thursday meeting",
         )
 
         assert result["status"] == "ok"
@@ -1525,7 +1642,7 @@ class TestMakeCallTool:
 
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context="Calling to confirm the Thursday meeting",
+            opener="Calling to confirm the Thursday meeting",
         )
 
         assert result["status"] == "error"
@@ -1533,12 +1650,12 @@ class TestMakeCallTool:
         assert "phone" in result["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_context_stores_initial_notification(
+    async def test_opener_stores_pending_opener(
         self,
         brain_action_tools,
         mock_cm,
     ):
-        """The context param stores initial_notification on call_manager
+        """The opener param stores pending_opener on call_manager
         before the call is placed, so CallManager can publish it to the
         fast brain after the subprocess spawns."""
         contact = {
@@ -1553,15 +1670,15 @@ class TestMakeCallTool:
         guidance_text = "Confirm the Thursday 3pm meeting"
         result = await brain_action_tools.make_call(
             contact_id=5,
-            context=guidance_text,
+            opener=guidance_text,
         )
 
         assert result["status"] == "ok"
-        assert mock_cm.call_manager.initial_notification == guidance_text
+        assert mock_cm.call_manager.pending_opener == guidance_text
 
     @pytest.mark.asyncio
-    async def test_context_is_required(self, brain_action_tools):
-        """context is a required argument — calling without it raises TypeError."""
+    async def test_opener_is_required(self, brain_action_tools):
+        """opener is a required argument — calling without it raises TypeError."""
         with pytest.raises(TypeError):
             await brain_action_tools.make_call(contact_id=5)
 
@@ -2280,3 +2397,123 @@ class TestBrainToolsIntegration:
         steering_names = set(brain_action_tools.build_action_steering_tools().keys())
         overlap = static_names & steering_names
         assert len(overlap) == 0, f"Overlapping tool names: {overlap}"
+
+
+class TestOnboardingToggleTools:
+    """Mutually exclusive activate/deactivate onboarding slow-brain tools."""
+
+    def _action_tools(self, mock_cm):
+        with patch(
+            "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
+        ) as mock_broker:
+            mock_broker.return_value = MagicMock()
+            mock_broker.return_value.publish = AsyncMock()
+            return ConversationManagerBrainActionTools(mock_cm)
+
+    def test_deactivate_exposed_when_onboarding_active(
+        self,
+        mock_cm,
+        coordinator_session,
+    ):
+        mock_cm.coordinator_onboarding_active = True
+        with patch("unify.settings.SETTINGS") as settings:
+            settings.UNITY_CONSOLE_UI = True
+            settings.DEMO_MODE = False
+            tools = self._action_tools(mock_cm).as_tools()
+        assert "deactivate_onboarding" in tools
+        assert "set_onboarding_task_state" in tools
+        assert "activate_onboarding" not in tools
+
+    def test_activate_exposed_when_onboarding_inactive(
+        self,
+        mock_cm,
+        coordinator_session,
+    ):
+        mock_cm.coordinator_onboarding_active = False
+        with patch("unify.settings.SETTINGS") as settings:
+            settings.UNITY_CONSOLE_UI = True
+            settings.DEMO_MODE = False
+            tools = self._action_tools(mock_cm).as_tools()
+        assert "activate_onboarding" in tools
+        assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
+
+    def test_neither_tool_without_console_ui(
+        self,
+        mock_cm,
+        coordinator_session,
+    ):
+        mock_cm.coordinator_onboarding_active = True
+        with patch("unify.settings.SETTINGS") as settings:
+            settings.UNITY_CONSOLE_UI = False
+            settings.DEMO_MODE = False
+            tools = self._action_tools(mock_cm).as_tools()
+        assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
+        assert "activate_onboarding" not in tools
+
+    def test_neither_tool_for_non_coordinator(self, mock_cm):
+        mock_cm.coordinator_onboarding_active = True
+        previous = SESSION_DETAILS.is_coordinator
+        SESSION_DETAILS.is_coordinator = False
+        try:
+            with patch("unify.settings.SETTINGS") as settings:
+                settings.UNITY_CONSOLE_UI = True
+                settings.DEMO_MODE = False
+                tools = self._action_tools(mock_cm).as_tools()
+        finally:
+            SESSION_DETAILS.is_coordinator = previous
+        assert "deactivate_onboarding" not in tools
+        assert "set_onboarding_task_state" not in tools
+        assert "activate_onboarding" not in tools
+
+    @pytest.mark.asyncio
+    async def test_set_onboarding_task_state_calls_patch_helper(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
+            return_value={"status": "ok", "message": "done"},
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.set_onboarding_task_state("apps", True)
+        mock_cm._patch_coordinator_onboarding_step_state.assert_awaited_once_with(
+            step_id="apps",
+            completed=True,
+        )
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_set_onboarding_task_state_surfaces_patch_error(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_step_state = AsyncMock(
+            return_value={
+                "status": "error",
+                "message": "Communication checklist steps complete automatically",
+            },
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.set_onboarding_task_state("email-reference", True)
+        assert result["status"] == "error"
+        assert "Communication" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_deactivate_calls_patch_helper(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_active = AsyncMock(
+            return_value={"status": "ok", "message": "paused"},
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.deactivate_onboarding()
+        mock_cm._patch_coordinator_onboarding_active.assert_awaited_once_with(
+            active=False,
+            clear_onboarding_step=True,
+        )
+        assert result["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_activate_calls_patch_helper(self, mock_cm):
+        mock_cm._patch_coordinator_onboarding_active = AsyncMock(
+            return_value={"status": "ok", "message": "live"},
+        )
+        tools = ConversationManagerBrainActionTools(mock_cm)
+        result = await tools.activate_onboarding()
+        mock_cm._patch_coordinator_onboarding_active.assert_awaited_once_with(
+            active=True,
+        )
+        assert result["status"] == "ok"

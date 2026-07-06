@@ -88,15 +88,30 @@ def create_conference_response(
     conference_name: str,
     *,
     with_status: bool = False,
+    ringback: bool = True,
 ) -> str:
-    """Return TwiML that joins the caller to a named conference."""
+    """Return TwiML that joins a participant to a named conference.
+
+    A Twilio conference only starts once TWO participants are present; the
+    first arrival hears the ``wait_url`` audio until then. ``ringback`` must be
+    True only for an inbound caller's leg (a human waiting for us to answer).
+    Legs we dial at a human (they answered — ringing at them is broken UX) and
+    SIP/agent legs (ring audio would play into the LiveKit room at the agent's
+    STT) wait in silence instead.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
+    """
     response = VoiceResponse()
     dial = response.dial()
     kwargs = {
         "startConferenceOnEnter": True,
         "endConferenceOnExit": True,
         "muted": False,
-        "wait_url": _RINGTONE_URL,
+        "beep": False,
+        "wait_url": _RINGTONE_URL if ringback else "",
     }
     if with_status:
         kwargs["status_callback"] = (
@@ -133,7 +148,9 @@ async def add_sip_leg_to_conference(
         call = client.calls.create(
             to=to_uri,
             from_=from_number,
-            twiml=create_conference_response(conference_name),
+            # No ringback on the agent leg: if it lands in the conference
+            # first, wait audio would play straight into the LiveKit room.
+            twiml=create_conference_response(conference_name, ringback=False),
         )
         return call.sid
 
@@ -216,7 +233,9 @@ async def start_whatsapp_call(
     sip_uri = make_sip_uri(from_number)
 
     def _start():
-        response = create_conference_response(conference_name)
+        # Agent-initiated call: neither leg may hear ring audio after connect
+        # (the callee already answered; the SIP leg feeds the agent's STT).
+        response = create_conference_response(conference_name, ringback=False)
         user_call = client.calls.create(
             to=f"whatsapp:{to_number}",
             from_=f"whatsapp:{from_number}",

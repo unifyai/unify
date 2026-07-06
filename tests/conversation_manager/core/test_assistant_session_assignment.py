@@ -59,6 +59,8 @@ def _secret_record(
             "team_ids": [],
             "org_id": None,
             "demo_id": None,
+            "self_contact_id": 0,
+            "boss_contact_id": 1,
         },
     )
 

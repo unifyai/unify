@@ -263,6 +263,34 @@ class TestSendSms:
             assert payload["Body"] == "Hello from tests"
 
     @pytest.mark.asyncio
+    async def test_send_sms_collapses_hard_wrapped_body(self):
+        """Hard-wrapped SMS bodies are normalized before transport."""
+        mock_session = _mock_aiohttp_session(
+            response_json={"success": True, "sid": "SM123"},
+        )
+        wrapped = "Line one of the clue\nLine two of the clue"
+
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session_details,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_session_details.assistant.number = "+15551234567"
+            mock_settings.conversation.COMMS_URL = COMMS_URL
+
+            await comms_utils.send_sms_message_via_number(
+                to_number="+15559876543",
+                content=wrapped,
+            )
+
+            payload = mock_session.post.call_args.kwargs["json"]
+            assert payload["Body"] == "Line one of the clue Line two of the clue"
+
+    @pytest.mark.asyncio
     async def test_send_sms_no_from_number(self):
         """Returns failure when assistant has no phone number."""
         with patch(
@@ -450,6 +478,34 @@ class TestSendEmailViaAddress:
             assert call_args.kwargs["json"]["attachment"] == attachment
 
     @pytest.mark.asyncio
+    async def test_send_includes_agent_id_when_configured(self):
+        mock_session = _mock_aiohttp_session(
+            response_json={"success": True, "id": "email-123"},
+        )
+
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session_details,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_session_details.assistant.email = "assistant@test.com"
+            mock_session_details.assistant.agent_id = 7316
+            mock_settings.conversation.COMMS_URL = COMMS_URL
+
+            result = await comms_utils.send_email_via_address(
+                to=["user@example.com"],
+                subject="Report",
+                body="Please see attached.",
+            )
+
+            assert result["success"] is True
+            assert mock_session.post.call_args.kwargs["json"]["agent_id"] == 7316
+
+    @pytest.mark.asyncio
     async def test_send_with_cc_and_bcc(self):
         """Sends email with cc and bcc to /email/send on COMMS_URL."""
         mock_session = _mock_aiohttp_session(
@@ -518,37 +574,40 @@ class TestSendEmailViaAddress:
             posted_url = mock_session.post.call_args[0][0]
             assert posted_url == f"{COMMS_URL}/email/send"
 
-
-class TestLocalCommsBackends:
     @pytest.mark.asyncio
-    async def test_send_sms_uses_local_twilio_backend(self):
+    async def test_send_email_collapses_hard_wrapped_body(self):
+        """Hard-wrapped email bodies are normalized before transport."""
+        mock_session = _mock_aiohttp_session(
+            response_json={"success": True, "id": "email-789"},
+        )
+        wrapped = "First sentence of the quiz.\nSecond sentence here.\n\nClue line."
+
         with (
-            patch(
-                "unify.conversation_manager.domains.comms_utils._use_local_comms",
-                return_value=True,
-            ),
-            patch(
-                "unify.conversation_manager.local_providers.twilio.send_sms_message",
-                new=AsyncMock(return_value={"success": True, "sid": "SM123"}),
-            ) as mock_send_sms,
+            patch("aiohttp.ClientSession", return_value=mock_session),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session_details,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
         ):
-            mock_session_details.assistant.number = "+15551234567"
+            mock_session_details.assistant.email = "assistant@outlook.unify.ai"
+            mock_settings.conversation.COMMS_URL = COMMS_URL
 
-            result = await comms_utils.send_sms_message_via_number(
-                to_number="+15559876543",
-                content="Hello from tests",
+            await comms_utils.send_email_via_address(
+                to=["user@example.com"],
+                subject="Quiz",
+                body=wrapped,
             )
 
-            assert result["success"] is True
-            mock_send_sms.assert_awaited_once_with(
-                "+15559876543",
-                "+15551234567",
-                "Hello from tests",
+            payload = mock_session.post.call_args.kwargs["json"]
+            assert (
+                payload["body"]
+                == "First sentence of the quiz. Second sentence here.\n\nClue line."
             )
 
+
+class TestLocalCommsBackends:
     @pytest.mark.asyncio
     async def test_send_unify_message_mirrors_to_local_outbox_and_pubsub(self):
         """Local-comms mode mirrors the message into the local outbox but
@@ -621,7 +680,13 @@ class TestLocalCommsBackends:
 
     @pytest.mark.asyncio
     async def test_upload_unify_attachment_uses_local_attachment_store(self):
-        mock_session = _mock_aiohttp_session(response_json={"success": True})
+        mock_session = _mock_aiohttp_session(
+            response_json={
+                "success": True,
+                "filename": "document.pdf",
+                "url": "http://127.0.0.1:8787/local/comms/attachments/document.pdf",
+            },
+        )
 
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
@@ -633,6 +698,8 @@ class TestLocalCommsBackends:
                 "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
+            mock_settings.ADAPTERS_URL = ""
+            mock_settings.COMMS_URL = ""
             mock_settings.conversation.LOCAL_COMMS_PUBLIC_URL = ""
             mock_settings.conversation.LOCAL_COMMS_HOST = "127.0.0.1"
             mock_settings.conversation.LOCAL_COMMS_PORT = 8787
@@ -648,34 +715,6 @@ class TestLocalCommsBackends:
             )
             posted_url = mock_session.post.call_args[0][0]
             assert posted_url == "http://127.0.0.1:8787/local/comms/attachments"
-
-    @pytest.mark.asyncio
-    async def test_send_email_uses_local_email_backend(self):
-        with (
-            patch(
-                "unify.conversation_manager.domains.comms_utils._use_local_comms",
-                return_value=True,
-            ),
-            patch(
-                "unify.conversation_manager.local_providers.email.send_email",
-                new=AsyncMock(return_value={"success": True, "id": "email-123"}),
-            ) as mock_send_email,
-        ):
-            result = await comms_utils.send_email_via_address(
-                to=["user@example.com"],
-                subject="Report",
-                body="Please see attached.",
-                attachment={
-                    "filename": "report.pdf",
-                    "content_base64": "UERGIGNvbnRlbnQ=",
-                },
-            )
-
-            assert result["success"] is True
-            mock_send_email.assert_awaited_once()
-            kwargs = mock_send_email.await_args.kwargs
-            assert kwargs["to"] == ["user@example.com"]
-            assert kwargs["subject"] == "Report"
 
     @pytest.mark.asyncio
     async def test_add_email_attachments_supports_inline_content(self):
@@ -755,3 +794,20 @@ class TestAddEmailAttachmentsRouting:
             assert params["receiver_email"] == "assistant@unify.ai"
             assert params["message_id"] == "msg-123"
             assert params["attachment_id"] == "att-1"
+
+
+@pytest.mark.asyncio
+async def test_request_deferred_desktop_binding_posts_to_comms_runtime():
+    mock_session = _mock_aiohttp_session(response_json={"accepted": True})
+
+    with (
+        patch("aiohttp.ClientSession", return_value=mock_session),
+        patch(
+            "unify.conversation_manager.domains.comms_utils.SETTINGS",
+        ) as mock_settings,
+    ):
+        mock_settings.conversation.COMMS_URL = COMMS_URL
+        await comms_utils.request_deferred_desktop_binding(7315)
+
+    post_url = mock_session.post.call_args[0][0]
+    assert post_url == f"{COMMS_URL}/infra/runtime/7315/request-desktop"

@@ -38,6 +38,7 @@ conversation while the Main CM Brain (slow brain) handles orchestration.
 """
 
 import asyncio
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -1042,6 +1043,19 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
 
             return _done().__await__()
 
+    class _FakeSpeechHandle:
+        interrupted = False
+
+        async def wait_for_playout(self):
+            return None
+
+        def done(self) -> bool:
+            return False
+
+        def interrupt(self, *, force: bool = False) -> "_FakeSpeechHandle":
+            self.interrupted = True
+            return self
+
     class _FakeLocalParticipant:
         async def publish_data(self, payload, *, topic=None, reliable=False):
             sequence.append(("data", json.loads(payload.decode()), topic, reliable))
@@ -1134,7 +1148,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
         def say(self, text, **kwargs):
             sequence.append(("say", text, kwargs))
             self.say_calls.append((text, kwargs))
-            return _ImmediateAwaitable()
+            return _FakeSpeechHandle()
 
         def interrupt(self):
             pass
@@ -1166,7 +1180,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     async def _noop_end_call():
         return None
 
-    def _fake_recording_audio_frames(source):
+    def _fake_recording_audio_frames(source, **_kwargs):
         audio_sources.append(source)
         return fake_audio
 
@@ -1219,6 +1233,11 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
         call_script,
         "_recording_audio_frames",
         _fake_recording_audio_frames,
+    )
+    monkeypatch.setattr(
+        call_script,
+        "_preload_recorded_opening_pcm",
+        lambda _config: {},
     )
     monkeypatch.setattr(
         call_script,
@@ -1286,11 +1305,25 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
             return _done().__await__()
 
     class _FakeSpeechHandle:
-        def __init__(self, interrupted):
+        def __init__(self, interrupted, *, spoken_text: str = ""):
             self.interrupted = interrupted
+            self._cancelled = False
+            self.chat_items = (
+                [SimpleNamespace(role="assistant", text_content=spoken_text)]
+                if interrupted
+                else []
+            )
 
         async def wait_for_playout(self):
             return None
+
+        def done(self) -> bool:
+            return self._cancelled
+
+        def interrupt(self, *, force: bool = False) -> "_FakeSpeechHandle":
+            self._cancelled = True
+            self.interrupted = True
+            return self
 
     class _FakeLocalParticipant:
         async def publish_data(self, payload, *, topic=None, reliable=False):
@@ -1360,6 +1393,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
             self.agent_state = "listening"
             self.current_speech = None
             self.say_calls = []
+            self.speech_handles = []
             self.generate_reply_calls = []
 
         @property
@@ -1384,7 +1418,10 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
             sequence.append(("say", text, kwargs))
             self.say_calls.append((text, kwargs))
             interrupted = interrupt_flags.pop(0) if interrupt_flags else False
-            return _FakeSpeechHandle(interrupted)
+            spoken_text = "Hi, I'm T dash W 1 N." if interrupted else ""
+            handle = _FakeSpeechHandle(interrupted, spoken_text=spoken_text)
+            self.speech_handles.append(handle)
+            return handle
 
         def interrupt(self):
             pass
@@ -1417,7 +1454,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     async def _noop_end_call():
         return None
 
-    def _fake_recording_audio_frames(source):
+    def _fake_recording_audio_frames(source, **_kwargs):
         audio_sources.append(source)
         return fake_audio
 
@@ -1473,6 +1510,11 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     )
     monkeypatch.setattr(
         call_script,
+        "_preload_recorded_opening_pcm",
+        lambda _config: {},
+    )
+    monkeypatch.setattr(
+        call_script,
         "create_end_call",
         lambda *args, **kwargs: _noop_end_call,
     )
@@ -1494,23 +1536,15 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
 
     session = session_holder["session"]
     assert session.generate_reply_calls == []
-    assert session.say_calls[0][0].startswith("Hi, I'm T dash W 1 N.")
+    assert len(session.say_calls) == 1
+    assert inspect.isasyncgen(session.say_calls[0][0])
+    assert audio_sources[0] == "asset://coordinator_onboarding_intro"
 
     if interrupt_walkie:
-        # Interrupting the first staticky sentence stops the opener immediately;
-        # no later sentence (nor the clean transition) plays, and the bridge is
-        # armed for the next turn.
-        assert audio_sources == ["asset://coordinator_onboarding_intro_walkie_00"]
-        assert len(session.say_calls) == 1
+        assert session.speech_handles[0].interrupted is True
         assert session.current_agent._pending_opening_bridge is not None
     else:
-        # All 20 staticky sentence slices play in order, then the clean
-        # transition segment, and no bridge is armed.
-        assert len(session.say_calls) == 21
-        assert audio_sources[0] == "asset://coordinator_onboarding_intro_walkie_00"
-        assert audio_sources[19] == "asset://coordinator_onboarding_intro_walkie_19"
-        assert audio_sources[-1] == "asset://coordinator_onboarding_intro_clean"
-        assert session.say_calls[-1][0].startswith("Much better.")
+        assert session.speech_handles[0].interrupted is False
         assert session.current_agent._pending_opening_bridge is None
 
 
@@ -1529,44 +1563,98 @@ def test_recorded_opening_builtin_asset_validates_without_single_transcript():
     assert config["recording_asset"] == "coordinator_onboarding_intro"
 
 
-def test_walkie_opener_segments_split_at_static_removal_transition():
+@pytest.mark.asyncio
+async def test_preloaded_recorded_opening_frames_match_file_decode():
+    from unify.conversation_manager.medium_scripts import call as call_script
+
+    config = {
+        "mode": "recorded",
+        "recording_asset": "coordinator_onboarding_intro",
+    }
+    preloaded = call_script._preload_recorded_opening_pcm(config)
+    assert len(preloaded) == 2
+    assert set(preloaded) == {
+        "coordinator_onboarding_intro",
+        "coordinator_onboarding_static_bridge",
+    }
+
+    asset_key = "coordinator_onboarding_intro"
+    file_frames = []
+    async for frame in call_script._recording_audio_frames(f"asset://{asset_key}"):
+        file_frames.append(frame)
+    preloaded_frames = []
+    async for frame in call_script._preloaded_audio_frames(preloaded[asset_key]):
+        preloaded_frames.append(frame)
+
+    assert len(preloaded_frames) == len(file_frames)
+    assert preloaded_frames[0].sample_rate == file_frames[0].sample_rate
+    assert preloaded_frames[-1].data == file_frames[-1].data
+
+
+def test_walkie_opener_timed_chunks_cover_static_removal_transition():
     from unify.conversation_manager.medium_scripts import call as call_script
 
     spec = call_script._RECORDED_OPENINGS["coordinator_onboarding_intro"]
-    segments = spec["segments"]
-    staticky = segments[:-1]
-    clean = segments[-1]
+    chunks = spec["timed_chunks"]
     bridge = spec["bridge"]
+    walkie = chunks[:5]
+    clean = chunks[5:]
 
-    # The staticky intro is split into per-sentence segments; the final one is
-    # the spoken static-removal cue. The clean segment opens after the transition.
-    assert len(staticky) == 20
-    assert staticky[0]["transcript"].startswith("Hi, I'm T dash W 1 N.")
-    assert (
-        staticky[-1]["transcript"].rstrip() == "Also, let me remove this voice static."
+    assert len(walkie) == 5
+    assert walkie[0]["text"] == "Hey, great to meet you."
+    assert walkie[-1]["text"] == "Also, let me remove this voice static."
+    for chunk in walkie:
+        assert "Much better." not in chunk["text"]
+    assert clean[0]["text"] == "Much better."
+    assert float(clean[0]["start_time"]) == pytest.approx(
+        call_script._COORDINATOR_ONBOARDING_CLEAN_START_TIME,
     )
-    for seg in staticky:
-        assert "Much better." not in seg["transcript"]
-    assert clean["transcript"].startswith("Much better.")
 
-    # The bridge re-performs the static removal for callers who interrupted the
-    # walkie segment before the transition.
     assert "remove this voice static" in bridge["transcript"]
     assert "Much better." in bridge["transcript"]
 
-    # Each segment resolves to its own bundled asset.
-    for segment in (*staticky, clean, bridge):
-        assert segment["asset"] in call_script._RECORDED_OPENING_ASSETS
+    for key in (spec["asset"], bridge["asset"]):
+        assert key in call_script._RECORDED_OPENING_ASSETS
 
-    # Older ad-lib lines stay redacted from the spoken transcripts.
     combined = (
-        "".join(seg["transcript"] for seg in staticky)
-        + clean["transcript"]
-        + bridge["transcript"]
+        call_script._recorded_opening_timed_transcript(chunks) + bridge["transcript"]
     )
     assert "Krispy Kreme" not in combined
     assert "Actually, first lets turn off this really annoying music." not in combined
     assert "There we go, now I'll pull up the platform." not in combined
+
+
+def test_coordinator_onboarding_timed_chunks_match_audio():
+    import soundfile as sf
+    from importlib import resources
+
+    from unify.conversation_manager.medium_scripts import call as call_script
+
+    chunks = call_script._COORDINATOR_ONBOARDING_TIMED_CHUNKS
+    assert len(chunks) == 7
+    assert chunks[0]["text"] == "Hey, great to meet you."
+    assert chunks[4]["text"] == "Also, let me remove this voice static."
+    assert chunks[5]["text"] == "Much better."
+    assert "Any questions before we start with the onboarding?" not in (
+        call_script._recorded_opening_timed_transcript(chunks)
+    )
+
+    with resources.as_file(
+        resources.files("unify.assets.audio") / "twin-onboarding-intro.mp3",
+    ) as intro_path:
+        full_duration = sf.info(intro_path).duration
+
+    assert float(chunks[-1]["end_time"]) == pytest.approx(full_duration, abs=0.01)
+    assert float(chunks[5]["start_time"]) == pytest.approx(
+        call_script._COORDINATOR_ONBOARDING_CLEAN_START_TIME,
+        abs=0.01,
+    )
+
+    for index in range(1, len(chunks)):
+        assert float(chunks[index]["start_time"]) == pytest.approx(
+            float(chunks[index - 1]["end_time"]),
+            abs=1e-6,
+        )
 
 
 @pytest.mark.asyncio
@@ -1589,6 +1677,8 @@ async def test_on_user_turn_completed_schedules_pending_opening_bridge():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        _turn_engaged_provider=None,
+        _current_turn_engaged=True,
     )
     new_message = SimpleNamespace(text_content="hi there")
 
@@ -1618,6 +1708,8 @@ async def test_on_user_turn_completed_without_bridge_is_normal():
         _user_turn_seq=0,
         _opening_pending=False,
         _first_user_turn=asyncio.Event(),
+        _turn_engaged_provider=None,
+        _current_turn_engaged=True,
     )
     new_message = SimpleNamespace(text_content="hello")
 
@@ -3005,7 +3097,7 @@ class TestChildProcessLogging:
 
 
 class TestFastBrainContinuation:
-    """``Assistant._claim_interrupted_continuation`` exactly-once semantics."""
+    """Pending continuation claim and llm_node resume semantics."""
 
     def _assistant(self, boss_contact):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3028,33 +3120,33 @@ class TestFastBrainContinuation:
         }
 
     @pytest.mark.asyncio
-    async def test_claims_and_resumes_with_verbatim_remainder(
-        self,
-        boss_contact,
-        monkeypatch,
-    ):
-        from unify.conversation_manager.medium_scripts import call as call_mod
-
+    async def test_claim_pending_returns_snapshot(self, boss_contact):
         a = self._assistant(boss_contact)
         a._pending_continuation = self._pending()
 
-        async def _fake(resume_text, user_text):
-            return "Sorry — as I was saying,"
-
-        monkeypatch.setattr(call_mod, "select_continuation", _fake)
-
-        out = await a._claim_interrupted_continuation("okay")
-        # Lead-in from the model + the slow brain's verbatim remainder.
-        assert out == "Sorry — as I was saying, Next, click Connect Slack."
-        # Claimed: cleared so the VoiceInterrupt handoff becomes a no-op.
+        pending = await a._claim_pending_continuation("okay")
+        assert pending is not None
+        assert pending.resume_text == "Next, click Connect Slack."
         assert a._pending_continuation is None
 
     @pytest.mark.asyncio
     async def test_defer_hands_off_to_slow_brain(self, boss_contact, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
+        a.call_received = True
         a._pending_continuation = self._pending()
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
         published: dict = {}
 
         async def _pub(spoken, remainder):
@@ -3062,14 +3154,20 @@ class TestFastBrainContinuation:
 
         a._publish_voice_interrupt = _pub
 
-        async def _defer(resume_text, user_text):
-            return None
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="Sure — one moment.",
+                declined_continuation=True,
+            )
 
-        monkeypatch.setattr(call_mod, "select_continuation", _defer)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
-        out = await a._claim_interrupted_continuation("wait, stop")
-        assert out is None
-        # The remainder is handed to the slow brain instead (delivered once).
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content="wait, stop")
+        chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(chunks) == 1
         assert published["args"] == (
             "Your number is saved.",
             "Next, click Connect Slack.",
@@ -3080,77 +3178,98 @@ class TestFastBrainContinuation:
     async def test_no_pending_returns_none(self, boss_contact):
         a = self._assistant(boss_contact)
         assert a._pending_continuation is None
-        assert await a._claim_interrupted_continuation("okay") is None
+        assert await a._claim_pending_continuation("okay") is None
 
     @pytest.mark.asyncio
-    async def test_already_consumed_returns_none(self, boss_contact, monkeypatch):
-        from unify.conversation_manager.medium_scripts import call as call_mod
-
+    async def test_already_consumed_returns_none(self, boss_contact):
         a = self._assistant(boss_contact)
         pending = self._pending()
         pending["consumed"] = True
         a._pending_continuation = pending
-
-        def _boom(*args, **kwargs):
-            raise AssertionError(
-                "must not select a continuation for a consumed candidate",
-            )
-
-        monkeypatch.setattr(call_mod, "select_continuation", _boom)
-        assert await a._claim_interrupted_continuation("okay") is None
+        assert await a._claim_pending_continuation("okay") is None
 
     @pytest.mark.asyncio
     async def test_speechless_barge_in_auto_continues(self, boss_contact, monkeypatch):
-        """A barge-in with no transcript (noise/echo) resumes the remainder
-        verbatim WITHOUT consulting the classifier - the only sensible action."""
-        from unify.conversation_manager.medium_scripts import call as call_mod
-
-        a = self._assistant(boss_contact)
-        a._pending_continuation = self._pending()
-
-        def _boom(*args, **kwargs):
-            raise AssertionError("speechless barge-in must not consult the classifier")
-
-        monkeypatch.setattr(call_mod, "select_continuation", _boom)
-
-        out = await a._claim_interrupted_continuation("   ")
-        assert out is not None
-        assert out.endswith("Next, click Connect Slack.")
-        # Claimed exactly once.
-        assert a._pending_continuation is None
-
-    @pytest.mark.asyncio
-    async def test_llm_node_continue_marks_text_and_cancels_slow_brain(
-        self,
-        boss_contact,
-        monkeypatch,
-    ):
-        """On CONTINUE, llm_node yields the verbatim remainder as the reply, marks
-        it for interruption-stashing, and cancels the eager slow-brain run."""
+        """A barge-in with no transcript resumes without calling the LLM."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
         a = self._assistant(boss_contact)
         a.call_received = True
+        a._pending_continuation = self._pending()
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("speechless barge-in must not consult the LLM")
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _boom)
+
+        ctx = llm.ChatContext()
+        ctx.add_message(role="user", content="   ")
+        chunks = [chunk async for chunk in a.llm_node(ctx, [], None)]
+
+        assert len(chunks) == 1
+        assert chunks[0].delta.content.endswith("Next, click Connect Slack.")
+        assert a._pending_continuation is None
+
+    @pytest.mark.asyncio
+    async def test_llm_node_continue_marks_text_and_schedules_slow_brain(
+        self,
+        boss_contact,
+        monkeypatch,
+    ):
+        from unittest.mock import AsyncMock
+
+        from livekit.agents import llm
+
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_CONTINUATION
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        a = self._assistant(boss_contact)
+        a.call_received = True
+        a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         resumed = "Sorry — as I was saying, Next, click Connect Slack."
-        a._claim_interrupted_continuation = AsyncMock(return_value=resumed)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        reply_handle = object()
+        a._active_reply_handle = reply_handle
+        registered: list = []
+        a._register_reply_continuation = lambda handle, text: registered.append(
+            (handle, text),
+        )
+
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_CONTINUATION,
+                intended_speech=resumed,
+            )
+
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == resumed
-        # Marked so the speech_created observer registers the reply (recursion).
-        assert a._continuation_full_text == resumed
-        # Cancels exactly this turn's slow-brain run (by turn id) so it cannot
-        # re-deliver.
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        # The continuation registers against this turn's own reply speech.
+        assert registered == [(reply_handle, resumed)]
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_CONTINUATION,
+            intended_speech=resumed,
+        )
 
 
 class TestFastBrainSmalltalk:
-    """``llm_node`` small-talk branch: the fast brain fully answers a pure social
-    turn and cancels the slow brain; otherwise it defers with a filler."""
+    """``llm_node`` unified fast-brain turn outcomes."""
 
     def _assistant(self, boss_contact):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3164,7 +3283,7 @@ class TestFastBrainSmalltalk:
         )
 
     @pytest.mark.asyncio
-    async def test_smalltalk_answers_and_cancels_slow_brain(
+    async def test_smalltalk_answers_and_schedules_slow_brain(
         self,
         boss_contact,
         monkeypatch,
@@ -3173,30 +3292,40 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SMALLTALK
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
         reply = "Doing great, thanks for asking! How are you?"
-        a._generate_smalltalk_reply = AsyncMock(return_value=reply)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SMALLTALK,
+                intended_speech=reply,
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
-        # The smalltalk reply is spoken (no filler), and this turn's slow-brain
-        # run is cancelled by turn id.
         assert len(chunks) == 1
         assert chunks[0].delta.content == reply
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_SMALLTALK,
+            intended_speech=reply,
+        )
 
     @pytest.mark.asyncio
-    async def test_defer_falls_back_to_filler_without_cancelling(
+    async def test_defer_falls_back_to_filler_and_schedules_slow_brain(
         self,
         boss_contact,
         monkeypatch,
@@ -3205,29 +3334,39 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
-        # Not small talk -> defer; the filler covers the gap, slow brain proceeds.
-        a._generate_smalltalk_reply = AsyncMock(return_value=None)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One sec — pulling that up."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One sec — pulling that up.",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
         assert chunks[0].delta.content == "One sec — pulling that up."
-        # Slow brain must NOT be cancelled - it produces the real answer.
-        a._publish_fast_brain_continued.assert_not_awaited()
+        a._publish_fast_brain_turn_completed.assert_awaited_once_with(
+            turn_id=a._user_turn_seq,
+            user_content="",
+            classification=FAST_BRAIN_TURN_DEFER,
+            intended_speech="One sec — pulling that up.",
+        )
 
     @pytest.mark.asyncio
-    async def test_idle_status_gate_is_passed_to_smalltalk(
+    async def test_idle_status_gate_is_passed_to_selector(
         self,
         boss_contact,
         monkeypatch,
@@ -3236,28 +3375,32 @@ class TestFastBrainSmalltalk:
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_DEFER
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
         a._request_idle_smalltalk_state = AsyncMock(return_value=True)
-        a._generate_smalltalk_reply = AsyncMock(return_value=None)
-        a._publish_fast_brain_continued = AsyncMock()
+        a._publish_fast_brain_turn_completed = AsyncMock()
+        captured: dict = {}
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            captured.update(kwargs)
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_DEFER,
+                intended_speech="One moment.",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
         assert len(chunks) == 1
-        assert chunks[0].delta.content == "One moment."
-        a._generate_smalltalk_reply.assert_awaited_once_with(
-            "",
-            idle_status_smalltalk=True,
-        )
+        assert captured.get("idle_status_smalltalk") is True
 
     @pytest.mark.asyncio
     async def test_bare_acknowledgement_stays_silent(
@@ -3265,42 +3408,51 @@ class TestFastBrainSmalltalk:
         boss_contact,
         monkeypatch,
     ):
-        """A bare ack ('okay') -> say nothing AND cancel the slow brain, so
-        neither brain speaks (no parroting, no filler)."""
+        """A bare ack ('okay') -> say nothing and do not schedule the slow brain."""
         from unittest.mock import AsyncMock
 
         from livekit.agents import llm
 
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            ResolvedFastBrainTurn,
+        )
+        from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
         from unify.conversation_manager.medium_scripts import call as call_mod
 
         a = self._assistant(boss_contact)
         a.call_received = True
         a._capture_screenshots_for_llm = AsyncMock()
-        a._generate_smalltalk_reply = AsyncMock(
-            return_value=call_mod._SMALLTALK_STAY_SILENT,
-        )
-        a._publish_fast_brain_continued = AsyncMock()
+        a._request_idle_smalltalk_state = AsyncMock(return_value=False)
+        a._publish_fast_brain_turn_completed = AsyncMock()
 
-        async def _filler(*args, **kwargs):
-            return "One moment."
+        async def _resolved(*args, **kwargs):
+            return ResolvedFastBrainTurn(
+                classification=FAST_BRAIN_TURN_SILENCE,
+                intended_speech="",
+            )
 
-        monkeypatch.setattr(call_mod, "select_fast_reply", _filler)
+        monkeypatch.setattr(call_mod, "select_fast_brain_turn", _resolved)
 
         chunks = [chunk async for chunk in a.llm_node(llm.ChatContext(), [], None)]
 
-        # Nothing spoken (no parrot, no filler), but the slow brain is cancelled.
         assert chunks == []
-        a._publish_fast_brain_continued.assert_awaited_once_with(a._user_turn_seq)
+        a._publish_fast_brain_turn_completed.assert_not_awaited()
 
 
 # =============================================================================
-# Outbound opener: held until the callee's first utterance (or fallback)
+# Agent-initiated opener: held until the callee's first short utterance or a
+# short silence window; a substantive first turn routes it to the fast brain
 # =============================================================================
 
 
 class TestOutboundOpenerTrigger:
-    """The outbound opener is held until the callee speaks; the first turn is
-    consumed by the opener (no competing fast-brain filler)."""
+    """The verbatim opener is held while ``_opening_pending``.
+
+    Nothing is spoken before the trigger (no seed): the fast-brain filler and
+    the slow-brain turn are suppressed for the callee's first turn, which either
+    triggers the opener directly (short turn / silence) or hands it to the fast
+    brain as a held continuation (substantive turn).
+    """
 
     def _assistant(self, boss_contact, *, outbound: bool):
         from unify.conversation_manager.medium_scripts.call import Assistant
@@ -3324,6 +3476,7 @@ class TestOutboundOpenerTrigger:
 
         await a.on_user_turn_completed(None, SimpleNamespace(text_content="Hello?"))
         assert a._first_user_turn.is_set()
+        assert a._first_turn_duration_s == 0.0
 
     @pytest.mark.asyncio
     async def test_first_user_turn_not_signalled_when_not_pending(self, boss_contact):

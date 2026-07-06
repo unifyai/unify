@@ -56,6 +56,12 @@ def _build_voice(**overrides: object) -> str:
 class TestCommsToolListing:
     """The output-format section lists only the comms tools the assistant can use."""
 
+    def test_slow_brain_prompt_documents_per_tool_call_thoughts(self):
+        prompt = _build()
+        assert "Tool-call reasoning" in prompt
+        assert "optional `thoughts` argument" in prompt
+        assert '"thoughts": [my concise thoughts before taking actions]' not in prompt
+
     def test_all_tools_listed_when_fully_configured(self):
         prompt = _build(assistant_has_phone=True, assistant_has_email=True)
         assert "`send_sms`" in prompt
@@ -556,6 +562,9 @@ class TestCoordinatorVoicePrompt:
         assert "Two ways to accomplish org tasks" not in prompt
         assert "My onboarding flow (UI reference)" not in prompt
         assert "Console knowledge\n-----------------" not in prompt
+        assert "My opening turn" not in prompt
+        assert "Onboarding checklist" not in prompt
+        assert "Step-by-step walkthrough pacing" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +660,72 @@ class TestCommunicationGuidelinesAdapt:
         )
 
 
+def _concurrent_ack_block(prompt: str) -> str:
+    start = prompt.index("Concurrent action and acknowledgment")
+    end = prompt.index("**Acknowledgments should be brief:**", start)
+    return prompt[start:end]
+
+
+class TestConcurrentActionAckBlock:
+    """Concurrent-action ack guidance names only outbound tools exposed this turn."""
+
+    def test_ack_block_omits_send_sms_without_phone(self):
+        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert "`send_unify_message`" in block
+        assert "send_sms" not in block
+        assert "only outbound message tool available on this turn" in block
+
+    def test_ack_block_includes_send_sms_with_phone(self):
+        prompt = _build(assistant_has_phone=True, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert "`send_sms`" in block
+        assert "`send_unify_message`" in block
+        assert "Pick whichever tool matches the active conversation thread" in block
+
+    def test_ack_block_whatsapp_only_omits_send_sms(self):
+        prompt = _build(
+            assistant_has_phone=False,
+            assistant_has_whatsapp=True,
+            assistant_has_email=False,
+        )
+        block = _concurrent_ack_block(prompt)
+        assert "`send_whatsapp`" in block
+        assert "send_sms" not in block
+
+    def test_ack_block_example_uses_default_outbound_tool(self):
+        prompt = _build(assistant_has_phone=False, assistant_has_email=False)
+        block = _concurrent_ack_block(prompt)
+        assert 'send_unify_message(contact_id=1, content="Let me check.")' in block
+
+
+class TestCreateTeamsMeetShareTools:
+    """create_teams_meet share guidance names only configured outbound tools."""
+
+    def test_teams_only_omits_send_sms_and_send_email(self):
+        prompt = _build(
+            assistant_has_phone=False,
+            assistant_has_email=False,
+            assistant_has_teams=True,
+        )
+        idx = prompt.find("create_teams_meet")
+        assert idx >= 0
+        snippet = prompt[idx : idx + 900]
+        assert "shared via `send_teams_message`" in snippet
+        assert "send_sms" not in snippet
+        assert "send_email" not in snippet
+
+    def test_teams_with_phone_and_email_lists_all_share_tools(self):
+        prompt = _build(
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_teams=True,
+        )
+        idx = prompt.find("create_teams_meet")
+        snippet = prompt[idx : idx + 900]
+        assert "shared via `send_teams_message` / `send_email` / `send_sms`" in snippet
+
+
 # ---------------------------------------------------------------------------
 # Tests – external app integration
 # ---------------------------------------------------------------------------
@@ -667,6 +742,20 @@ class TestExternalAppIntegration:
     def test_act_capabilities_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
         assert "**External apps & services**" not in prompt
+
+
+class TestExternalResourcesActBlock:
+    """External-resource work must go through ``act``."""
+
+    def test_external_resources_block_present(self):
+        prompt = _build()
+        assert "External resources (use ``act``)" in prompt
+        assert "Ground truth rule" in prompt
+        assert "I do not answer from memory" in prompt
+
+    def test_external_resources_block_absent_in_demo_mode(self):
+        prompt = _build(demo_mode=True)
+        assert "External resources (use ``act``)" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -884,40 +973,56 @@ class TestConsoleUIGate:
 
 
 # ---------------------------------------------------------------------------
-# Tests - small-talk sidecar prompt
+# Tests - unified fast-brain turn prompt
 # ---------------------------------------------------------------------------
 
 
-class TestSmalltalkMessages:
-    """The small-talk sidecar lets the fast brain fully answer pure social /
-    biographical / self-context / repeat turns, and DEFERs everything else."""
+class TestFastBrainTurnPrompt:
+    """The unified fast-brain turn prompt covers social, defer, silence, and
+    continuation rules formerly split across smalltalk/filler/continuation paths."""
 
-    def test_build_smalltalk_messages_structure(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+    def test_build_fast_brain_turn_messages_structure(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+            build_fast_brain_turn_messages,
+        )
 
         history = [
             {"role": "assistant", "content": "Hi there!"},
             {"role": "user", "content": "what did you just say?"},
         ]
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=history,
             user_text="what did you just say?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
+            idle_status_smalltalk=False,
+            recent_assistant_text="",
         )
-        # Persona first, guardrail near the end, caller's latest line last.
         assert msgs[0] == {"role": "system", "content": "PERSONA"}
         assert msgs[-1] == {"role": "user", "content": "what did you just say?"}
-        assert msgs[-2]["role"] == "system"
-        # History is preserved between persona and guardrail.
+        assert any(
+            m["role"] == "system" and m["content"] == FAST_BRAIN_TURN_PROMPT
+            for m in msgs
+        )
         assert {"role": "assistant", "content": "Hi there!"} in msgs
 
     def test_idle_status_smalltalk_guidance_is_absent_by_default(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            build_fast_brain_turn_messages,
+        )
 
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=[],
             user_text="what are you doing?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
+            idle_status_smalltalk=False,
+            recent_assistant_text="",
         )
 
         system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
@@ -925,13 +1030,19 @@ class TestSmalltalkMessages:
         assert "Mario Kart" not in system_text
 
     def test_idle_status_smalltalk_guidance_is_gated(self):
-        from unify.conversation_manager.prompt_builders import build_smalltalk_messages
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            build_fast_brain_turn_messages,
+        )
 
-        msgs = build_smalltalk_messages(
+        msgs = build_fast_brain_turn_messages(
             system_prompt="PERSONA",
             history_messages=[],
             user_text="what are you doing?",
+            pending_continuation=None,
+            already_deferred=False,
+            guidance="",
             idle_status_smalltalk=True,
+            recent_assistant_text="",
         )
 
         system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
@@ -942,61 +1053,200 @@ class TestSmalltalkMessages:
         assert "Mario Kart" in system_text
         assert "Tetris" in system_text
 
-    def test_smalltalk_guardrail_allows_social_bio_selfcontext_repeat(self):
-        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
-
-        g = _SMALLTALK_GUARDRAIL.lower()
-        assert "tell me about yourself" in g
-        assert "repeat" in g
-        # Self-context is allowed but only when actually known.
-        assert "local time" in g or "where you are" in g
-        assert "do not guess" in g or "do not actually know" in g
-
-    def test_smalltalk_guardrail_defers_substantive_and_mixed(self):
-        from unify.conversation_manager.prompt_builders import (
-            SMALLTALK_DEFER_SENTINEL,
-            _SMALLTALK_GUARDRAIL,
+    def test_fast_brain_turn_prompt_allows_social_bio_selfcontext_repeat(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
         )
 
-        assert SMALLTALK_DEFER_SENTINEL == "DEFER"
-        g = _SMALLTALK_GUARDRAIL
-        assert "DEFER" in g
+        g = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "smalltalk" in g
+        assert "repeat" in g
+        assert "persona" in g or "who you are" in g
+
+    def test_fast_brain_turn_prompt_defers_substantive_and_mixed(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
+
+        g = FAST_BRAIN_TURN_PROMPT
+        assert "defer" in g
         low = g.lower()
-        # Data / tools / actions and mixed turns must defer.
-        assert "calendar" in low and "inbox" in low
-        assert "tool" in low
-        assert "mixed" in low
+        assert "data" in low and "tools" in low
         assert "when unsure" in low
 
-    def test_smalltalk_guardrail_stays_silent_on_bare_acks(self):
-        from unify.conversation_manager.prompt_builders import (
-            SMALLTALK_SILENCE_SENTINEL,
-            _SMALLTALK_GUARDRAIL,
+    def test_fast_brain_turn_prompt_stays_silent_on_bare_acks(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
         )
 
-        assert SMALLTALK_SILENCE_SENTINEL == "SILENCE"
-        g = _SMALLTALK_GUARDRAIL
-        assert "SILENCE" in g
+        g = FAST_BRAIN_TURN_PROMPT
+        assert "silence" in g
         low = g.lower()
-        # Bare acknowledgements -> silence, never echoed back.
         assert "acknowledgement" in low
         assert "never echo" in low
-        # The carve-out: an 'okay' that authorises an action is NOT silence.
         assert "authorises an action" in low or "authorizes an action" in low
 
-    def test_smalltalk_guardrail_defers_action_and_status_questions(self):
-        from unify.conversation_manager.prompt_builders import _SMALLTALK_GUARDRAIL
+    def test_fast_brain_turn_prompt_interrupted_question_ack_is_defer(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
 
-        low = _SMALLTALK_GUARDRAIL.lower()
-        # The fast brain must never promise/report on an action it controls.
-        assert "hang up" in low
-        assert "are you calling me" in low
-        assert "did you send it yet" in low
-        assert "idle status small-talk" in low
-        assert "never promise, claim, or report" in low
+        low = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "interrupted mid-sentence" in low and "question" in low
+        assert "agreeing to proceed" in low
+
+    def test_fast_brain_turn_prompt_defers_action_and_status_questions(self):
+        from unify.conversation_manager.domains.fast_brain_turn import (
+            FAST_BRAIN_TURN_PROMPT,
+        )
+
+        low = FAST_BRAIN_TURN_PROMPT.lower()
+        assert "status of work you control" in low
+        assert "idle status small-talk" not in low
 
     def test_slow_brain_voice_guide_knows_idle_smalltalk_exception(self):
         prompt = _build(is_voice_call=True)
         assert "Idle small-talk exception" in prompt
         assert "playing Snake" in prompt
         assert "no in-flight action" in prompt
+
+
+class TestOnboardingPromptLeakageGuard:
+    """Onboarding and general restraint blocks must not invite parroting."""
+
+    def test_conversational_restraint_forbids_prompt_leakage(self):
+        prompt = _build()
+        assert "No prompt leakage" in prompt
+        assert "never quote, paraphrase, or summarize" in prompt
+
+    def test_coordinator_onboarding_narration_forbids_parroting(self):
+        prompt = _build(is_coordinator=True)
+        assert "My onboarding narration" in prompt
+        assert "internal guidance — I never repeat it to the user" in prompt
+        assert "No genre lists, franchise names" in prompt
+
+    def test_coordinator_onboarding_scaffolding_omitted_when_inactive(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=False,
+        )
+        assert "My onboarding narration" not in prompt
+        assert "My onboarding progress (live)" not in prompt
+
+    def test_coordinator_onboarding_scaffolding_present_when_active(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [],
+                "next_targets": [],
+            },
+        )
+        assert "My onboarding narration" in prompt
+
+    def test_reference_quiz_rules_omit_parrotable_franchise_lists(self):
+        prompt = _build(is_coordinator=True)
+        assert "Star Wars" not in prompt
+        assert "Blade Runner" not in prompt
+        assert "quick sci-fi quiz" in prompt
+        assert "I NEVER list genres, franchises" in prompt
+
+    def test_reference_quiz_requires_checklist_click_not_verbal_consent(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [
+                    {
+                        "id": "email-reference",
+                        "title": "Trigger email from T-W1N",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "trigger",
+                        "interaction": {
+                            "type": "reference_quiz",
+                            "tool_name": "send_email",
+                        },
+                    },
+                ],
+                "next_targets": [
+                    {
+                        "id": "email-reference",
+                        "title": "Trigger email from T-W1N",
+                        "nudge_chat": "Click the email row.",
+                    },
+                ],
+            },
+        )
+        assert "verbal ask" in prompt.lower() or "verbal consent" in prompt.lower()
+        assert (
+            "does not substitute" in prompt.lower()
+            or "does not count" in prompt.lower()
+        )
+        assert "Trigger ... from T-W1N" in prompt
+
+    def test_onboarding_requires_responsive_unify_message_chat(self):
+        prompt = _build(is_coordinator=True, coordinator_onboarding_active=True)
+        assert "Rules for unify_message during onboarding" in prompt
+        assert "never `wait`" in prompt
+        assert (
+            "Do not leave chat silent while only the other channel carries the clue"
+            in prompt
+        )
+
+    def test_conversational_restraint_keeps_unify_message_responsive(self):
+        prompt = _build()
+        assert "Unify message / Console chat is the live thread" in prompt
+        assert "not over answering inbound chat" in prompt
+        assert "Never `wait` while their chat line is still unanswered" in prompt
+
+    def test_onboarding_progress_leads_with_whats_next_answer(self):
+        prompt = _build(
+            is_coordinator=True,
+            coordinator_onboarding_active=True,
+            coordinator_onboarding_render={
+                "steps": [
+                    {
+                        "id": "whatsapp-number",
+                        "title": "Add your WhatsApp number",
+                        "phase": "Communication",
+                        "status": "done",
+                    },
+                    {
+                        "id": "whatsapp-message-reference",
+                        "title": "Trigger WhatsApp message from T-W1N",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "trigger",
+                    },
+                    {
+                        "id": "phone-number",
+                        "title": "Add your phone number",
+                        "phase": "Communication",
+                        "status": "available",
+                        "kind": "setup",
+                    },
+                ],
+                "next_targets": [
+                    {
+                        "id": "whatsapp-message-reference",
+                        "title": "Trigger WhatsApp message from T-W1N",
+                        "nudge_chat": "Click the WhatsApp message row.",
+                    },
+                    {
+                        "id": "phone-number",
+                        "title": "Add your phone number",
+                        "nudge_chat": "Click the phone row.",
+                    },
+                ],
+            },
+        )
+        whats_next_pos = prompt.index("When they ask what to do next")
+        checklist_pos = prompt.index("Full checklist")
+        assert whats_next_pos < checklist_pos
+        assert "Primary answer: Trigger WhatsApp message from T-W1N" in prompt
+        assert "Do NOT volunteer next steps unprompted" in prompt
+        assert "collect all numbers first" in prompt
+        assert "Startable steps right now" in prompt
+        assert "1. Trigger WhatsApp message from T-W1N" in prompt
+        assert "2. Add your phone number" in prompt

@@ -43,10 +43,10 @@ def test_profile_docs_are_curated_and_include_relative_prices():
         "gpt_5_5_medium",
         "gpt_5_5_high",
     }
-    assert "roughly 11.5x the DeepSeek input-token rate" in docs
-    assert "34.5x the DeepSeek output-token rate" in docs
+    assert "roughly 17x the MiniMax input-token rate" in docs
+    assert "25x the MiniMax output-token rate" in docs
     assert "gpt-5.5@openai" in docs
-    assert "deepseek-v4-max@deepseek" in docs
+    assert "minimax-v3@minimax" in docs
 
 
 def test_profile_context_is_scoped():

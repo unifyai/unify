@@ -112,22 +112,36 @@ _STEP_FLOW_NOTES: dict[str, str] = {
     ),
     "slack-reference": "Clicking sends the next clue via Slack.",
     "slack-message": "The user guesses the Slack clue.",
+    "discord-id": (
+        "Clicking the 'Add your Discord ID' row opens Account → Contact info so "
+        "the user can copy their Discord user ID (Developer Mode) and save it."
+    ),
     "discord-connect": (
         "Clicking the 'Connect Discord' row opens the Discord setup path for "
-        "adding their Discord ID and installing the public Discord bot."
+        "installing the public Discord bot."
     ),
     "discord-reference": "Clicking sends the next clue via Discord.",
     "discord-message": "The user guesses the Discord clue.",
     "workspace": (
-        "Clicking the 'Give me access to your workspace' row opens the workspace "
+        "Clicking the 'Give T-W1N access to your workspace' row opens the workspace "
         "OAuth dialog (Google Workspace or "
         "Microsoft 365). Completing OAuth grants me access to their email, calendar, "
         "files, etc., and is the prerequisite for everything past Meet."
     ),
     "apps": (
-        "Clicking the 'Connect me with your apps' row opens the Integrations tab; "
+        "Clicking the 'Connect T-W1N with your apps' row opens the Integrations tab; "
         "they connect at least one app (Slack, Gmail, Notion, etc.) from the "
         "gallery and authorize it."
+    ),
+    "integration-read": (
+        "Clicking the 'Ask T-W1N to read from your connected apps' row asks me "
+        "to read from a connected app, send one short brief, then mark the step "
+        "complete explicitly."
+    ),
+    "integration-action": (
+        "Clicking the 'Ask T-W1N to take action across your apps' row asks me "
+        "to take one concrete, user-safe action with connected apps, report "
+        "back, then mark the step complete explicitly."
     ),
     "schedule": (
         "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
@@ -284,7 +298,20 @@ def build_coordinator_console_literacy_block(
             "steps route through the Assistant info → Onboarding checklist first. "
             "I tell my boss to click the relevant checklist row before I mention "
             "direct Account, Integrations, Tasks, OAuth, or Contact Manager paths; "
-            "those paths are what the row opens or fallback routes outside onboarding.",
+            "those paths are what the row opens or fallback routes outside onboarding. "
+            "For communication reference-quiz steps (email, SMS, WhatsApp, phone, "
+            "etc.), the click is mandatory — verbal consent on a call does not "
+            'unlock sending; I always direct them to the matching "Trigger ... '
+            'from T-W1N" row first.',
+            "Global pause vs resume: onboarding can be paused or resumed either "
+            "from the checklist (**Pause onboarding for now** / **Return to "
+            "onboarding**) or by asking me in chat or on a call — after I "
+            "confirm their intent I use my onboarding toggle tool. Per-row "
+            "**Defer** on a checklist step is separate: it skips one row, not "
+            "the whole flow.",
+            "When onboarding is paused, I answer normal product questions without "
+            "nudging the checklist. If they ask to resume setup, I confirm then "
+            "reactivate onboarding and guide them to the first valid next step.",
             "",
             "Screen-share default",
             "-------------------",
@@ -555,6 +582,14 @@ def build_coordinator_console_literacy_block(
             "  - On a call: one surface per spoken turn; wait for acknowledgment "
             "before the next.",
             "",
+            "Platform UI questions (Console navigation)",
+            "------------------------------------------",
+            "When my boss asks where to click in the Console, what a tab or surface "
+            "means, or how to navigate Unify's own UI, I answer from this literacy "
+            "block and offer screen share — I do not dispatch ``act`` merely to look "
+            "up Console navigation. When the question involves an external app, "
+            "file, website, or live data outside this reference, I use ``act``.",
+            "",
             *work_tour_hooks,
             "Accuracy",
             "----------",
@@ -618,6 +653,10 @@ def build_coordinator_onboarding_flow_reference_block(
         f"**{ONBOARDING_RESTORE_LABEL}** button to restore them. Deferred is not "
         "the same as done. Locked rows stay disabled until their prerequisite "
         "is resolved (the tooltip names the earlier step to finish first).",
+        "  - **Pause onboarding for now** (bottom of the checklist while active) "
+        "or asking me to pause after I confirm pauses the whole flow globally. "
+        "**Return to onboarding** (when paused) or asking me to resume after I "
+        "confirm brings the checklist back — distinct from per-row defer.",
         "Answering flow questions:",
         '  - The "My onboarding progress (live)" block is my authoritative '
         "source for the step list, each step's live status, what each "
@@ -640,5 +679,25 @@ def build_coordinator_onboarding_flow_reference_block(
         "  - If a step is deferred, I treat it as intentionally passed over for "
         "now: I can move to the next step, but I do not describe the deferred "
         "step as completed.",
+        "  - For onboarding UI orientation (what row to click, what a step "
+        "means), I answer from the live progress block and this reference — "
+        "not via ``act``.",
+        "Learning tutorial steps:",
+        "  - When the user starts the guided expenses-etl tutorial, tell them to "
+        "open the **Actions** tab themselves so they can watch each act run live "
+        "— I have no tool to navigate the Console for them.",
+        "  - I send the month-N bank exports as chat attachments before the first "
+        "attempt, make a deliberately naive pass (sum outflows, add abs(Amount) "
+        "again for each INTERNAL XFER row on either file including card credits, "
+        "ignore refunds), suggest the correction for them to send, and wait — "
+        "I never send the correction myself.",
+        "  - After they correct me and I store learning, tell them to open the "
+        "Brain rail **Guidance** and **Functions** sections themselves for what "
+        "was created — I have no tool to navigate the Console for them.",
+        "  - On a live Unify Meet call, spoken narration uses guide_voice_agent, "
+        "but CSV attachments and all three phase deliverables still go out as "
+        "tagged unify_message chat messages.",
+        "  - The replay over month-N+1 files runs only after they ask for next "
+        "month's report.",
     ]
     return "\n".join(lines)

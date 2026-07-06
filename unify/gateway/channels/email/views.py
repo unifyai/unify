@@ -41,7 +41,7 @@ from unify.gateway.channels.outlook.views import (
     get_outlook_attachment,
     send_outlook_email,
 )
-from unify.gateway.common.orchestra import lookup_assistant
+from unify.gateway.common.orchestra import lookup_assistant, lookup_assistant_by_id
 from unify.gateway.credentials import EnvCredentialStore
 from unify.settings import SETTINGS
 
@@ -75,6 +75,17 @@ def _is_shared_coordinator_email(sender: str) -> bool:
     )
 
 
+async def _resolve_send_assistant(
+    data: dict,
+    sender: str,
+    credentials: EnvCredentialStore,
+) -> dict:
+    agent_id = data.get("agent_id")
+    if agent_id is not None:
+        return await lookup_assistant_by_id(agent_id, credentials)
+    return await lookup_assistant(sender, credentials)
+
+
 async def _clone_request(request: Request, body: bytes) -> StarletteRequest:
     """Rebuild an ASGI Request with the same headers but a fresh body stream.
 
@@ -102,9 +113,11 @@ async def send_email(request: Request):
     """Send an email, routing to the correct provider.
 
     Request body must include ``from`` (the assistant's email
-    address). The remaining fields (``to``, ``subject``, ``body``,
-    ``cc``, ``bcc``, ``in_reply_to``, ``thread_id``, ``attachment``) are forwarded
-    unchanged to the provider-specific handler.
+    address). When ``agent_id`` is present, Orchestra is queried by
+    id (fast path for hosted runtime sends). The remaining fields
+    (``to``, ``subject``, ``body``, ``cc``, ``bcc``, ``in_reply_to``,
+    ``thread_id``, ``attachment``) are forwarded unchanged to the
+    provider-specific handler.
     """
     body_bytes = await request.body()
     data = json.loads(body_bytes)
@@ -117,12 +130,12 @@ async def send_email(request: Request):
         return await gmail_send_email(forwarded)
 
     credentials = EnvCredentialStore()
-    assistant = await lookup_assistant(sender, credentials)
+    assistant = await _resolve_send_assistant(data, sender, credentials)
 
     if _is_outlook_assistant(assistant):
-        return await send_outlook_email(forwarded)
+        return await send_outlook_email(forwarded, assistant=assistant)
 
-    return await gmail_send_email(forwarded)
+    return await gmail_send_email(forwarded, assistant=assistant)
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,17 @@ from fastapi import HTTPException, Request
 from unify.gateway.context import GatewayContext
 from unify.settings import SETTINGS
 
+ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
+    "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
+    "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
+    "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
+    "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
+    "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
+    "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
+    "age,nationality,"
+    "about,job_title,timezone"
+)
+
 NO_DESKTOP_MODE = "none"
 COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 
@@ -126,6 +137,14 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "assistant_number": assistant["phone"] or "",
         "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number") or "",
         "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id", ""),
+        "assistant_slack_bot_user_id": assistant.get(
+            "assistant_slack_bot_user_id",
+            "",
+        ),
+        "assistant_slack_team_id": assistant.get(
+            "assistant_slack_team_id",
+            "",
+        ),
         "assistant_email": assistant["email"] or "",
         "assistant_email_provider": assistant.get("email_provider")
         or "google_workspace",
@@ -148,11 +167,21 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_shared_coordinator_email(email_address: str | None) -> bool:
+    if not email_address:
+        return False
+    return (
+        email_address.strip().lower()
+        == SETTINGS.UNITY_COORDINATOR_EMAIL_ADDRESS.strip().lower()
+    )
+
+
 async def get_assistant(
     *,
     assistant_id: str | None = None,
     email_address: str | None = None,
     phone_number: str | None = None,
+    from_fields: str | None = None,
 ) -> dict[str, Any]:
     """Return assistant routing metadata from Orchestra."""
 
@@ -179,12 +208,18 @@ async def get_assistant(
         }
 
     params: dict[str, str] = {}
-    if email_address:
-        params["email"] = email_address
-    if phone_number:
-        params["phone"] = phone_number
     if assistant_id:
         params["agent_id"] = assistant_id
+    elif email_address:
+        if is_shared_coordinator_email(email_address):
+            return {**_local_assistant_data(assistant_id), "assistant_id": None}
+        params["email"] = email_address
+        params["from_fields"] = from_fields or ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    elif phone_number:
+        params["phone"] = phone_number
+        params["from_fields"] = from_fields or ADMIN_CONTACT_LOOKUP_FROM_FIELDS
+    elif from_fields:
+        params["from_fields"] = from_fields
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
@@ -296,9 +331,11 @@ async def publish_runtime_event(
 
 
 __all__ = [
+    "ADMIN_CONTACT_LOOKUP_FROM_FIELDS",
     "build_internal_context",
     "default_contacts",
     "get_assistant",
+    "is_shared_coordinator_email",
     "parse_json_field",
     "publish_runtime_event",
     "request_payload",

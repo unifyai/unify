@@ -472,6 +472,11 @@ def test_console_can_create_whatsapp_sender_with_snake_case_body(
     assert response.status_code == 200
     assert response.json()["sid"] == "XE_sender"
 
+    profile = httpx_client.post.call_args.kwargs["json"]["profile"]
+    assert profile["name"] == "Unify T-W1N"
+    assert profile["logo_url"] == "https://console.unify.ai/brand/twin-logo.png"
+    assert profile["about"] == "Your digital twin."
+
 
 def test_console_can_delete_whatsapp_sender(client: TestClient) -> None:
     delete_response = MagicMock(status_code=204, text="")
@@ -543,6 +548,31 @@ def test_console_message_dispatch_publishes_runtime_event(
     assert thread == "inbound"
     assert envelope["thread"] == "unify_message"
     assert envelope["event"]["body"] == "hello"
+
+
+def test_console_reaction_dispatch_publishes_runtime_event(
+    client: TestClient,
+    gateway_context: GatewayContext,
+) -> None:
+    response = client.post(
+        "/unify/reaction",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": "123",
+            "contact_id": 456,
+            "target_message_id": 42,
+            "emoji": "👍",
+        },
+    )
+
+    assert response.status_code == 200
+    sink = gateway_context.envelope_sink
+    assert isinstance(sink, FakeEnvelopeSink)
+    _assistant_id, envelope, thread = sink.published[-1]
+    assert thread == "inbound"
+    assert envelope["thread"] == "unify_message_reaction"
+    assert envelope["event"]["target_message_id"] == 42
+    assert envelope["event"]["emoji"] == "👍"
 
 
 def test_console_meet_dispatch_publishes_runtime_event(

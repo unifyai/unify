@@ -48,7 +48,10 @@ async def test_lookup_assistant_returns_first_match_on_200(
     assert result == {"email": "user@example.com", "secrets": {"X": "1"}}
     call = fake_client.get.call_args
     assert call.args[0] == "https://orchestra.example.com/v0/admin/assistant"
-    assert call.kwargs["params"] == {"email": "user@example.com"}
+    assert call.kwargs["params"] == {
+        "email": "user@example.com",
+        "from_fields": orchestra.ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
+    }
     assert call.kwargs["headers"]["Authorization"] == "Bearer test-admin-key"
 
 

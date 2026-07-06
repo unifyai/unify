@@ -13,7 +13,7 @@ from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
 
 import unisdk
-from .types.contact import Contact
+from .types.contact import Contact, VOICE_ENROLLMENT_FIELDS
 from .base import BaseContactManager
 from ..common.context_registry import ContextRegistry, TableContext
 from ..common.data_store import DataStore
@@ -50,6 +50,12 @@ from .custom_columns import (
     create_custom_column as _cc_create,
     delete_custom_column as _cc_delete,
 )
+from .voice_enrollment import (
+    get_voice_profiles as _voice_get_profiles,
+    get_voice_enrollment_info as _voice_get_info,
+    set_voice_enrollment as _voice_set_enrollment,
+    sync_manual_voice_enrollment as _voice_sync_manual,
+)
 from .ops import (
     create_contact as _op_create,
     update_contact as _op_update,
@@ -73,7 +79,7 @@ class ContactManager(BaseContactManager):
             TableContext(
                 name="Contacts",
                 description="List of contacts, with all contact details stored.",
-                fields=model_to_fields(Contact),
+                fields={**model_to_fields(Contact), **VOICE_ENROLLMENT_FIELDS},
                 unique_keys={"contact_id": "int"},
                 auto_counting={"contact_id": None},
             ),
@@ -1499,6 +1505,36 @@ class ContactManager(BaseContactManager):
     def _provision_storage(self) -> None:
         """Ensure Contacts context, schema, and local view exist (delegated)."""
         _storage_provision(self)
+
+    # ── voice enrollment (programmatic only; never exposed as LLM tools) ──
+    def get_voice_profiles(self, contact_ids) -> Dict[int, List[float]]:
+        """Return {contact_id: voice embedding} for enrolled contacts."""
+        return _voice_get_profiles(self, contact_ids)
+
+    def get_voice_enrollment_info(self, contact_id: int) -> Dict[str, Any]:
+        """Return enrollment metadata (enrolled, enrolled_at, source)."""
+        return _voice_get_info(self, contact_id)
+
+    def set_voice_enrollment(
+        self,
+        *,
+        contact_id: int,
+        embedding: List[float],
+        wav_bytes: bytes | None = None,
+        source: str,
+    ) -> None:
+        """Persist a voice enrollment (embedding + optional sample) on a contact."""
+        _voice_set_enrollment(
+            self,
+            contact_id=contact_id,
+            embedding=embedding,
+            wav_bytes=wav_bytes,
+            source=source,
+        )
+
+    def sync_manual_voice_enrollment(self) -> None:
+        """Sync the boss user's manually recorded voice sample onto the boss contact."""
+        _voice_sync_manual(self)
 
     def _num_contacts(
         self,

@@ -13,10 +13,10 @@ from unify.settings import ProductionSettings
 class TestLLMProviderValidation:
     """Tests for validate_llm_providers method."""
 
-    def test_default_model_is_deepseek(self):
+    def test_default_model_is_minimax_m3(self):
         """UNIFY_MODEL defaults to the primary production reasoning model."""
         field_info = ProductionSettings.model_fields["UNIFY_MODEL"]
-        assert field_info.default == "deepseek-v4-max@deepseek"
+        assert field_info.default == "minimax-v3@minimax"
 
     def test_validation_fails_when_all_credentials_missing(self):
         """Validation raises RuntimeError when no credentials are set."""

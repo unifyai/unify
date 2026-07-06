@@ -8,6 +8,7 @@ from pathlib import Path
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
+from unify.common.plain_text import normalize_outbound_plain_text
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
@@ -171,6 +172,8 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
     if not from_number:
         return {"success": False}
 
+    content = normalize_outbound_plain_text(content)
+
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/send-text",
@@ -219,6 +222,8 @@ async def send_whatsapp_message(
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
         return {"success": False}
+
+    content = normalize_outbound_plain_text(content)
 
     payload = {
         "to": to_number,
@@ -290,6 +295,8 @@ async def send_unify_message(
     Returns:
         dict with "success" key indicating delivery status.
     """
+    content = normalize_outbound_plain_text(content)
+
     agent_id = SESSION_DETAILS.assistant.agent_id
     event_data = {"content": content, "role": "assistant", "contact_id": contact_id}
     if attachment:
@@ -329,6 +336,46 @@ async def send_unify_message(
         return {"success": False, "error": str(e)}
 
 
+async def publish_unify_reaction_outbound(
+    *,
+    contact_id: int,
+    target_message_id: int,
+    emoji: str | None,
+    action: str,
+    reactions: list[dict],
+) -> dict:
+    """Publish a reaction update to the assistant Pub/Sub topic for Console SSE."""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event_data = {
+        "contact_id": contact_id,
+        "target_message_id": target_message_id,
+        "emoji": emoji,
+        "action": action,
+        "reactions": reactions,
+    }
+    message_data = {
+        "thread": "unify_message_reaction_outbound",
+        "event": event_data,
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(message_data)
+        except Exception as e:
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
+            )
+    try:
+        message_id = _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unify_message_reaction_outbound",
+            event=event_data,
+        )
+        return {"success": bool(message_id)}
+    except Exception as e:
+        LOGGER.error(f"{ICONS['comms_outbound']} Error publishing unify reaction: {e}")
+        return {"success": False, "error": str(e)}
+
+
 async def send_unify_meet_ring(
     call_session_id: str,
     reason: str = "",
@@ -341,8 +388,8 @@ async def send_unify_meet_ring(
     signal on the assistant's Pub/Sub topic so the Console shows a pinned
     incoming-call window; when the owner clicks Answer, Console runs its normal
     connect flow (token + ``/unify/meet`` dispatch) which lands as
-    ``UnifyMeetReceived`` here. ``reason`` is the briefing for how I open once
-    answered; Console turns it into a briefed opening config.
+    ``UnifyMeetReceived`` here.     ``reason`` is the verbatim opener for how I open once answered; Console turns
+    it into a simulated opening config.
     """
     agent_id = SESSION_DETAILS.assistant.agent_id
     event_data = {
@@ -470,6 +517,44 @@ async def complete_api_message(
             return {"success": True}
 
 
+async def publish_voice_enrollment_suggested(*, num_speakers: int) -> None:
+    """Notify Console that manual voice enrollment is needed after this call.
+
+    Published when multiple speakers are heard but the call contact has no
+    voice profile, so auto-capture could not run. Console opens the fallback
+    recorder when the call ends.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event = {
+        "event_type": "voice_enrollment_suggested",
+        "num_speakers": int(num_speakers),
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(
+                {
+                    "thread": "unity_system_event",
+                    "event": event,
+                },
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error publishing voice_enrollment_suggested: {e}",
+            )
+        return
+
+    try:
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unity_system_event",
+            event=event,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['comms_outbound']} Error publishing voice_enrollment_suggested: {e}",
+        )
+
+
 async def publish_assistant_desktop_ready(
     binding_id: str,
     desktop_url: str,
@@ -522,6 +607,32 @@ async def publish_assistant_desktop_ready(
         )
 
 
+async def request_deferred_desktop_binding(assistant_id: int | str) -> None:
+    """Promote a voice-only activation so the session controller binds desktop."""
+    base_url = SETTINGS.conversation.COMMS_URL.strip()
+    if not base_url:
+        return
+    url = f"{base_url.rstrip('/')}/infra/runtime/{assistant_id}/request-desktop"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    LOGGER.warning(
+                        f"{ICONS['comms_outbound']} request-desktop failed "
+                        f"({resp.status}): {body[:200]}",
+                    )
+    except Exception as e:
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} request-desktop error for "
+            f"assistant {assistant_id}: {e}",
+        )
+
+
 async def upload_unify_attachment(
     file_content: bytes,
     filename: str,
@@ -544,7 +655,10 @@ async def upload_unify_attachment(
 
     from io import BytesIO
 
-    adapters_url = _gateway_adapters_base_url()
+    if _use_local_comms():
+        upload_url = f"{_local_comms_base_url()}/local/comms/attachments"
+    else:
+        upload_url = f"{_gateway_adapters_base_url()}/unify/attachment"
 
     LOGGER.debug(
         f"{ICONS['comms_outbound']} Uploading unify attachment: {filename} ({len(file_content)} bytes)",
@@ -562,7 +676,7 @@ async def upload_unify_attachment(
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{adapters_url}/unify/attachment",
+            upload_url,
             headers=headers,
             data=form_data,
         ) as response:
@@ -616,6 +730,8 @@ async def send_discord_message(
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
         return {"success": False}
+
+    body = normalize_outbound_plain_text(body)
 
     payload: dict = {
         "body": body,
@@ -681,6 +797,8 @@ async def send_slack_message(
     if agent_id is None:
         return {"success": False}
 
+    body = normalize_outbound_plain_text(body)
+
     payload: dict = {
         "team_id": team_id,
         "body": body,
@@ -736,6 +854,40 @@ async def resolve_slack_user_profile(
             return await response.json()
 
 
+async def resolve_slack_user_id_by_email(
+    *,
+    team_id: str,
+    email: str,
+) -> str | None:
+    """Resolve a Slack user ID from an email via the Communication gateway.
+
+    The reverse of ``resolve_slack_user_profile``: given a contact's email
+    it returns their Slack user ID (via ``users.lookupByEmail``), so an
+    assistant can DM a workspace member it has never received a message
+    from. Returns ``None`` when the workspace has no member with that email,
+    when the bot lacks the ``users:read.email`` scope, or on any failure —
+    callers treat ``None`` as "unresolved" and fall back to their existing
+    behaviour.
+    """
+    if not email:
+        return None
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/slack/user-by-email",
+            headers=headers,
+            json={"team_id": team_id, "email": email},
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(
+                    f"{ICONS['comms_outbound']} Slack user-by-email failed: {e}",
+                )
+                return None
+            result = await response.json()
+            return result.get("slack_user_id") or None
+
+
 async def send_teams_message(
     chat_id: str | None = None,
     team_id: str | None = None,
@@ -766,6 +918,9 @@ async def send_teams_message(
     from_email = SESSION_DETAILS.assistant.email
     if not from_email:
         return {"success": False, "error": "No sender email configured"}
+
+    if content_type == "text":
+        body = normalize_outbound_plain_text(body)
 
     payload: dict = {
         "from": from_email,
@@ -1087,6 +1242,9 @@ async def send_email_via_address(
     if not from_email:
         return {"success": False, "error": "No sender email configured"}
 
+    body = normalize_outbound_plain_text(body)
+    from_name = (SESSION_DETAILS.assistant.name or "").strip()
+
     payload = {
         "from": from_email,
         "to": to,
@@ -1094,6 +1252,11 @@ async def send_email_via_address(
         "body": body,
         "in_reply_to": email_id,
     }
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    if from_name:
+        payload["from_name"] = from_name
     if thread_id:
         payload["thread_id"] = thread_id
     if cc:
@@ -1161,7 +1324,7 @@ async def start_whatsapp_call(
     agent_name: str,
     room_name: str,
     allow_permission_probe: bool = False,
-    pending_call_context: str = "",
+    pending_call_opener: str = "",
 ) -> dict:
     """
     Initiate a WhatsApp voice call via the Communication service.
@@ -1192,7 +1355,7 @@ async def start_whatsapp_call(
                 "agent_name": agent_name,
                 "room_name": room_name,
                 "allow_permission_probe": allow_permission_probe,
-                "pending_call_context": pending_call_context,
+                "pending_call_opener": pending_call_opener,
             },
         ) as response:
             try:
@@ -1277,7 +1440,7 @@ async def store_pending_whatsapp_call_intent(
     *,
     pool_number: str,
     contact_number: str,
-    context: str,
+    opener: str,
 ) -> None:
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -1286,7 +1449,7 @@ async def store_pending_whatsapp_call_intent(
             json={
                 "pool_number": pool_number,
                 "contact_number": contact_number,
-                "context": context,
+                "context": opener,
             },
         ) as response:
             response.raise_for_status()

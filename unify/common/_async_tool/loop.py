@@ -3761,6 +3761,14 @@ async def async_tool_loop_inner(
                     "Persist mode: waiting for next interjection...",
                     prefix=ICONS["pause"],
                 )
+                try:
+                    from ...events.manager_event_logging import (
+                        publish_persist_session_phase,
+                    )
+
+                    await publish_persist_session_phase(_outer, "awaiting_input")
+                except Exception:
+                    pass
                 while True:
                     # Block until an interjection arrives or cancellation is requested
                     cancel_waiter = asyncio.create_task(
@@ -3813,6 +3821,11 @@ async def async_tool_loop_inner(
                             "Persist mode: interjection received, resuming loop",
                             prefix=ICONS["resume"],
                         )
+                        from ...events.manager_event_logging import (
+                            publish_persist_session_phase,
+                        )
+
+                        await publish_persist_session_phase(_outer, "resumed")
                     except Exception:
                         pass
                     break

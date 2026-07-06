@@ -45,6 +45,8 @@ class Medium(StrEnum):
     SLACK_CHANNEL_MESSAGE = "slack_channel_message"
     TEAMS_MESSAGE = "teams_message"
     TEAMS_CHANNEL_MESSAGE = "teams_channel_message"
+    UNIFY_REACTION = "unify_reaction"
+    WHATSAPP_REACTION = "whatsapp_reaction"
 
     @property
     def info(self) -> MediumInfo:
@@ -142,6 +144,16 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
     Medium.TEAMS_CHANNEL_MESSAGE: MediumInfo(
         value=Medium.TEAMS_CHANNEL_MESSAGE,
         description="A message in a Microsoft Teams channel.",
+        mode=Mode.TEXT,
+    ),
+    Medium.UNIFY_REACTION: MediumInfo(
+        value=Medium.UNIFY_REACTION,
+        description="An emoji reaction on a Unify console chat message.",
+        mode=Mode.TEXT,
+    ),
+    Medium.WHATSAPP_REACTION: MediumInfo(
+        value=Medium.WHATSAPP_REACTION,
+        description="An emoji reaction on a WhatsApp message.",
         mode=Mode.TEXT,
     ),
 }

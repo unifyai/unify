@@ -34,15 +34,15 @@ import os
 # overrides are silently ignored and prompts/feature flags fall back to
 # production defaults. Tests like test_email_to_email then fail because the
 # system prompt branches on the wrong value (e.g. send_email tool gated by
-# empty ASSISTANT_EMAIL).
-#
-# pytest_configure() below still reassigns these defensively in case a
-# downstream test reimports SETTINGS, but the authoritative point of
-# truth is *here*, before any unity import in this conftest.
+# empty ASSISTANT_EMAIL). A blank ASSISTANT_NUMBER= in .env also defeats
+# setdefault; ensure_test_assistant_identity_env() forces fake values when
+# missing or whitespace-only.
 # ─────────────────────────────────────────────────────────────────────────────
-os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
-os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
-os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
+from tests.conversation_manager.assistant_identity_env import (
+    ensure_test_assistant_identity_env,
+)
+
+ensure_test_assistant_identity_env()
 os.environ.setdefault("UNITY_CONVERSATION_JOB_NAME", "test_job")
 
 from unittest.mock import patch
@@ -197,6 +197,8 @@ def pytest_configure(config):
     os.environ["TEST"] = "true"
     os.environ["UNITY_CONVERSATION_JOB_NAME"] = "test_job"
 
+    ensure_test_assistant_identity_env()
+
     # Configure the assistant identity for flows tests.
     #
     # unify/conversation_manager/prompt_builders.py:_build_comms_tool_listing
@@ -212,13 +214,8 @@ def pytest_configure(config):
     #
     # Populate via env vars so SessionDetails.populate_from_env() (called
     # by the CM process under `apply_test_mocks=True`) picks them up.
-    # Mirror the email_address / phone_number values that TEST_CONTACTS
-    # use for the user so the flow looks coherent in any prompt
-    # rendering. The provider stays "google_workspace" (the default)
-    # because the gate only checks email non-emptiness.
-    os.environ.setdefault("ASSISTANT_EMAIL", "assistant@test.example.com")
-    os.environ.setdefault("ASSISTANT_NUMBER", "+15550001000")
-    os.environ.setdefault("ASSISTANT_WHATSAPP_NUMBER", "+15550001000")
+    # ensure_test_assistant_identity_env() above also overrides blank .env
+    # values (setdefault alone loses to ASSISTANT_NUMBER= with no value).
 
 
 # =============================================================================
@@ -350,6 +347,14 @@ async def conversation_manager(request) -> CMStepDriver:
     reset_event_broker()
 
 
+def _reset_screen_share_state(cm: "CMStepDriver") -> None:
+    """Clear screen-share flags and buffered screenshots between tests."""
+
+    cm.cm.user_screen_share_active = False
+    cm.cm.assistant_screen_share_active = False
+    cm.cm._screenshot_buffer.clear()
+
+
 def _complete_in_flight_actions(cm: "CMStepDriver") -> None:
     """
     Complete all in-flight actions to unblock watcher threads.
@@ -393,6 +398,9 @@ def initialized_cm(
 
     # Clear chat history (LLM message history)
     conversation_manager.cm.chat_history.clear()
+
+    # Screen-share tests attach screenshots that must not leak into text-only turns.
+    _reset_screen_share_state(conversation_manager)
 
     # Clear tool call tracking from previous tests
     conversation_manager.all_tool_calls.clear()
