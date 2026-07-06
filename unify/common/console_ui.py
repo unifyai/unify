@@ -133,6 +133,16 @@ _STEP_FLOW_NOTES: dict[str, str] = {
         "they connect at least one app (Slack, Gmail, Notion, etc.) from the "
         "gallery and authorize it."
     ),
+    "integration-read": (
+        "Clicking the 'Ask T-W1N to read from your connected apps' row asks me "
+        "to read from a connected app, send one short brief, then mark the step "
+        "complete explicitly."
+    ),
+    "integration-action": (
+        "Clicking the 'Ask T-W1N to take action across your apps' row asks me "
+        "to take one concrete, user-safe action with connected apps, report "
+        "back, then mark the step complete explicitly."
+    ),
     "schedule": (
         "Clicking the 'Schedule a task for later' row opens the Tasks tab. "
         "Time- or event-bound work — a Task in the product sense — lands there "
