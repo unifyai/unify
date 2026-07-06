@@ -15,9 +15,13 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
-from unify.conversation_manager.domains.comms_utils import publish_system_error
+from unify.conversation_manager.domains.comms_utils import (
+    publish_system_error,
+    publish_voice_enrollment_suggested,
+)
 from unify.conversation_manager.domains.coordinator_onboarding import (
     _handle_coordinator_onboarding_event,
+    schedule_coordinator_chat_intro_delivery,
 )
 from unify.conversation_manager.domains.coordinator_delegate import (
     _handle_coordinator_delegate_event,
@@ -231,13 +235,15 @@ def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
     """Enable Slack send capability from an inbound Slack event.
 
     Slack's ``bot_user_id`` is workteam-scoped (it lives on the
-    ``slack_installs`` row), not on the assistant record, so the
-    per-assistant ``assistant_slack_bot_user_id`` is never populated at
-    session bootstrap. The brain gates the ``send_slack_message`` /
-    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
-    on that flag, so without it the assistant can never reply on Slack.
-    Adopt the workspace bot id from the inbound event so this session's
-    subsequent brain run exposes the Slack tools.
+    ``slack_installs`` row), not on the assistant record. The bootstrap
+    payload resolves it from the workspace install so outbound-first
+    sessions (e.g. a Console trigger) expose the Slack tools without a
+    prior inbound event. This fallback covers the case where the
+    bootstrap value is absent (no resolvable install at wake time) by
+    adopting the workspace bot id from the inbound event, so this
+    session's subsequent brain run exposes the Slack tools. The brain
+    gates ``send_slack_message`` / ``send_slack_channel_message`` (and
+    the Slack reply guidelines) on that flag.
     """
     inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
     if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
@@ -406,12 +412,58 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     )
     sender_name = _get_sender_name(contact)
 
-    # Inject stashed context from make_whatsapp_call if a pending permission
-    # grant triggered this inbound WhatsApp call.
+    # Inject stashed opener/briefing/pre-armed gate from make_whatsapp_call if
+    # a pending permission grant triggered this inbound WhatsApp call.
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
-        stashed_context = cm._pending_whatsapp_call_contexts.pop(contact_id, None)
-        if stashed_context:
-            cm.call_manager.initial_notification = stashed_context
+        stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+        if stashed and stashed.get("opener"):
+            cm.call_manager.pending_opener = stashed["opener"]
+            cm.call_manager.pending_briefing = stashed.get("briefing", "")
+            cm.call_manager.pending_hang_up_gate = stashed.get("hang_up_gate", "")
+
+    if isinstance(event, WhatsAppCallSent) and contact_id is not None:
+        if not cm.call_manager.pending_opener:
+            stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+            if stashed and stashed.get("opener"):
+                cm.call_manager.pending_opener = stashed["opener"]
+                cm.call_manager.pending_briefing = stashed.get("briefing", "")
+                cm.call_manager.pending_hang_up_gate = stashed.get(
+                    "hang_up_gate",
+                    "",
+                )
+            else:
+                from unify.conversation_manager.domains import comms_utils
+
+                pool_number = (
+                    getattr(cm, "assistant_whatsapp_number", "")
+                    or getattr(SESSION_DETAILS.assistant, "whatsapp_number", "")
+                    or ""
+                )
+                whatsapp_number = (contact or {}).get("whatsapp_number") or ""
+                if pool_number and whatsapp_number:
+                    try:
+                        intent = await comms_utils.get_pending_whatsapp_call_intent(
+                            pool_number=pool_number,
+                            contact_number=whatsapp_number,
+                        )
+                    except Exception as exc:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
+                        )
+                        intent = None
+                    opener = (intent or {}).get("context")
+                    if opener:
+                        cm.call_manager.pending_opener = opener
+                        try:
+                            await comms_utils.clear_pending_whatsapp_call_intent(
+                                pool_number=pool_number,
+                                contact_number=whatsapp_number,
+                            )
+                        except Exception as exc:
+                            LOGGER.error(
+                                f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
+                            )
+        cm.call_manager._whatsapp_call_joining = True
 
     match event:
         case PhoneCallReceived() as e:
@@ -489,6 +541,12 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         sender_name=sender_name,
         timestamp=event.timestamp,
     ):
+        cm.record_last_inbound_reply(
+            _credit_gate_reply_context(
+                medium=medium,
+                contact_id=contact_id,
+            ),
+        )
         await cm.request_llm_run(
             delay=0,
             triggering_contact_id=contact_id,
@@ -570,7 +628,6 @@ async def _(
         )
         await cm.request_llm_run(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=contact_id,
         )
 
@@ -650,7 +707,6 @@ async def _(
         )
         await cm.request_llm_run(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=contact_id,
         )
 
@@ -757,6 +813,12 @@ async def _(
     conv_state = cm.contact_index.get_or_create_conversation(contact_id)
     conv_state.on_call = True
 
+    if isinstance(event, UnifyMeetStarted) and cm.call_manager.is_outbound:
+        await cm.event_broker.publish(
+            "app:call:status",
+            json.dumps({"type": "call_answered"}),
+        )
+
     # Sync meet interaction state that may have been set before the call started.
     # The fast brain starts with all flags as False and relies on guidance delivery,
     # so any state that was already active needs to be pushed now.
@@ -777,7 +839,7 @@ async def _(
             notification_event.to_json(),
         )
 
-    # No LLM run here — call guidance is pre-computed via make_call(context=...).
+    # No LLM run here — outbound openers are pre-computed via make_call(opener=...).
     # The slow brain will be woken later by:
     # - InboundPhoneUtterance (user says something)
     # - ActorResult (action completes)
@@ -903,7 +965,6 @@ async def _(
     # Trigger LLM run so the brain can decide next steps
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -962,7 +1023,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -982,7 +1042,7 @@ async def _(
     sender_name = _get_sender_name(contact)
 
     permission_status = event.status or ("accepted" if event.accepted else "rejected")
-    pending_contexts = getattr(cm, "_pending_whatsapp_call_contexts", None)
+    pending_openers = getattr(cm, "_pending_whatsapp_call_openers", None)
     whatsapp_number = contact.get("whatsapp_number")
     pool_number = (
         getattr(cm, "assistant_whatsapp_number", "")
@@ -995,8 +1055,8 @@ async def _(
         message_content = "<WhatsApp Call Permission Granted: calling now>"
     elif permission_status == "rejected":
         notif_content = f"{sender_name} rejected WhatsApp call permission"
-        if isinstance(pending_contexts, dict):
-            pending_contexts.pop(contact_id, None)
+        if isinstance(pending_openers, dict):
+            pending_openers.pop(contact_id, None)
         if pool_number and whatsapp_number:
             from unify.conversation_manager.domains import comms_utils
 
@@ -1036,10 +1096,16 @@ async def _(
         from unify.conversation_manager.domains import comms_utils
         from unify.conversation_manager.domains.call_manager import make_room_name
 
-        context = None
-        if isinstance(pending_contexts, dict):
-            context = pending_contexts.pop(contact_id, None)
-        if context is None and pool_number and whatsapp_number:
+        opener = None
+        call_briefing = ""
+        call_hang_up_gate = ""
+        if isinstance(pending_openers, dict):
+            stashed = pending_openers.pop(contact_id, None)
+            if stashed:
+                opener = stashed.get("opener")
+                call_briefing = stashed.get("briefing", "")
+                call_hang_up_gate = stashed.get("hang_up_gate", "")
+        if opener is None and pool_number and whatsapp_number:
             try:
                 intent = await comms_utils.get_pending_whatsapp_call_intent(
                     pool_number=pool_number,
@@ -1050,17 +1116,18 @@ async def _(
                     f"{DEFAULT_ICON} Failed to load pending WhatsApp call intent: {exc}",
                 )
                 intent = None
-            context = (intent or {}).get("context")
+            opener = (intent or {}).get("context")
 
-        if context is None:
+        if opener is None:
             await cm.request_llm_run(
                 delay=0,
-                cancel_running=True,
                 triggering_contact_id=contact_id,
             )
             return
 
-        cm.call_manager.initial_notification = context
+        cm.call_manager.pending_opener = opener
+        cm.call_manager.pending_briefing = call_briefing
+        cm.call_manager.pending_hang_up_gate = call_hang_up_gate
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1083,7 +1150,7 @@ async def _(
                     LOGGER.error(
                         f"{DEFAULT_ICON} Failed to clear pending WhatsApp call intent: {exc}",
                     )
-            call_event = WhatsAppCallSent(contact=contact)
+            call_event = cm.build_whatsapp_call_sent_event(contact)
             await cm.event_broker.publish(
                 "app:comms:whatsapp_call_sent",
                 call_event.to_json(),
@@ -1091,7 +1158,9 @@ async def _(
             return
 
         cm.call_manager._whatsapp_call_joining = False
-        cm.call_manager.initial_notification = None
+        cm.call_manager.pending_opener = ""
+        cm.call_manager.pending_briefing = ""
+        cm.call_manager.pending_hang_up_gate = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
@@ -1103,7 +1172,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -1192,13 +1260,31 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     else:
         medium = Medium.PHONE_CALL
 
-    # For diarized browser-meet utterances, prefer the speaker_label from
-    # the event so we attribute speech to the right participant.
+    # For diarized utterances, prefer the speaker_label from the event so we
+    # attribute speech to the right participant. On enrolled-contact calls
+    # this surfaces anonymous voices as "Speaker 2", "Speaker 3", …
     if (
-        isinstance(event, (InboundGoogleMeetUtterance, InboundTeamsMeetUtterance))
+        isinstance(
+            event,
+            (
+                InboundPhoneUtterance,
+                InboundWhatsAppCallUtterance,
+                InboundUnifyMeetUtterance,
+                InboundGoogleMeetUtterance,
+                InboundTeamsMeetUtterance,
+            ),
+        )
         and event.speaker_label
     ):
         sender_name = event.speaker_label
+
+    # Track anonymous voice labels for the engagement tools' status appendix.
+    if (
+        role == "user"
+        and getattr(event, "speaker_label", None)
+        and not getattr(event, "voice_verified", False)
+    ):
+        cm.call_manager.note_speaker_label(event.speaker_label)
 
     message_id = cm.contact_index.push_message(
         contact_id=contact_id,
@@ -1214,6 +1300,18 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         event,
         local_message_id=message_id,
     )
+
+    # A non-engaged (background) utterance is context, not a turn: the fast
+    # brain emitted no reply and scheduled no slow-brain user run for it. A
+    # debounced non-user-origin run lets the slow brain notice a background
+    # voice addressing the assistant and engage it; bursts collapse in the
+    # debouncer.
+    if role == "user" and getattr(event, "engaged", True) is False:
+        await cm.request_llm_run(
+            delay=2,
+            triggering_contact_id=contact_id,
+        )
+        return
 
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
@@ -1245,11 +1343,157 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                 cached=True,
             )
 
-        await cm.interject_or_run(
-            event.content,
-            triggering_contact_id=contact_id,
-            turn_id=getattr(event, "turn_id", None),
+
+@EventHandler.register(VoiceEnrollmentCaptured)
+async def _(
+    event: VoiceEnrollmentCaptured,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Persist an auto-captured voice enrollment onto the contact row."""
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    if contact_id is None or not event.embedding:
+        return
+    contact = cm.contact_index.get_contact(contact_id=contact_id) or event.contact
+    sender_name = _get_sender_name(contact)
+
+    async def _persist(cm: "ConversationManager") -> None:
+        from unify.contact_manager.voice_enrollment import (
+            VOICE_ENROLLMENT_SOURCE_AUTO,
         )
+
+        wav_bytes = None
+        if event.wav_path:
+            wav_file = Path(event.wav_path)
+            if wav_file.exists():
+                wav_bytes = wav_file.read_bytes()
+                wav_file.unlink(missing_ok=True)
+        await asyncio.to_thread(
+            cm.contact_manager.set_voice_enrollment,
+            contact_id=int(contact_id),
+            embedding=[float(x) for x in event.embedding],
+            wav_bytes=wav_bytes,
+            source=VOICE_ENROLLMENT_SOURCE_AUTO,
+        )
+        LOGGER.info(
+            f"{DEFAULT_ICON} Voice enrollment persisted for contact "
+            f"{contact_id} ({event.duration_s:.0f}s of speech)",
+        )
+
+    await managers_utils.queue_operation(_persist, cm)
+
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"Voice profile enrolled for {sender_name} from this call's audio; "
+        "their turns on future calls will be voice-verified",
+        event.timestamp,
+    )
+
+
+@EventHandler.register(VoiceEnrollmentSuggested)
+async def _(
+    event: VoiceEnrollmentSuggested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Surface degraded speaker attribution and nudge manual enrollment."""
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"{event.num_speakers} distinct voices detected on this call, but "
+        f"{sender_name} has no voice enrollment, so turns cannot be "
+        "attributed to individual speakers",
+        event.timestamp,
+    )
+
+    # Only the account holder can use the in-app fallback recorder, so the
+    # guidance nudge is limited to the boss.
+    if contact_id == SESSION_DETAILS.boss_contact_id:
+        await publish_voice_enrollment_suggested(num_speakers=event.num_speakers)
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=_active_voice_thread_medium(cm),
+            message_content=(
+                "Speaker attribution note: multiple distinct voices are "
+                f"present on this call, but {sender_name} has no voice "
+                "enrollment, so the transcript cannot reliably distinguish "
+                "who said what. If a natural moment arises, you may mention "
+                "that a short in-app voice recorder will appear when the call "
+                "ends so they can enroll for future calls. Do not derail the "
+                "current topic for this."
+            ),
+            role="guidance",
+        )
+
+
+@EventHandler.register(FastBrainTurnCompleted)
+async def _(
+    event: FastBrainTurnCompleted,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Start the slow-brain run after the Voice Agent finishes a user turn."""
+    from unify.conversation_manager.events import FAST_BRAIN_TURN_SILENCE
+    from unify.conversation_manager.prompt_builders import (
+        build_fast_brain_turn_guidance,
+    )
+
+    if event.classification == FAST_BRAIN_TURN_SILENCE:
+        return
+
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id) if contact_id else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+
+    note = build_fast_brain_turn_guidance(
+        classification=event.classification,
+        intended_speech=event.intended_speech,
+    )
+    active_briefing = (
+        getattr(cm.call_manager, "active_call_briefing", "") or ""
+    ).strip()
+    if active_briefing:
+        note += (
+            "\n[This call carries a briefing the Voice Agent holds and fully "
+            f"handles on its own: {active_briefing}\n"
+            "Do NOT re-deliver briefed content via guide_voice_agent — call "
+            "wait() while the briefed interaction plays out. Act only when the "
+            "turn needs something outside the briefing, or the interaction has "
+            "concluded and follow-through is yours (completing steps, ending "
+            "the call, follow-up messages).]"
+        )
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=_active_voice_thread_medium(cm),
+        message_content=note,
+        role="guidance",
+    )
+
+    user_content = (event.user_content or "").strip()
+    if not user_content:
+        return
+
+    await cm.handle_voice_user_turn(
+        user_content,
+        triggering_contact_id=contact_id,
+        turn_id=event.turn_id,
+    )
 
 
 @EventHandler.register(AssistantTurnInjected)
@@ -1284,13 +1528,15 @@ async def _(
         local_message_id=message_id,
     )
 
+    # ``pending_opener`` is exclusively the verbatim opener queued by the
+    # call-start tools — an injected turn must never masquerade as one. If no
+    # voice socket is up yet the injected turn is simply not forwarded (it is
+    # already recorded above and re-derives on the next slow-brain turn).
     if cm.call_manager and cm.call_manager._socket_server:
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
             event.to_json(),
         )
-    else:
-        cm.call_manager.initial_notification = event.content
 
     if event.schedule_proactive:
         await cm.schedule_proactive_speech()
@@ -1326,6 +1572,39 @@ async def _(
 
     if event.should_speak:
         await cm.schedule_proactive_speech()
+
+
+@EventHandler.register(FastBrainHangUp)
+async def _(
+    event: FastBrainHangUp,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Tear down the voice session after the fast brain closed the call.
+
+    Only reachable while the hang-up gate was armed by the slow brain: the
+    voice agent spoke its farewell, confirmed clean playout (no barge-in), and
+    published this event. The farewell utterance itself already landed in the
+    transcript via the normal outbound-utterance path.
+    """
+    from unify.conversation_manager.domains.brain_action_tools import (
+        ConversationManagerBrainActionTools,
+    )
+
+    cm.call_manager.hang_up_gate_reason = None
+    sender_name = _get_sender_name(event.contact)
+    cm.notifications_bar.push_notif(
+        "Comms",
+        (
+            f"I ended the call with {sender_name} at its natural close "
+            f"(sanctioned earlier: {event.gate_reason or 'no reason recorded'}; "
+            f"trigger: {event.trigger or 'user_turn'})."
+        ),
+        event.timestamp,
+    )
+    tools = ConversationManagerBrainActionTools(cm)
+    await tools._perform_hang_up_teardown()
 
 
 @EventHandler.register(VoiceInterrupt)
@@ -1365,22 +1644,6 @@ async def _(
         message_content=note,
         role="guidance",
     )
-
-
-@EventHandler.register(FastBrainContinued)
-async def _(
-    event: FastBrainContinued,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    """Cancel the slow-brain run for the turn the fast brain answered.
-
-    The fast brain resolved this turn itself (resumed the interrupted line or
-    answered small talk), so the slow-brain run that turn spawned must not also
-    answer it. Targets exactly that turn's run (no-op if already gone).
-    """
-    await cm.cancel_slow_brain_run(event.turn_id)
 
 
 @EventHandler.register(ProactiveSpeechControl)
@@ -1429,6 +1692,9 @@ async def _(
                 active_session,
             )
             return
+
+    # The hang-up gate is per-session permission; it never outlives the call.
+    cm.call_manager.hang_up_gate_reason = None
 
     # Persist session identifiers in exchange metadata and stash the
     # exchange_id so the async RecordingReady handler can find it.
@@ -1558,7 +1824,6 @@ async def _(
 
     await cm.request_llm_run(
         delay=0,
-        cancel_running=True,
         triggering_contact_id=contact_id,
     )
 
@@ -1748,6 +2013,10 @@ def _push_email_to_all_contacts(
         contact = _resolve_contact_by_email(email_addr)
         if contact and contact.get("contact_id"):
             _push_to_contact(contact["contact_id"], "bcc")
+
+
+def _should_wake_for_outbound_sent(event) -> bool:
+    return not getattr(event, "suppress_slow_brain_wake", False)
 
 
 def _credit_gate_reply_context(
@@ -1947,7 +2216,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             )
             notif_content = f"Email sent to {', '.join(email_to[:2])}{'...' if len(email_to) > 2 else ''}"
             cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
-            if cm._outbound_suppress_gen != cm._llm_gen:
+            if _should_wake_for_outbound_sent(event):
                 await cm.request_llm_run(
                     triggering_contact_id=contact_id,
                 )
@@ -1991,14 +2260,16 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 sender_name=sender_name,
                 timestamp=event.timestamp,
             )
+            email_reply_context = _credit_gate_reply_context(
+                medium=Medium.EMAIL,
+                contact_id=contact_id,
+                email_id=event.email_id,
+                thread_id=event.thread_id,
+            )
+            cm.record_last_inbound_reply(email_reply_context)
             await cm.request_llm_run(
                 triggering_contact_id=contact_id,
-                credit_gate_reply_context=_credit_gate_reply_context(
-                    medium=Medium.EMAIL,
-                    contact_id=contact_id,
-                    email_id=event.email_id,
-                    thread_id=event.thread_id,
-                ),
+                credit_gate_reply_context=email_reply_context,
             )
             return  # Early return - email handling is complete
 
@@ -2272,29 +2543,32 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium.value,
         )
 
-    if role == "user" or cm._outbound_suppress_gen != cm._llm_gen:
+    if role == "user" or _should_wake_for_outbound_sent(event):
         _t0 = time.perf_counter()
+        inbound_reply_context = (
+            _credit_gate_reply_context(
+                medium=medium,
+                contact_id=contact_id,
+                api_message_id=getattr(event, "api_message_id", None),
+                tags=tags,
+                chat_id=chat_id,
+                channel_id=channel_id,
+                team_id=team_id,
+                thread_id=thread_id,
+                thread_ts=thread_ts,
+                guild_id=guild_id,
+                bot_id=bot_id,
+                message_id=message_id,
+                routing_metadata=routing_metadata,
+            )
+            if role == "user"
+            else None
+        )
+        if inbound_reply_context is not None:
+            cm.record_last_inbound_reply(inbound_reply_context)
         await cm.request_llm_run(
             triggering_contact_id=contact_id,
-            credit_gate_reply_context=(
-                _credit_gate_reply_context(
-                    medium=medium,
-                    contact_id=contact_id,
-                    api_message_id=getattr(event, "api_message_id", None),
-                    tags=tags,
-                    chat_id=chat_id,
-                    channel_id=channel_id,
-                    team_id=team_id,
-                    thread_id=thread_id,
-                    thread_ts=thread_ts,
-                    guild_id=guild_id,
-                    bot_id=bot_id,
-                    message_id=message_id,
-                    routing_metadata=routing_metadata,
-                )
-                if role == "user"
-                else None
-            ),
+            credit_gate_reply_context=inbound_reply_context,
         )
         log_startup_timing(
             LOGGER,
@@ -2549,6 +2823,16 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
             *contact_sync_args,
         )
 
+    from unify.settings import SETTINGS
+
+    if (
+        cm.is_coordinator
+        and cm.coordinator_onboarding_active
+        and SETTINGS.UNITY_CONSOLE_UI
+    ):
+        cm._coordinator_state_checked_at = 0.0
+        await cm._refresh_coordinator_onboarding_state()
+
 
 @EventHandler.register(GetChatHistory)
 async def _(event: GetChatHistory, cm: "ConversationManager", *args, **kwargs):
@@ -2585,7 +2869,7 @@ async def _(
     )
 
     await cm.schedule_proactive_speech()
-    await cm.request_llm_run(delay=0, cancel_running=True)
+    await cm.request_llm_run(delay=0)
 
 
 @EventHandler.register(TaskDue)
@@ -2823,6 +3107,13 @@ async def _(
             cm._session_logger.info("state_update", "Contacts synced successfully")
         except Exception as e:
             cm._session_logger.error("state_update", f"Error syncing contacts: {e}")
+        try:
+            await asyncio.to_thread(cm.contact_manager.sync_manual_voice_enrollment)
+        except Exception as e:
+            cm._session_logger.error(
+                "state_update",
+                f"Error syncing manual voice enrollment: {e}",
+            )
         cm.notifications_bar.push_notif(
             "System",
             f"Contacts synced: {event.reason or 'manual sync'}",
@@ -2981,6 +3272,31 @@ async def _(
     await cm.request_llm_run(delay=0)
 
 
+OPEN_SLOW_BRAIN_TURN_NOTIFICATION = (
+    "Open slow-brain turn — your previous turn finished without calling "
+    "`wait`. You have another thinking turn now. Continue any outstanding "
+    "work (reply to the user, send onboarding deliverables, follow up on "
+    "in-flight actions). Recurring turns keep opening until you explicitly "
+    "call `wait()` or `wait(delay=…)`. Do not call `wait` while the user is "
+    "still waiting on you in chat."
+)
+
+
+@EventHandler.register((OpenSlowBrainTurn,))
+async def _(
+    event: OpenSlowBrainTurn,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    cm.notifications_bar.push_notif(
+        "System",
+        OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
+        event.timestamp,
+    )
+    await cm.request_llm_run(delay=0)
+
+
 # Notification text shown to the slow brain when initialization completes.
 #
 # Wording is deliberately strong about preferring `wait` over a follow-up
@@ -3040,7 +3356,17 @@ async def _(
         )
 
     await _consume_startup_wake_reasons(cm)
-    await cm.request_llm_run(delay=0)
+
+    from unify.settings import SETTINGS
+
+    scheduled_chat_intro = False
+    if cm.is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
+        cm._coordinator_state_checked_at = 0.0
+        await cm._refresh_coordinator_onboarding_state(force=True)
+        scheduled_chat_intro = schedule_coordinator_chat_intro_delivery(cm)
+
+    if not scheduled_chat_intro:
+        await cm.request_llm_run(delay=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -3286,6 +3612,38 @@ async def _(event: LogMessageResponse, cm: "ConversationManager", *args, **kwarg
         and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
     ):
         cm.call_manager.teams_meet_exchange_id = event.exchange_id
+
+
+@EventHandler.register((UnifyMessageReactionChanged, WhatsAppReactionChanged))
+async def _(event, cm: "ConversationManager", *args, **kwargs):
+    action = await managers_utils.log_reaction(cm, event)
+    if action is None:
+        return
+
+    contact_id = event.contact.get("contact_id") if event.contact else None
+    contact = (
+        cm.contact_index.get_contact(contact_id=contact_id)
+        if contact_id is not None
+        else None
+    )
+    if contact is None:
+        contact = event.contact or {}
+    sender_name = _get_sender_name(contact)
+    emoji = getattr(event, "emoji", None)
+    if isinstance(event, UnifyMessageReactionChanged):
+        medium_label = "Unify message"
+    else:
+        medium_label = "WhatsApp message"
+    if action == "removed":
+        notif = f"{sender_name} removed a reaction from your {medium_label.lower()}"
+    elif emoji:
+        notif = f"{sender_name} reacted {emoji} to your {medium_label.lower()}"
+    else:
+        notif = f"{sender_name} reacted to your {medium_label.lower()}"
+    cm.notifications_bar.push_notif("comms", notif, event.timestamp)
+
+    if action in ("added", "changed"):
+        await cm.request_llm_run(triggering_contact_id=contact_id)
 
 
 @EventHandler.register(PreHireMessage)

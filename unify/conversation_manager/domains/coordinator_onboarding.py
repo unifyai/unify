@@ -14,7 +14,7 @@ sessions. The notification we push here carries only the structured
 event payload + a one-line system instruction; the brain owns the
 phrasing.
 
-Gating on ``Coordinator/State.mode == 'onboarding'`` happens on the
+Gating on ``Coordinator/State.onboarding_active`` happens on the
 orchestra side before the event is ever published, so handlers here
 can assume the user is currently in the onboarding flow. Outside of
 onboarding the helper simply never runs.
@@ -22,15 +22,25 @@ onboarding the helper simply never runs.
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from unify.conversation_manager.events import CoordinatorOnboardingEvent
+from unify.conversation_manager.medium_scripts.call import (
+    COORDINATOR_ONBOARDING_CHAT_INTRO,
+)
+from unify.session_details import SESSION_DETAILS
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
 
 
 _NOTIFICATION_TYPE = "CoordinatorOnboarding"
+
+# Total wall-clock delay from ``chat_intro_armed_at`` until the scripted
+# opener is sent. Pairs with Console's typing indicator timing.
+_COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS = 3.5
 
 # Per-subtype default instruction used when the orchestra-side
 # ``message`` field is missing or empty — the live emit path always
@@ -46,6 +56,12 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user just reset a previously-completed onboarding step — it is "
         "no longer done."
     ),
+    "onboarding_step_completed": (
+        "An onboarding step you were working on is now marked complete."
+    ),
+    "onboarding_render_updated": (
+        "The onboarding checklist progress updated from durable account state."
+    ),
     "onboarding_session_started": (
         "The user just opened the onboarding session with you — they are "
         "waiting for you to open with one short turn."
@@ -58,6 +74,27 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user picked an example task — set it up now with your task tools "
         "and confirm it in one short message."
     ),
+    "integration_demo_requested": (
+        "The user clicked an Integrations demo row — use connected app tools, "
+        "send the demo result, then mark the step complete."
+    ),
+    "integration_connect_chip_requested": (
+        "The user picked an Integrations connect suggestion — explain what kind "
+        "of app to connect and let them finish the connection in Console."
+    ),
+    "integration_demo_chip_requested": (
+        "The user picked an Integrations demo suggestion — treat the chip as the "
+        "demo instruction and use connected app tools now."
+    ),
+    "learning_beat_requested": (
+        "The user clicked the Learning tutorial row — run the guided "
+        "expenses-etl correction demo now."
+    ),
+    "my_computer_beat_requested": (
+        "The user clicked the My Computer row — run the live desktop demo now "
+        "if you're on a call with them, otherwise ring them with start_unify_meet "
+        "— opener introduces the demo, briefing carries the demo script."
+    ),
 }
 
 
@@ -68,15 +105,175 @@ _SUBTYPE_ONBOARDING_SESSION_STARTED = "onboarding_session_started"
 _SUBTYPE_STEP_SKIPPED = "step_skipped"
 _SUBTYPE_STEP_STARTED = "onboarding_step_started"
 _SUBTYPE_STEP_RESET = "onboarding_step_reset"
+_SUBTYPE_STEP_COMPLETED = "onboarding_step_completed"
+_SUBTYPE_ONBOARDING_RENDER_UPDATED = "onboarding_render_updated"
 _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 _SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
+_SUBTYPE_INTEGRATION_DEMO_REQUESTED = "integration_demo_requested"
+_SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requested"
+_SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
+_SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
+_SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
+
+_IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
+    "Mandatory: the user's checklist click has no visible UI feedback until I "
+    "speak. In this same LLM turn, send one brief acknowledgement on the active "
+    "channel (e.g. 'Checking your mailbox now', 'On it — pulling that up'). "
+    "If I also call act or another long-running tool, the acknowledgement and "
+    "that tool call MUST be in the same response — never wait for act to finish. "
+    "The main deliverable (summary, clue, demo output) is separate and may come "
+    "on a later turn; the ack only confirms the click registered."
+)
+
+_SUBTYPES_WITHOUT_USER_ACK = frozenset(
+    {
+        _SUBTYPE_ONBOARDING_SESSION_STARTED,
+        _SUBTYPE_STEP_RESET,
+        _SUBTYPE_STEP_COMPLETED,
+        _SUBTYPE_ONBOARDING_RENDER_UPDATED,
+    },
+)
+
+# Beat/checklist clicks that must leave a durable thread trace — the one-shot
+# notification is cleared after one LLM turn; this guidance line survives it.
+# Not used for lifecycle subtypes (complete/skip/reset/render/session) — those
+# already update the authoritative progress block. Guidance is in-memory only;
+# Orchestra ``in_progress`` render covers pod restart.
+_SUBTYPES_WITH_DURABLE_CLICK_TRACE = frozenset(
+    {
+        _SUBTYPE_STEP_STARTED,
+        _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
+        _SUBTYPE_TASK_BEAT_REQUESTED,
+        _SUBTYPE_TASK_CHIP_REQUESTED,
+        _SUBTYPE_LEARNING_BEAT_REQUESTED,
+        _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
+        _SUBTYPE_WORKSPACE_DEMO_REQUESTED,
+    },
+)
+
+
+def _append_onboarding_trigger_ack_guidance(text: str, subtype: str) -> str:
+    """Append mandatory immediate-ack suffix for step-trigger notifications."""
+    stripped = text.strip()
+    if subtype in _SUBTYPES_WITHOUT_USER_ACK:
+        return stripped
+    return f"{stripped} {_IMMEDIATE_TRIGGER_ACK_GUIDANCE}".strip()
+
+
+def _boss_thread_has_assistant_unify_message(cm: "ConversationManager") -> bool:
+    from unify.conversation_manager.cm_types.medium import Medium
+    from unify.conversation_manager.domains.contact_index import UnifyMessage
+
+    boss_id = int(
+        getattr(cm, "boss_contact_id", None) or SESSION_DETAILS.boss_contact_id or 1,
+    )
+    contact_index = getattr(cm, "contact_index", None)
+    if contact_index is None:
+        return False
+    for msg in contact_index.get_messages_for_contact(boss_id, Medium.UNIFY_MESSAGE):
+        if isinstance(msg, UnifyMessage) and msg.role == "assistant":
+            return True
+    return False
+
+
+def _should_deliver_coordinator_chat_intro(cm: "ConversationManager") -> bool:
+    return (
+        cm.coordinator_onboarding_active
+        and cm.coordinator_intro_watched
+        and cm.coordinator_pending_chat_intro
+        and not _boss_thread_has_assistant_unify_message(cm)
+    )
+
+
+def _remaining_chat_intro_delay_seconds(cm: "ConversationManager") -> float:
+    armed_at = cm.coordinator_chat_intro_armed_at
+    if not isinstance(armed_at, str) or not armed_at.strip():
+        return _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS
+    try:
+        armed = datetime.fromisoformat(armed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS
+    elapsed = (datetime.now(timezone.utc) - armed).total_seconds()
+    return max(0.0, _COORDINATOR_ONBOARDING_CHAT_INTRO_TOTAL_DELAY_SECONDS - elapsed)
+
+
+async def _deliver_coordinator_chat_intro_task(cm: "ConversationManager") -> None:
+    from unify.conversation_manager.domains.brain_action_tools import (
+        ConversationManagerBrainActionTools,
+    )
+
+    delay = _remaining_chat_intro_delay_seconds(cm)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    if not _should_deliver_coordinator_chat_intro(cm):
+        return
+    tools = ConversationManagerBrainActionTools(cm)
+    await tools.send_unify_message_to_boss(content=COORDINATOR_ONBOARDING_CHAT_INTRO)
+    await cm._patch_coordinator_pending_chat_intro(pending=False)
+    cm._session_logger.info(
+        "coordinator_onboarding_event",
+        "Coordinator onboarding chat intro delivered.",
+    )
+
+
+def schedule_coordinator_chat_intro_delivery(cm: "ConversationManager") -> bool:
+    """Arm the scripted chat opener when durable state says it is due."""
+    if not _should_deliver_coordinator_chat_intro(cm):
+        return False
+    task = getattr(cm, "_coordinator_chat_intro_delivery_task", None)
+    if task is not None and not task.done():
+        return True
+    cm._coordinator_chat_intro_delivery_task = asyncio.create_task(
+        _deliver_coordinator_chat_intro_task(cm),
+    )
+    return True
 
 
 def _detail_string(details: dict[str, Any], key: str) -> str:
     value = details.get(key)
     return value.strip() if isinstance(value, str) else ""
+
+
+def _onboarding_click_step_labels(details: dict[str, Any]) -> tuple[str, str]:
+    """Resolve step id/title for a durable click-trace guidance line."""
+    step_id = _detail_string(details, "step_id") or _detail_string(
+        details,
+        "trigger_step_id",
+    )
+    step_title = _detail_string(details, "step_title") or step_id or "onboarding step"
+    return step_id, step_title
+
+
+def _push_durable_onboarding_click_trace(
+    event: CoordinatorOnboardingEvent,
+    cm: "ConversationManager",
+) -> None:
+    """Anchor a checklist click in the boss unify_message thread."""
+    from unify.conversation_manager.cm_types.medium import Medium
+
+    details = event.details if isinstance(event.details, dict) else {}
+    step_id, step_title = _onboarding_click_step_labels(details)
+    if not step_id:
+        return
+    boss_id = int(
+        getattr(cm, "boss_contact_id", None) or SESSION_DETAILS.boss_contact_id or 1,
+    )
+    contact_index = getattr(cm, "contact_index", None)
+    if contact_index is None:
+        return
+    contact_index.push_message(
+        contact_id=boss_id,
+        sender_name="guidance",
+        thread_name=Medium.UNIFY_MESSAGE,
+        message_content=(
+            f"[Onboarding] User clicked '{step_title}' (step_id: {step_id}) — "
+            "beat pending until the step is marked done."
+        ),
+        role="guidance",
+        timestamp=event.timestamp,
+    )
 
 
 def _coordinator_onboarding_event_from_payload(
@@ -166,43 +363,48 @@ def _coordinator_onboarding_notification_text(
             if trigger_step_id or reply_step_id
             else ""
         )
-        # The event is a poll, not a fresh command. The click and any verbal ask
-        # that arrived around the same time are the same directive in two forms,
-        # so the clue must go out exactly once.
+        # The click unlocks the outbound tool; verbal consent on a call does not.
         poll_note = (
-            " This notification is a POLL confirming the user now expects the "
-            "clue on this channel — it is NOT a request for another copy. If a "
-            "verbal directive arrived around the same time (e.g. they said so on "
-            "a call), it is almost certainly the SAME directive in two forms: "
-            "satisfy it once. If I have already sent a clue on this channel for "
-            "this step, I do NOT send another — I simply confirm it's on its "
-            "way. I send a clue now only if none has gone out yet."
+            " This notification means the user clicked the trigger row — that "
+            "click unlocked my outbound tool. A verbal ask or 'go ahead' on a "
+            "call before they clicked does NOT count; if that happened, tell them "
+            "to click the matching row in the Onboarding checklist. If I have "
+            "already sent a clue on this channel for this step, I do NOT send "
+            "another — I confirm it's on its way. I send a clue now only if none "
+            "has gone out yet after their click."
         )
         clue_note = (
-            " I invent my own short reference-quiz clue on the spot — there is "
-            "no supplied clue or answer. I pick a fresh sci-fi or pop-culture "
-            "quote of my own each time and keep the answer to myself."
+            " I invent my own short sci-fi quote clue on the spot — there is "
+            "no supplied clue or answer, and I keep the answer to myself. "
+            "User-facing lines stay minimal (one sentence that we're testing "
+            "the channel with a quick sci-fi quiz); I never list genres or "
+            "franchises."
         )
         framing_note = f" Section framing: {framing}" if framing else ""
         interaction_note = (
-            " Structured interaction: reference_quiz. Explain the quiz before "
-            "sending or discussing any clue; the user should know this is a "
-            "channel-proving mini-game, not a mysterious email. Outbound text "
-            "or email clue messages must include that context before the clue."
+            " Structured interaction: reference_quiz. One short sentence of "
+            "context before the clue — we're testing the channel with a quick "
+            "sci-fi quiz — not a genre list or franchise rundown."
             if isinstance(interaction, dict)
             and interaction.get("type") == "reference_quiz"
             else ""
         )
         call_note = (
-            " If the tool starts a call, put the briefing and framing in the call context "
-            "so the spoken sidecar can run the interaction without needing this notification."
+            " If the tool starts a call, put the full spoken line in the required "
+            "`opener` argument — verbatim at call start — AND put the full task "
+            "design in the `briefing` argument (the answer I have in mind, likely "
+            "mishearings to accept, how to confirm a correct guess, and the exact "
+            "wrap-up to say when done). The voice agent runs the whole interaction "
+            "from the briefing by itself; nothing from this notification needs "
+            "repeating via guide_voice_agent."
             if tool_name.startswith("make_") or "call" in channel
             else ""
         )
-        return (
+        text = (
             f"{subtype_hint} {body}{channel_note}{step_note}{poll_note}{clue_note}"
             f"{tool_note}{framing_note}{interaction_note}{call_note}"
         ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
         medium = ""
@@ -243,7 +445,9 @@ def _coordinator_onboarding_notification_text(
             "(e.g. do not say 'connect your workspace' when `workspace` is "
             "already done or skipped). Frame that next step as clicking its row "
             "in the Onboarding checklist before mentioning any destination tab, "
-            "dialog, or settings page. If there is no evidence that the user "
+            "dialog, or settings page — for communication trigger steps (email, "
+            "SMS, WhatsApp, phone, etc.), the click is required before I can "
+            "send; verbal consent on the call does not substitute. If there is no evidence that the user "
             "has already had a meaningful onboarding orientation from you, "
             "introduce yourself as T-W1N, frame yourself as their digital twin "
             "or stand-in, explain that onboarding is a shared walkthrough from "
@@ -256,6 +460,13 @@ def _coordinator_onboarding_notification_text(
             "one-sentence recap of what's been done so far plus that first "
             "valid next step — do NOT re-introduce yourself."
         )
+        if medium == "chat":
+            guidance = (
+                "The onboarding picker resolved to chat. A fixed scripted opener "
+                "is being delivered as a unify_message on a short delay — do not "
+                "send it yourself. Stay silent until the user sends their next "
+                "message; do not send another opening turn or replay the intro/overview."
+            )
         medium_note = ""
         if medium == "call":
             medium_note = (
@@ -263,9 +474,12 @@ def _coordinator_onboarding_notification_text(
                 "agent generates its own spoken opener. No chat reply needed.)"
             )
         elif medium == "chat":
-            medium_note = " (Chat: send exactly one short chat message.)"
-        composed = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
-        return composed.strip()
+            medium_note = (
+                " (Chat: the scripted opener is scheduled for delivery — "
+                "no chat reply on this event.)"
+            )
+        text = f"{subtype_hint} {body} {guidance}{completed_hint}{skipped_hint}{medium_note}"
+        return _append_onboarding_trigger_ack_guidance(text.strip(), event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_SKIPPED:
         details = event.details if isinstance(event.details, dict) else {}
@@ -287,7 +501,8 @@ def _coordinator_onboarding_notification_text(
             "Frame the next target as clicking its row in the Onboarding "
             "checklist. Do not say the skipped step is complete."
         )
-        return f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
+        text = f"{subtype_hint} {body}{step_note}{skipped_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_RESET:
         details = event.details if isinstance(event.details, dict) else {}
@@ -304,7 +519,8 @@ def _coordinator_onboarding_notification_text(
             "only source of truth for what is done — ignore any earlier "
             "transcript memory of having finished this step."
         )
-        return f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_STEP_STARTED:
         details = event.details if isinstance(event.details, dict) else {}
@@ -332,7 +548,10 @@ def _coordinator_onboarding_notification_text(
             "for the channel event. Do not skip ahead to Connect or Delegate "
             "until this step is done or skipped."
         )
-        return f"{subtype_hint} {body}{step_note}{progress_note}{skipped_note} {guidance}".strip()
+        text = (
+            f"{subtype_hint} {body}{step_note}{progress_note}{skipped_note} {guidance}"
+        ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype in (_SUBTYPE_TASK_BEAT_REQUESTED, _SUBTYPE_TASK_CHIP_REQUESTED):
         # The orchestra-supplied ``body`` already carries the full directive
@@ -351,7 +570,166 @@ def _coordinator_onboarding_notification_text(
             'guide_voice_agent(message="...") rather than sending a chat '
             "message; otherwise send a single chat message."
         )
-        return f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
+        text = f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype in (
+        _SUBTYPE_INTEGRATION_DEMO_REQUESTED,
+        _SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
+    ):
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id") or _detail_string(
+            details,
+            "trigger_step_id",
+        )
+        instruction = _detail_string(details, "instruction")
+        step_note = f" The demo step id is `{step_id}`." if step_id else ""
+        instruction_note = (
+            f" The selected demo instruction is: {instruction}" if instruction else ""
+        )
+        guidance = (
+            "After acking that I am on it, use my connected integration/app tools "
+            "to do the requested demo now. For `integration-read`, read from a "
+            "connected app and send one short user-facing brief as a unify_message. "
+            "For `integration-action`, take one concrete, user-safe action in or "
+            "across connected apps and send one short report as a unify_message. "
+            "The checklist does NOT auto-detect this deliverable, so handling the "
+            "demo is not finished until I call set_onboarding_task_state(step_id, "
+            "completed=True) after sending it. If no connected app fits, I explain "
+            "exactly what is missing and do NOT mark the step complete. If a voice "
+            "call is active I speak via guide_voice_agent for the acknowledgement "
+            "but still send the deliverable as a unify_message."
+        )
+        text = f"{subtype_hint} {body}{step_note}{instruction_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        instruction = _detail_string(details, "instruction")
+        category = _detail_string(details, "gallery_category")
+        search_query = _detail_string(details, "search_query")
+        instruction_note = (
+            f" The selected connect suggestion is: {instruction}" if instruction else ""
+        )
+        category_note = f" Gallery category hint: `{category}`." if category else ""
+        search_note = f" Gallery search hint: `{search_query}`." if search_query else ""
+        guidance = (
+            "Acknowledge in one short sentence and point them at the Integrations "
+            "pane that Console just opened/filtered for them. Do not claim the app "
+            "is connected and do not mark `apps` complete from this click — that "
+            "step completes only after an actual integration credential lands."
+        )
+        text = (
+            f"{subtype_hint} {body}{instruction_note}{category_note}{search_note} "
+            f"{guidance}"
+        ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
+        from unify.conversation_manager.domains.learning_expenses_fixtures import (
+            learning_expenses_scenario_prompt_lines,
+            learning_expenses_stop_act_for_storage_rule,
+            learning_expenses_storage_check_nudge,
+            learning_expenses_user_facing_voice,
+        )
+
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        scenario_id = _detail_string(details, "scenario_id")
+        replay_hint = _detail_string(details, "replay_hint")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        scenario_note = f" Scenario id: `{scenario_id}`." if scenario_id else ""
+        replay_note = f" Replay hint: {replay_hint}" if replay_hint else ""
+        fixture_note = " ".join(learning_expenses_scenario_prompt_lines())
+        medium_note = (
+            " This is an openly narrated tutorial demo — say so up front. "
+            f"{learning_expenses_user_facing_voice()} "
+            f"{fixture_note} "
+            "Before the first attempt, send the month-N bank export CSVs as "
+            "unify_message attachments (one attachment per message). Run a "
+            "deliberately naive first pass via act(persist=True) with genuinely "
+            "computed numbers (sum every outflow, add abs(Amount) again for each "
+            "INTERNAL XFER row on either file including card-side credits, ignore "
+            "refunds), state the naive total and explain the mistake in plain "
+            "language (no tables or row-by-row breakdowns), suggest the exact "
+            "correction text, and WAIT — never send the correction or proceed "
+            "on the user's behalf. After their correction, interject_* into the "
+            "running persist act with the corrected algorithm and include this "
+            f"StorageCheck memoization request verbatim: "
+            f"{learning_expenses_storage_check_nudge()} "
+            "Then send the improved deliverable as a unify_message. "
+            f"{learning_expenses_stop_act_for_storage_rule()} "
+            "The doing loop must not call "
+            "GuidanceManager or FunctionManager store tools — StorageCheck "
+            "persists after completion; tell the user to open the Brain rail "
+            "Guidance and Functions sections and cite what StorageCheck stored — "
+            "I have no tool to navigate the Console for them — invite them to ask "
+            "for next month's report, and WAIT again "
+            "before the replay act. Each phase deliverable (first attempt, "
+            "improved version, replay) must be sent with send_unify_message. "
+            "After the replay deliverable, mark the step done with "
+            "set_onboarding_task_state('learn-from-correction', True) — the "
+            "checklist does not auto-detect the tutorial. Brain nudges and "
+            "attachment intro messages are not deliverables. Tell the user to open "
+            "the Actions tab themselves before/during each act run — I have no "
+            "tool to navigate the Console for them. "
+            "On a live in-app Unify Meet call: narrate spoken beats via "
+            "guide_voice_agent, but CSV attachments and all three deliverables "
+            "MUST still be sent as unify_message chat messages — a report is a "
+            "document, not a spoken line. "
+            "On off-console channels (plain phone call, WhatsApp call): do not "
+            "run the tutorial; say it is a Console exercise and offer to start "
+            "when the user is back in the app."
+        )
+        text = (
+            f"{subtype_hint} {body}{framing_note}{scenario_note}{replay_note}"
+            f"{medium_note}"
+        ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        text = f"{subtype_hint} {body}{framing_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id")
+        step_note = f" The demo step id is `{step_id}`." if step_id else ""
+        guidance = (
+            "The user clicked a workspace demo row: after acking that I am on it, "
+            "do the demo task now with my own tools. Read the relevant part of "
+            "their connected workspace and deliver one short unify_message summary. "
+            "The checklist does NOT "
+            "auto-detect that summary, so handling this demo is not finished until "
+            "I mark it done by calling set_onboarding_task_state(step_id, "
+            "completed=True) after sending the summary. Any reply, tidy-up, or "
+            "flag is an optional follow-up I only act on if the user says yes; it "
+            "never gates completion. This notification is a poll, not a request to "
+            "repeat finished work: if the task is already done I just confirm it "
+            "and do not redo it or send a duplicate. If a voice call is active I "
+            'speak via guide_voice_agent(message="...") instead of a chat message.'
+        )
+        text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_STEP_COMPLETED:
+        # This event confirms a completion the brain itself just made via
+        # set_onboarding_task_state. It exists to refresh the render and log the
+        # milestone; the handler suppresses the follow-up run so the brain does
+        # not acknowledge its own tool call in a second turn. The text is only
+        # standing context for a later turn.
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id")
+        step_note = f" Completed step id: `{step_id}`." if step_id else ""
+        text = (
+            f"{subtype_hint} {body}{step_note} No action needed now — this "
+            "confirms a step I just marked complete; the live progress block is "
+            "already updated."
+        ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     guidance = (
         "Acknowledge this in one short sentence to the user, name the thing they "
@@ -365,8 +743,10 @@ def _coordinator_onboarding_notification_text(
         "single chat message."
     )
     if not body:
-        return f"{subtype_hint} {guidance}"
-    return f"{subtype_hint} {body} {guidance}"
+        text = f"{subtype_hint} {guidance}"
+    else:
+        text = f"{subtype_hint} {body} {guidance}"
+    return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
 
 async def _handle_coordinator_onboarding_event(
@@ -387,6 +767,10 @@ async def _handle_coordinator_onboarding_event(
     still push the notification — keeps the brain aware that the
     user just opened a session in case it matters for a later turn —
     but suppress the immediate run.
+
+    The ``medium == 'chat'`` branch is similar: the handler delivers
+    the fixed onboarding opener as a unify_message and suppresses
+    the immediate run so the slow brain cannot race a second intro.
     """
     from unify.settings import SETTINGS
 
@@ -395,6 +779,8 @@ async def _handle_coordinator_onboarding_event(
     # no notification, no LLM run — rather than nudge them toward UI steps
     # they cannot see.
     if not SETTINGS.UNITY_CONSOLE_UI:
+        return False
+    if not cm.coordinator_onboarding_active:
         return False
     # Refresh the standing onboarding progress model from the event's
     # attached render so the slow brain's next turn reflects this change
@@ -414,21 +800,22 @@ async def _handle_coordinator_onboarding_event(
                 event.details,
                 origin_event_id=trace.get("event_id", ""),
             )
-        if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
-            # A workspace demo proves out via the assistant's unify_message
-            # summary. There is no paired reply and unify_message is not a
-            # gated channel, so we only arm the pending outbound so the next
-            # unify_message send is tagged and the step auto-completes.
-            trace = getattr(cm, "_current_event_trace", None) or {}
-            cm.set_pending_onboarding_outbound(
-                event.details,
-                origin_event_id=trace.get("event_id", ""),
+        if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
+            from unify.conversation_manager.domains.learning_expenses_fixtures import (
+                provision_learning_expenses_fixtures,
             )
+            from unify.file_manager.settings import get_local_root
+
+            provision_learning_expenses_fixtures(get_local_root())
+    if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
+        return False
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
         _coordinator_onboarding_notification_text(event),
         event.timestamp,
     )
+    if event.subtype in _SUBTYPES_WITH_DURABLE_CLICK_TRACE:
+        _push_durable_onboarding_click_trace(event, cm)
     cm._session_logger.info(
         "coordinator_onboarding_event",
         "Coordinator onboarding narration requested; "
@@ -436,11 +823,24 @@ async def _handle_coordinator_onboarding_event(
     )
     if event.subtype == _SUBTYPE_ONBOARDING_SESSION_STARTED:
         details = event.details if isinstance(event.details, dict) else {}
-        if details.get("medium") == "call":
+        medium = details.get("medium")
+        if medium == "chat":
+            cm._coordinator_state_checked_at = 0.0
+            await cm._refresh_coordinator_onboarding_state(force=True)
+            schedule_coordinator_chat_intro_delivery(cm)
+            return False
+        if medium == "call":
             return False
     if event.subtype == _SUBTYPE_STEP_RESET:
         # The render refresh + standing notification above are the whole
         # point of this event; a reset must not make the brain spontaneously
         # message the user, so suppress the immediate run.
+        return False
+    if event.subtype == _SUBTYPE_STEP_COMPLETED:
+        # The completion originated from the brain's own set_onboarding_task_state
+        # call, so it already told the user (or will on its current turn). The
+        # event only exists to push the freshly-derived render; triggering a run
+        # here would make the brain acknowledge its own action in a redundant
+        # second turn. Refresh only, no run.
         return False
     return True

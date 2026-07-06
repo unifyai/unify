@@ -25,6 +25,10 @@ from unify.common.prompt_helpers import now as prompt_now
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from unify.comms import CommsPrimitives
+from unify.comms.outbound_origin import (
+    mark_slow_brain_direct_outbound,
+    reset_slow_brain_direct_outbound,
+)
 from unify.session_details import SESSION_DETAILS
 
 from unify.conversation_manager.domains import managers_utils
@@ -229,6 +233,18 @@ class _DesktopActionHandle:
         pass
 
 
+def slow_brain_direct_comms(method):
+    @wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        token = mark_slow_brain_direct_outbound()
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            reset_slow_brain_direct_outbound(token)
+
+    return wrapper
+
+
 class ConversationManagerBrainActionTools:
     """
     Side-effecting tools for the Main CM Brain.
@@ -247,6 +263,7 @@ class ConversationManagerBrainActionTools:
     def _boss_contact_id(self) -> int:
         return int(SESSION_DETAILS.boss_contact_id)
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_sms)
     async def send_sms(
         self,
@@ -261,6 +278,7 @@ class ConversationManagerBrainActionTools:
             phone_number=phone_number,
         )
 
+    @slow_brain_direct_comms
     async def send_sms_to_boss(
         self,
         *,
@@ -283,6 +301,7 @@ class ConversationManagerBrainActionTools:
             content=content,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_whatsapp)
     async def send_whatsapp(
         self,
@@ -299,6 +318,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     async def send_whatsapp_to_boss(
         self,
         *,
@@ -338,6 +358,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_discord_message)
     async def send_discord_message(
         self,
@@ -352,6 +373,7 @@ class ConversationManagerBrainActionTools:
             discord_id=discord_id,
         )
 
+    @slow_brain_direct_comms
     async def send_discord_message_to_boss(
         self,
         *,
@@ -374,6 +396,7 @@ class ConversationManagerBrainActionTools:
             content=content,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_discord_channel_message)
     async def send_discord_channel_message(
         self,
@@ -390,13 +413,14 @@ class ConversationManagerBrainActionTools:
             contact_id=contact_id,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_slack_message)
     async def send_slack_message(
         self,
         *,
         contact_id: int | str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         slack_user_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
@@ -408,11 +432,12 @@ class ConversationManagerBrainActionTools:
             thread_ts=thread_ts,
         )
 
+    @slow_brain_direct_comms
     async def send_slack_message_to_boss(
         self,
         *,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
         """Send a Slack direct message to my boss only.
@@ -427,8 +452,11 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send to my boss.
-        team_id : str
-            Slack workspace/team ID from the inbound boss DM annotation.
+        team_id : str | None, optional
+            Slack workspace/team ID (T...). Auto-resolved from my connected
+            Slack workspace, so leave it unset for the normal single-
+            workspace case; only pass it to override for a multi-workspace
+            send.
         thread_ts : str | None, optional
             Existing boss DM thread timestamp to reply inside.
         """
@@ -439,13 +467,14 @@ class ConversationManagerBrainActionTools:
             thread_ts=thread_ts,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_slack_channel_message)
     async def send_slack_channel_message(
         self,
         *,
         channel_id: str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
         contact_id: int | str | None = None,
     ) -> dict[str, Any]:
@@ -457,6 +486,7 @@ class ConversationManagerBrainActionTools:
             contact_id=contact_id,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_teams_message)
     async def send_teams_message(
         self,
@@ -479,6 +509,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     async def send_teams_message_to_boss(
         self,
         *,
@@ -602,6 +633,7 @@ class ConversationManagerBrainActionTools:
             location=location,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_unify_message)
     async def send_unify_message(
         self,
@@ -616,6 +648,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     async def send_unify_message_to_boss(
         self,
         *,
@@ -642,6 +675,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_api_response)
     async def send_api_response(
         self,
@@ -658,6 +692,7 @@ class ConversationManagerBrainActionTools:
             tags=tags,
         )
 
+    @slow_brain_direct_comms
     async def send_api_response_to_boss(
         self,
         *,
@@ -689,6 +724,7 @@ class ConversationManagerBrainActionTools:
             tags=tags,
         )
 
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_email)
     async def send_email(
         self,
@@ -715,6 +751,7 @@ class ConversationManagerBrainActionTools:
             attachment_filepath=attachment_filepath,
         )
 
+    @slow_brain_direct_comms
     async def send_email_to_boss(
         self,
         *,
@@ -759,19 +796,25 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_call(
             contact_id=contact_id,
-            context=context,
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
             phone_number=phone_number,
         )
 
     async def make_call_to_boss(
         self,
         *,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
     ) -> dict[str, Any]:
         """Start an outbound phone call to my boss only.
 
@@ -782,12 +825,27 @@ class ConversationManagerBrainActionTools:
 
         Parameters
         ----------
-        context : str
-            Mission briefing for the voice agent speaking with my boss.
+        opener : str
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after my boss's brief "Hello?" (or a few seconds of
+            silence). Write it so it reads naturally either way.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design (purpose, key facts, expected
+            responses, how to confirm, and the wrap-up to give) so the voice
+            runs the whole interaction itself.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason. Set this
+            whenever the call is expected to be short (a single question, a
+            message delivery, a quick confirmation) so the live voice can end
+            it at the natural close without waiting on me; revoke mid-call
+            with ``withdraw_hang_up`` if it turns into a longer conversation.
         """
         return await self._comms.make_call(
             contact_id=self._boss_contact_id(),
-            context=context,
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
         )
 
     @wraps(CommsPrimitives.make_whatsapp_call)
@@ -795,19 +853,25 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.make_whatsapp_call(
             contact_id=contact_id,
-            context=context,
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
             whatsapp_number=whatsapp_number,
         )
 
     async def make_whatsapp_call_to_boss(
         self,
         *,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
     ) -> dict[str, Any]:
         """Start a WhatsApp voice call to my boss only.
 
@@ -818,18 +882,33 @@ class ConversationManagerBrainActionTools:
 
         Parameters
         ----------
-        context : str
-            Mission briefing for the voice agent speaking with my boss.
+        opener : str
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after my boss's brief "Hello?" (or a few seconds of
+            silence). Write it so it reads naturally either way.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design (purpose, key facts, expected
+            responses, how to confirm, and the wrap-up to give) so the voice
+            runs the whole interaction itself.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason. Set this
+            whenever the call is expected to be short (a single question, a
+            message delivery, a quick confirmation) so the live voice can end
+            it at the natural close without waiting on me; revoke mid-call
+            with ``withdraw_hang_up`` if it turns into a longer conversation.
         """
         return await self._comms.make_whatsapp_call(
             contact_id=self._boss_contact_id(),
-            context=context,
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
         )
 
     async def join_google_meet(
         self,
         meet_url: str,
-        context: str = "",
+        opener: str,
     ) -> dict[str, Any]:
         """Join a Google Meet call.
 
@@ -840,9 +919,8 @@ class ConversationManagerBrainActionTools:
 
         Args:
             meet_url: The full Google Meet URL (e.g. https://meet.google.com/abc-defg-hij).
-            context: Briefing for the voice agent about the meeting purpose,
-                expected participants, topics to cover, and how to behave.
-                Same guidance principles as make_call's context parameter.
+            opener: Verbatim spoken line once the meeting is live and someone
+                is listening. Write the exact words to speak.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -854,8 +932,7 @@ class ConversationManagerBrainActionTools:
                 "message": "A call or meeting is already active.",
             }
 
-        if context:
-            self._cm.call_manager.initial_notification = context
+        self._cm.call_manager.pending_opener = opener.strip()
 
         from unify.conversation_manager.events import GoogleMeetReceived
 
@@ -930,7 +1007,7 @@ class ConversationManagerBrainActionTools:
     async def join_teams_meet(
         self,
         meet_url: str,
-        context: str = "",
+        opener: str,
     ) -> dict[str, Any]:
         """Join a Microsoft Teams meeting.
 
@@ -943,9 +1020,8 @@ class ConversationManagerBrainActionTools:
             meet_url: The full Teams meeting URL (e.g.
                 https://teams.microsoft.com/l/meetup-join/... or
                 https://teams.live.com/meet/...).
-            context: Briefing for the voice agent about the meeting purpose,
-                expected participants, topics to cover, and how to behave.
-                Same guidance principles as make_call's context parameter.
+            opener: Verbatim spoken line once the meeting is live and someone
+                is listening. Write the exact words to speak.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -957,8 +1033,7 @@ class ConversationManagerBrainActionTools:
                 "message": "A call or meeting is already active.",
             }
 
-        if context:
-            self._cm.call_manager.initial_notification = context
+        self._cm.call_manager.pending_opener = opener.strip()
 
         from unify.conversation_manager.events import TeamsMeetReceived
 
@@ -993,7 +1068,12 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Teams meeting"}
 
-    async def start_unify_meet(self, context: str = "") -> dict[str, Any]:
+    async def start_unify_meet(
+        self,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
+    ) -> dict[str, Any]:
         """Ring my boss on Unify Meet (the in-app live call) and ask them to answer.
 
         Unify Meet is the in-app live call inside the Console - the canonical
@@ -1010,10 +1090,18 @@ class ConversationManagerBrainActionTools:
         phone or WhatsApp call I must ``hang_up`` first, then ring the Meet.
 
         Args:
-            context: A short briefing for how I should open the call once it is
-                answered (why I'm calling / what we're continuing), spoken as a
-                purposeful greeting. Same guidance principles as make_call's
-                context parameter.
+            opener: Verbatim spoken line once the call connects. Write the exact
+                words to speak.
+            briefing: Optional unspoken context for the live voice — never read
+                aloud. Describe the full task design (purpose, key facts,
+                expected responses, how to confirm, and the wrap-up to give)
+                so the voice runs the whole interaction itself.
+            allow_hang_up: Optional one-line reason that pre-sanctions ending
+                the call. Set it whenever the call is expected to be short (a
+                single question, a message delivery, a quick confirmation) so
+                the live voice can end it at the natural close without waiting
+                on me; revoke mid-call with ``withdraw_hang_up`` if it turns
+                into a longer conversation.
         """
         if (
             self._cm.call_manager.has_active_call
@@ -1027,19 +1115,93 @@ class ConversationManagerBrainActionTools:
                     "ring the Unify Meet."
                 ),
             }
-        return await self._cm.ring_unify_meet(context=context)
+        return await self._cm.ring_unify_meet(
+            opener=opener,
+            briefing=briefing,
+            allow_hang_up=allow_hang_up,
+        )
+
+    async def allow_hang_up(self, reason: str) -> dict[str, Any]:
+        """Sanction ending the current call; the live voice picks the moment.
+
+        Arms the hang-up gate: the live voice on the call gains permission to
+        end it, and will do so at the natural close — typically right after
+        goodbyes are exchanged, or after a stretch of dead air. It will NOT cut
+        anyone off mid-conversation, and it keeps handling substantive turns
+        normally until the close actually arrives.
+
+        This is the preferred way to end a call when the conversation is
+        wrapping up: I decide THAT ending is right, the live voice decides
+        WHEN. Use ``hang_up`` instead only when my boss explicitly tells me to
+        end the call right now.
+
+        If the conversation moves on to something new after I arm this, I use
+        ``withdraw_hang_up`` to take the permission back.
+
+        Parameters
+        ----------
+        reason : str
+            One short line on why wrapping up is appropriate (e.g. "channel
+            test complete — wrap up warmly"). The live voice sees this
+            verbatim as its guidance for the close.
+        """
+        if not self._cm.in_voice_session:
+            return {
+                "status": "error",
+                "message": "No active voice session to sanction ending.",
+            }
+        reason = " ".join((reason or "").split()).strip()
+        if not reason:
+            return {
+                "status": "error",
+                "message": (
+                    "reason is required: state briefly why wrapping up is "
+                    "appropriate."
+                ),
+            }
+        await self._cm.call_manager.set_hang_up_gate(reason)
+        return {
+            "status": "ok",
+            "message": (
+                "Hang-up gate armed — the live voice will end the call at the "
+                "natural close. Use withdraw_hang_up if the conversation "
+                "moves on instead."
+            ),
+        }
+
+    async def withdraw_hang_up(self) -> dict[str, Any]:
+        """Withdraw a previously granted permission to end the current call.
+
+        Disarms the hang-up gate set by ``allow_hang_up`` — for example when
+        my boss changes their mind, raises something new, or the conversation
+        clearly is not over after all. The live voice loses the ability to end
+        the call until I arm the gate again.
+        """
+        if self._cm.call_manager.hang_up_gate_reason is None:
+            return {
+                "status": "ok",
+                "message": "The hang-up gate was not armed; nothing to withdraw.",
+            }
+        await self._cm.call_manager.set_hang_up_gate(None)
+        return {
+            "status": "ok",
+            "message": "Hang-up gate disarmed — the call continues normally.",
+        }
 
     async def hang_up(self) -> dict[str, Any]:
-        """End the current call or meeting, whatever kind it is.
+        """End the current call or meeting immediately.
 
         Hangs up / leaves the live voice session — a phone call, WhatsApp call,
         Unify Meet, Google Meet, or Microsoft Teams meeting. Only one voice
         session can be active at a time, so this always targets that session.
         After it ends, the call-starting tools become available again.
 
-        Use this when my boss asks me to hang up, end the call, leave the
-        meeting, or when the conversation is clearly finished and it is natural
-        to disconnect.
+        This ends the session NOW. Use it only when my boss explicitly asks me
+        to hang up / end the call / leave the meeting, or when the session must
+        be torn down (e.g. to recover from a broken line). When a conversation
+        is simply wrapping up naturally, prefer ``allow_hang_up`` — it lets the
+        live voice finish the goodbyes and end at the right moment instead of
+        cutting anyone off.
         """
         channel = self._cm.call_manager._call_channel
         has_meet = (
@@ -1261,14 +1423,14 @@ class ConversationManagerBrainActionTools:
                 (interject, ask) on this action will also skip context forwarding.
             llm_profile: Optional curated LLM profile for this action. Leave
                 unset for the default actor profile, normally
-                ``deepseek-v4-max@deepseek``. Use ``gpt_5_5_low``,
+                ``minimax-v3@minimax``. Use ``gpt_5_5_low``,
                 ``gpt_5_5_medium``, or ``gpt_5_5_high`` only when the task or
                 the user's wording warrants premium GPT-5.5 reasoning. If the
                 user explicitly asks you to "use all of your thinking effort",
                 "think as hard as possible", or similar, choose
                 ``gpt_5_5_high``. GPT-5.5 profiles are substantially more
-                expensive than the DeepSeek default: about 11.5x the
-                input-token rate and 34.5x the output-token rate before any
+                expensive than the MiniMax default: about 17x the
+                input-token rate and 25x the output-token rate before any
                 extra reasoning/output tokens from higher effort.
 
                 Escalate the profile when retrying an action that shows
@@ -1931,6 +2093,99 @@ class ConversationManagerBrainActionTools:
         )
         return {"status": "updated", "updates": updates}
 
+    async def deactivate_onboarding(self) -> dict[str, Any]:
+        """Pause the global onboarding flow so my boss can use the platform normally.
+
+        **Only call after my boss has verbally confirmed** they want to pause
+        onboarding — not merely hinted, not while I am mid-explanation, and
+        not when they are deferring a single checklist row (that is a per-row
+        UI control, not a global pause).
+
+        **Call when:** they clearly want to stop setup for now and have
+        confirmed after I restate intent — e.g. "Yes, pause it", "Let's do
+        that", "I'll finish setup later" in direct answer to my confirmation
+        question.
+
+        **Do not call when:** I am suggesting pause proactively; they asked
+        what pause means; they said "skip this step" (row defer only); they
+        have not answered a confirmation question; onboarding is already
+        inactive; they only want help with a normal task while onboarding is
+        still active (answer normally instead).
+
+        After success: tell them onboarding is paused, they can ask for help
+        normally, and they can resume later from the **Onboarding** tab in
+        Assistant info or by asking me to continue setup.
+        """
+        return await self._cm._patch_coordinator_onboarding_active(
+            active=False,
+            clear_onboarding_step=True,
+        )
+
+    async def activate_onboarding(self) -> dict[str, Any]:
+        """Resume the global onboarding checklist and nudges.
+
+        **Only call after my boss has verbally confirmed** they want to return
+        to setup — not when they are asking a one-off product question while
+        onboarding is paused (answer normally without reactivating).
+
+        **Call when:** they ask to resume or finish setup and confirm after I
+        restate intent — e.g. "Yes, let's continue onboarding", "Take me back
+        to the checklist".
+
+        **Do not call when:** onboarding is already active; they have not
+        confirmed; they only asked how to open the Onboarding tab (give
+        directions instead); the Console **Return to onboarding** button is
+        enough and they did not ask me to flip it.
+
+        After success: confirm onboarding is live again and guide them to the
+        first valid next step from my live onboarding progress block (if any).
+        """
+        return await self._cm._patch_coordinator_onboarding_active(active=True)
+
+    async def set_onboarding_task_state(
+        self,
+        step_id: str,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """Mark one onboarding checklist step complete or incomplete.
+
+        Use the ``step_id`` values from my live onboarding progress block
+        (for example ``apps``, ``create-scheduled-task``, ``learn-from-correction``,
+        ``my-computer-demo``, and the workspace demos ``workspace-mailbox`` /
+        ``workspace-drive`` / ``workspace-calendar``). Communication rows still
+        complete on their own when messages are sent and received — if this tool
+        returns an error, relay that explanation rather than guessing which steps
+        are settable.
+
+        **Workspace demos, the Learning tutorial, and the My Computer live demo
+        are completed here, explicitly.** A demo never auto-completes, so the
+        checklist cannot detect it on its own. I do the demo task — read the
+        relevant area and deliver one short summary as a single ``unify_message``
+        (e.g. for ``workspace-mailbox`` I summarise the recent mail), for
+        ``learn-from-correction`` I finish the full correction loop including the
+        replay deliverable, or for ``my-computer-demo`` I run the call-anchored
+        desktop errand and deliver the downloaded file as a chat attachment —
+        and then call this with ``completed=True``; the step is not finished until
+        I make that call. Any reply, tidy-up, or flag I offer afterwards is an
+        optional follow-up and never gates completion.
+
+        **Call when:** I have finished onboarding work the checklist cannot
+        detect yet (a workspace demo task, semantic setup, or a guided
+        walkthrough outside Communication) and it is genuinely done — or when I
+        need to undo a manual completion I set earlier.
+
+        **Do not call when:** onboarding is inactive; the step is in the
+        Communication section; or I have not actually finished the work yet
+        (e.g. I've not yet delivered the workspace demo summary).
+
+        After success: confirm briefly and continue from the refreshed
+        onboarding progress block.
+        """
+        return await self._cm._patch_coordinator_onboarding_step_state(
+            step_id=step_id,
+            completed=completed,
+        )
+
     async def wait(
         self,
         delay: int | None = None,
@@ -1938,15 +2193,24 @@ class ConversationManagerBrainActionTools:
         """
         Wait for more input without taking any action.
 
-        PREFER THIS TOOL over sending messages in most situations. Call this tool:
-        - After completing a request (let the user respond first)
-        - When there are no NEW messages requiring response
-        - When unsure whether to speak (when in doubt, wait)
-        - To let the conversation end naturally
+        Call this tool when I have nothing left to say or do this turn:
+        - After I already answered the user's latest message and they should
+          have the last word
+        - When there are no NEW inbound messages or completion events to handle
+        - After starting a long-running action or outbound send whose outcome
+          I will handle on the next event
+        - To let a natural exchange end
 
-        The user should usually have the last word. Do not send follow-up
-        messages, additional information, or "anything else?" prompts unless
-        the user explicitly asks for more.
+        Do NOT call this tool when:
+        - The user just sent a unify_message I have not answered yet
+        - I sent something on another channel (email, SMS, WhatsApp, etc.) but
+          have not yet told the user in chat where to look or what to do next
+        - The user asks a question, expresses confusion, or checks whether I
+          am still here ("hello?", "what next?", "are you ignoring me?")
+
+        The user should usually have the last word after I answer — not while
+        they are waiting on me. Do not send unprompted "anything else?" filler,
+        but do not leave an unanswered unify_message on the Console chat thread.
 
         Parameters
         ----------
@@ -1958,7 +2222,6 @@ class ConversationManagerBrainActionTools:
             that many seconds — useful for probing a long-running action or
             revisiting a situation after a reasonable interval.
         """
-        self._cm._outbound_suppress_gen = self._cm._llm_gen
         return {"status": "waiting", "delay": delay}
 
     async def guide_voice_agent(
@@ -1996,6 +2259,96 @@ class ConversationManagerBrainActionTools:
                 unless…" constraint explicitly if the note is sensitive.
         """
         return {"status": "guidance_noted"}
+
+    async def engage_speaker(self, *, speaker: str) -> dict[str, Any]:
+        """
+        Give another voice on the call full conversational standing.
+
+        During calls, transcript lines are attributed by voice: my primary call
+        participants appear by name, while other voices in the room appear as
+        anonymous labels like "Speaker 2". Those background voices are heard
+        and transcribed, but they cannot end turns, trigger my replies, or
+        interrupt my speech — I treat them as context only.
+
+        I call this when a background voice becomes a legitimate conversation
+        partner: my caller hands the conversation over ("talk to my friend for
+        a moment", "my colleague has a question"), or a background speaker
+        clearly addresses me directly and my caller would want me to respond.
+        Once engaged, that voice holds the floor like any participant. My
+        caller always remains engaged regardless — engaging a guest never
+        demotes anyone.
+
+        Args:
+            speaker: The transcript label of the voice to engage (e.g.
+                "Speaker 2"), exactly as it appears in the conversation.
+        """
+        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=True)
+
+    async def disengage_speaker(self, *, speaker: str) -> dict[str, Any]:
+        """
+        Return a previously engaged voice to background (context-only) status.
+
+        I call this when a guest's turn in the conversation is over — the
+        caller takes back the conversation ("thanks, I'm back", "that's all
+        from him"), the guest says goodbye, or the caller asks me to stop
+        responding to them. Their speech is still transcribed as labeled
+        context; they simply stop holding the floor. Primary call participants
+        can never be disengaged.
+
+        Args:
+            speaker: The transcript label of the engaged voice to demote
+                (e.g. "Speaker 2").
+        """
+        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=False)
+
+    def _speaker_engagement_doc_suffix(self) -> str:
+        """Live engagement status appendix for the engage/disengage docstrings.
+
+        Rendered per turn (``as_tools`` runs each turn) so the slow brain sees
+        the current engaged set and which anonymous voices have been heard.
+        Returns ``""`` when no anonymous voice has surfaced yet.
+        """
+        cmgr = self._cm.call_manager
+        if not cmgr.known_speaker_labels and not cmgr.engaged_labels:
+            return ""
+        engaged_names = sorted(cmgr.engaged_contacts.values()) + sorted(
+            cmgr.engaged_labels,
+        )
+        lines = [
+            "",
+            f"Currently engaged: {', '.join(engaged_names)}.",
+        ]
+        background = sorted(cmgr.known_speaker_labels - cmgr.engaged_labels)
+        if background:
+            lines.append(
+                f"Background voices heard so far (not engaged): {', '.join(background)}.",
+            )
+        return "\n".join(lines)
+
+    def _with_doc_suffix(
+        self,
+        base: "Callable[..., Any]",
+        suffix: str,
+    ) -> "Callable[..., Any]":
+        """Return ``base`` with ``suffix`` appended to its docstring.
+
+        Rebuilt per turn (``as_tools`` runs each turn) so dynamic status stays
+        current. Returns ``base`` unchanged for an empty suffix.
+        """
+        if not suffix:
+            return base
+
+        @wraps(base)
+        async def _with_suffix(**kwargs: Any) -> Any:
+            return await base(**kwargs)
+
+        # Pin the schema signature to the bound method's (which already
+        # excludes ``self``); without this, ``inspect.signature`` would unwrap
+        # past the bound method and re-expose ``self``.
+        _with_suffix.__signature__ = inspect.signature(base)
+        base_doc = inspect.getdoc(base) or ""
+        _with_suffix.__doc__ = f"{base_doc}\n{suffix}"
+        return _with_suffix
 
     def _whatsapp_contact_label(self, contact_id: int) -> str:
         """Human-friendly name for a contact in the window-status appendix."""
@@ -2123,6 +2476,21 @@ class ConversationManagerBrainActionTools:
             # One voice session at a time; a single tool ends whichever is live
             # (phone, WhatsApp, Unify Meet, Google Meet, or Teams).
             tools["hang_up"] = self.hang_up
+            # Preferred close: arm the gate and let the live voice pick the
+            # natural cut-off point (withdrawable if the conversation moves on).
+            if self._cm.call_manager.hang_up_gate_reason is None:
+                tools["allow_hang_up"] = self.allow_hang_up
+            else:
+                tools["withdraw_hang_up"] = self.withdraw_hang_up
+            engagement_suffix = self._speaker_engagement_doc_suffix()
+            tools["engage_speaker"] = self._with_doc_suffix(
+                self.engage_speaker,
+                engagement_suffix,
+            )
+            tools["disengage_speaker"] = self._with_doc_suffix(
+                self.disengage_speaker,
+                engagement_suffix,
+            )
         if self._cm.call_manager.has_active_google_meet:
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_gmeet_presenting:
@@ -2207,11 +2575,18 @@ class ConversationManagerBrainActionTools:
         # During onboarding, withhold a reference-quiz channel's send tool until
         # the user clicks its trigger row (this session) or the step durably
         # completes — so T-W1N cannot send an untagged clue proactively.
-        for name in masked_reference_quiz_tools(
-            self._cm.coordinator_onboarding_render,
-            self._cm.onboarding_clicked_trigger_steps,
-        ):
-            tools.pop(name, None)
+        if self._cm.coordinator_onboarding_active:
+            for name in masked_reference_quiz_tools(
+                self._cm.coordinator_onboarding_render,
+                self._cm.onboarding_clicked_trigger_steps,
+            ):
+                tools.pop(name, None)
+        if is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
+            if self._cm.coordinator_onboarding_active:
+                tools["deactivate_onboarding"] = self.deactivate_onboarding
+                tools["set_onboarding_task_state"] = self.set_onboarding_task_state
+            else:
+                tools["activate_onboarding"] = self.activate_onboarding
         return tools
 
     def build_action_steering_tools(self) -> dict[str, "Callable[..., Any]"]:

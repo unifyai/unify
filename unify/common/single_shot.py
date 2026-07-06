@@ -22,9 +22,15 @@ from typing import Any, Callable, Dict, List, Type, Union
 import unillm
 from pydantic import BaseModel
 
+from unillm.clients.completion_mutator import CompletionMutator
+
 from unify.common.diagnostic_logging import staging_diagnostics_enabled
 
-from .llm_helpers import method_to_schema
+from .llm_helpers import (
+    TOOL_CALL_THOUGHTS_PARAM,
+    inject_tool_call_thoughts,
+    method_to_schema,
+)
 from .llm_client import pydantic_to_json_schema_response_format
 from .tool_spec import ToolSpec, normalise_tools
 
@@ -38,14 +44,17 @@ class ToolExecution:
     name : str
         Name of the tool that was called.
     args : dict[str, Any]
-        Arguments passed to the tool.
+        Arguments passed to the tool (schema-injected ``thoughts`` excluded).
     result : Any
         Return value from executing the tool.
+    thoughts : str | None
+        Optional per-tool reasoning stripped from args before execution.
     """
 
     name: str
     args: dict[str, Any]
     result: Any
+    thoughts: str | None = None
 
 
 @dataclass
@@ -100,8 +109,10 @@ async def single_shot_tool_decision(
     tool_choice: str = "auto",
     include_class_name: bool = False,
     response_format: Type[BaseModel] | None = None,
+    inject_tool_thoughts: bool = False,
     exclusive_tools: set[str] | None = None,
     on_tool_execution_start: Callable[[], None] | None = None,
+    completion_mutator: CompletionMutator | None = None,
 ) -> SingleShotResult:
     """Make a single LLM call, execute all selected tools, return the results.
 
@@ -138,6 +149,10 @@ async def single_shot_tool_decision(
         response content will be parsed into this model and returned in
         `structured_output`. This can be combined with tools - the model can
         return structured JSON AND call tools in the same turn.
+    inject_tool_thoughts : bool, default False
+        When True, each tool schema gains an optional ``thoughts`` string
+        parameter. The value is stripped before invocation and returned on
+        ``ToolExecution.thoughts`` instead of in ``ToolExecution.args``.
     exclusive_tools : set[str] | None, default None
         Tool names that must appear at most once per LLM turn. If the LLM calls
         an exclusive tool more than once, ALL instances are rejected without
@@ -181,6 +196,8 @@ async def single_shot_tool_decision(
             tool_name=name,
             include_class_name=include_class_name,
         )
+        if inject_tool_thoughts:
+            inject_tool_call_thoughts(schema)
         schemas.append(schema)
 
     # Normalise message to list format
@@ -203,6 +220,8 @@ async def single_shot_tool_decision(
         gen_kwargs["response_format"] = pydantic_to_json_schema_response_format(
             response_format,
         )
+    if completion_mutator is not None:
+        gen_kwargs["completion_mutator"] = completion_mutator
 
     # Single LLM call
     _ss_logger.debug(
@@ -236,7 +255,7 @@ async def single_shot_tool_decision(
         _ss_logger.info(
             (
                 "Single-shot response shape message_type=%s content_type=%s "
-                "tool_calls_type=%s tool_calls_count=%s wrapper_tool_names=%s"
+                "tool_calls_type=%s tool_calls_count=%s tool_call_names=%s"
             ),
             type(msg).__name__,
             type(raw_content).__name__ if raw_content is not None else "None",
@@ -270,30 +289,6 @@ async def single_shot_tool_decision(
             structured_output=structured_output,
         )
 
-    # Some providers/adapters(eg: Anthropic) represent structured output as a `json_tool_call`
-    # tool invocation (with arguments matching `response_format`) instead of
-    # placing JSON into `message.content`. If present, parse it and exclude it
-    # from tool execution.
-    if response_format is not None:
-        try:
-            for _tc in list(tool_calls):
-                _fn = (_tc.get("function") or {}) if isinstance(_tc, dict) else {}
-                if _fn.get("name") != "json_tool_call":
-                    continue
-                _args = _fn.get("arguments", "{}")
-                _payload = (
-                    json.loads(_args) if isinstance(_args, str) else (_args or {})
-                )
-                if isinstance(_payload, dict):
-                    try:
-                        structured_output = response_format.model_validate(_payload)
-                    except Exception:
-                        # Best-effort: if it doesn't validate, ignore and proceed.
-                        pass
-        except Exception:
-            pass
-
-    # Execute ALL tool calls concurrently
     tool_calls_list = list(tool_calls)
 
     def _parse_json_args(raw: Any) -> dict[str, Any]:
@@ -301,85 +296,20 @@ async def single_shot_tool_decision(
             return json.loads(raw) if raw else {}
         return raw or {}
 
-    def _unwrap_json_tool_call(call: dict) -> list[dict]:
-        """
-        Expand provider wrapper tool-calls into real tool calls.
-
-        Why this exists
-        --------------
-        Some LLM providers (or provider adapters) represent tool calling as a
-        *single* wrapper tool invocation (commonly named `json_tool_call`) whose
-        arguments describe the *actual* tool(s) to call. This is compatible with
-        OpenAI-style tool schemas but requires unwrapping before execution.
-
-        This function returns a list of OpenAI-style tool call dicts:
-            {"function": {"name": <tool_name>, "arguments": <json-string|dict>}, ...}
-        """
-        fn_info = call.get("function", {}) or {}
-        fn_name = fn_info.get("name")
-        if fn_name != "json_tool_call":
-            return [call]
-
-        args = _parse_json_args(fn_info.get("arguments", "{}"))
-
-        # Common shapes we accept:
-        # 1) {"name": "...", "arguments": {...}}  (single tool)
-        # 2) {"tool_name": "...", "tool_args": {...}} (single tool)
-        # 3) {"tool_calls": [ {"name": "...", "arguments": {...}}, ... ]} (multi tool)
-        # 4) {"tool_calls": [ {"function": {"name": "...", "arguments": {...}}}, ... ]} (already OpenAI-like)
-        if isinstance(args, dict):
-            if "tool_calls" in args:
-                inner = args.get("tool_calls")
-                if isinstance(inner, str):
-                    inner = json.loads(inner) if inner else []
-                if not isinstance(inner, list):
-                    raise ValueError(
-                        f"json_tool_call.tool_calls must be a list, got {type(inner)}",
-                    )
-                expanded: list[dict] = []
-                for item in inner:
-                    if not isinstance(item, dict):
-                        continue
-                    if "function" in item:
-                        # Already tool-call shaped
-                        expanded.append(item)
-                        continue
-                    # Normalize {"name":..., "arguments":...}
-                    name = item.get("name") or item.get("tool_name")
-                    item_args = item.get("arguments", item.get("tool_args", {}))
-                    expanded.append(
-                        {
-                            "type": "function",
-                            "id": call.get("id", ""),
-                            "function": {
-                                "name": name,
-                                "arguments": item_args,
-                            },
-                        },
-                    )
-                return expanded
-
-            # Single tool
-            name = args.get("name") or args.get("tool_name")
-            inner_args = args.get("arguments", args.get("tool_args", {}))
-            if name:
-                return [
-                    {
-                        "type": "function",
-                        "id": call.get("id", ""),
-                        "function": {"name": name, "arguments": inner_args},
-                    },
-                ]
-
-        # If this `json_tool_call` doesn't describe an inner tool, treat it as a
-        # non-executable wrapper (commonly used to carry structured output).
-        return []
+    def _split_tool_args(fn_args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+        if not inject_tool_thoughts:
+            return fn_args, None
+        tool_thoughts = fn_args.pop(TOOL_CALL_THOUGHTS_PARAM, None)
+        if isinstance(tool_thoughts, str) and tool_thoughts.strip():
+            return fn_args, tool_thoughts
+        return fn_args, None
 
     async def execute_tool_call(call: dict) -> ToolExecution:
         """Execute a single tool call and return the result."""
         fn_info = call.get("function", {})
         fn_name = fn_info.get("name")
         fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+        fn_args, tool_thoughts = _split_tool_args(dict(fn_args))
 
         # Get the callable
         if not fn_name or fn_name not in normalised:
@@ -393,15 +323,15 @@ async def single_shot_tool_decision(
         else:
             result = fn(**fn_args)
 
-        return ToolExecution(name=fn_name, args=fn_args, result=result)
+        return ToolExecution(
+            name=fn_name,
+            args=fn_args,
+            result=result,
+            thoughts=tool_thoughts,
+        )
 
     # Execute all tool calls concurrently
-    # Expand wrapper tool calls (e.g. `json_tool_call`) into real tool calls first.
-    expanded_calls: list[dict] = []
-    for c in tool_calls_list:
-        expanded_calls.extend(_unwrap_json_tool_call(c))
-
-    _tool_names = [(c.get("function") or {}).get("name", "?") for c in expanded_calls]
+    _tool_names = [(c.get("function") or {}).get("name", "?") for c in tool_calls_list]
 
     # Reject exclusive tools that appear more than once.
     violated_tools: set[str] = set()
@@ -412,12 +342,12 @@ async def single_shot_tool_decision(
         violated_tools = {name for name in exclusive_tools if counts.get(name, 0) > 1}
 
     _ss_logger.debug(
-        f"⏱️ [single_shot +{_ss_ms()}] executing {len(expanded_calls)} tools: {_tool_names}",
+        f"⏱️ [single_shot +{_ss_ms()}] executing {len(tool_calls_list)} tools: {_tool_names}",
     )
-    if expanded_calls and on_tool_execution_start is not None:
+    if tool_calls_list and on_tool_execution_start is not None:
         on_tool_execution_start()
 
-    async def _execute_expanded_calls() -> list[ToolExecution]:
+    async def _execute_calls() -> list[ToolExecution]:
         if violated_tools:
             error_msg = (
                 f"Rejected: multiple calls to exclusive tool(s) "
@@ -429,22 +359,24 @@ async def single_shot_tool_decision(
                 fn_info = call.get("function", {})
                 fn_name = fn_info.get("name")
                 fn_args = _parse_json_args(fn_info.get("arguments", "{}"))
+                fn_args, tool_thoughts = _split_tool_args(dict(fn_args))
                 if fn_name in violated_tools:
                     return ToolExecution(
                         name=fn_name,
                         args=fn_args,
                         result={"error": error_msg},
+                        thoughts=tool_thoughts,
                     )
                 return await execute_tool_call(call)
 
             return await asyncio.gather(
-                *[_execute_or_reject(call) for call in expanded_calls],
+                *[_execute_or_reject(call) for call in tool_calls_list],
             )
         return await asyncio.gather(
-            *[execute_tool_call(call) for call in expanded_calls],
+            *[execute_tool_call(call) for call in tool_calls_list],
         )
 
-    tool_execution_task = asyncio.create_task(_execute_expanded_calls())
+    tool_execution_task = asyncio.create_task(_execute_calls())
     try:
         tool_executions = await asyncio.shield(tool_execution_task)
     except asyncio.CancelledError:

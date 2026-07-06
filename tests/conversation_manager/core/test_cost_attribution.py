@@ -101,6 +101,7 @@ def mock_cm():
     cm.event_broker = MagicMock()
     cm.event_broker.publish = AsyncMock()
     cm.call_manager = MagicMock()
+    cm.suppress_duplicate_commissioning_tool = MagicMock(return_value=None)
     return cm
 
 
@@ -572,12 +573,18 @@ class TestContactProvisioningUserId:
             patch(
                 "unify.contact_manager.system_contacts._ensure_columns_exist",
             ),
+            patch(
+                "unify.contact_manager.system_contacts._upsert_personal_contact_membership",
+            ),
             patch("unify.session_details.SESSION_DETAILS") as mock_sd,
             patch("unify.settings.SETTINGS") as mock_settings,
         ):
             mock_settings.DEMO_MODE = False
+            mock_settings.ORCHESTRA_URL = "http://127.0.0.1:8000/v0"
             mock_sd.is_initialized = True
             mock_sd.user.id = "boss_platform_uid"
+            mock_sd.unify_key = "test-key"
+            mock_sd.assistant.agent_id = 1
 
             provision_user_contact(mock_self, user_log=None)
 

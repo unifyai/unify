@@ -608,8 +608,7 @@ class EventBus:
 
         async def _prefill_deque(etype: str, context: str, window_size: int):
             """Fetch recent events into the in-memory deque."""
-            raw_logs = await asyncio.to_thread(
-                unisdk.get_logs,
+            raw_logs = await self._get_logs_resilient(
                 context=context,
                 limit=window_size,
                 sorting={"timestamp": "descending"},
@@ -625,8 +624,7 @@ class EventBus:
 
         async def _seed_row_id(etype: str, context: str):
             """Fetch only the latest row_id so the counter stays monotonic."""
-            raw_logs = await asyncio.to_thread(
-                unisdk.get_logs,
+            raw_logs = await self._get_logs_resilient(
                 context=context,
                 limit=1,
                 sorting={"row_id": "descending"},
@@ -662,22 +660,53 @@ class EventBus:
             )
             self._next_row_ids[etype] = max_id + 1
 
+    @staticmethod
+    def _is_missing_context_error(exc: BaseException) -> bool:
+        from unisdk.utils.http import RequestError as _UnifyRequestError
+
+        if isinstance(exc, _UnifyRequestError):
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            return status == 404
+        msg = str(exc).lower()
+        return "404" in msg or "not found" in msg
+
+    async def _get_logs_resilient(
+        self,
+        *,
+        context: str,
+        **kwargs: Any,
+    ) -> list[Any]:
+        """Fetch logs, tolerating missing contexts after ``create_context``.
+
+        Orchestra can briefly return 404 for a context that was just created.
+        A short retry window covers that window; persistent 404 means the
+        context is empty, which callers treat as ``[]``.
+        """
+        last_exc: Exception | None = None
+        for delay in (0.0, 0.05, 0.15):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                return await asyncio.to_thread(
+                    unisdk.get_logs,
+                    context=context,
+                    **kwargs,
+                )
+            except Exception as exc:
+                if self._is_missing_context_error(exc):
+                    last_exc = exc
+                    continue
+                raise
+        if last_exc is not None:
+            return []
+        return []
+
     async def _async_load_subscriptions(self) -> None:
         """Async wrapper around the former blocking `_load_subscriptions`."""
-        try:
-            rows = await asyncio.to_thread(
-                unisdk.get_logs,
-                context=self._callbacks_ctx,
-                sorting={"row_id": "ascending"},
-            )
-        except Exception as e:
-            # Handle 404 errors gracefully - the context may not exist yet due to
-            # eventual consistency after create_context(). For a newly created
-            # context, having no subscriptions is the expected initial state.
-            if "404" in str(e) or "not found" in str(e).lower():
-                rows = []
-            else:
-                raise
+        rows = await self._get_logs_resilient(
+            context=self._callbacks_ctx,
+            sorting={"row_id": "ascending"},
+        )
         self._subscriptions = self._rows_to_subscriptions(rows)
 
     # ------------------------------------------------------------------
@@ -1104,12 +1133,32 @@ class EventBus:
                 )
             except Exception as exc:
                 LOGGER.warning(
-                    "EventBus flush failed: context=%s events=%d error=%s",
+                    "EventBus flush batch failed: context=%s events=%d error=%s "
+                    "— retrying entries individually",
                     context,
                     len(entries_list),
                     exc,
                     exc_info=True,
                 )
+                # One poisoned entry must not take the whole batch down with
+                # it: retry each entry alone so only the genuinely bad rows
+                # are lost, and log exactly which ones.
+                for entries in entries_list:
+                    try:
+                        unisdk.create_logs(
+                            project=project,
+                            context=context,
+                            entries=[entries],
+                        )
+                    except Exception as entry_exc:
+                        LOGGER.warning(
+                            "EventBus flush dropped event: context=%s "
+                            "event_id=%s type=%s error=%s",
+                            context,
+                            entries.get("event_id"),
+                            entries.get("type"),
+                            entry_exc,
+                        )
                 continue
 
     def join_published(self):
@@ -1657,8 +1706,7 @@ class EventBus:
         Return (last_row_id, last_timestamp) of the most-recent event of
         *event_type* that matches *filter* (or ``(-1, None)`` if none exist).
         """
-        recent_logs = await asyncio.to_thread(
-            unisdk.get_logs,
+        recent_logs = await self._get_logs_resilient(
             context=self._specific_ctxs[event_type],
             sorting={"row_id": "descending"},
             limit=100,

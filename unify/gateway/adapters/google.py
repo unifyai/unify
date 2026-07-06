@@ -10,8 +10,12 @@ import httpx
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import RedirectResponse, Response
 
-from unify.gateway.adapters.common import default_contacts, get_assistant
-from unify.gateway.adapters.common import publish_runtime_event
+from unify.gateway.adapters.common import (
+    default_contacts,
+    get_assistant,
+    is_shared_coordinator_email,
+    publish_runtime_event,
+)
 from unify.gateway.adapters.oauth import (
     OAuthStateError,
     exchange_google_code_for_tokens,
@@ -143,6 +147,8 @@ async def gmail_notification_processor(
     data = base64.b64decode(pubsub_message.get("data", "")).decode("utf-8")
     notification = json.loads(data)
     assistant_email = notification["emailAddress"]
+    if is_shared_coordinator_email(assistant_email):
+        return Response(content="OK", status_code=200)
     history_id = str(notification.get("historyId", ""))
     assistant = await get_assistant(email_address=assistant_email)
     assistant_id = assistant.get("assistant_id")

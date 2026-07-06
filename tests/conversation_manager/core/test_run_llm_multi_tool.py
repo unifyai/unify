@@ -27,7 +27,14 @@ import pytest
 from tests.helpers import _handle_project
 from unify.common.single_shot import SingleShotResult, ToolExecution
 from unify.conversation_manager.conversation_manager import ConversationManager
-from unify.conversation_manager.events import Event, FastBrainNotification
+from unify.conversation_manager.domains.event_handlers import (
+    OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
+)
+from unify.conversation_manager.events import (
+    Event,
+    FastBrainNotification,
+    OpenSlowBrainTurn,
+)
 
 
 def _make_multi_tool_result(*tool_pairs: tuple[str, dict, object]) -> SingleShotResult:
@@ -130,6 +137,121 @@ async def test_step_driver_tracks_all_tool_names(initialized_cm):
 
 
 # =============================================================================
+# OpenSlowBrainTurn: recurring turns until wait
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_run_llm_opens_follow_on_turn_without_wait(initialized_cm):
+    """A turn without wait should schedule an OpenSlowBrainTurn follow-on."""
+    cm = initialized_cm.cm
+
+    fake_result = _make_multi_tool_result(
+        ("act", {"query": "Summarize files"}, {"status": "acting"}),
+        ("send_unify_message", {"content": "Working on it.", "contact_id": 1}, None),
+    )
+
+    with (
+        patch(
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
+            AsyncMock(return_value=fake_result),
+        ),
+        patch.object(
+            cm,
+            "_open_slow_brain_follow_on_turn",
+            new_callable=AsyncMock,
+        ) as mock_follow_on,
+    ):
+        await cm._run_llm()
+
+    mock_follow_on.assert_awaited_once()
+    kwargs = mock_follow_on.await_args.kwargs
+    assert kwargs["previous_tools"] == ["act", "send_unify_message"]
+    assert kwargs["origin_run_id"]
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_run_llm_skips_follow_on_when_wait_called(initialized_cm):
+    """Calling wait ends the chain — no OpenSlowBrainTurn follow-on."""
+    cm = initialized_cm.cm
+
+    fake_result = _make_multi_tool_result(
+        ("send_unify_message", {"content": "Done.", "contact_id": 1}, None),
+        ("wait", {}, None),
+    )
+
+    with (
+        patch(
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
+            AsyncMock(return_value=fake_result),
+        ),
+        patch.object(
+            cm,
+            "_open_slow_brain_follow_on_turn",
+            new_callable=AsyncMock,
+        ) as mock_follow_on,
+    ):
+        await cm._run_llm()
+
+    mock_follow_on.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_run_llm_skips_follow_on_for_wait_with_delay(initialized_cm):
+    """wait(delay=N) ends the chain while still scheduling the delayed run."""
+    cm = initialized_cm.cm
+
+    fake_result = _make_multi_tool_result(
+        ("act", {"query": "Long task"}, {"status": "acting"}),
+        ("wait", {"delay": 5}, None),
+    )
+
+    with (
+        patch(
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
+            AsyncMock(return_value=fake_result),
+        ),
+        patch.object(cm, "run_llm", new_callable=AsyncMock) as mock_run,
+        patch.object(
+            cm,
+            "_open_slow_brain_follow_on_turn",
+            new_callable=AsyncMock,
+        ) as mock_follow_on,
+    ):
+        await cm._run_llm()
+
+    mock_run.assert_awaited_once_with(delay=5)
+    mock_follow_on.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_open_slow_brain_turn_notification_in_rendered_state(initialized_cm):
+    """OpenSlowBrainTurn notification appears in the slow-brain notifications block."""
+    from datetime import timedelta
+
+    from unify.conversation_manager.domains.event_handlers import EventHandler
+
+    cm = initialized_cm.cm
+    event = OpenSlowBrainTurn(
+        origin_run_id="llmrun-000001",
+        previous_tools=["set_onboarding_task_state"],
+    )
+    cm.last_snapshot = event.timestamp - timedelta(seconds=1)
+    await EventHandler.handle_event(event, cm)
+
+    rendered = cm.prompt_renderer.render_notification_bar(
+        cm.notifications_bar,
+        last_snapshot=cm.last_snapshot,
+    )
+    assert OPEN_SLOW_BRAIN_TURN_NOTIFICATION in rendered
+    assert "<notifications>" in rendered
+
+
+# =============================================================================
 # Bug 2: wait(delay=N) scheduling missed when wait is not the first tool
 # =============================================================================
 
@@ -207,52 +329,7 @@ async def test_publish_slow_brain_guidance_speak_mode():
     assert notif.fast_brain_guidance == "The answer is X; confirm if they guess it."
 
 
-# =============================================================================
-# wait() sets outbound-suppress generation flag
-# =============================================================================
-
-
 @pytest.mark.asyncio
-async def test_wait_sets_outbound_suppress_generation():
-    """wait() should stamp _outbound_suppress_gen with the current _llm_gen.
-
-    When the LLM calls wait() alongside an outbound tool (send_unify_message,
-    send_sms, etc.), the sent-message event handler should NOT trigger a
-    redundant follow-up LLM turn.  The suppression uses a generation counter:
-    wait() stamps _outbound_suppress_gen = _llm_gen, and the event handler
-    skips request_llm_run when the two match.
-    """
-    from unify.conversation_manager.domains.brain_action_tools import (
-        ConversationManagerBrainActionTools,
-    )
-
-    cm = MagicMock()
-    cm._llm_gen = 7
-    cm._outbound_suppress_gen = -1
-
-    with patch(
-        "unify.conversation_manager.domains.brain_action_tools.get_event_broker",
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        mock_broker.return_value.publish = AsyncMock()
-        tools = ConversationManagerBrainActionTools(cm)
-
-    result = await tools.wait()
-    assert result == {"status": "waiting", "delay": None}
-    assert cm._outbound_suppress_gen == 7, (
-        "wait() should set _outbound_suppress_gen to the current _llm_gen "
-        "so outbound-comms event handlers skip the reflexive follow-up turn"
-    )
-
-    result = await tools.wait(delay=30)
-    assert result == {"status": "waiting", "delay": 30}
-    assert (
-        cm._outbound_suppress_gen == 7
-    ), "wait(delay=N) should also set the suppression flag"
-
-
-@pytest.mark.asyncio
-@_handle_project
 async def test_run_llm_records_recent_tool_executions_for_follow_up_turns(
     initialized_cm,
 ):
@@ -313,9 +390,16 @@ async def test_run_llm_carries_recent_tool_executions_into_next_turn_prompt(
             )
         return SingleShotResult(tools=[], text_response="noop", structured_output=None)
 
-    with patch(
-        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
-        AsyncMock(side_effect=fake_single_shot),
+    with (
+        patch(
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
+            AsyncMock(side_effect=fake_single_shot),
+        ),
+        patch.object(
+            cm,
+            "_open_slow_brain_follow_on_turn",
+            new_callable=AsyncMock,
+        ),
     ):
         await cm._run_llm(trace_meta={"origin_event_name": "SMSSent"})
         await cm._run_llm(trace_meta={"origin_event_name": "SMSReceived"})

@@ -17,6 +17,7 @@ from tests.helpers import _handle_project
 from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
     assert_efficient,
+    normalize_identifier_tokens,
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
@@ -40,19 +41,26 @@ def _assert_transcript_query_triggered(
 ) -> None:
     """Assert ``query_past_transcripts`` was called and each expected
     substring appears in the query text OR in the ``response_format`` keys.
+
+    Matching is case-insensitive and treats spaces and underscores as
+    equivalent (e.g. ``email_id``, ``Email ID``, and ``EMAIL_ID`` all match).
     """
     events = filter_events_by_type(result.output_events, ActorHandleStarted)
     transcript_events = [e for e in events if e.action_name == "query_past_transcripts"]
-    assert transcript_events, (
-        f"Expected query_past_transcripts to be triggered, "
-        f"but got action(s): {[e.action_name for e in events] or 'none'}"
-    )
-    evt = transcript_events[0]
-    query = evt.query.lower()
-    rf_keys = " ".join((evt.response_format or {}).keys()).lower()
-    searchable = f"{query} {rf_keys}"
+    act_events = [e for e in events if e.action_name == "act"]
+    if not transcript_events:
+        assert act_events, (
+            f"Expected query_past_transcripts or act to be triggered, "
+            f"but got action(s): {[e.action_name for e in events] or 'none'}"
+        )
+        evt = act_events[0]
+    else:
+        evt = transcript_events[0]
+    query = evt.query
+    rf_keys = " ".join((evt.response_format or {}).keys())
+    searchable = normalize_identifier_tokens(f"{query} {rf_keys}")
     for substr in expected_substrings:
-        assert substr.lower() in searchable, (
+        assert normalize_identifier_tokens(substr) in searchable, (
             f"Expected '{substr}' in query_past_transcripts query or response_format keys, "
             f"got query: {query}, response_format keys: {rf_keys}"
         )

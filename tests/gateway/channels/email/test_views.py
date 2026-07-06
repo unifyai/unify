@@ -277,7 +277,7 @@ class TestSendDispatch:
         """The cloned ASGI request carries the original body unchanged."""
         captured = {}
 
-        async def fake_gmail_send(forwarded_request):
+        async def fake_gmail_send(forwarded_request, *, assistant=None):
             captured["body"] = await forwarded_request.body()
             return {"success": True}
 
@@ -345,6 +345,46 @@ class TestSendDispatch:
         gmail_handler.assert_awaited_once()
         outlook_handler.assert_not_called()
         lookup.assert_not_called()
+
+    def test_uses_agent_id_lookup_when_present(
+        self,
+        client: TestClient,
+        _orchestra_credentials: None,
+    ) -> None:
+        assistant = {"email_provider": "google_workspace", "agent_id": "7316"}
+        by_id = AsyncMock(return_value=assistant)
+        by_email = AsyncMock(
+            side_effect=AssertionError("email lookup should be skipped"),
+        )
+        gmail_handler = AsyncMock(return_value={"success": True, "via": "gmail"})
+        with (
+            patch(
+                "unify.gateway.channels.email.views.lookup_assistant_by_id",
+                new=by_id,
+            ),
+            patch(
+                "unify.gateway.channels.email.views.lookup_assistant",
+                new=by_email,
+            ),
+            patch(
+                "unify.gateway.channels.email.views.gmail_send_email",
+                new=gmail_handler,
+            ),
+        ):
+            resp = client.post(
+                "/email/send",
+                json={
+                    "from": "alice@unify.ai",
+                    "to": "bob@example.com",
+                    "body": "y",
+                    "agent_id": 7316,
+                },
+            )
+        assert resp.status_code == 200
+        by_id.assert_awaited_once()
+        by_email.assert_not_called()
+        gmail_handler.assert_awaited_once()
+        assert gmail_handler.await_args.kwargs["assistant"] == assistant
 
 
 # ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Core LLM Settings
     # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_MODEL: str = "deepseek-v4-max@deepseek"
+    UNIFY_MODEL: str = "minimax-v3@minimax"
     UNIFY_VISION_MODEL: str = "gpt-5.5@openai"
     UNIFY_VISION_REASONING_EFFORT: str = "low"
 

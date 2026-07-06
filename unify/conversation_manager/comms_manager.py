@@ -822,8 +822,9 @@ class CommsManager:
                         "assistant_slack_bot_user_id",
                         "",
                     ),
-                    "assistant_is_coordinator": bool(
-                        event.get("assistant_is_coordinator", False),
+                    "assistant_slack_team_id": event.get(
+                        "assistant_slack_team_id",
+                        "",
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
@@ -1123,6 +1124,88 @@ class CommsManager:
                     ack_now()
                     return
 
+                if thread == "unify_message_reaction":
+                    target_contact_id = event.get("contact_id")
+                    target_message_id = event.get("target_message_id")
+                    if target_contact_id is None or target_message_id is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} unify_message_reaction requires "
+                            "contact_id and target_message_id",
+                        )
+                        ack_now()
+                        return
+                    contact = next(
+                        (c for c in contacts if c["contact_id"] == target_contact_id),
+                        None,
+                    )
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} unify_message_reaction contact_id "
+                            f"{target_contact_id} not found",
+                        )
+                        ack_now()
+                        return
+                    emoji = event.get("emoji")
+                    if emoji == "":
+                        emoji = None
+                    await publish(
+                        "app:comms:unify_message_reaction",
+                        UnifyMessageReactionChanged(
+                            contact=contact,
+                            target_message_id=int(target_message_id),
+                            emoji=emoji,
+                        ).to_json(),
+                    )
+                    ack_now()
+                    return
+
+                if thread == "whatsapp_reaction":
+                    raw_from = (event.get("from_number") or "").strip()
+                    contact_detail = (
+                        raw_from.replace("whatsapp:", "")
+                        if raw_from.startswith("whatsapp:")
+                        else raw_from
+                    )
+                    contact = next(
+                        (
+                            c
+                            for c in contacts
+                            if c.get("whatsapp_number") == contact_detail
+                            or c.get("phone_number") == contact_detail
+                        ),
+                        None,
+                    )
+                    if contact is None:
+                        contact = _lookup_known_contact(
+                            Medium.WHATSAPP_MESSAGE,
+                            contact_detail,
+                        )
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to resolve contact for WhatsApp "
+                            f"reaction from: {contact_detail}",
+                        )
+                        ack_now()
+                        return
+                    emoji = event.get("emoji")
+                    if emoji == "":
+                        emoji = None
+                    await publish(
+                        "app:comms:whatsapp_reaction",
+                        WhatsAppReactionChanged(
+                            contact=contact,
+                            target_message_id=int(event.get("target_message_id") or 0),
+                            provider_message_sid=str(
+                                event.get("provider_message_sid")
+                                or event.get("message_sid")
+                                or "",
+                            ),
+                            emoji=emoji,
+                        ).to_json(),
+                    )
+                    ack_now()
+                    return
+
                 if thread == "api_message":
                     target_contact_id = event.get("contact_id", 1)
                     contact = next(
@@ -1249,12 +1332,23 @@ class CommsManager:
                         return
 
                     attachments = event.get("attachments") or []
+                    provider_message_sid = str(
+                        event.get("message_sid")
+                        or event.get("MessageSid")
+                        or event.get("provider_message_sid")
+                        or "",
+                    )
                     await publish(
                         f"app:comms:{thread}_message",
                         events_map[thread](
                             content=content,
                             contact=contact,
                             **({"attachments": attachments} if attachments else {}),
+                            **(
+                                {"provider_message_sid": provider_message_sid}
+                                if provider_message_sid
+                                else {}
+                            ),
                         ).to_json(),
                     )
 
@@ -1856,6 +1950,25 @@ class CommsManager:
                                 message_preview="Incoming phone call",
                             ).to_json(),
                         )
+                elif thread == "whatsapp_call_sent":
+                    number = event.get("user_number")
+                    if number and number.startswith("whatsapp:"):
+                        number = number[len("whatsapp:") :]
+                    contact = next(
+                        (c for c in contacts if c.get("whatsapp_number") == number),
+                        None,
+                    )
+                    if contact is None:
+                        contact = event.get("contact")
+                    if contact is None:
+                        contact = next(
+                            (c for c in contacts if c.get("phone_number") == number),
+                            None,
+                        )
+                    if contact is None:
+                        contact = next(c for c in contacts if c["contact_id"] == 1)
+                    call_event = WhatsAppCallSent(contact=contact)
+                    event_topic = "app:comms:whatsapp_call_sent"
                 elif thread == "whatsapp_call_answered":
                     number = event.get("user_number")
                     if number and number.startswith("whatsapp:"):
@@ -1930,6 +2043,7 @@ class CommsManager:
 
             if thread in (
                 "unify_message_outbound",
+                "unify_message_reaction_outbound",
                 "system_error",
                 "assistant_desktop_ready",
                 "comms_activity",
@@ -2285,8 +2399,9 @@ class CommsManager:
                         "assistant_slack_bot_user_id",
                         "",
                     ),
-                    "assistant_is_coordinator": bool(
-                        event.get("assistant_is_coordinator", False),
+                    "assistant_slack_team_id": event.get(
+                        "assistant_slack_team_id",
+                        "",
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
@@ -2354,7 +2469,7 @@ class CommsManager:
                     Ping(kind="keepalive").to_json(),
                 )
 
-                # Wait 30 seconds before next ping (half the inactivity timeout)
+                # Wait 30 seconds before next ping (pre-startup keepalive)
                 await asyncio.sleep(30)
 
                 # Check if we've received a startup message (indicated by assistant_id changed)

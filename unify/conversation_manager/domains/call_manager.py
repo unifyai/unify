@@ -17,7 +17,6 @@ from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CM_EVENT_SOCKET_ENV,
 )
-from unify.conversation_manager.tracing import trace_kv
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.helpers import (
@@ -91,14 +90,22 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 # ``medium_scripts/worker.py``.
 WORKER_REWARM_STALL_S = 60.0
 
-# Fallback briefing for an outbound call that somehow reaches dispatch without a
-# mission context. An agent-initiated call must never open "blind", so even
-# here the agent is told to open with purpose rather than wait in silence.
-_OUTBOUND_OPENER_FALLBACK_CONTEXT = (
-    "You are placing this outbound call. Open by greeting the person warmly, "
-    "saying who you are, and giving the reason you are reaching out, using what "
-    "you already know about this contact and your relationship with them."
-)
+
+def _opener_opening_config(opener: str, *, source: str, briefing: str = "") -> dict:
+    config = {
+        "mode": "opener",
+        "opener_text": opener.strip(),
+        "source": source,
+    }
+    if briefing.strip():
+        config["briefing"] = briefing.strip()
+    return config
+
+
+def _opening_config_is_outbound(opening_config: dict | None) -> bool:
+    if not opening_config:
+        return False
+    return opening_config.get("mode") == "opener"
 
 
 class LivekitCallManager:
@@ -125,16 +132,38 @@ class LivekitCallManager:
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
         self.is_outbound: bool = False
-        self.initial_notification: str = ""
+        self.pending_opener: str = ""
+        # Optional unspoken briefing queued alongside the opener by the
+        # call-start tools; travels in the opening config and is injected into
+        # the voice agent's context (never spoken).
+        self.pending_briefing: str = ""
+        # Briefing of the currently dispatched call, if any. The slow brain's
+        # turn guidance uses it to defer briefed play to the voice agent.
+        self.active_call_briefing: str = ""
+        # Pre-armed hang-up gate reason queued by the call-start tools for
+        # calls expected to be short; consumed into dispatch metadata (and the
+        # CM-side ``hang_up_gate_reason`` mirror) when the session starts.
+        self.pending_hang_up_gate: str = ""
         self.on_screenshot: Callable[[str], None] | None = None
         self.on_fast_brain_generating: Callable[[], dict[str, Any] | None] | None = None
         self.on_pipeline_quiescent: Callable[[bool], None] | None = None
+        # Returns {contact_id: voice embedding} for enrolled contacts, injected
+        # into job dispatch metadata so the voice agent can pin diarized
+        # speakers to known voices. Set by the ConversationManager.
+        self.voice_profile_provider: (
+            Callable[[list[int]], dict[int, list[float]]] | None
+        ) = None
         # Pulled at the top of every dispatch so a call always carries the
         # assistant's current voice/config rather than a snapshot taken at
         # construction time (which can go stale, e.g. self-host bootstrap).
         self._config_provider: Callable[[], CallConfig] | None = None
         self._call_channel: str | None = None
         self._disconnect_contact: dict | None = None
+        # Hang-up gate: while armed (non-None), the slow brain has sanctioned
+        # ending the active voice session and the fast brain may close the call
+        # at a natural point. Holds the slow brain's stated reason. Armed and
+        # disarmed via ``set_hang_up_gate``; cleared on session end.
+        self.hang_up_gate_reason: str | None = None
         self._boss_notification_task: asyncio.Task | None = None
         self._worker_watchdog_task: asyncio.Task | None = None
         self._dispatch_watchdog_task: asyncio.Task | None = None
@@ -152,6 +181,36 @@ class LivekitCallManager:
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
         self.teams_meet_exchange_id = UNASSIGNED
+        # Parent-side mirror of the voice agent's engaged-speaker set: the
+        # permanently engaged call participants (contact_id -> display name),
+        # labels the slow brain has engaged, and every anonymous speaker label
+        # heard on the call so far (for tool-docstring status rendering).
+        self.engaged_contacts: dict[int, str] = {}
+        self.engaged_labels: set[str] = set()
+        self.known_speaker_labels: set[str] = set()
+
+    def reset_speaker_engagement(
+        self,
+        contact: dict | None,
+        boss: dict | None,
+    ) -> None:
+        """Initialize the per-call engagement mirror at call start."""
+        self.engaged_contacts = {}
+        for cand in (contact, boss):
+            if not cand or cand.get("contact_id") is None:
+                continue
+            name = (
+                f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                or f"contact {cand['contact_id']}"
+            )
+            self.engaged_contacts[int(cand["contact_id"])] = name
+        self.engaged_labels = set()
+        self.known_speaker_labels = set()
+
+    def note_speaker_label(self, label: str | None) -> None:
+        """Record an anonymous speaker label heard on the active call."""
+        if label:
+            self.known_speaker_labels.add(label.strip())
 
     def set_config(self, config: CallConfig):
         self.assistant_id = config.assistant_id
@@ -290,33 +349,20 @@ class LivekitCallManager:
         previous_key: str,
         current_key: str,
     ) -> None:
-        """Respawn the LiveKit worker when UNIFY_KEY changes after idle-pool pre-warm.
+        """Ensure the persistent worker is running after UNIFY_KEY changes.
 
-        Idle containers start the persistent worker at boot with the image-baked
-        UNIFY_KEY. Assignment updates os.environ in this process, but the worker
-        subprocess tree keeps the stale key until it is restarted.
+        Idle containers start the worker at boot with an image-baked UNIFY_KEY.
+        Assignment updates this process's environment, but each LiveKit job carries
+        the assigned key in dispatch metadata so entrypoints authenticate as the
+        tenant without restarting the pre-warmed worker pool.
         """
         if not os.environ.get("LIVEKIT_URL"):
             return
-
-        worker_running = (
-            self._worker_proc is not None and self._worker_proc.poll() is None
-        )
-        key_changed = bool(current_key) and current_key != previous_key
-
-        if key_changed and worker_running:
-            if self.has_active_call:
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] Skipping persistent "
-                    "worker restart while a voice call is active",
-                )
-            else:
-                LOGGER.info(
-                    f"{ICONS['ipc']} [LivekitCallManager] Restarting persistent "
-                    "worker so voice subprocesses inherit updated UNIFY_KEY",
-                )
-                await self.cleanup_persistent_worker()
-
+        if current_key and current_key != previous_key:
+            LOGGER.debug(
+                f"{ICONS['ipc']} [LivekitCallManager] UNIFY_KEY changed; "
+                "keeping persistent worker warm (key passed via dispatch metadata)",
+            )
         self.start_persistent_worker()
 
     def _is_idle_pending_rewarm(self) -> bool:
@@ -494,6 +540,31 @@ class LivekitCallManager:
         )
         return False
 
+    def _get_voice_profiles(self, contact: dict, boss: dict) -> dict[str, list[float]]:
+        """Fetch enrolled voice embeddings for the call participants.
+
+        Best-effort: a backend hiccup here must never block call dispatch, so
+        failures degrade to "no profiles" (speaker attribution disabled).
+        """
+        if self.voice_profile_provider is None:
+            return {}
+        contact_ids = {
+            int(c["contact_id"])
+            for c in (contact, boss)
+            if c and c.get("contact_id") is not None
+        }
+        if not contact_ids:
+            return {}
+        try:
+            profiles = self.voice_profile_provider(sorted(contact_ids))
+        except Exception as e:  # noqa: BLE001
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] voice profile lookup "
+                f"failed: {e}",
+            )
+            return {}
+        return {str(cid): vec for cid, vec in (profiles or {}).items()}
+
     async def _dispatch_job(
         self,
         room_name: str,
@@ -521,6 +592,8 @@ class LivekitCallManager:
 
             socket_path = await self._ensure_socket_server()
 
+            from unify.session_details import SESSION_DETAILS
+
             meta_dict = {
                 "voice_provider": self.voice_provider or "cartesia",
                 "voice_id": self.voice_id or "",
@@ -534,7 +607,9 @@ class LivekitCallManager:
                 "assistant_name": self.assistant_name,
                 "is_coordinator": self.is_coordinator,
                 "ipc_socket_path": socket_path or "",
+                "unify_key": SESSION_DETAILS.unify_key,
             }
+            meta_dict["voice_profiles"] = self._get_voice_profiles(contact, boss)
             if extra_metadata:
                 meta_dict.update(extra_metadata)
             metadata = json.dumps(meta_dict)
@@ -637,6 +712,7 @@ class LivekitCallManager:
         self.is_outbound = outbound
         self._call_channel = channel
         self._disconnect_contact = contact
+        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -649,26 +725,44 @@ class LivekitCallManager:
         room_name = room_name or make_room_name(self.assistant_id, medium)
         self.room_name = room_name
 
-        # An agent-initiated (outbound) call must never open "blind". The mission
-        # context becomes a briefed opener the agent speaks the moment the callee
-        # answers — and is injected as a durable system briefing for the rest of
-        # the call — rather than a reactive fast-brain notification. This is the
-        # single outbound choke point, so every outbound path is covered.
+        # A queued opener always becomes a spoken ``opener`` opening — even on
+        # an inbound-shaped leg of an agent-initiated call (e.g. the WhatsApp
+        # permission-callback call, where the contact's "Call now" tap dials
+        # us back but the opener was decided when we tried to place the call).
+        if opening_config is None and (self.pending_opener or "").strip():
+            opening_config = _opener_opening_config(
+                self.pending_opener,
+                source="outbound_call_opening",
+                briefing=self.pending_briefing,
+            )
+            self.pending_opener = ""
+            self.pending_briefing = ""
         if outbound and opening_config is None:
-            briefing = (self.initial_notification or "").strip()
-            opening_config = {
-                "mode": "briefed",
-                "system_context": briefing or _OUTBOUND_OPENER_FALLBACK_CONTEXT,
-                "source": "outbound_call_opening",
-            }
-            # Delivered as the opener (and the in-call system briefing), so don't
-            # also queue it as a separate notification that would race/double it.
-            self.initial_notification = ""
+            raise RuntimeError(
+                "Outbound call refused: no verbatim opener was queued "
+                "(call-start tools must set pending_opener before dialing)",
+            )
+        self.active_call_briefing = (opening_config or {}).get("briefing", "")
 
-        extra_metadata = {"opening_config": opening_config} if opening_config else None
-        extra_env = (
-            {"opening_config": json.dumps(opening_config)} if opening_config else None
-        )
+        # A queued pre-armed hang-up gate rides the dispatch metadata so the
+        # voice agent starts already sanctioned to close (no IPC race on short
+        # calls); the CM-side mirror drives tool registration, the standing
+        # prompt note, and proactive-speech suppression from call start.
+        gate_reason = (self.pending_hang_up_gate or "").strip()
+        self.pending_hang_up_gate = ""
+        if gate_reason:
+            self.hang_up_gate_reason = gate_reason
+
+        extra_metadata: dict = {}
+        if opening_config:
+            extra_metadata["opening_config"] = opening_config
+        if gate_reason:
+            extra_metadata["hang_up_gate_reason"] = gate_reason
+        extra_env: dict = {}
+        if opening_config:
+            extra_env["opening_config"] = json.dumps(opening_config)
+        if gate_reason:
+            extra_env["hang_up_gate_reason"] = gate_reason
 
         dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
@@ -678,7 +772,7 @@ class LivekitCallManager:
                 contact,
                 boss,
                 outbound,
-                extra_metadata=extra_metadata,
+                extra_metadata=extra_metadata or None,
             )
         if not dispatched:
             await self._start_call_subprocess(
@@ -687,27 +781,8 @@ class LivekitCallManager:
                 contact,
                 boss,
                 outbound,
-                extra_env=extra_env,
+                extra_env=extra_env or None,
             )
-
-        if self.initial_notification:
-            notification_event = FastBrainNotification(
-                contact=contact,
-                message=self.initial_notification,
-                source="initial_call",
-            )
-            await self._socket_server.queue_for_clients(
-                "app:call:notification",
-                notification_event.to_json(),
-            )
-            await self._event_broker.publish(
-                "app:comms:assistant_notification",
-                notification_event.to_json(),
-            )
-            LOGGER.debug(
-                f"{ICONS['ipc']} {trace_kv('CALL_MANAGER_INITIAL_NOTIFICATION', content_preview=self.initial_notification[:80])}",
-            )
-            self.initial_notification = ""
 
     async def start_unify_meet(
         self,
@@ -731,9 +806,42 @@ class LivekitCallManager:
                 )
                 return
 
-        self.is_outbound = False
+        outbound = _opening_config_is_outbound(opening_config)
+        if opening_config is None and (self.pending_opener or "").strip():
+            opening_config = _opener_opening_config(
+                self.pending_opener,
+                source="outbound_unify_meet_opening",
+                briefing=self.pending_briefing,
+            )
+            self.pending_opener = ""
+            self.pending_briefing = ""
+            outbound = True
+        elif (
+            opening_config is not None
+            and opening_config.get("mode") == "opener"
+            and not opening_config.get("briefing")
+            and (self.pending_briefing or "").strip()
+        ):
+            # A Unify Meet ring answer round-trips the opener through the
+            # Console, but the briefing stays queued CM-side — reattach it.
+            opening_config = {
+                **opening_config,
+                "briefing": self.pending_briefing.strip(),
+            }
+            self.pending_briefing = ""
+        self.active_call_briefing = (opening_config or {}).get("briefing", "")
+
+        # The pre-armed gate never round-trips the Console either — consume the
+        # CM-side stash regardless of which branch produced the opening config.
+        gate_reason = (self.pending_hang_up_gate or "").strip()
+        self.pending_hang_up_gate = ""
+        if gate_reason:
+            self.hang_up_gate_reason = gate_reason
+
+        self.is_outbound = outbound
         self._call_channel = "unify_meet"
         self._disconnect_contact = contact
+        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -750,6 +858,8 @@ class LivekitCallManager:
             extra_metadata["opening_config"] = opening_config
         if call_session_id:
             extra_metadata["call_session_id"] = call_session_id
+        if gate_reason:
+            extra_metadata["hang_up_gate_reason"] = gate_reason
         extra_env = {
             key: value
             for key, value in {
@@ -757,6 +867,7 @@ class LivekitCallManager:
                     json.dumps(opening_config) if opening_config else None
                 ),
                 "CALL_SESSION_ID": call_session_id,
+                "hang_up_gate_reason": gate_reason or None,
             }.items()
             if value
         } or None
@@ -768,7 +879,7 @@ class LivekitCallManager:
                 "unify_meet",
                 contact,
                 boss,
-                False,
+                outbound,
                 extra_metadata=extra_metadata or None,
             )
         if not dispatched:
@@ -777,7 +888,7 @@ class LivekitCallManager:
                 "unify_meet",
                 contact,
                 boss,
-                False,
+                outbound,
                 extra_env=extra_env,
             )
 
@@ -856,6 +967,17 @@ class LivekitCallManager:
         self._meet_joining = True
         self._call_channel = channel
         self._disconnect_contact = contact
+        self.reset_speaker_engagement(contact, boss)
+
+        opener = (self.pending_opener or "").strip()
+        meet_opening_config = None
+        if opener:
+            meet_opening_config = _simulated_outbound_opening_config(
+                opener,
+                source="outbound_meet_opening",
+            )
+            self.pending_opener = ""
+        meet_outbound = meet_opening_config is not None
 
         display_name = display_name or self.assistant_name or "Unity Assistant"
 
@@ -909,6 +1031,10 @@ class LivekitCallManager:
             "meet_display_name": display_name,
             "agent_service_url": "http://localhost:3000",
         }
+        if meet_opening_config:
+            meet_extra["opening_config"] = meet_opening_config
+
+        self.is_outbound = meet_outbound
 
         dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
@@ -917,17 +1043,20 @@ class LivekitCallManager:
                 channel,
                 contact,
                 boss,
-                False,
+                meet_outbound,
                 extra_metadata=meet_extra,
             )
         if not dispatched:
+            meet_env = dict(meet_extra)
+            if meet_opening_config:
+                meet_env["opening_config"] = json.dumps(meet_opening_config)
             await self._start_call_subprocess(
                 room_name,
                 channel,
                 contact,
                 boss,
-                False,
-                extra_env=meet_extra,
+                meet_outbound,
+                extra_env=meet_env,
             )
 
         # Browser join runs after dispatch — fast brain initializes in parallel.
@@ -961,6 +1090,12 @@ class LivekitCallManager:
                 json.dumps(
                     {"type": "meet_session_id", "session_id": self._meet_session_id},
                 ),
+            )
+
+        if meet_outbound and self._event_broker:
+            await self._event_broker.publish(
+                "app:call:status",
+                json.dumps({"type": "call_answered"}),
             )
 
         return True
@@ -1247,6 +1382,28 @@ class LivekitCallManager:
             f"{ICONS['ipc']} [LivekitCallManager] Persistent worker terminated",
         )
 
+    async def set_hang_up_gate(self, reason: str | None) -> None:
+        """Arm or disarm the fast brain's hang-up gate on the live voice agent.
+
+        Arming (``reason`` set) exposes the ``hang_up`` classification to the
+        fast brain so it can end the call at a natural close; disarming
+        (``reason=None``) withdraws it. The state is mirrored to the voice
+        agent child over the ``app:call:status`` IPC channel.
+        """
+        self.hang_up_gate_reason = reason
+        if self._event_broker is None:
+            return
+        await self._event_broker.publish(
+            "app:call:status",
+            json.dumps(
+                {
+                    "type": "hang_up_gate",
+                    "armed": reason is not None,
+                    "reason": reason or "",
+                },
+            ),
+        )
+
     async def end_call(self, reason: str = "assistant_hangup") -> None:
         """Tear down an active phone / WhatsApp / Unify Meet voice session.
 
@@ -1298,10 +1455,17 @@ class LivekitCallManager:
         self._whatsapp_call_joining = False
 
         self.is_outbound = False
-        self.initial_notification = ""
+        self.pending_opener = ""
+        self.pending_briefing = ""
+        self.active_call_briefing = ""
+        self.pending_hang_up_gate = ""
+        self.hang_up_gate_reason = None
         self._call_channel = None
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
+        self.engaged_contacts = {}
+        self.engaged_labels = set()
+        self.known_speaker_labels = set()
 
         if self._boss_notification_task and not self._boss_notification_task.done():
             self._boss_notification_task.cancel()

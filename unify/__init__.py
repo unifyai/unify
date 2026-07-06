@@ -95,16 +95,23 @@ def init(
         with startup_timing(LOGGER, "unify.init.activate", f"project={project_name}"):
             unisdk.activate(project_name, overwrite)
 
-    # Set the Unify context using user_id/assistant_id (e.g., "42/7")
-    full_ctx = f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
+    from unify.common.runtime_context import (
+        bind_runtime_context_root,
+        resolve_runtime_context_root,
+    )
 
-    # Idempotent context setup: tolerate concurrent creation from parallel processes
-    with startup_timing(LOGGER, "unify.init.set_context", f"context={full_ctx}"):
+    # Idempotent context setup: tolerate concurrent creation from parallel processes.
+    # In tests, honor the per-test root pytest already established.
+    with startup_timing(
+        LOGGER,
+        "unify.init.set_context",
+        f"context={resolve_runtime_context_root()}",
+    ):
         try:
-            unisdk.set_context(full_ctx)
+            bind_runtime_context_root(skip_create=False, strict=True)
         except Exception as e:
             if "already exists" in str(e).lower():
-                unisdk.set_context(full_ctx, skip_create=True)
+                bind_runtime_context_root(skip_create=True, strict=True)
             else:
                 raise
 

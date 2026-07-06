@@ -23,6 +23,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Mapping
 
 from unify.common.hierarchical_logger import DEFAULT_ICON
+from unify.common.plain_text import normalize_outbound_plain_text
 from unify.common.prompt_helpers import now as prompt_now
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.domains import comms_utils
@@ -55,6 +56,7 @@ from unify.comms.offline_support import (
     finalize_outbound_operation_success,
     reserve_outbound_operation,
 )
+from unify.comms.outbound_origin import slow_brain_direct_outbound_active
 
 if TYPE_CHECKING:
     from unify.conversation_manager.conversation_manager import ConversationManager
@@ -71,6 +73,14 @@ _DETAIL_LABELS = {
 
 _VOICE_SESSION_CLEAR_TIMEOUT_SECONDS = 15.0
 _VOICE_SESSION_CLEAR_POLL_SECONDS = 0.5
+
+# Onboarding reference-quiz calls are short and scripted by design: the
+# hang-up gate is force-armed at dispatch so the live voice can end the call
+# at its natural close without waiting on a slow-brain grant.
+_ONBOARDING_CALL_HANG_UP_REASON = (
+    "Onboarding channel test: one quiz clue, confirm their answer, then wrap "
+    "up warmly and end the call."
+)
 
 
 def _coerce_contact_id(value: Any) -> int:
@@ -130,6 +140,11 @@ class CommsPrimitives:
         self._cm = conversation_manager
         self._event_broker = event_broker or get_event_broker()
 
+    async def _publish_comms_event(self, topic: str, event) -> None:
+        if slow_brain_direct_outbound_active():
+            event.suppress_slow_brain_wake = True
+        await self._event_broker.publish(topic, event.to_json())
+
     def _assistant_number(self) -> str:
         if self._cm is not None:
             return getattr(self._cm, "assistant_number", "") or ""
@@ -154,6 +169,11 @@ class CommsPrimitives:
         if self._cm is not None:
             return getattr(self._cm, "assistant_slack_bot_user_id", "") or ""
         return SESSION_DETAILS.assistant.slack_bot_user_id or ""
+
+    def _assistant_slack_team_id(self) -> str:
+        if self._cm is not None:
+            return getattr(self._cm, "assistant_slack_team_id", "") or ""
+        return SESSION_DETAILS.assistant.slack_team_id or ""
 
     def _assistant_has_teams(self) -> bool:
         if self._cm is not None:
@@ -232,13 +252,36 @@ class CommsPrimitives:
             return await self._wait_for_voice_session_to_clear()
         return await await_ready()
 
+    def _pre_armed_hang_up_reason(
+        self,
+        allow_hang_up: str | None,
+        channel: str,
+    ) -> str:
+        """Effective pre-armed hang-up gate reason for an outbound call.
+
+        Normally the slow brain's ``allow_hang_up`` argument (blank = not
+        pre-armed). Onboarding reference-quiz calls force the gate on — they
+        are short and scripted by design — using the slow brain's own reason
+        when it supplied one.
+        """
+        reason = " ".join((allow_hang_up or "").split()).strip()
+        if self._cm is None:
+            return reason
+        peek = getattr(self._cm, "active_pending_onboarding_outbound", None)
+        pending = peek() if callable(peek) else None
+        if pending and pending.get("channel") == channel:
+            return reason or _ONBOARDING_CALL_HANG_UP_REASON
+        return reason
+
     def _onboarding_event_kwargs(self, medium: Medium) -> dict[str, str]:
         if self._cm is None:
             return {}
         consume = getattr(self._cm, "consume_pending_onboarding_outbound", None)
-        if not callable(consume):
-            return {}
-        return consume(medium.value) or {}
+        if callable(consume):
+            pending = consume(medium.value)
+            if pending:
+                return pending
+        return {}
 
     def _stash_whatsapp_resend_onboarding_kwargs(
         self,
@@ -683,6 +726,7 @@ class CommsPrimitives:
             why the send was rejected or failed.
         """
         contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
 
@@ -780,7 +824,7 @@ class CommsPrimitives:
                 content=content,
                 **self._onboarding_event_kwargs(Medium.SMS_MESSAGE),
             )
-            await self._event_broker.publish("app:comms:sms_sent", event.to_json())
+            await self._publish_comms_event("app:comms:sms_sent", event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -879,6 +923,7 @@ class CommsPrimitives:
             entered the live resend flow.
         """
         contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
 
@@ -1125,9 +1170,12 @@ class CommsPrimitives:
                 via_template=via_template,
                 delivered_content=delivered_content,
                 attachments=attachments_for_event or None,
+                provider_message_sid=str(
+                    response.get("message_sid") or response.get("sid") or "",
+                ),
                 **event_onboarding_kwargs,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1237,6 +1285,7 @@ class CommsPrimitives:
             why the DM could not be sent.
         """
         contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:discord_message_sent"
@@ -1329,7 +1378,7 @@ class CommsPrimitives:
                 content=content,
                 **self._onboarding_event_kwargs(Medium.DISCORD_MESSAGE),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1405,6 +1454,7 @@ class CommsPrimitives:
         normalized_contact_id = (
             _coerce_contact_id(contact_id) if contact_id is not None else None
         )
+        content = normalize_outbound_plain_text(content)
         offline_reservation = None
         resolved_contact = self._normalize_optional_contact(normalized_contact_id)
         if resolved_contact is not None:
@@ -1477,9 +1527,9 @@ class CommsPrimitives:
                 guild_id=guild_id,
                 **self._onboarding_event_kwargs(Medium.DISCORD_CHANNEL_MESSAGE),
             )
-            await self._event_broker.publish(
+            await self._publish_comms_event(
                 "app:comms:discord_channel_message_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -1526,7 +1576,7 @@ class CommsPrimitives:
         *,
         contact_id: int | str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         slack_user_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
@@ -1550,9 +1600,10 @@ class CommsPrimitives:
             search/create tools.
         content : str
             Direct-message body to send.
-        team_id : str
-            Slack workspace ID the bot token belongs to. Required to resolve
-            the workteam-scoped bot token server-side.
+        team_id : str | None, optional
+            Slack workspace/team ID (T...) the bot token belongs to. Auto-
+            resolved from the assistant's connected Slack workspace when
+            omitted; only pass it to override for a multi-workspace send.
         slack_user_id : str | None, optional
             Recipient Slack user ID when the contact does not already have
             one on file.
@@ -1566,6 +1617,8 @@ class CommsPrimitives:
             why the DM could not be sent.
         """
         contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
+        team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:slack_message_sent"
@@ -1611,6 +1664,22 @@ class CommsPrimitives:
                 history_metadata={
                     "contact_display_name": _get_contact_display_name(contact),
                 },
+            )
+
+        # Reach a workspace member we've never received a Slack message from:
+        # when the contact has an email but no Slack user ID on file (and none
+        # was supplied inline), resolve it from the email via the workspace
+        # bot (users.lookupByEmail). _resolve_or_attach_detail then persists it
+        # onto the contact, so this lookup happens at most once per contact.
+        if (
+            slack_user_id is None
+            and contact is not None
+            and not contact.get("slack_user_id")
+            and contact.get("email_address")
+        ):
+            slack_user_id = await comms_utils.resolve_slack_user_id_by_email(
+                team_id=team_id,
+                email=contact["email_address"],
             )
 
         detail_error, contact = self._resolve_or_attach_detail(
@@ -1677,7 +1746,7 @@ class CommsPrimitives:
                 thread_ts=thread_ts or "",
                 **self._onboarding_event_kwargs(Medium.SLACK_MESSAGE),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -1719,7 +1788,7 @@ class CommsPrimitives:
         *,
         channel_id: str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
         contact_id: int | str | None = None,
     ) -> dict[str, Any]:
@@ -1746,8 +1815,10 @@ class CommsPrimitives:
             Target Slack channel ID to post into.
         content : str
             Message body to publish.
-        team_id : str
-            Slack workspace ID (used to resolve the bot token server-side).
+        team_id : str | None, optional
+            Slack workspace/team ID (T...). Auto-resolved from the
+            assistant's connected Slack workspace when omitted; only pass it
+            to override for a multi-workspace send.
         thread_ts : str | None, optional
             Slack thread timestamp to reply inside a thread. Pass the value
             surfaced on the inbound message line to keep channel replies
@@ -1764,6 +1835,8 @@ class CommsPrimitives:
         normalized_contact_id = (
             _coerce_contact_id(contact_id) if contact_id is not None else None
         )
+        content = normalize_outbound_plain_text(content)
+        team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         resolved_contact = self._normalize_optional_contact(normalized_contact_id)
         if resolved_contact is not None:
@@ -1841,9 +1914,9 @@ class CommsPrimitives:
                 thread_ts=thread_ts or "",
                 **self._onboarding_event_kwargs(Medium.SLACK_CHANNEL_MESSAGE),
             )
-            await self._event_broker.publish(
+            await self._publish_comms_event(
                 "app:comms:slack_channel_message_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -1951,6 +2024,7 @@ class CommsPrimitives:
             ``{"status": "ok"}`` on success, or an error payload describing
             why the send could not complete.
         """
+        content = normalize_outbound_plain_text(content)
         offline_reservation = None
         is_channel = bool(channel_id and team_id)
         is_chat_reply = bool(chat_id) and not is_channel
@@ -2273,7 +2347,7 @@ class CommsPrimitives:
                     attachments=attachments_for_event,
                     participants=sorted(set(participants_list)),
                 )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -2489,7 +2563,7 @@ class CommsPrimitives:
                 description=description or "",
                 membership_type=membership_type,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             return {
                 "status": "ok",
                 "team_id": team_id,
@@ -2742,7 +2816,7 @@ class CommsPrimitives:
                 attendees=list(attendee_emails),
                 web_link=web_link,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             return {
                 "status": "ok",
                 "mode": mode,
@@ -2802,6 +2876,7 @@ class CommsPrimitives:
             why the message or attachment flow failed.
         """
         contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
         offline_reservation, offline_response = self._reserve_offline_operation(
             method_name="send_unify_message",
             medium=Medium.UNIFY_MESSAGE,
@@ -2958,7 +3033,7 @@ class CommsPrimitives:
                 attachments=[attachment] if attachment else [],
                 **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
@@ -3114,7 +3189,7 @@ class CommsPrimitives:
                 attachments=uploaded_attachments,
                 tags=tags,
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             if self._cm is not None:
                 self._cm._pending_api_message_id = None
                 self._cm._pending_api_message_tags = None
@@ -3189,6 +3264,7 @@ class CommsPrimitives:
             ``{"status": "ok"}`` on success, or an error payload describing
             why the email could not be sent.
         """
+        body = normalize_outbound_plain_text(body)
         from unify.file_manager.filesystem_adapters.local_adapter import (
             LocalFileSystemAdapter,
         )
@@ -3758,7 +3834,7 @@ class CommsPrimitives:
                 bcc=final_bcc,
                 **self._onboarding_event_kwargs(Medium.EMAIL),
             )
-            await self._event_broker.publish(topic, event.to_json())
+            await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=f"Subject: {final_subject}\n\n{body}",
@@ -3818,7 +3894,9 @@ class CommsPrimitives:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
         phone_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound phone call to an existing contact.
@@ -3837,11 +3915,31 @@ class CommsPrimitives:
         ----------
         contact_id : int | str
             Person to call.
-        context : str
-            Mission briefing for the voice agent. This is the agent's main
-            context for opening and handling the call, so include the purpose,
-            key facts, questions to ask, tone, relationship context, and any
-            constraints or fallback behavior.
+        opener : str
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after the callee's brief "Hello?" (or a few seconds
+            of silence if they say nothing). Write it so it reads naturally
+            either way. If they instead open with something substantive, the
+            live voice decides whether to still deliver it or respond to them.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design: why the call is happening,
+            key facts, expected responses (including likely mishearings), how
+            to confirm or correct, and the exact wrap-up to give when done.
+            The voice runs everything the briefing covers by itself, so a
+            complete briefing makes the call feel instant; leave it out only
+            for calls with no plan beyond the opener.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason the live
+            voice sees as its guidance for the close. Set this whenever the
+            call is expected to be short — a single question and answer,
+            delivering a message, a quick confirmation — so the voice can end
+            the call the moment it naturally closes (after goodbyes, or after
+            sustained silence) with no round trip back to me for permission.
+            Leave it unset for open-ended calls. If the call turns into a
+            longer, fluid conversation, withdraw the permission mid-call with
+            ``withdraw_hang_up``; a call placed without it can be sanctioned
+            later with ``allow_hang_up``.
         phone_number : str | None, optional
             Recipient phone number when the contact does not already have one on
             file.
@@ -3854,6 +3952,16 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
+
+        opener = (opener or "").strip()
+        if not opener:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak the "
+                    "moment the callee answers. No call was placed."
+                ),
+            }
 
         if self._cm is not None and not await self._await_ready_for_outbound_call():
             return {
@@ -3950,13 +4058,19 @@ class CommsPrimitives:
 
         to_number = (contact or {}).get("phone_number")
         LOGGER.debug(
-            "%s [make_call] context=%r to_number_present=%s",
+            "%s [make_call] opener=%r to_number_present=%s",
             DEFAULT_ICON,
-            context,
+            opener,
             bool(to_number),
         )
-        if self._cm is not None and context:
-            self._cm.call_manager.initial_notification = context
+        # Queue the opener (and any briefing / pre-armed hang-up gate) BEFORE
+        # dialing: a call must never be attempted without its verbatim opening
+        # line in place.
+        hang_up_reason = self._pre_armed_hang_up_reason(allow_hang_up, "phone_call")
+        if self._cm is not None:
+            self._cm.call_manager.pending_opener = opener
+            self._cm.call_manager.pending_briefing = (briefing or "").strip()
+            self._cm.call_manager.pending_hang_up_gate = hang_up_reason
 
         response = await comms_utils.start_call(to_number=to_number)
         if response.get("success"):
@@ -3966,7 +4080,7 @@ class CommsPrimitives:
                 provider_call_sid=response.get("call_sid", ""),
                 **self._onboarding_event_kwargs(Medium.PHONE_CALL),
             )
-            await self._event_broker.publish("app:comms:make_call", event.to_json())
+            await self._publish_comms_event("app:comms:make_call", event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content="<Sending Call...>",
@@ -3982,6 +4096,12 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
+        # The dial failed — clear the queued opener/briefing/gate so they
+        # cannot leak into a later, unrelated call.
+        if self._cm is not None:
+            self._cm.call_manager.pending_opener = ""
+            self._cm.call_manager.pending_briefing = ""
+            self._cm.call_manager.pending_hang_up_gate = ""
         if not self._assistant_number():
             error_msg = "You don't have a number, please provision one."
         else:
@@ -4007,7 +4127,9 @@ class CommsPrimitives:
         self,
         *,
         contact_id: int | str,
-        context: str,
+        opener: str,
+        briefing: str | None = None,
+        allow_hang_up: str | None = None,
         whatsapp_number: str | None = None,
     ) -> dict[str, Any]:
         """Start an assistant-owned outbound WhatsApp voice call.
@@ -4025,20 +4147,40 @@ class CommsPrimitives:
         WhatsApp Business Calling may require the contact to approve calls from
         this business first. If permission has not yet been granted, this sends
         a WhatsApp call-permission request instead of placing the call. In a live
-        assistant session, the call context is kept ready so the call is placed
+        assistant session, the call opener is kept ready so the call is placed
         automatically after the contact taps "Allow calls" / "Call now".
-        Headless offline task runs cannot queue that follow-up context, so they
+        Headless offline task runs cannot queue that follow-up opener, so they
         only report that an invite was sent.
 
         Parameters
         ----------
         contact_id : int | str
             Person to call.
-        context : str
-            Mission briefing for the voice agent. This is the agent's main
-            context for opening and handling the call, so include the purpose,
-            key facts, questions to ask, tone, relationship context, and any
-            constraints or fallback behavior.
+        opener : str
+            Required. The exact words spoken to open the call — delivered
+            verbatim right after the callee's brief "Hello?" (or a few seconds
+            of silence if they say nothing). Write it so it reads naturally
+            either way. If they instead open with something substantive, the
+            live voice decides whether to still deliver it or respond to them.
+        briefing : str | None, optional
+            Unspoken context for the live voice on the call — never read
+            aloud. Describe the full task design: why the call is happening,
+            key facts, expected responses (including likely mishearings), how
+            to confirm or correct, and the exact wrap-up to give when done.
+            The voice runs everything the briefing covers by itself, so a
+            complete briefing makes the call feel instant; leave it out only
+            for calls with no plan beyond the opener.
+        allow_hang_up : str | None, optional
+            Pre-sanction ending the call, with a one-line reason the live
+            voice sees as its guidance for the close. Set this whenever the
+            call is expected to be short — a single question and answer,
+            delivering a message, a quick confirmation — so the voice can end
+            the call the moment it naturally closes (after goodbyes, or after
+            sustained silence) with no round trip back to me for permission.
+            Leave it unset for open-ended calls. If the call turns into a
+            longer, fluid conversation, withdraw the permission mid-call with
+            ``withdraw_hang_up``; a call placed without it can be sanctioned
+            later with ``allow_hang_up``.
         whatsapp_number : str | None, optional
             Recipient WhatsApp number when the contact does not already have one
             on file.
@@ -4053,6 +4195,17 @@ class CommsPrimitives:
 
         contact_id = _coerce_contact_id(contact_id)
         offline_reservation = None
+
+        opener = (opener or "").strip()
+        if not opener:
+            return {
+                "status": "error",
+                "message": (
+                    "opener is required: provide the exact words to speak the "
+                    "moment the callee answers. No call was placed."
+                ),
+            }
+
         if not await self._await_ready_for_outbound_call():
             return {
                 "status": "retry_later_active_voice_session",
@@ -4150,10 +4303,23 @@ class CommsPrimitives:
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         room_name = make_room_name(assistant_id, "whatsapp_call")
         LOGGER.debug(
-            f"{DEFAULT_ICON} [make_whatsapp_call] context: {context}, to_number: {to_number}",
+            f"{DEFAULT_ICON} [make_whatsapp_call] opener: {opener}, to_number: {to_number}",
         )
 
+        # Queue the opener (and any briefing / pre-armed hang-up gate) BEFORE
+        # dialing: a call must never be attempted without its verbatim opening
+        # line in place. Non-direct outcomes below (invite / pending /
+        # rejected / failure) clear them so stale state cannot leak into a
+        # later, unrelated call.
+        briefing = (briefing or "").strip()
+        hang_up_reason = self._pre_armed_hang_up_reason(
+            allow_hang_up,
+            "whatsapp_call",
+        )
         if self._cm is not None:
+            self._cm.call_manager.pending_opener = opener
+            self._cm.call_manager.pending_briefing = briefing
+            self._cm.call_manager.pending_hang_up_gate = hang_up_reason
             self._cm.call_manager._whatsapp_call_joining = True
 
         response = await comms_utils.start_whatsapp_call(
@@ -4161,10 +4327,13 @@ class CommsPrimitives:
             agent_name=SESSION_DETAILS.assistant.name or "",
             room_name=room_name,
             allow_permission_probe=self._allow_whatsapp_call_permission_probe(),
-            pending_call_context=context,
+            pending_call_opener=opener,
         )
         if not response.get("success"):
             if self._cm is not None:
+                self._cm.call_manager.pending_opener = ""
+                self._cm.call_manager.pending_briefing = ""
+                self._cm.call_manager.pending_hang_up_gate = ""
                 self._cm.call_manager._whatsapp_call_joining = False
             if not self._assistant_whatsapp_number():
                 error_msg = "You don't have a WhatsApp number configured."
@@ -4190,15 +4359,13 @@ class CommsPrimitives:
         fresh_contact = self._get_contact(whatsapp_number=to_number) or contact or {}
         method = response.get("method")
         if method == "direct":
-            if self._cm is not None and context:
-                self._cm.call_manager.initial_notification = context
-            event = WhatsAppCallSent(
-                contact=fresh_contact,
-                **self._onboarding_event_kwargs(Medium.WHATSAPP_CALL),
-            )
-            await self._event_broker.publish(
+            if self._cm is not None:
+                event = self._cm.build_whatsapp_call_sent_event(fresh_contact)
+            else:
+                event = WhatsAppCallSent(contact=fresh_contact)
+            await self._publish_comms_event(
                 "app:comms:whatsapp_call_sent",
-                event.to_json(),
+                event,
             )
             self._record_offline_success(
                 offline_reservation,
@@ -4215,25 +4382,33 @@ class CommsPrimitives:
             )
             return {"status": "ok"}
 
-        pending_contexts = None
+        # Not a direct dial (permission invite / pending / rejected): no live
+        # call leg exists yet, so the opener, briefing, and pre-armed gate move
+        # from the live queue to the per-contact stash consumed when the
+        # permission callback fires.
+        pending_openers = None
         automatic_callback_available = False
         if self._cm is not None:
+            self._cm.call_manager.pending_opener = ""
+            self._cm.call_manager.pending_briefing = ""
+            self._cm.call_manager.pending_hang_up_gate = ""
             self._cm.call_manager._whatsapp_call_joining = False
-            pending_contexts = getattr(
+            pending_openers = getattr(
                 self._cm,
-                "_pending_whatsapp_call_contexts",
+                "_pending_whatsapp_call_openers",
                 None,
             )
-            if context:
-                if isinstance(pending_contexts, dict):
-                    pending_contexts[contact_id] = context
-                    automatic_callback_available = True
-            else:
+            if isinstance(pending_openers, dict):
+                pending_openers[contact_id] = {
+                    "opener": opener,
+                    "briefing": briefing,
+                    "hang_up_gate": hang_up_reason,
+                }
                 automatic_callback_available = True
 
         pool_number = response.get("pool_number") or self._assistant_whatsapp_number()
         if (
-            context
+            opener
             and pool_number
             and method in {"invite", "invite_pending", "needs_reconciliation"}
         ):
@@ -4241,7 +4416,7 @@ class CommsPrimitives:
                 await comms_utils.store_pending_whatsapp_call_intent(
                     pool_number=pool_number,
                     contact_number=to_number,
-                    context=context,
+                    opener=opener,
                 )
             except Exception as exc:
                 LOGGER.error(
@@ -4259,8 +4434,8 @@ class CommsPrimitives:
             }
 
         if method == "rejected":
-            if isinstance(pending_contexts, dict):
-                pending_contexts.pop(contact_id, None)
+            if isinstance(pending_openers, dict):
+                pending_openers.pop(contact_id, None)
             if pool_number:
                 try:
                     await comms_utils.clear_pending_whatsapp_call_intent(
@@ -4301,9 +4476,9 @@ class CommsPrimitives:
             }
 
         event = WhatsAppCallInviteSent(contact=fresh_contact)
-        await self._event_broker.publish(
+        await self._publish_comms_event(
             "app:comms:whatsapp_call_invite_sent",
-            event.to_json(),
+            event,
         )
         self._record_offline_success(
             offline_reservation,
@@ -4328,7 +4503,7 @@ class CommsPrimitives:
                     "WhatsApp requires the contact to approve calls from this business first. "
                     "A call-permission request was sent instead of the call. Tell the user "
                     "to tap Allow calls / Call now; when they approve, the call will be "
-                    "placed automatically with your briefing context."
+                    "placed automatically with your opener."
                 ),
             }
         return {
@@ -4337,7 +4512,7 @@ class CommsPrimitives:
                 "WhatsApp requires the contact to approve calls from this business first. "
                 "A call-permission request was sent instead of the call. Because this send "
                 "ran without a live assistant session, the callback was not queued with "
-                "your briefing context."
+                "your opener."
             ),
         }
 

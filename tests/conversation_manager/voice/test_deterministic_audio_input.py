@@ -553,22 +553,35 @@ class TestFullVoiceInputPipeline:
         initialized_cm,
         sample_contact,
     ):
-        """Test that inbound utterance triggers LLM processing."""
+        """Test that FastBrainTurnCompleted triggers LLM processing."""
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_DEFER,
+            FastBrainTurnCompleted,
+        )
+
         cm = initialized_cm.cm
 
         # Start a call
         start_event = PhoneCallStarted(contact=sample_contact)
         await initialized_cm.step(start_event)
 
-        # Send utterance
+        # User utterance alone does not wake the slow brain
         utterance = InboundPhoneUtterance(
             contact=sample_contact,
             content="What's on my schedule?",
         )
         result = await initialized_cm.step(utterance)
+        assert result.llm_requested is False
 
-        # Verify LLM was triggered (interject_or_run called)
-        assert result.llm_requested, "Inbound utterance should trigger LLM processing"
+        completed = FastBrainTurnCompleted(
+            contact=sample_contact,
+            turn_id=1,
+            user_content="What's on my schedule?",
+            classification=FAST_BRAIN_TURN_DEFER,
+            intended_speech="One moment.",
+        )
+        result = await initialized_cm.step(completed)
+        assert result.llm_requested, "Fast brain completion should trigger LLM"
 
     @pytest.mark.asyncio
     async def test_unify_meet_utterance_uses_correct_medium(

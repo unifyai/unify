@@ -50,10 +50,11 @@ verify the fix for this issue.
 
 Known Issue (rapid utterance cancellation):
 -------------------------------------------
-When user turns occur faster than the slow brain can think, every new utterance
-cancels the in-flight LLM run (because interject_or_run uses cancel_running=True).
-This means the slow brain NEVER completes thinking if the user keeps talking.
-Tests in this file document and verify the fix for this issue.
+When user turns occur faster than the slow brain can think, cancelling the
+running slow-brain head on each new utterance prevents any run from completing.
+The debouncer uses queue-of-2 semantics (running head never cancelled; only
+the pending slot is replaced). Tests in this file document and verify that
+behavior.
 
 Known Issue (stale guidance after topic change):
 ------------------------------------------------
@@ -203,17 +204,17 @@ class TestSlowBrainDecisionBoundaries:
         NOT run a separate LLM step.
 
         Initial guidance for outbound calls is captured by the make_call tool's
-        `context` parameter and published to the fast brain by
+        `opener` parameter and becomes a simulated opening_config in
         CallManager.start_call() after the subprocess spawns.  This eliminates
         the race condition where a slow LLM finishes after the fast brain has
         already spoken.
 
         Flow for outbound calls:
-        1. Slow brain decides to call → calls make_call(context="...")
-        2. make_call stores context on call_manager.initial_notification
+        1. Slow brain decides to call → calls make_call(opener="...")
+        2. make_call stores opener on call_manager.pending_opener
         3. comms_utils.start_call() places the call
         4. PhoneCallSent arrives → event handler spawns subprocess
-        5. CallManager.start_call() publishes stored guidance as FastBrainNotification
+        5. CallManager.start_call() dispatches simulated opener in opening_config
         6. Fast brain receives guidance via on_guidance / pending_guidance buffer
         7. PhoneCallStarted arrives → mode set to CALL
         8. Ongoing guidance flows via the guide_voice_agent tool (called in parallel)
@@ -268,15 +269,14 @@ class TestSlowBrainDecisionBoundaries:
         a parameter on wait/send_sms/act, and not via the response content field.
 
         Verify: guide_voice_agent exists as a standalone method with the expected
-        signature, wait() does NOT have call_guidance params, and the response
-        model for voice modes does NOT have a call_guidance field.
+        signature, wait() does NOT have call_guidance params, and injected tool
+        schemas expose optional per-call thoughts without call_guidance.
         """
         import inspect
-        from unify.conversation_manager.domains.brain import build_response_models
+        from unify.common.llm_helpers import inject_tool_call_thoughts, method_to_schema
         from unify.conversation_manager.domains.brain_action_tools import (
             ConversationManagerBrainActionTools,
         )
-        from unify.conversation_manager.cm_types import Mode
 
         # guide_voice_agent should exist as a standalone method
         guide_sig = inspect.signature(
@@ -301,15 +301,19 @@ class TestSlowBrainDecisionBoundaries:
             "it is now a standalone guide_voice_agent tool"
         )
 
-        # The response model for voice modes should NOT contain call_guidance
-        models = build_response_models()
-        voice_model = models[Mode.CALL]
-        schema = voice_model.model_json_schema()
-        props = schema.get("properties", {})
-        assert "call_guidance" not in props, (
-            "call_guidance should NOT be in the response model — "
-            "it is delivered via the standalone guide_voice_agent tool"
+        # Injected tool schemas expose optional thoughts, not call_guidance
+        guide_schema = inject_tool_call_thoughts(
+            method_to_schema(
+                ConversationManagerBrainActionTools.guide_voice_agent,
+                tool_name="guide_voice_agent",
+                include_class_name=False,
+            ),
         )
+        props = guide_schema["function"]["parameters"]["properties"]
+        required = guide_schema["function"]["parameters"]["required"]
+        assert "thoughts" in props
+        assert "thoughts" not in required
+        assert "call_guidance" not in props
 
 
 @pytest.mark.asyncio
@@ -417,9 +421,6 @@ class TestRapidUtteranceHandling:
     Without this, rapid speech causes the slow brain to NEVER complete
     thinking, which breaks any functionality that depends on slow brain output
     (action completion, cross-channel notifications, etc.).
-
-    The bug: interject_or_run() uses cancel_running=True, which cancels
-    even the in-flight LLM call. With rapid utterances, none ever complete.
     """
 
     @pytest.fixture
@@ -439,18 +440,17 @@ class TestRapidUtteranceHandling:
         - User is on a voice call
         - User speaks rapidly (multiple utterances while LLM is thinking)
         - LLM takes ~10-15 seconds per thinking step (realistic timing)
-        - Each utterance triggers the slow brain via interject_or_run()
+        - Each utterance triggers the slow brain via handle_voice_user_turn()
 
-        THE BUG (without fix):
-        - interject_or_run uses cancel_running=True for all modes
-        - Each new utterance CANCELS the in-flight LLM run
+        THE BUG (without queue-of-2):
+        - Each new utterance cancels the in-flight LLM run
         - With rapid speech, NO LLM runs ever complete
         - The slow brain becomes completely non-functional
 
         THE FIX:
-        - interject_or_run uses cancel_running=False for voice mode
-        - Debouncer uses asyncio.shield() to protect running tasks
-        - Running LLM completes, only pending tasks are debounced
+        - Debouncer never cancels the running head
+        - asyncio.shield() protects running tasks from pending cancellation
+        - Running LLM completes; only pending tasks are debounced
         - "Queue of 2" behavior: 1 running + 1 pending
 
         Expected results:
@@ -462,8 +462,8 @@ class TestRapidUtteranceHandling:
         # Disable the speech urgency evaluator for this test. The urgency
         # evaluator is a separate sidecar that can legitimately preempt
         # stale slow-brain runs — tested independently in test_speech_urgency.
-        # Here we isolate the base debouncing guarantee: cancel_running=False
-        # plus asyncio.shield() protect running tasks from being replaced.
+        # Here we isolate the base debouncing guarantee: queue-of-2 plus
+        # asyncio.shield() protect running tasks from being replaced.
         from unify.settings import SETTINGS
 
         orig = SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
@@ -526,7 +526,7 @@ class TestRapidUtteranceHandling:
             for i, text in enumerate(utterances):
                 event = InboundPhoneUtterance(contact=boss_contact, content=text)
 
-                # Handle the event (triggers interject_or_run -> request_llm_run)
+                # Handle the event (triggers handle_voice_user_turn -> request_llm_run)
                 await EventHandler.handle_event(
                     event,
                     cm,
@@ -540,7 +540,7 @@ class TestRapidUtteranceHandling:
                     await asyncio.sleep(UTTERANCE_INTERVAL)
 
             # Wait for LLM runs to complete
-            # Timeline with fix (cancel_running=False + shield):
+            # Timeline with queue-of-2 + shield:
             #   t=0.0: U1 -> run 1 starts (2s duration)
             #   t=0.1: U2 -> pending waits for run 1
             #   t=0.2: U3 -> pending replaced
@@ -550,13 +550,10 @@ class TestRapidUtteranceHandling:
             #   t=4.0: run 5 COMPLETES
             #   Result: 0 cancelled, 2 completed
             #
-            # Timeline with bug (cancel_running=True, no shield):
+            # Timeline if running head were cancelled on each utterance:
             #   t=0.0: U1 -> run 1 starts
             #   t=0.1: U2 -> run 1 CANCELLED, run 2 starts
-            #   t=0.2: U3 -> run 2 CANCELLED, run 3 starts
-            #   t=0.3: U4 -> run 3 CANCELLED, run 4 starts
-            #   t=0.4: U5 -> run 4 CANCELLED, run 5 starts
-            #   t=2.4: run 5 COMPLETES (if we wait)
+            #   ... repeated ...
             #   Result: 4 cancelled, 1 completed
 
             # Wait for all LLM runs to resolve (completed or cancelled).
@@ -602,7 +599,7 @@ class TestRapidUtteranceHandling:
                 f"LLM tasks instead of just debouncing pending tasks.\n"
                 f"\n"
                 f"Required fixes:\n"
-                f"1. interject_or_run must use cancel_running=False for voice mode\n"
+                f"1. Debouncer must never cancel the running head\n"
                 f"2. Debouncer must use asyncio.shield() to protect running tasks"
             )
 

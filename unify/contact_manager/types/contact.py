@@ -21,6 +21,32 @@ UNICODE_NAME_RE = r"^[^\W_](?:[^\W_]|[ .'-])*$"
 
 UNASSIGNED = -1
 
+# Private (underscore-prefixed) Orchestra columns backing voice enrollment.
+# These are provisioned alongside the Contact model fields but are excluded
+# from all LLM-facing tool surfaces by the standard private-column filtering.
+VOICE_ENROLLMENT_FIELDS: dict[str, dict] = {
+    "_voice_embedding": {
+        "type": "list",
+        "mutable": True,
+        "description": "Speaker-embedding vector used for voice identification.",
+    },
+    "_voice_sample": {
+        "type": "audio",
+        "mutable": True,
+        "description": "Enrollment audio sample backing the voice embedding.",
+    },
+    "_voice_enrolled_at": {
+        "type": "datetime",
+        "mutable": True,
+        "description": "When the voice enrollment was captured.",
+    },
+    "_voice_enrollment_source": {
+        "type": "str",
+        "mutable": True,
+        "description": "Origin of the voice enrollment: auto_call or manual_upload.",
+    },
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lightweight contact detail models for outbound communication tools

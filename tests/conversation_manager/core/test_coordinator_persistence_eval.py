@@ -234,10 +234,34 @@ def _managed_test_organization() -> Iterator[LiveOrganization]:
     )
 
     try:
+        assistants_response = http.get(
+            f"{base_url}/assistant",
+            headers=_headers(user_key),
+            params={"list_all_org": "true"},
+            timeout=30,
+        )
+        assert assistants_response.status_code == 200, assistants_response.text
+        assistants_body = assistants_response.json()
+        assistants = (
+            assistants_body.get("info", assistants_body)
+            if isinstance(assistants_body, dict)
+            else assistants_body
+        )
+        coordinator_row = next(
+            (
+                row
+                for row in assistants
+                if row.get("is_coordinator") and row.get("user_id") == owner["user_id"]
+            ),
+            None,
+        )
+        assert (
+            coordinator_row is not None
+        ), f"No coordinator assistant found for org {organization_id}"
         coordinator = {
-            "agent_id": int(organization["coordinator_id"]),
-            "first_name": "Avery",
-            "surname": "Coordinator",
+            "agent_id": int(coordinator_row["agent_id"]),
+            "first_name": coordinator_row.get("first_name") or "Avery",
+            "surname": coordinator_row.get("surname") or "Coordinator",
             "is_coordinator": True,
             "user_id": owner["user_id"],
         }
@@ -452,6 +476,7 @@ async def test_coordinator_persists_confirmed_shared_team_guidance():
             "support handoffs, launch SOPs, and escalation rules."
         )
         team = unisdk.create_team(
+            organization.organization_id,
             name=f"Launch War Room {suffix}",
             description=team_description,
             api_key=organization.api_key,

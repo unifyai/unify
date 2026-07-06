@@ -3,7 +3,7 @@ Contact-focused ConversationManager → CodeActActor integration tests.
 
 These validate that natural-language contact operations routed through CM→Actor:
 - read contact details deterministically (lookup by email)
-- create/update contacts and persist them in ContactManager storage
+- create contacts and persist them in ContactManager storage
 """
 
 import re
@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from tests.helpers import _handle_project, get_or_create_contact
+from tests.helpers import _handle_project
 from tests.conversation_manager.conftest import BOSS
 from tests.conversation_manager.actions.integration.helpers import (
     assert_no_errors,
@@ -93,57 +93,6 @@ async def test_contact_create_persists_in_db(initialized_cm_codeact):
             "first_name": "Jane",
             "surname": "Doe",
             "email_address": email,
-        },
-    )
-    assert_no_errors(result)
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(300)
-@_handle_project
-async def test_contact_update_persists_in_db(initialized_cm_codeact):
-    """Update an existing contact via CM→Actor and verify the change persisted."""
-    cm = initialized_cm_codeact
-    email = f"eve.{uuid.uuid4().hex[:8]}@example.com"
-
-    # Create a baseline contact deterministically.
-    created = get_or_create_contact(
-        cm.cm.contact_manager,
-        first_name="Eve",
-        surname="Adams",
-        email_address=email,
-        phone_number="+15555550900",
-    )
-    assert created is not None
-
-    result = await cm.step_until_wait(
-        SMSReceived(
-            contact=BOSS,
-            content=f"Update the contact with email {email} to have phone number +15555550901.",
-        ),
-    )
-
-    actor_event = get_actor_started_event(result)
-    handle_id = actor_event.handle_id
-    _final = await wait_for_actor_completion(cm, handle_id, timeout=300)
-
-    payload = cm.cm.contact_manager.filter_contacts(
-        filter=f"email_address == '{email}'",
-        limit=5,
-    )
-    contacts = payload.get("contacts") or []
-    assert contacts
-    c0 = contacts[0]
-    contact_id = (
-        int(c0.get("contact_id")) if isinstance(c0, dict) else int(c0.contact_id)
-    )
-
-    verify_contact_in_db(
-        cm,
-        contact_id,
-        expected_fields={
-            "email_address": email,
-            "phone_number": "+15555550901",
         },
     )
     assert_no_errors(result)

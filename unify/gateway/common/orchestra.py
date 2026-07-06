@@ -15,6 +15,17 @@ from fastapi import HTTPException
 from unify.gateway.credentials import CredentialStore
 from unify.settings import SETTINGS
 
+ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
+    "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
+    "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
+    "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
+    "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
+    "surname,deploy_env,desktop_mode,user_desktops,demo_id,is_local,"
+    "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
+    "age,nationality,"
+    "about,job_title,timezone"
+)
+
 
 async def _lookup_assistant(
     params: dict,
@@ -55,10 +66,15 @@ async def _lookup_assistant(
 async def lookup_assistant(
     user_email: str,
     credentials: CredentialStore,
+    *,
+    from_fields: str | None = ADMIN_CONTACT_LOOKUP_FROM_FIELDS,
 ) -> dict:
     """Fetch the assistant record matching ``user_email`` from Orchestra."""
+    params: dict[str, str] = {"email": user_email}
+    if from_fields:
+        params["from_fields"] = from_fields
     return await _lookup_assistant(
-        {"email": user_email},
+        params,
         credentials,
         f"Assistant not found: {user_email}",
     )
@@ -67,6 +83,8 @@ async def lookup_assistant(
 async def lookup_assistant_by_id(
     assistant_id: str | int,
     credentials: CredentialStore,
+    *,
+    from_fields: str | None = None,
 ) -> dict:
     """Fetch the assistant record matching ``assistant_id`` from Orchestra.
 
@@ -75,11 +93,18 @@ async def lookup_assistant_by_id(
     connected workspace account is not registered as its email contact (the
     Coordinator's contacts are the platform-managed universal pools).
     """
+    params: dict[str, str] = {"agent_id": str(assistant_id)}
+    if from_fields:
+        params["from_fields"] = from_fields
     return await _lookup_assistant(
-        {"agent_id": str(assistant_id)},
+        params,
         credentials,
         f"Assistant not found: id={assistant_id}",
     )
 
 
-__all__ = ["lookup_assistant", "lookup_assistant_by_id"]
+__all__ = [
+    "ADMIN_CONTACT_LOOKUP_FROM_FIELDS",
+    "lookup_assistant",
+    "lookup_assistant_by_id",
+]

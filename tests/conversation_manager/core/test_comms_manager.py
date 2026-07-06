@@ -170,6 +170,7 @@ def mock_session_details():
         mock.user.number = "+15555550000"
         mock.user.email = "user@test.com"
         mock.user.whatsapp_number = ""
+        mock.boss_contact_id = -1
         mock.unify_key = "test_key"
         mock.get_subprocess_env.return_value = {}
         yield mock

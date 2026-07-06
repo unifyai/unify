@@ -71,6 +71,8 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "python-multipart>=0.0.27",
     "polars>=1.39.3",
+    "sherpa-onnx>=1.13.3",
+    "sherpa-onnx-core>=1.13.3",
 ]
 
 [dependency-groups]
@@ -106,6 +108,7 @@ include = ["unify", "unify.*"]
 
 [tool.setuptools.package-data]
 "unify.assets.audio" = ["*.mp3"]
+"unify.assets.onboarding.learning.expenses" = ["*.csv"]
 
 [tool.uv.sources]
 unisdk = { path = "../unisdk", editable = true }

@@ -201,6 +201,34 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         """
         raise NotImplementedError
 
+    def update_message_reactions(
+        self,
+        message_id: int,
+        reactions: list[dict],
+        *,
+        destination: Optional[str] = None,
+    ) -> None:
+        """Attach or replace emoji reactions on an already-logged transcript message."""
+        raise NotImplementedError
+
+    def get_message_by_id(
+        self,
+        message_id: int,
+        *,
+        destination: Optional[str] = None,
+    ) -> dict | None:
+        """Return the stored transcript row entries for a message_id."""
+        raise NotImplementedError
+
+    def resolve_message_id_by_provider_sid(
+        self,
+        provider_message_sid: str,
+        *,
+        destination: Optional[str] = None,
+    ) -> int | None:
+        """Look up a transcript message_id by provider_message_sid metadata."""
+        raise NotImplementedError
+
     def update_exchange_metadata(
         self,
         exchange_id: int,

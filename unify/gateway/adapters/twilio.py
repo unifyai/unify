@@ -71,7 +71,25 @@ def _room_name(assistant_id: str, channel: str) -> str:
     return f"{safe_assistant_id}_{channel}_{suffix}"
 
 
-def _conference_response(conference_name: str) -> VoiceResponse:
+def _conference_response(
+    conference_name: str,
+    *,
+    ringback: bool = True,
+) -> VoiceResponse:
+    """TwiML joining a participant to a named conference.
+
+    The first participant into a Twilio conference hears the ``wait_url``
+    audio until a second joins. ``ringback`` stays True only for an inbound
+    caller's leg (a human waiting for us to answer); SIP/agent legs wait in
+    silence so ring audio never plays into the LiveKit room.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
+    """
+    from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL
+
     resp = VoiceResponse()
     dial = resp.dial()
     dial.conference(
@@ -79,7 +97,8 @@ def _conference_response(conference_name: str) -> VoiceResponse:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        beep=False,
+        wait_url=CONFERENCE_WAIT_URL if ringback else "",
     )
     return resp
 
@@ -485,7 +504,7 @@ async def twilio_call_webhook(
     twilio_client.calls.create(
         to=sip_uri,
         from_=to_number,
-        twiml=str(_conference_response(conference_name)),
+        twiml=str(_conference_response(conference_name, ringback=False)),
     )
     return Response(content=str(resp_user), media_type="text/xml")
 
@@ -604,8 +623,37 @@ async def twilio_whatsapp_webhook(
         "body": body,
         "role": route["role"],
     }
+    if message_sid:
+        event_data["message_sid"] = str(message_sid)
     if attachments:
         event_data["attachments"] = attachments
+
+    reaction_type = str(
+        form_data.get("MessageType") or form_data.get("type") or "",
+    ).lower()
+    reaction_emoji = form_data.get("Reaction") or form_data.get("reaction_emoji")
+    reacted_to_sid = (
+        form_data.get("OriginalRepliedMessageSid")
+        or form_data.get("reaction_message_id")
+        or form_data.get("RepliedMessageSid")
+    )
+    if reaction_type == "reaction" or reacted_to_sid:
+        reaction_event = {
+            "contacts": contacts,
+            "to_number": to_number,
+            "from_number": from_number,
+            "provider_message_sid": str(reacted_to_sid or message_sid or ""),
+            "message_sid": str(reacted_to_sid or message_sid or ""),
+            "emoji": str(reaction_emoji) if reaction_emoji else None,
+        }
+        await publish_runtime_event(
+            context,
+            assistant_id=assistant_id,
+            thread="whatsapp_reaction",
+            event=reaction_event,
+        )
+        return Response(content=str(MessagingResponse()), media_type="text/xml")
+
     await publish_runtime_event(
         context,
         assistant_id=assistant_id,
@@ -717,7 +765,7 @@ async def twilio_whatsapp_call_webhook(
     wa_client.calls.create(
         to=sip_uri,
         from_=pool_number,
-        twiml=str(_conference_response(conference_name)),
+        twiml=str(_conference_response(conference_name, ringback=False)),
     )
     return Response(
         content=str(_conference_response(conference_name)),

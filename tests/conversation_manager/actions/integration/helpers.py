@@ -364,15 +364,14 @@ async def run_cm_until_wait(
 
     # Patch request_llm_run so "requested turns" don't escape into background debouncers.
     original_request = cm.request_llm_run
-    requested: list[tuple[float, bool, bool]] = []
+    requested: list[tuple[float, bool]] = []
 
     async def patched_request(
         delay=0,
-        cancel_running=False,
         is_user_origin=False,
         **kwargs,
     ) -> None:
-        requested.append((delay, cancel_running, is_user_origin))
+        requested.append((delay, is_user_origin))
         return
 
     try:
@@ -389,7 +388,9 @@ async def run_cm_until_wait(
             if pending:
                 await asyncio.wait(pending, timeout=300)
 
-            if "wait" in tool_names or not tool_names:
+            if "wait" in tool_names:
+                break
+            if not tool_names:
                 break
         return output_events
     finally:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -56,9 +56,16 @@ async def test_run_llm_registers_workspace_tools_only_for_coordinator(
         )
 
     coordinator_tool_names = set(CoordinatorManager._PRIMITIVE_METHODS)
-    with patch(
-        "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
-        fake_single_shot_tool_decision,
+    with (
+        patch(
+            "unify.conversation_manager.conversation_manager.single_shot_tool_decision",
+            fake_single_shot_tool_decision,
+        ),
+        patch.object(
+            cm,
+            "_open_slow_brain_follow_on_turn",
+            new_callable=AsyncMock,
+        ),
     ):
         try:
             SESSION_DETAILS.is_coordinator = True

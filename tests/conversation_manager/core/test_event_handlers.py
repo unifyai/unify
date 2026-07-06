@@ -23,6 +23,7 @@ import pytest
 from tests.helpers import _handle_project
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
+    OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
     _event_type_to_log_key,
 )
 from unify.conversation_manager.cm_types import ScreenshotEntry
@@ -35,6 +36,7 @@ from unify.conversation_manager.events import (
     EmailReceived,
     EmailSent,
     UnifyMessageReceived,
+    UnifyMessageSent,
     PhoneCallReceived,
     PhoneCallStarted,
     PhoneCallEnded,
@@ -56,6 +58,7 @@ from unify.conversation_manager.events import (
     ActorResult,
     ActorClarificationRequest,
     InitializationComplete,
+    OpenSlowBrainTurn,
     NotificationInjectedEvent,
     NotificationUnpinnedEvent,
     SyncContacts,
@@ -122,7 +125,9 @@ def mock_call_manager():
     manager._gmeet_joining = False
     manager._socket_server = None
     manager._disconnect_contact = None
-    manager.initial_notification = ""
+    manager.pending_opener = ""
+    manager.pending_briefing = ""
+    manager.active_call_briefing = ""
     manager.conference_name = None
     manager.call_contact = None
     manager.call_exchange_id = -1
@@ -196,16 +201,18 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     # Set up notifications bar
     cm.notifications_bar = NotificationBar()
 
-    # Generation-scoped outbound suppression (wait() sets suppress_gen = llm_gen)
+    # LLM generation counter (commissioning duplicate guard, tool execution metadata)
     cm._llm_gen = 0
-    cm._outbound_suppress_gen = -1
 
     # Mock async methods
     cm.request_llm_run = AsyncMock()
     cm.cancel_proactive_speech = AsyncMock()
     cm.schedule_proactive_speech = AsyncMock()
-    cm.interject_or_run = AsyncMock()
+    cm.handle_voice_user_turn = AsyncMock()
     cm.get_active_contact = MagicMock(return_value=sample_contacts[1])
+    cm.is_coordinator = False
+    cm.coordinator_onboarding_active = False
+    cm._refresh_coordinator_onboarding_state = AsyncMock()
 
     return cm
 
@@ -602,6 +609,83 @@ class TestTextMessageHandlers:
         mock_cm.cancel_proactive_speech.assert_not_called()
 
 
+class TestOutboundSentWakePolicy:
+    """Outbound *Sent events honor suppress_slow_brain_wake on the event."""
+
+    @pytest.mark.asyncio
+    async def test_email_sent_with_suppress_flag_skips_llm_run(self, mock_cm):
+        event = EmailSent(
+            contact={"contact_id": 2, "email_address": "alice@example.com"},
+            subject="Update",
+            body="Please review.",
+            to=["alice@example.com"],
+            suppress_slow_brain_wake=True,
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+        assert len(mock_cm.notifications_bar.notifications) == 1
+
+    @pytest.mark.asyncio
+    async def test_email_sent_without_suppress_flag_wakes_slow_brain(self, mock_cm):
+        event = EmailSent(
+            contact={"contact_id": 2, "email_address": "alice@example.com"},
+            subject="Update",
+            body="Please review.",
+            to=["alice@example.com"],
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(triggering_contact_id=2)
+
+    @pytest.mark.asyncio
+    async def test_unify_message_sent_with_suppress_flag_skips_llm_run(self, mock_cm):
+        event = UnifyMessageSent(
+            contact={"contact_id": 2},
+            content="Onboarding reply",
+            suppress_slow_brain_wake=True,
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unify_message_sent_without_suppress_flag_wakes_slow_brain(
+        self,
+        mock_cm,
+    ):
+        event = UnifyMessageSent(
+            contact={"contact_id": 2},
+            content="Actor follow-up",
+        )
+
+        with patch(
+            "unify.conversation_manager.domains.event_handlers.managers_utils",
+        ) as mock_utils:
+            mock_utils.queue_operation = AsyncMock()
+            await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(
+            triggering_contact_id=2,
+            credit_gate_reply_context=None,
+        )
+
+
 # =============================================================================
 # 5. Phone Call Event Handler Tests
 # =============================================================================
@@ -709,7 +793,7 @@ class TestPhoneCallHandlers:
     async def test_phone_call_started_does_not_trigger_llm_run(self, mock_cm):
         """PhoneCallStarted does not trigger an LLM run.
 
-        Call guidance is pre-computed via make_call(context=...) before the call
+        Call guidance is pre-computed via make_call(opener=...) before the call
         is placed.  The slow brain is woken later by InboundPhoneUtterance,
         ActorResult, or cross-channel notifications — not by call-start itself.
         """
@@ -786,7 +870,6 @@ class TestPhoneCallHandlers:
         mock_cm.cancel_proactive_speech.assert_called_once()
         mock_cm.request_llm_run.assert_called_once_with(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=2,
         )
 
@@ -824,7 +907,6 @@ class TestPhoneCallHandlers:
         assert 42 not in mock_cm.completed_actions
         mock_cm.request_llm_run.assert_called_once_with(
             delay=0,
-            cancel_running=True,
             triggering_contact_id=2,
         )
 
@@ -835,7 +917,9 @@ class TestPhoneCallHandlers:
     ):
         """Accepted WhatsApp permission should preserve the pre-refactor room-name fallback."""
 
-        mock_cm._pending_whatsapp_call_contexts = {2: "pending call context"}
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "pending call context", "briefing": ""},
+        }
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -910,11 +994,11 @@ class TestPhoneCallHandlers:
         assert "calling now" in mock_cm.notifications_bar.notifications[-1].content
 
     @pytest.mark.asyncio
-    async def test_whatsapp_permission_acceptance_uses_persisted_context(
+    async def test_whatsapp_permission_acceptance_uses_persisted_opener(
         self,
         mock_cm,
     ):
-        mock_cm._pending_whatsapp_call_contexts = {}
+        mock_cm._pending_whatsapp_call_openers = {}
         mock_cm.assistant_whatsapp_number = "+15550000000"
         event = WhatsAppCallPermissionResponse(
             contact={
@@ -956,7 +1040,7 @@ class TestPhoneCallHandlers:
             contact_number="+15555552222",
         )
         mock_start_whatsapp_call.assert_awaited_once()
-        assert mock_cm.call_manager.initial_notification == "Persisted call briefing"
+        assert mock_cm.call_manager.pending_opener == "Persisted call briefing"
         mock_clear_intent.assert_awaited_once_with(
             pool_number="+15550000000",
             contact_number="+15555552222",
@@ -967,11 +1051,82 @@ class TestPhoneCallHandlers:
         )
 
     @pytest.mark.asyncio
-    async def test_whatsapp_permission_unknown_does_not_clear_pending_context(
+    async def test_whatsapp_permission_acceptance_tags_onboarding_outbound(
         self,
         mock_cm,
     ):
-        mock_cm._pending_whatsapp_call_contexts = {2: "Call briefing"}
+        """Permission-granted auto-calls must consume pending onboarding metadata."""
+        from unify.conversation_manager.conversation_manager import (
+            ConversationManager,
+        )
+        from unify.conversation_manager.events import WhatsAppCallSent
+
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "Call opener line.", "briefing": "Full task design."},
+        }
+        mock_cm._pending_onboarding_outbound = {
+            "onboarding_trigger_step_id": "whatsapp-call-reference",
+            "onboarding_reply_step_id": "whatsapp-call",
+            "onboarding_request_id": "req-1",
+            "onboarding_origin_event_id": "evt-1",
+            "channel": "whatsapp_call",
+            "tool_name": "make_whatsapp_call_to_boss",
+            "expires_at": 1_000_000.0,
+        }
+        mock_cm.loop.time.return_value = 0.0
+        mock_cm.consume_pending_onboarding_outbound = (
+            ConversationManager.consume_pending_onboarding_outbound.__get__(
+                mock_cm,
+                ConversationManager,
+            )
+        )
+        mock_cm.build_whatsapp_call_sent_event = (
+            ConversationManager.build_whatsapp_call_sent_event.__get__(
+                mock_cm,
+                ConversationManager,
+            )
+        )
+        mock_cm.assistant_whatsapp_number = "+15550000000"
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=True,
+        )
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils.start_whatsapp_call",
+                new_callable=AsyncMock,
+                return_value={"success": True},
+            ),
+            patch(
+                "unify.conversation_manager.domains.event_handlers.SESSION_DETAILS",
+            ) as mock_session_details,
+        ):
+            mock_session_details.assistant.agent_id = 7
+            mock_session_details.assistant.name = "Test Assistant"
+
+            await EventHandler.handle_event(event, mock_cm)
+
+        published_event = WhatsAppCallSent.from_json(
+            mock_cm.event_broker.publish.await_args.args[1],
+        )
+        assert published_event.onboarding_trigger_step_id == "whatsapp-call-reference"
+        assert published_event.onboarding_reply_step_id == "whatsapp-call"
+        assert mock_cm._pending_onboarding_outbound is None
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_permission_unknown_does_not_clear_pending_opener(
+        self,
+        mock_cm,
+    ):
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {"opener": "Call opener line.", "briefing": "Full task design."},
+        }
         event = WhatsAppCallPermissionResponse(
             contact={
                 "contact_id": 2,
@@ -990,7 +1145,10 @@ class TestPhoneCallHandlers:
             "<WhatsApp Call Permission Unknown: waiting for reconciliation>"
         )
         assert "did not include" in mock_cm.notifications_bar.notifications[-1].content
-        assert mock_cm._pending_whatsapp_call_contexts[2] == "Call briefing"
+        assert mock_cm._pending_whatsapp_call_openers[2] == {
+            "opener": "Call opener line.",
+            "briefing": "Full task design.",
+        }
         mock_cm.request_llm_run.assert_called_once()
 
 
@@ -1140,8 +1298,11 @@ class TestVoiceUtteranceHandlers:
         mock_cm.schedule_proactive_speech.assert_called()
 
     @pytest.mark.asyncio
-    async def test_inbound_utterance_triggers_interject_or_run(self, mock_cm):
-        """Inbound utterances trigger interject_or_run."""
+    async def test_inbound_utterance_does_not_trigger_voice_user_turn_handler(
+        self,
+        mock_cm,
+    ):
+        """Inbound utterances are logged; slow brain runs after fast brain completes."""
         event = InboundPhoneUtterance(
             contact={"contact_id": 2},
             content="What's the weather?",
@@ -1154,11 +1315,38 @@ class TestVoiceUtteranceHandlers:
             mock_utils.queue_operation = AsyncMock()
             await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.interject_or_run.assert_called_once_with(
-            "What's the weather?",
-            triggering_contact_id=2,
-            turn_id=3,
+        mock_cm.handle_voice_user_turn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_triggers_voice_user_turn_handler(
+        self,
+        mock_cm,
+    ):
+        """Slow brain runs after the Voice Agent finishes a user turn."""
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_SMALLTALK,
+            FastBrainTurnCompleted,
         )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="How are you?",
+            classification=FAST_BRAIN_TURN_SMALLTALK,
+            intended_speech="Doing great, thanks!",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.handle_voice_user_turn.assert_called_once_with(
+            "How are you?",
+            triggering_contact_id=2,
+            turn_id=7,
+        )
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 1
+        assert "Classification: SMALLTALK" in msgs[0].content
+        assert "Doing great, thanks!" in msgs[0].content
 
     @pytest.mark.asyncio
     async def test_outbound_utterance_resets_proactive_speech(self, mock_cm):
@@ -1263,16 +1451,44 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 0
 
     @pytest.mark.asyncio
-    async def test_fast_brain_continued_cancels_run_for_its_turn(self, mock_cm):
-        """The fast brain resolving a turn cancels exactly that turn's run."""
-        from unify.conversation_manager.events import FastBrainContinued
+    async def test_fast_brain_turn_completed_skips_silence(self, mock_cm):
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_SILENCE,
+            FastBrainTurnCompleted,
+        )
 
-        mock_cm.cancel_slow_brain_run = AsyncMock()
-        event = FastBrainContinued(contact={"contact_id": 2}, turn_id=7)
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="Okay.",
+            classification=FAST_BRAIN_TURN_SILENCE,
+            intended_speech="",
+        )
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.cancel_slow_brain_run.assert_awaited_once_with(7)
+        mock_cm.handle_voice_user_turn.assert_not_called()
+        msgs = mock_cm.contact_index.get_messages_for_contact(2, Medium.PHONE_CALL)
+        assert len(msgs) == 0
+
+    @pytest.mark.asyncio
+    async def test_fast_brain_turn_completed_skips_empty_user_content(self, mock_cm):
+        from unify.conversation_manager.events import (
+            FAST_BRAIN_TURN_DEFER,
+            FastBrainTurnCompleted,
+        )
+
+        event = FastBrainTurnCompleted(
+            contact={"contact_id": 2},
+            turn_id=7,
+            user_content="   ",
+            classification=FAST_BRAIN_TURN_DEFER,
+            intended_speech="One moment.",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.handle_voice_user_turn.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_assistant_turn_injection_updates_history_without_user_turn(
@@ -1299,7 +1515,7 @@ class TestVoiceUtteranceHandlers:
         assert len(msgs) == 1
         assert msgs[0].role == "assistant"
         assert msgs[0].content == "I just gave the onboarding intro."
-        mock_cm.interject_or_run.assert_not_called()
+        mock_cm.handle_voice_user_turn.assert_not_called()
         mock_cm.request_llm_run.assert_not_called()
         mock_cm.schedule_proactive_speech.assert_not_called()
         mock_socket.queue_for_clients.assert_called_once()
@@ -2240,7 +2456,7 @@ class TestNotificationEventHandlers:
 
         await EventHandler.handle_event(event, mock_cm)
 
-        mock_cm.request_llm_run.assert_called_once_with(delay=0, cancel_running=True)
+        mock_cm.request_llm_run.assert_called_once_with(delay=0)
 
     @pytest.mark.asyncio
     async def test_notification_unpinned_removes_from_bar(self, mock_cm, static_now):
@@ -3892,6 +4108,44 @@ class TestRemoteControlComputerPrimitivesIntegration:
             await EventHandler.handle_event(event, mock_cm)
 
         mock_cp.set_user_remote_control.assert_not_called()
+
+
+# =============================================================================
+# OpenSlowBrainTurn Event Tests
+# =============================================================================
+
+
+class TestOpenSlowBrainTurnEvent:
+    """Tests for the OpenSlowBrainTurn event."""
+
+    def test_open_slow_brain_turn_is_registered(self):
+        """OpenSlowBrainTurn should have a handler in the registry."""
+        assert OpenSlowBrainTurn in EventHandler._registry
+
+    @pytest.mark.asyncio
+    async def test_open_slow_brain_turn_pushes_notification(self, mock_cm):
+        """OpenSlowBrainTurn handler should push the follow-on notification."""
+        event = OpenSlowBrainTurn(
+            origin_run_id="llmrun-000001",
+            previous_tools=["act"],
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        notifications = mock_cm.notifications_bar.notifications
+        assert any(
+            OPEN_SLOW_BRAIN_TURN_NOTIFICATION in n.content for n in notifications
+        )
+
+    @pytest.mark.asyncio
+    async def test_open_slow_brain_turn_triggers_llm_run(self, mock_cm):
+        """OpenSlowBrainTurn handler should trigger an LLM run."""
+        event = OpenSlowBrainTurn(
+            origin_run_id="llmrun-000001",
+            previous_tools=["act"],
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once_with(delay=0)
 
 
 # =============================================================================

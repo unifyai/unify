@@ -47,9 +47,15 @@ from livekit.api import (
     SIPInboundTrunkInfo,
 )
 
-from unify.gateway.common.callbacks import CONFERENCE_WAIT_URL, twilio_callback_url
+from unify.gateway.adapters.common import (
+    default_contacts,
+    get_assistant,
+    publish_runtime_event,
+)
+from unify.gateway.common.callbacks import twilio_callback_url
 from unify.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
 from unify.gateway.common.twilio import build_twilio_wa_client
+from unify.gateway.context import GatewayContext
 from unify.gateway.credentials import (
     CredentialNotFoundError,
     CredentialStore,
@@ -131,24 +137,36 @@ async def _resolve_route(assistant_id: int, contact_number: str) -> dict:
 
 @unauth_router.post("/status")
 async def check_whatsapp_status(
+    request: Request,
     MessageStatus: str = Form(...),
     To: str = Form(...),
     From: str = Form(...),
     MessageSid: str | None = Form(None),
+    ErrorCode: str | None = Form(None),
     callback_id: str | None = Query(None),
 ):
     """Twilio delivery-receipt webhook for outbound WhatsApp messages."""
     logger.info(
         "[WhatsApp Status Callback] MessageStatus=%s To=%s From=%s "
-        "MessageSid=%s callback_id=%s",
+        "MessageSid=%s ErrorCode=%s callback_id=%s",
         MessageStatus,
         To,
         From,
         MessageSid,
+        ErrorCode,
         callback_id,
     )
     if callback_id:
         await _forward_notification_status(callback_id, To, MessageSid, MessageStatus)
+    elif MessageStatus == "failed":
+        gateway_context = getattr(request.app.state, "gateway_context", None)
+        await _recover_permanent_permission_from_failed_invite_status(
+            pool_number=_normalize_whatsapp_number(From),
+            contact_number=_normalize_whatsapp_number(To),
+            message_sid=MessageSid,
+            error_code=ErrorCode,
+            gateway_context=gateway_context,
+        )
     return {"status": True, "message_status": MessageStatus}
 
 
@@ -193,8 +211,12 @@ GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
+TWILIO_PERMANENT_CALL_PERMISSION_ERROR = 37010
+PERMANENT_CALL_PERMISSION_SOURCE = "twilio_permanent_permission"
 CALL_PERMISSION_PENDING_SUPPRESSION = timedelta(minutes=10)
 CALL_PERMISSION_PROBE_STATUSES = {"pending", "unknown_interaction"}
+PERMANENT_PERMISSION_INVITE_POLL_INTERVAL_S = 0.25
+PERMANENT_PERMISSION_INVITE_POLL_MAX_S = 1.0
 
 
 def render_greeting_template_text(user_name: str, agent_name: str) -> str:
@@ -300,6 +322,7 @@ async def send(request: Request):
     window_open = route["window_open"]
 
     twilio_client = build_twilio_wa_client(credentials)
+    message_sid = ""
     if window_open:
         delivered_body = body
         create_kwargs: dict = {
@@ -310,7 +333,8 @@ async def send(request: Request):
         }
         if media_url:
             create_kwargs["media_url"] = [_resolve_media_url(media_url, credentials)]
-        twilio_client.messages.create(**create_kwargs)
+        created = twilio_client.messages.create(**create_kwargs)
+        message_sid = str(getattr(created, "sid", "") or "")
         method = "freeform"
     else:
         if media_url:
@@ -320,7 +344,7 @@ async def send(request: Request):
                 to,
                 assistant_id,
             )
-        twilio_client.messages.create(
+        created = twilio_client.messages.create(
             content_sid=GREETING_TEMPLATE_SID,
             to=f"whatsapp:{to}",
             from_=f"whatsapp:{pool_number}",
@@ -329,10 +353,16 @@ async def send(request: Request):
             ),
             status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
         )
+        message_sid = str(getattr(created, "sid", "") or "")
         method = "template"
         delivered_body = render_greeting_template_text(user_name, agent_name)
 
-    return {"success": True, "method": method, "delivered_body": delivered_body}
+    return {
+        "success": True,
+        "method": method,
+        "delivered_body": delivered_body,
+        "message_sid": message_sid,
+    }
 
 
 @auth_router.get("/window")
@@ -477,7 +507,10 @@ async def _upsert_outbound_whatsapp_call_session(
     return response.json()
 
 
-async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
+async def _fetch_pending_call_intent(
+    pool_number: str,
+    contact_number: str,
+) -> dict | None:
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
@@ -489,9 +522,297 @@ async def _has_pending_call_intent(pool_number: str, contact_number: str) -> boo
             timeout=10.0,
         )
     if response.status_code == 404:
-        return False
+        return None
     response.raise_for_status()
-    return True
+    return response.json()
+
+
+async def _has_pending_call_intent(pool_number: str, contact_number: str) -> bool:
+    intent = await _fetch_pending_call_intent(pool_number, contact_number)
+    return intent is not None
+
+
+async def _clear_pending_call_intent(pool_number: str, contact_number: str) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
+            params={
+                "pool_number": pool_number,
+                "contact_number": contact_number,
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if response.status_code == 404:
+        return
+    response.raise_for_status()
+
+
+async def _resolve_inbound_assistant_id(
+    pool_number: str,
+    contact_number: str,
+) -> int | None:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/resolve",
+            params={
+                "pool_number": pool_number,
+                "sender": contact_number,
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if response.status_code >= 400:
+        return None
+    data = response.json()
+    assistant_id = data.get("assistant_id")
+    if assistant_id is None:
+        return None
+    return int(assistant_id)
+
+
+def _normalize_whatsapp_number(value: str) -> str:
+    return value.replace("whatsapp:", "").strip()
+
+
+def _whatsapp_call_room_name(assistant_id: int | str) -> str:
+    return f"unity_{assistant_id}_whatsapp_call"
+
+
+def _is_permanent_call_permission_error(error_code: object) -> bool:
+    return str(error_code or "") == str(TWILIO_PERMANENT_CALL_PERMISSION_ERROR)
+
+
+def _fetch_twilio_message(wa_client, message_sid: str):
+    return wa_client.messages(message_sid).fetch()
+
+
+def _message_indicates_permanent_permission(message) -> bool:
+    return _is_permanent_call_permission_error(getattr(message, "error_code", None))
+
+
+def _invite_status_callback_url() -> str:
+    return twilio_callback_url(
+        local_path="/local/twilio/whatsapp-status",
+        hosted_base=SETTINGS.conversation.COMMS_URL,
+        hosted_path="/whatsapp/status",
+    )
+
+
+def _create_call_permission_invite_message(*, wa_client, pool_number: str, to: str):
+    return wa_client.messages.create(
+        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
+        status_callback=_invite_status_callback_url(),
+    )
+
+
+async def _attempt_call_permission_invite(
+    *,
+    wa_client,
+    pool_number: str,
+    to: str,
+) -> str:
+    """Send a call-permission invite unless WhatsApp already granted permission.
+
+    Returns ``"sent"`` when the invite was queued, or ``"permanent_permission"``
+    when Twilio reports permanent call permission already exists (error 37010).
+    """
+    try:
+        message = await asyncio.to_thread(
+            _create_call_permission_invite_message,
+            wa_client=wa_client,
+            pool_number=pool_number,
+            to=to,
+        )
+    except Exception as exc:
+        if _is_permanent_call_permission_error(getattr(exc, "code", None)):
+            return "permanent_permission"
+        raise
+
+    fetched = await asyncio.to_thread(_fetch_twilio_message, wa_client, message.sid)
+    if _message_indicates_permanent_permission(fetched):
+        return "permanent_permission"
+
+    deadline = time.monotonic() + PERMANENT_PERMISSION_INVITE_POLL_MAX_S
+    while time.monotonic() < deadline:
+        if _message_indicates_permanent_permission(fetched):
+            return "permanent_permission"
+        status = str(getattr(fetched, "status", "") or "").lower()
+        if status == "failed":
+            if _message_indicates_permanent_permission(fetched):
+                return "permanent_permission"
+            return "sent"
+        if status in {"delivered", "read"}:
+            return "sent"
+        await asyncio.sleep(PERMANENT_PERMISSION_INVITE_POLL_INTERVAL_S)
+        fetched = await asyncio.to_thread(_fetch_twilio_message, wa_client, message.sid)
+
+    if _message_indicates_permanent_permission(fetched):
+        return "permanent_permission"
+    return "sent"
+
+
+async def _wake_and_publish_outbound_whatsapp_call_sent(
+    *,
+    gateway_context: GatewayContext,
+    assistant_id: int | str,
+    pool_number: str,
+    contact_number: str,
+    room_name: str,
+) -> None:
+    """Wake the assistant runtime and tell CM to start the outbound voice agent.
+
+    Gateway-side direct call placement (Twilio conference + LiveKit SIP) must
+    stay paired with the ConversationManager ``WhatsAppCallSent`` lifecycle.
+    Without this publish, telephony rings while no voice worker is dispatched.
+    """
+    assistant_data = await get_assistant(assistant_id=str(assistant_id))
+    resolved_id = str(assistant_data.get("assistant_id") or assistant_id)
+    await gateway_context.runtime_activator.activate(
+        resolved_id,
+        reason="whatsapp_call_sent",
+        medium="whatsapp_call",
+        metadata={"assistant": assistant_data},
+    )
+    contacts = default_contacts(assistant_data)
+    contact = next(
+        (c for c in contacts if c.get("whatsapp_number") == contact_number),
+        None,
+    )
+    if contact is None:
+        contact = contacts[-1] if contacts else {"whatsapp_number": contact_number}
+
+    await publish_runtime_event(
+        gateway_context,
+        assistant_id=resolved_id,
+        thread="whatsapp_call_sent",
+        event={
+            "contacts": contacts,
+            "assistant_id": resolved_id,
+            "user_number": contact_number,
+            "assistant_number": pool_number,
+            "livekit_room": room_name,
+            "contact": contact,
+        },
+    )
+
+
+async def _recover_permanent_call_permission_and_place_call(
+    *,
+    credentials: CredentialStore,
+    assistant_id: int,
+    pool_number: str,
+    contact_number: str,
+    room_name: str,
+    wa_client,
+    gateway_context: GatewayContext | None = None,
+    notify_runtime: bool = False,
+) -> dict:
+    accepted = await _record_call_permission_accepted(
+        pool_number,
+        contact_number,
+        source=PERMANENT_CALL_PERMISSION_SOURCE,
+    )
+    _cache_call_permission(
+        pool_number=pool_number,
+        contact_number=contact_number,
+        response_payload=accepted,
+    )
+    try:
+        await _clear_pending_call_intent(pool_number, contact_number)
+    except Exception:
+        logger.exception(
+            "failed to clear pending WhatsApp call intent for %s",
+            contact_number,
+        )
+    if notify_runtime:
+        if gateway_context is None:
+            raise RuntimeError(
+                "notify_runtime requires gateway_context for outbound WhatsApp calls",
+            )
+        await _wake_and_publish_outbound_whatsapp_call_sent(
+            gateway_context=gateway_context,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=contact_number,
+            room_name=room_name,
+        )
+    return await _place_direct_whatsapp_call(
+        credentials=credentials,
+        assistant_id=assistant_id,
+        pool_number=pool_number,
+        to=contact_number,
+        room_name=room_name,
+        wa_client=wa_client,
+    )
+
+
+async def _recover_permanent_permission_from_failed_invite_status(
+    *,
+    pool_number: str,
+    contact_number: str,
+    message_sid: str | None,
+    error_code: str | None,
+    gateway_context: GatewayContext | None = None,
+) -> None:
+    if not _is_permanent_call_permission_error(error_code):
+        if not message_sid:
+            return
+        credentials = EnvCredentialStore()
+        wa_client = build_twilio_wa_client(credentials)
+        try:
+            fetched = await asyncio.to_thread(
+                _fetch_twilio_message,
+                wa_client,
+                message_sid,
+            )
+        except Exception:
+            logger.exception(
+                "failed to fetch WhatsApp message %s for permission recovery",
+                message_sid,
+            )
+            return
+        if not _message_indicates_permanent_permission(fetched):
+            return
+
+    permission = await _check_call_permission(pool_number, contact_number)
+    if permission.get("permitted"):
+        logger.info(
+            "WhatsApp permanent permission already reconciled for %s",
+            contact_number,
+        )
+        return
+
+    assistant_id = await _resolve_inbound_assistant_id(pool_number, contact_number)
+    if assistant_id is None:
+        logger.error(
+            "cannot recover WhatsApp permanent permission: no assistant route "
+            "for pool=%s contact=%s",
+            pool_number,
+            contact_number,
+        )
+        return
+
+    credentials = EnvCredentialStore()
+    wa_client = build_twilio_wa_client(credentials)
+    try:
+        await _recover_permanent_call_permission_and_place_call(
+            credentials=credentials,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=contact_number,
+            room_name=_whatsapp_call_room_name(assistant_id),
+            wa_client=wa_client,
+            gateway_context=gateway_context,
+            notify_runtime=gateway_context is not None,
+        )
+    except Exception:
+        logger.exception(
+            "failed to recover WhatsApp permanent permission for %s",
+            contact_number,
+        )
 
 
 def _recent_pending_invite(permission: dict) -> bool:
@@ -630,24 +951,6 @@ async def _place_direct_whatsapp_call(
     }
 
 
-def _send_call_permission_invite(
-    *,
-    wa_client,
-    pool_number: str,
-    to: str,
-) -> None:
-    wa_client.messages.create(
-        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        status_callback=twilio_callback_url(
-            local_path="/local/twilio/whatsapp-status",
-            hosted_base=SETTINGS.conversation.COMMS_URL,
-            hosted_path="/whatsapp/status",
-        ),
-    )
-
-
 async def _can_probe_permission(
     *,
     permission: dict,
@@ -669,7 +972,22 @@ async def _can_probe_permission(
 
 
 def _conference_twiml(conference_name: str) -> str:
-    """TwiML for joining a participant into a named Twilio conference."""
+    """TwiML for joining a participant into a named Twilio conference.
+
+    A Twilio conference only starts once TWO participants are present, and the
+    first arrival hears the ``wait_url`` audio until then. On an
+    assistant-initiated call both legs are dialed concurrently, so either leg
+    can land first: a ring-tone ``wait_url`` here meant the callee could answer
+    and immediately hear ringing (or, in the opposite order, the ringtone
+    played into the LiveKit room at the agent's STT). ``wait_url=""`` keeps the
+    lone first leg in silence instead — the callee's only ringing experience is
+    WhatsApp's native pre-answer ring.
+
+    ``beep`` defaults to true on Twilio, playing a join tone into the
+    conference the moment a participant enters — heard by the callee right as
+    they pick up (an artificial "call answered" sound) and by the agent's STT.
+    Disabled on every leg.
+    """
     from twilio.twiml.voice_response import VoiceResponse
 
     resp = VoiceResponse()
@@ -679,7 +997,8 @@ def _conference_twiml(conference_name: str) -> str:
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        wait_url=CONFERENCE_WAIT_URL,
+        beep=False,
+        wait_url="",
     )
     return str(resp)
 
@@ -699,7 +1018,7 @@ async def send_call(request: Request):
     assistant_id = data["assistant_id"]
     room_name = data["room_name"]
     allow_permission_probe = bool(data.get("allow_permission_probe"))
-    pending_call_context = str(data.get("pending_call_context") or "")
+    pending_call_opener = str(data.get("pending_call_opener") or "")
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -725,14 +1044,14 @@ async def send_call(request: Request):
     if (
         allow_permission_probe
         and _is_local_permission_probe_enabled()
-        and pending_call_context
+        and pending_call_opener
         and permission_status in {"unknown", "pending", "unknown_interaction"}
     ):
         await _record_call_permission_pending(pool_number, to)
         await _store_pending_call_intent(
             pool_number=pool_number,
             contact_number=to,
-            context=pending_call_context,
+            context=pending_call_opener,
         )
         permission = await _check_call_permission(pool_number, to)
         permission_status = permission.get("status") or "unknown"
@@ -800,12 +1119,25 @@ async def send_call(request: Request):
             "pool_number": pool_number,
         }
 
-    wa_client.messages.create(
-        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        status_callback=f"{SETTINGS.conversation.COMMS_URL}/whatsapp/status",
+    invite_result = await _attempt_call_permission_invite(
+        wa_client=wa_client,
+        pool_number=pool_number,
+        to=to,
     )
+    if invite_result == "permanent_permission":
+        logger.info(
+            "WhatsApp permanent call permission exists for %s; placing direct call",
+            to,
+        )
+        return await _recover_permanent_call_permission_and_place_call(
+            credentials=credentials,
+            assistant_id=assistant_id,
+            pool_number=pool_number,
+            contact_number=to,
+            room_name=room_name,
+            wa_client=wa_client,
+        )
+
     await _record_call_permission_pending(pool_number, to)
     logger.info("WhatsApp call permission request sent to %s", to)
     return {"success": True, "method": "invite", "pool_number": pool_number}
@@ -830,6 +1162,11 @@ def _whatsapp_voice_app_sid(credentials: CredentialStore) -> str:
 
 WHATSAPP_GB_BUNDLE_SID = "BUd85f47e01a9d85003c364f400105a8da"
 _SENDER_BASE = "https://messaging.twilio.com/v2/Channels/Senders"
+
+# WhatsApp business-profile defaults for the shared universal T-W1N pool.
+DEFAULT_WHATSAPP_PROFILE_NAME = "Unify T-W1N"
+WHATSAPP_PROFILE_LOGO_URL = "https://console.unify.ai/brand/twin-logo.png"
+WHATSAPP_PROFILE_ABOUT = "Your digital twin."
 
 
 async def _attach_voice_app(
@@ -990,8 +1327,9 @@ async def create_whatsapp_sender(request: Request):
     payload: dict = {
         "sender_id": f"whatsapp:{phone_number}",
         "profile": {
-            "name": data.get("name", "Unify Assistant"),
-            "logo_url": "https://console.unify.ai/icon.png",
+            "name": data.get("name", DEFAULT_WHATSAPP_PROFILE_NAME),
+            "logo_url": WHATSAPP_PROFILE_LOGO_URL,
+            "about": data.get("about", WHATSAPP_PROFILE_ABOUT),
         },
         "webhook": {
             "callback_method": "POST",

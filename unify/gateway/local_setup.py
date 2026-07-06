@@ -304,11 +304,6 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
         summary="Discord bot registration, pool sync, status, and outbound send routes.",
         credentials=(
             CredentialSpec("ORCHESTRA_ADMIN_KEY", "Admin key for Discord routes"),
-            CredentialSpec(
-                "DISCORD_PUBLIC_KEY",
-                "Discord interaction public key",
-                required=False,
-            ),
         ),
         callbacks=(),
         public_https_required=False,

@@ -51,6 +51,34 @@ def _admin_headers() -> dict:
     }
 
 
+async def _resolve_team_id_for_assistant(assistant_id: str) -> str:
+    """Return the Slack workspace/team ID for an assistant's active install.
+
+    Fallback for outbound sends that omit ``team_id`` (the tool no longer
+    requires it): resolve the assistant's connected workspace from Orchestra
+    via ``assistant_slack_team_id`` on the admin assistant record. Returns an
+    empty string when the assistant has no resolvable install.
+    """
+    if not assistant_id:
+        return ""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}/admin/assistant",
+            params={
+                "agent_id": str(assistant_id),
+                "from_fields": "agent_id,assistant_slack_team_id",
+            },
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if resp.status_code != 200:
+        return ""
+    assistants = resp.json().get("info", [])
+    if not assistants:
+        return ""
+    return assistants[0].get("assistant_slack_team_id") or ""
+
+
 async def _resolve_bot_token(team_id: str) -> str:
     """Return the workspace bot token for ``team_id`` (admin auth).
 
@@ -139,7 +167,7 @@ async def send_slack_message(request: Request):
       (optional ``thread_ts``).
     """
     data = await request.json()
-    team_id = data["team_id"]
+    team_id = data.get("team_id") or ""
     body = data["body"]
     thread_ts = data.get("thread_ts")
     user_id = data.get("user_id")
@@ -149,6 +177,21 @@ async def send_slack_message(request: Request):
         raise HTTPException(
             status_code=400,
             detail="Either 'channel_id' or 'user_id' is required",
+        )
+
+    # ``team_id`` is optional on the wire: the assistant tool auto-resolves it
+    # from the connected workspace, but a caller may still omit it (e.g. a
+    # session whose Slack team id was not populated). Fall back to resolving
+    # the assistant's active install from Orchestra by ``assistant_id``.
+    if not team_id:
+        team_id = await _resolve_team_id_for_assistant(data.get("assistant_id") or "")
+    if not team_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No Slack workspace resolved: pass 'team_id' or send from an "
+                "assistant with a connected Slack workspace."
+            ),
         )
 
     bot_token = await _resolve_bot_token(team_id)
@@ -256,6 +299,60 @@ async def slack_user_info(request: Request):
     """
     data = await request.json()
     return await fetch_slack_user_profile(data["team_id"], data["slack_user_id"])
+
+
+# ---------------------------------------------------------------------------
+# POST /user-by-email
+# ---------------------------------------------------------------------------
+
+
+async def lookup_slack_user_id_by_email(team_id: str, email: str) -> str | None:
+    """Resolve a Slack user ID from an email via ``users.lookupByEmail``.
+
+    This is the reverse of ``users.info`` and the only way to reach a
+    workspace member the bot has never heard from: given a contact's email
+    it returns their Slack user ID so an assistant can open a DM. Returns
+    ``None`` when the workspace has no member with that email
+    (``users_not_found``), when the bot lacks the ``users:read.email``
+    scope, or when the email is empty — the caller treats any ``None`` as
+    "unresolved" and falls back to its existing behaviour.
+    """
+    if not email:
+        return None
+    bot_token = await _resolve_bot_token(team_id)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{SLACK_API_BASE}/users.lookupByEmail",
+            params={"email": email},
+            headers={"Authorization": f"Bearer {bot_token}"},
+            timeout=10.0,
+        )
+    payload = resp.json()
+    if not payload.get("ok"):
+        logger.warning(
+            f"slack users.lookupByEmail failed: {_log_field(payload.get('error'))}",
+        )
+        return None
+    return (payload.get("user") or {}).get("id") or None
+
+
+@auth_router.post("/user-by-email")
+async def slack_user_by_email(request: Request):
+    """Resolve a Slack user ID from an email via ``users.lookupByEmail``.
+
+    Body::
+
+        {"team_id": str, "email": str}
+
+    Returns ``{"slack_user_id": str | None}``. Lets the outbound pipeline
+    reach a contact that has an email on file but no Slack user ID yet.
+    """
+    data = await request.json()
+    slack_user_id = await lookup_slack_user_id_by_email(
+        data["team_id"],
+        data.get("email") or "",
+    )
+    return {"slack_user_id": slack_user_id}
 
 
 # ---------------------------------------------------------------------------

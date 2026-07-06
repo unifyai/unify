@@ -1,7 +1,7 @@
 import json
 import uuid
 from collections.abc import Mapping as _Mapping
-from typing import Optional, Any, ClassVar
+from typing import Literal, Optional, Any, ClassVar
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 
@@ -61,6 +61,7 @@ def _now_datetime() -> datetime:
 @dataclass(kw_only=True)
 class Event:
     timestamp: datetime = field(default_factory=_now_datetime)
+    suppress_slow_brain_wake: bool = False
 
     _registry: ClassVar[dict[str, "Event"]] = {}
     loggable: ClassVar[bool] = True
@@ -209,9 +210,20 @@ class InboundPhoneUtterance(Event):
 
     contact: dict
     content: str
-    # Per-turn id from the voice agent, used to cancel exactly the slow-brain run
-    # this turn spawns if the fast brain resolves the turn itself.
+    # Per-turn id from the voice agent, correlated with the slow-brain run that
+    # starts after the fast brain completes this user turn.
     turn_id: int | None = None
+    # Voice-derived speaker attribution: an anonymous session-scoped label
+    # (e.g. "Speaker 2") when the voice does not match the contact's enrolled
+    # profile, the diarization id from STT, and whether the utterance's voice
+    # was positively matched to the contact's enrollment.
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
+    # Whether the speaker holds conversational standing on the call. False for
+    # background voices: the line is context only — it triggered no fast-brain
+    # reply and no slow-brain user turn.
+    engaged: bool = True
 
 
 @dataclass
@@ -223,6 +235,10 @@ class InboundUnifyMeetUtterance(Event):
     contact: dict
     content: str
     turn_id: int | None = None
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -234,6 +250,10 @@ class InboundWhatsAppCallUtterance(Event):
     contact: dict
     content: str
     turn_id: int | None = None
+    speaker_label: str | None = None
+    diarization_speaker_id: str | None = None
+    voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -252,21 +272,85 @@ class VoiceInterrupt(Event):
 
 
 @dataclass
-class FastBrainContinued(Event):
-    """The fast brain resolved this turn itself (CONTINUE or SMALLTALK).
+class VoiceEnrollmentCaptured(Event):
+    """A single-voice call accumulated enough speech to enroll the contact.
 
-    Emitted when the fast brain takes full ownership of the turn's reply - either
-    resuming an interrupted line verbatim (continuation) or fully answering a pure
-    small-talk turn. Signals the CM to cancel the slow-brain run that was eagerly
-    started for this user turn, so the slow brain does not also answer.
+    Published by the voice agent child process. The embedding is the
+    duration-weighted speaker embedding of the captured speech; ``wav_path``
+    points at a temp WAV file on the shared filesystem that the parent
+    persists onto the contact row (and then deletes).
     """
 
-    topic: ClassVar[str | None] = "app:comms:fast_brain_continued"
+    topic: ClassVar[str | None] = "app:comms:voice_enrollment_captured"
+    prominent: ClassVar[bool] = True
 
     contact: dict
-    # The user turn the fast brain resolved; the CM cancels exactly that turn's
-    # slow-brain run (wherever it sits in the debouncer queue).
+    embedding: list
+    wav_path: str = ""
+    duration_s: float = 0.0
+    channel: str = ""
+
+
+@dataclass
+class VoiceEnrollmentSuggested(Event):
+    """Multiple voices were heard on a call but the contact has no enrollment.
+
+    Signals degraded speaker attribution and triggers the Console fallback
+    recorder after the call when the contact is the account holder.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:voice_enrollment_suggested"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+    num_speakers: int = 0
+    channel: str = ""
+
+
+# Classifications the fast brain emits when a user turn completes.
+FAST_BRAIN_TURN_DEFER = "defer"
+FAST_BRAIN_TURN_SMALLTALK = "smalltalk"
+FAST_BRAIN_TURN_SILENCE = "silence"
+FAST_BRAIN_TURN_CONTINUATION = "continuation"
+FAST_BRAIN_TURN_HANG_UP = "hang_up"
+
+
+@dataclass
+class FastBrainHangUp(Event):
+    """The fast brain closed the call at a natural end point.
+
+    Only possible while the slow brain has armed the hang-up gate. Published by
+    the voice agent child process after its farewell line finished playing out
+    uninterrupted (or after a sanctioned-silence close). The CM performs the
+    actual session teardown on receipt.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_hang_up"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+    farewell: str = ""
+    trigger: str = ""  # "user_turn" | "silence"
+    gate_reason: str = ""
+
+
+@dataclass
+class FastBrainTurnCompleted(Event):
+    """The fast brain finished responding to a user turn.
+
+    Emitted after the Voice Agent classifies and emits its line (filler, small
+    talk, continuation, or silence). The CM then starts the slow-brain run for
+    this turn, with a guidance note carrying the classification and intended
+    speech so the slow brain does not duplicate what was already said.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:fast_brain_turn_completed"
+
+    contact: dict
     turn_id: int | None = None
+    user_content: str = ""
+    classification: str = ""
+    intended_speech: str = ""
 
 
 @dataclass
@@ -331,6 +415,8 @@ class InboundGoogleMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
+    voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -407,6 +493,8 @@ class InboundTeamsMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
+    voice_verified: bool = False
+    engaged: bool = True
 
 
 @dataclass
@@ -470,6 +558,7 @@ class WhatsAppReceived(Event):
     contact: dict
     content: str
     attachments: list[dict] | None = None
+    provider_message_sid: str = ""
 
 
 @dataclass
@@ -837,6 +926,35 @@ class UnifyMessageReceived(Event):
 
 
 @dataclass
+class UnifyMessageReactionChanged(Event):
+    """A user reacted to a Unify console chat message."""
+
+    topic: ClassVar[str | None] = "app:comms:unify_message_reaction"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    target_message_id: int
+    emoji: str | None = None
+    action: Literal["added", "changed", "removed"] = "added"
+    previous_emoji: str | None = None
+
+
+@dataclass
+class WhatsAppReactionChanged(Event):
+    """A user reacted to a WhatsApp message."""
+
+    topic: ClassVar[str | None] = "app:comms:whatsapp_reaction"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    target_message_id: int = 0
+    provider_message_sid: str = ""
+    emoji: str | None = None
+    action: Literal["added", "changed", "removed"] = "added"
+    previous_emoji: str | None = None
+
+
+@dataclass
 class PhoneCallSent(Event):
     topic: ClassVar[str | None] = "app:comms:make_call"
     prominent: ClassVar[bool] = True
@@ -996,6 +1114,7 @@ class WhatsAppSent(Event):
     via_template: bool = False
     delivered_content: str | None = None
     attachments: list[dict] | None = None
+    provider_message_sid: str = ""
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None
@@ -1140,7 +1259,7 @@ class _SessionConfigBase(Event):
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""
-    assistant_is_coordinator: bool = False
+    assistant_slack_team_id: str = ""
     assistant_timezone: str = (
         ""  # IANA timezone identifier; default empty for backward compat
     )
@@ -1175,6 +1294,15 @@ class InitializationComplete(Event):
     """Published when ConversationManager has fully initialized all managers."""
 
     loggable: ClassVar[bool] = False
+
+
+@dataclass
+class OpenSlowBrainTurn(Event):
+    """Follow-on slow-brain turn because the prior turn did not call wait."""
+
+    loggable: ClassVar[bool] = False
+    origin_run_id: str = ""
+    previous_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1646,7 +1774,7 @@ class CoordinatorOnboardingEvent(Event):
     Coordinator's onboarding conversation.
 
     Emitted only while the Coordinator is in
-    ``Coordinator/State.mode == 'onboarding'`` (see
+    ``Coordinator/State.onboarding_active`` (see
     ``coordinator_onboarding_event_service`` in orchestra) so day-to-day
     activity stays silent. Subtypes correspond to onboarding milestones
     with no other user-visible feedback channel: workspace OAuth landed,

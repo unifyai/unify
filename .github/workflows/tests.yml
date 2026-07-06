@@ -596,8 +596,18 @@ jobs:
       with:
         python-version: '3.12'
 
+    - name: Clone unisdk client
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unisdk
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unisdk
+        submodules: false
+        token: ${{ secrets.CLONE_TOKEN }}
+        fetch-depth: 1
+
     - name: Install unisdk client
-      run: pip install "unisdk @ git+https://github.com/unifyai/unisdk.git@${{ github.ref_name == 'main' && 'main' || 'staging' }}"
+      run: pip install -e ./unisdk
 
     - name: Delete shared project (once, before all runners)
       run: |
@@ -1383,8 +1393,18 @@ jobs:
       with:
         python-version: '3.12'
 
+    - name: Clone unisdk client
+      uses: actions/checkout@v4
+      with:
+        repository: unifyai/unisdk
+        ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
+        path: unisdk
+        submodules: false
+        token: ${{ secrets.CLONE_TOKEN }}
+        fetch-depth: 1
+
     - name: Install unisdk client
-      run: pip install "unisdk @ git+https://github.com/unifyai/unisdk.git@${{ github.ref_name == 'main' && 'main' || 'staging' }}"
+      run: pip install -e ./unisdk
 
     - name: Delete shared project (once, after all runners)
       run: |

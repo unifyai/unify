@@ -116,18 +116,22 @@ async def test_interjection_publishes_user_event(llm_config) -> None:
     in test_interjections.py.
     """
     client = new_llm_client(**llm_config)
-    # Minimal prompt - we don't care about model's response quality here
-    client.set_system_message("Acknowledge any messages you receive.")
+    opening_turn = "Event bus check: this is the opening user turn."
+    interjected_turn = "Event bus check: this is the interjected user turn."
+    client.set_system_message(
+        "You are in an automated event-bus test. "
+        "Briefly acknowledge each user message. Do not call tools.",
+    )
 
     async with capture_events("ToolLoop") as captured_events:
         handle = start_async_tool_loop(
             client=client,
-            message="initial message",
+            message=opening_turn,
             tools={},
             max_consecutive_failures=1,
         )
 
-        await handle.interject("interjected message")
+        await handle.interject(interjected_turn)
 
         # We don't need to verify model output - just let it complete
         await handle.result()
@@ -147,10 +151,10 @@ async def test_interjection_publishes_user_event(llm_config) -> None:
         if evt.payload["message"]["role"] == "user"
     ]
     assert any(
-        "initial" in c for c in user_contents
+        "opening user turn" in c for c in user_contents
     ), "Initial message should be recorded"
     assert any(
-        "interjected" in c for c in user_contents
+        "interjected user turn" in c for c in user_contents
     ), "Interjection should be recorded"
 
 

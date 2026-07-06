@@ -332,8 +332,48 @@ PY
   _port_is_listening 8000 && _port_is_listening 8001
 }
 
+_resolve_orchestra_db_port() {
+  if [[ -n "${ORCHESTRA_DB_PORT:-}" ]]; then
+    printf '%s\n' "$ORCHESTRA_DB_PORT"
+    return 0
+  fi
+
+  local _prefix="${ORCHESTRA_PREFIX:-orchestra}"
+  local _config_file="/tmp/${_prefix}-local-server.config"
+  if [[ -f "$_config_file" ]]; then
+    local _from_config
+    _from_config=$(grep "^ORCHESTRA_DB_PORT=" "$_config_file" 2>/dev/null | cut -d= -f2- | head -1)
+    if [[ -n "$_from_config" ]]; then
+      printf '%s\n' "$_from_config"
+      return 0
+    fi
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    local _mapped _inspect_mapped=""
+    _mapped="$(docker port "${_prefix}-local-db" 5432/tcp 2>/dev/null | sed -n 's/.*://p' | head -1 || true)"
+    if [[ -z "$_mapped" ]]; then
+      _inspect_mapped="$(docker inspect -f '{{(index (index .HostConfig.PortBindings "5432/tcp") 0).HostPort}}' "${_prefix}-local-db" 2>/dev/null || true)"
+      _mapped="$_inspect_mapped"
+    fi
+    if [[ -n "$_mapped" ]]; then
+      printf '%s\n' "$_mapped"
+      return 0
+    fi
+  fi
+
+  if _full_stack_source_is_active; then
+    printf '55432\n'
+    return 0
+  fi
+
+  printf '5432\n'
+}
+
 if _is_local_url "${ORCHESTRA_URL:-}"; then
   if [[ -x "$_local_orchestra_script" ]]; then
+    export ORCHESTRA_DB_PORT="$(_resolve_orchestra_db_port)"
+    echo "Local orchestra PostgreSQL port: $ORCHESTRA_DB_PORT"
     # Set up orchestra configuration for tests
     export ORCHESTRA_SEED_USER=1
     export ORCHESTRA_TEST_USER_ID="${ORCHESTRA_TEST_USER_ID:-unity-test-user-001}"
@@ -344,6 +384,7 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     # intentionally NOT set. Those traces duplicate the OTEL spans in logs/all/
     # and add ~370MB to CI artifacts. Orchestra's own CI still uses it.
     export ORCHESTRA_OTEL_LOG_DIR="$REPO_ROOT/logs/all"
+    export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-86400}"
 
     # Check if local orchestra is already running
     if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
@@ -375,15 +416,15 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
           echo "Shared orchestra: using existing instance, creating log symlinks..."
           _create_orchestra_log_symlinks
           export ORCHESTRA_URL="$_local_url"
-        else
+        elif [[ "${UNIFY_FORCE_ORCHESTRA_PURGE:-0}" == "1" ]]; then
           # MAIN REPO MODE: Purge then start to pick up logging config AND wipe
-          # the database for test isolation. `restart` no longer wipes data
-          # (intentionally, for the install-and-live local UX), so tests use
-          # `purge` to explicitly destroy the named volume + container.
+          # the database for test isolation. Opt in via UNIFY_FORCE_ORCHESTRA_PURGE=1
+          # so concurrent long-running suites (bare pytest, other agents) are not
+          # killed mid-flight when OTEL log paths differ.
           _original_url="$_local_url"
           echo "Purging + starting orchestra to apply logging configuration..."
           "$_local_orchestra_script" purge >/dev/null 2>&1 || true
-          "$_local_orchestra_script" start >/dev/null 2>&1 || true
+          "$_local_orchestra_script" start >"/tmp/orchestra-startup.log" 2>&1 || true
           if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then
             echo "Using local orchestra: $_local_url"
             export ORCHESTRA_URL="$_local_url"
@@ -392,6 +433,10 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
             export ORCHESTRA_URL="$_original_url"
           fi
           unset _original_url
+        else
+          echo "Orchestra running with different logging config; creating symlinks (set UNIFY_FORCE_ORCHESTRA_PURGE=1 to purge DB and restart)..."
+          _create_orchestra_log_symlinks
+          export ORCHESTRA_URL="$_local_url"
         fi
       else
         # Logging already configured correctly, reuse existing instance
@@ -402,15 +447,24 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     else
       # Not running - need to start it
       if _full_stack_source_is_active && [[ "${UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
-        echo "Full local stack detected: reusing stack-owned Orchestra."
-        export ORCHESTRA_URL="${ORCHESTRA_URL:-http://127.0.0.1:8000/v0}"
-        unset _local_url
+        _deploy_repo="${UNITY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unity-deploy}"
+        _stack_script="$_deploy_repo/selfhost/stack.sh"
+        echo "Error: Full local stack is active but Orchestra is not responding at http://127.0.0.1:8000/v0." >&2
+        if [[ -x "$_stack_script" ]]; then
+          echo "  Repair or restart the stack: bash \"$_stack_script\" status" >&2
+          echo "  Full restart: bash \"$_stack_script\" up --durable" >&2
+        else
+          echo "  Start or repair the stack with unity-deploy/selfhost/stack.sh." >&2
+        fi
+        echo "  To run an isolated test Orchestra anyway: UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA=1" >&2
+        unset _deploy_repo _stack_script
+        exit 1
       else
         # Stop any stale orchestra state first
         "$_local_orchestra_script" stop >/dev/null 2>&1 || true
 
         # Remove any existing PostgreSQL container so we get fresh one with correct max_connections
-        _db_port="${ORCHESTRA_DB_PORT:-5432}"
+        _db_port="$ORCHESTRA_DB_PORT"
         for _container in $(docker ps -a --filter "publish=${_db_port}" --format "{{.Names}}" 2>/dev/null); do
           docker stop "$_container" >/dev/null 2>&1 || true
           docker rm "$_container" >/dev/null 2>&1 || true
@@ -462,6 +516,20 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     echo "Warning: Orchestra script not found at $_local_orchestra_script" >&2
     echo "  Set ORCHESTRA_REPO_PATH or clone orchestra repo to ../orchestra" >&2
   fi
+
+  # Local pytest must authenticate as the seeded test user. UnityTests/.env
+  # often carries a hosted UNIFY_KEY whose tenant has no billing_account row in
+  # this Postgres, so /v0/credits/deduct returns 400 "Billing is not set up".
+  export SELF_HOST=1
+  export UNIFY_KEY="local-test-api-key"
+  if [[ -x "$_local_orchestra_script" ]]; then
+    if "$_local_orchestra_script" seed; then
+      echo "Local orchestra test user + billing seeded"
+    else
+      echo "Warning: orchestra seed failed; credit-deduct tests may fail" >&2
+    fi
+  fi
+
   unset _local_url
 else
   echo "Using remote orchestra: $ORCHESTRA_URL"

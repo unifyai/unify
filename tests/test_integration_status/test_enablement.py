@@ -14,9 +14,8 @@ Synthetic state is injected by stubbing two helpers:
   module — returns the set of currently-present secret names in the
   assistant's local Secrets context.
 
-Manager-coupled helpers (``enabled_function_ids``,
-``enabled_guidance_ids``) are tested separately under
-``tests/test_integration_status/test_manager_resolution.py`` (TODO) once
+Manager-coupled helpers (``enabled_function_ids``) are tested separately under
+``tests/test_integration_status/test_manager_resolution.py`` once
 we have lightweight FunctionManager / GuidanceManager fakes.
 """
 
@@ -324,14 +323,14 @@ def test_filter_scope_none_when_no_packages(monkeypatch):
     assert IS.build_guidance_filter_scope() is None
 
 
-def test_filter_scope_never_match_when_packages_exist_but_none_enabled(monkeypatch):
-    """Packages on disk but none enabled → hide all integration guidance."""
+def test_filter_scope_none_when_packages_exist_but_none_enabled(monkeypatch):
+    """Packages on disk but none enabled → no filter when no disabled guidance registered."""
     _stub_packages_and_keyset(
         monkeypatch,
         packages=[_pkg(slug="hubspot", label="HubSpot", required=["HUBSPOT_TOKEN"])],
         keyset=set(),
     )
-    assert IS.build_guidance_filter_scope() == "guidance_id in ()"
+    assert IS.build_guidance_filter_scope() is None
 
 
 # ---------------------------------------------------------------------------

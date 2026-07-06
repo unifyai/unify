@@ -124,6 +124,7 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     cm.call_manager.has_teams_presenting = False
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
+    cm.call_manager.hang_up_gate_reason = None
     cm.assistant_has_teams = False
 
     # Create SimulatedContactManager and populate with sample contacts
@@ -232,6 +233,19 @@ class TestScheduleProactiveSpeech:
 
         mock_cm.mode = Mode.CALL
         mock_cm._proactive_speech_enabled = False
+        mock_cm.cancel_proactive_speech = AsyncMock()
+
+        await ConversationManager.schedule_proactive_speech(mock_cm)
+
+        mock_cm.cancel_proactive_speech.assert_called_once()
+        assert mock_cm._proactive_speech_task is None
+
+    async def test_schedule_skipped_while_hang_up_gate_armed(self, mock_cm):
+        """With the hang-up gate armed, silence is the close signal — no filler."""
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+        mock_cm.call_manager.hang_up_gate_reason = "wrap up warmly"
         mock_cm.cancel_proactive_speech = AsyncMock()
 
         await ConversationManager.schedule_proactive_speech(mock_cm)
@@ -457,6 +471,33 @@ class TestProactiveSpeechLoop:
             await ConversationManager._proactive_speech_loop(mock_cm)
 
         mock_cm.event_broker.publish.assert_called()
+
+    async def test_loop_drops_line_when_gate_arms_mid_decision(self, mock_cm):
+        """Scheduling-time suppression cannot see a gate that arms while the
+        decision is in flight; the delivery-time check drops the pending line
+        so proactive filler never keeps a sanctioned-close call alive."""
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm.mode = Mode.CALL
+
+        async def mock_decide(*args, **kwargs):
+            # The slow brain arms the hang-up gate while the proactive
+            # decision is being generated.
+            mock_cm.call_manager.hang_up_gate_reason = "wrap up warmly"
+            return ProactiveDecision(delay=0, content="Bye, Dan."), ""
+
+        mock_cm.proactive_speech.decide = mock_decide
+
+        with (
+            patch("asyncio.sleep", new=AsyncMock()),
+            patch(
+                "unify.conversation_manager.conversation_manager.build_brain_spec",
+                return_value=MockBrainSpec(),
+            ),
+        ):
+            await ConversationManager._proactive_speech_loop(mock_cm)
+
+        mock_cm.event_broker.publish.assert_not_called()
 
     async def test_loop_returns_when_nothing_said_yet(self, mock_cm):
         """With an empty transcript there is no silence to break, so the loop
@@ -691,7 +732,7 @@ class TestEventHandlerProactiveSpeechIntegration:
         from unify.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
-        mock_cm.interject_or_run = AsyncMock()
+        mock_cm.handle_voice_user_turn = AsyncMock()
 
         event = InboundPhoneUtterance(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
@@ -968,7 +1009,7 @@ class TestProactiveSpeechBlindSpots:
         from unify.conversation_manager.domains.event_handlers import EventHandler
 
         mock_cm.schedule_proactive_speech = AsyncMock()
-        mock_cm.interject_or_run = AsyncMock()
+        mock_cm.handle_voice_user_turn = AsyncMock()
 
         event = InboundUnifyMeetUtterance(
             contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
@@ -1747,7 +1788,6 @@ class TestProactiveSpeechVisualContext:
         brain_spec = BrainSpec(
             system_prompt=_default_prompt_parts(),
             state_prompt="<state>test</state>",
-            response_model=ProactiveDecision,
             screenshots=screenshots,
         )
         main_brain_msg = brain_spec.state_message()

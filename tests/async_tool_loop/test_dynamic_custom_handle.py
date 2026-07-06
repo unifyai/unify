@@ -461,7 +461,11 @@ async def test_dynamic_helpers_use_overridden_docstrings(client):
 
     setattr(_dtf.DynamicToolFactory, "_register_tool", _spy_register_tool)
 
-    client.set_system_message("Call `spawn_handle` to start a nested handle.")
+    client.set_system_message(
+        "You are running inside an automated test.\n"
+        "1️⃣  Call `spawn_handle` with no arguments.\n"
+        "2️⃣  Wait for further instructions.",
+    )
     outer = start_async_tool_loop(
         client,
         message="start",

@@ -1,9 +1,10 @@
-"""An agent-initiated (outbound) call must always open with a briefed opener.
+"""An agent-initiated call must always open with a verbatim opener.
 
-The mission context the brain passes to make_call/make_whatsapp_call lands on
-``call_manager.initial_notification``; start_call must turn that into a
-``briefed`` opening_config (spoken on answer) for every outbound call and must
-never dispatch one "blind" — even when no context was provided.
+The slow brain passes ``opener`` to make_call/make_whatsapp_call; it lands on
+``call_manager.pending_opener`` BEFORE the dial. ``start_call`` must turn that
+into a spoken ``opener`` opening_config — including on inbound-shaped legs of
+agent-initiated calls (the WhatsApp permission-callback dial-back) — and must
+refuse an outbound call with no opener queued.
 """
 
 from __future__ import annotations
@@ -61,9 +62,9 @@ def _manager_with_worker() -> tuple[LivekitCallManager, dict]:
 
 
 @pytest.mark.asyncio
-async def test_outbound_call_opens_with_briefed_mission_context():
+async def test_outbound_call_opens_with_verbatim_opener():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = "Call Daniel to confirm tomorrow's 3pm demo."
+    manager.pending_opener = "Call Daniel to confirm tomorrow's 3pm demo."
 
     await manager.start_call(
         {"contact_id": 2},
@@ -73,30 +74,49 @@ async def test_outbound_call_opens_with_briefed_mission_context():
     )
 
     opening = captured["extra_metadata"]["opening_config"]
-    assert opening["mode"] == "briefed"
-    assert opening["system_context"] == "Call Daniel to confirm tomorrow's 3pm demo."
-    # The mission is delivered as the opener, not also queued as a separate
-    # reactive notification that would race / double the greeting.
-    assert manager.initial_notification == ""
+    assert opening["mode"] == "opener"
+    assert opening["opener_text"] == "Call Daniel to confirm tomorrow's 3pm demo."
+    assert captured["outbound"] is True
+    assert manager.pending_opener == ""
 
 
 @pytest.mark.asyncio
-async def test_outbound_call_is_never_blind_without_context():
+async def test_outbound_call_without_opener_is_refused():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = ""  # no mission context provided
+    manager.pending_opener = ""
 
-    await manager.start_call({"contact_id": 2}, {"contact_id": 1}, outbound=True)
+    with pytest.raises(RuntimeError, match="no verbatim opener"):
+        await manager.start_call({"contact_id": 2}, {"contact_id": 1}, outbound=True)
+
+    assert "extra_metadata" not in captured  # never dispatched
+
+
+@pytest.mark.asyncio
+async def test_inbound_leg_with_queued_opener_still_speaks_it():
+    """The WhatsApp permission-callback call arrives inbound-shaped, but the
+    opener queued when we tried to place the call must still be spoken."""
+    manager, captured = _manager_with_worker()
+    manager.pending_opener = "Hi Dan — quick quiz to test the WhatsApp channel."
+
+    await manager.start_call(
+        {"contact_id": 2},
+        {"contact_id": 1},
+        outbound=False,
+        channel="whatsapp_call",
+    )
 
     opening = captured["extra_metadata"]["opening_config"]
-    assert opening["mode"] == "briefed"
-    # A non-empty fallback briefing guarantees a purposeful opener (never silent).
-    assert opening["system_context"].strip()
+    assert opening["mode"] == "opener"
+    assert opening["opener_text"] == (
+        "Hi Dan — quick quiz to test the WhatsApp channel."
+    )
+    assert captured["outbound"] is False
+    assert manager.pending_opener == ""
 
 
 @pytest.mark.asyncio
-async def test_inbound_call_does_not_force_an_opener():
+async def test_inbound_call_without_opener_has_no_opening_config():
     manager, captured = _manager_with_worker()
-    manager.initial_notification = "Inbound context"
 
     await manager.start_call(
         {"contact_id": 2},
@@ -104,19 +124,68 @@ async def test_inbound_call_does_not_force_an_opener():
         outbound=False,
     )
 
-    # Inbound calls keep their existing behaviour (no forced briefed opener).
     assert captured["extra_metadata"] is None
 
 
-def test_opener_guardrails_handle_reply_to_hello():
-    """The opener is held until the callee speaks, so the drafted line must read
-    naturally both as a standalone opener AND as a reply to their "Hello?"."""
-    from unify.conversation_manager.prompt_builders import (
-        _BRIEFED_OPENING_GUARDRAIL,
-        _OPENING_GREETING_GUARDRAIL,
+@pytest.mark.asyncio
+async def test_outbound_unify_meet_uses_verbatim_opener():
+    manager, captured = _manager_with_worker()
+    manager.pending_opener = "Hi — continuing onboarding on the live call."
+
+    await manager.start_unify_meet(
+        {"contact_id": 1},
+        {"contact_id": 1},
+        "unity_1_meet",
     )
 
-    for guardrail in (_OPENING_GREETING_GUARDRAIL, _BRIEFED_OPENING_GUARDRAIL):
-        assert "Hello?" in guardrail
-        flat = " ".join(guardrail.lower().split())
-        assert "do not assume silence" in flat
+    opening = captured["extra_metadata"]["opening_config"]
+    assert opening["mode"] == "opener"
+    assert opening["opener_text"] == "Hi — continuing onboarding on the live call."
+    assert manager.is_outbound is True
+    assert manager.pending_opener == ""
+
+
+@pytest.mark.asyncio
+async def test_outbound_call_carries_unspoken_briefing():
+    manager, captured = _manager_with_worker()
+    manager.pending_opener = "Hi Dan — quick quiz to test this channel."
+    manager.pending_briefing = "Expected answer: Dune. Confirm warmly and wrap up."
+
+    await manager.start_call(
+        {"contact_id": 2},
+        {"contact_id": 1},
+        outbound=True,
+        channel="whatsapp_call",
+    )
+
+    opening = captured["extra_metadata"]["opening_config"]
+    assert opening["mode"] == "opener"
+    assert opening["briefing"] == ("Expected answer: Dune. Confirm warmly and wrap up.")
+    assert manager.pending_briefing == ""
+    assert manager.active_call_briefing == (
+        "Expected answer: Dune. Confirm warmly and wrap up."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unify_meet_ring_answer_reattaches_queued_briefing():
+    """The meet-ring opener round-trips through the Console without the
+    briefing; start_unify_meet must reattach the CM-side queued briefing."""
+    manager, captured = _manager_with_worker()
+    manager.pending_briefing = "Continue onboarding from the Slack step."
+
+    await manager.start_unify_meet(
+        {"contact_id": 1},
+        {"contact_id": 1},
+        "unity_1_meet",
+        opening_config={
+            "mode": "opener",
+            "opener_text": "Hi — picking up where we left off.",
+            "source": "unify_meet_ring",
+        },
+    )
+
+    opening = captured["extra_metadata"]["opening_config"]
+    assert opening["briefing"] == "Continue onboarding from the Slack step."
+    assert manager.pending_briefing == ""
+    assert manager.active_call_briefing == ("Continue onboarding from the Slack step.")
