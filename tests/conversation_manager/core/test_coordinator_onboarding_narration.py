@@ -51,6 +51,42 @@ def test_workspace_demo_notification_requires_full_task_then_explicit_completion
     assert "checklist click has no visible UI feedback" in text
 
 
+def test_integration_demo_notification_requires_explicit_completion() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="integration_demo_chip_requested",
+        message="The user picked an integration demo chip.",
+        details={
+            "step_id": "integration-read",
+            "instruction": "Pull the latest from one of my connected apps and brief me here",
+        },
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "integration_demo_chip_requested" in text
+    assert "`integration-read`" in text
+    assert "connected integration/app tools" in text
+    assert "set_onboarding_task_state" in text
+    assert "does NOT auto-detect" in text
+    assert "Mandatory:" in text
+
+
+def test_integration_connect_chip_does_not_complete_apps() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="integration_connect_chip_requested",
+        message="The user picked a CRM connect suggestion.",
+        details={
+            "instruction": "Connect a CRM or sales tool — if you use one",
+            "gallery_category": "crm_sales",
+            "search_query": "crm sales hubspot pipedrive",
+        },
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "integration_connect_chip_requested" in text
+    assert "crm_sales" in text
+    assert "crm sales hubspot pipedrive" in text
+    assert "do not mark `apps` complete" in text
+    assert "actual integration credential lands" in text
+
+
 def test_step_completed_notification_requires_no_action() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_step_completed",

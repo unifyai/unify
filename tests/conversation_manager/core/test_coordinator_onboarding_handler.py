@@ -65,6 +65,48 @@ async def test_workspace_demo_requested_refreshes_render_without_arming(
 
 
 @pytest.mark.anyio
+async def test_integration_demo_requested_refreshes_render_without_arming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = _fake_cm()
+    event = CoordinatorOnboardingEvent(
+        subtype="integration_demo_requested",
+        message="The user clicked 'Ask T-W1N to read from your connected apps'.",
+        details={"step_id": "integration-read", "onboarding": _RENDER},
+    )
+
+    should_run = await _handle_coordinator_onboarding_event(event, cm)
+
+    assert should_run is True
+    cm.set_pending_onboarding_outbound.assert_not_called()
+    cm.set_coordinator_onboarding_render.assert_called_once_with(_RENDER)
+
+
+@pytest.mark.anyio
+async def test_integration_connect_chip_requested_refreshes_render_without_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = _fake_cm()
+    event = CoordinatorOnboardingEvent(
+        subtype="integration_connect_chip_requested",
+        message="The user picked a CRM connect suggestion.",
+        details={
+            "step_id": "apps",
+            "chip_id": "crm-sales",
+            "onboarding": _RENDER,
+        },
+    )
+
+    should_run = await _handle_coordinator_onboarding_event(event, cm)
+
+    assert should_run is True
+    cm.set_pending_onboarding_outbound.assert_not_called()
+    cm.set_coordinator_onboarding_render.assert_called_once_with(_RENDER)
+
+
+@pytest.mark.anyio
 async def test_render_updated_refreshes_render_without_notif_or_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

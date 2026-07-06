@@ -74,6 +74,18 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user picked an example task — set it up now with your task tools "
         "and confirm it in one short message."
     ),
+    "integration_demo_requested": (
+        "The user clicked an Integrations demo row — use connected app tools, "
+        "send the demo result, then mark the step complete."
+    ),
+    "integration_connect_chip_requested": (
+        "The user picked an Integrations connect suggestion — explain what kind "
+        "of app to connect and let them finish the connection in Console."
+    ),
+    "integration_demo_chip_requested": (
+        "The user picked an Integrations demo suggestion — treat the chip as the "
+        "demo instruction and use connected app tools now."
+    ),
     "learning_beat_requested": (
         "The user clicked the Learning tutorial row — run the guided "
         "expenses-etl correction demo now."
@@ -99,6 +111,9 @@ _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED = "reference_quiz_clue_requested"
 _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 _SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
+_SUBTYPE_INTEGRATION_DEMO_REQUESTED = "integration_demo_requested"
+_SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requested"
+_SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
 _SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 
@@ -556,6 +571,58 @@ def _coordinator_onboarding_notification_text(
             "message; otherwise send a single chat message."
         )
         text = f"{subtype_hint}{kind_note} {body}{medium_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype in (
+        _SUBTYPE_INTEGRATION_DEMO_REQUESTED,
+        _SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED,
+    ):
+        details = event.details if isinstance(event.details, dict) else {}
+        step_id = _detail_string(details, "step_id") or _detail_string(
+            details,
+            "trigger_step_id",
+        )
+        instruction = _detail_string(details, "instruction")
+        step_note = f" The demo step id is `{step_id}`." if step_id else ""
+        instruction_note = (
+            f" The selected demo instruction is: {instruction}" if instruction else ""
+        )
+        guidance = (
+            "After acking that I am on it, use my connected integration/app tools "
+            "to do the requested demo now. For `integration-read`, read from a "
+            "connected app and send one short user-facing brief as a unify_message. "
+            "For `integration-action`, take one concrete, user-safe action in or "
+            "across connected apps and send one short report as a unify_message. "
+            "The checklist does NOT auto-detect this deliverable, so handling the "
+            "demo is not finished until I call set_onboarding_task_state(step_id, "
+            "completed=True) after sending it. If no connected app fits, I explain "
+            "exactly what is missing and do NOT mark the step complete. If a voice "
+            "call is active I speak via guide_voice_agent for the acknowledgement "
+            "but still send the deliverable as a unify_message."
+        )
+        text = f"{subtype_hint} {body}{step_note}{instruction_note} {guidance}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        instruction = _detail_string(details, "instruction")
+        category = _detail_string(details, "gallery_category")
+        search_query = _detail_string(details, "search_query")
+        instruction_note = (
+            f" The selected connect suggestion is: {instruction}" if instruction else ""
+        )
+        category_note = f" Gallery category hint: `{category}`." if category else ""
+        search_note = f" Gallery search hint: `{search_query}`." if search_query else ""
+        guidance = (
+            "Acknowledge in one short sentence and point them at the Integrations "
+            "pane that Console just opened/filtered for them. Do not claim the app "
+            "is connected and do not mark `apps` complete from this click — that "
+            "step completes only after an actual integration credential lands."
+        )
+        text = (
+            f"{subtype_hint} {body}{instruction_note}{category_note}{search_note} "
+            f"{guidance}"
+        ).strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:

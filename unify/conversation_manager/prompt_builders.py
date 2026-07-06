@@ -966,6 +966,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `task_beat_requested` / `task_chip_requested`: the user clicked a "
             "Tasks beat row or chip — follow the orchestra directive in the "
             "notification body.",
+            "  - `integration_demo_requested` / `integration_demo_chip_requested`: "
+            "the user clicked an Integrations read/action demo row or chip — "
+            "use connected app tools, send the deliverable, then call "
+            "`set_onboarding_task_state(step_id, completed=True)`.",
+            "  - `integration_connect_chip_requested`: the user clicked an "
+            "Integrations connect suggestion — explain what kind of app to "
+            "connect; the step completes only after a real credential lands.",
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
             "row — run the guided expenses-etl correction demo from the "
             "notification framing.",
