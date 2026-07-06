@@ -78,6 +78,11 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "The user clicked the Learning tutorial row — run the guided "
         "expenses-etl correction demo now."
     ),
+    "my_computer_beat_requested": (
+        "The user clicked the My Computer row — run the live desktop demo now "
+        "if you're on a call with them, otherwise invite them to start a call "
+        "so they can watch."
+    ),
 }
 
 
@@ -95,9 +100,7 @@ _SUBTYPE_WORKSPACE_DEMO_REQUESTED = "workspace_demo_requested"
 _SUBTYPE_TASK_BEAT_REQUESTED = "task_beat_requested"
 _SUBTYPE_TASK_CHIP_REQUESTED = "task_chip_requested"
 _SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
-_LEARNING_BEAT_CHANNEL = "learning_beat"
-_ONBOARDING_STEP_LEARN_FROM_CORRECTION = "learn-from-correction"
-_ONBOARDING_LEARNING_PHASE_FIRST = "first_attempt"
+_SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 
 _IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
     "Mandatory: the user's checklist click has no visible UI feedback until I "
@@ -530,8 +533,7 @@ def _coordinator_onboarding_notification_text(
             "running persist act with the corrected algorithm and include this "
             f"StorageCheck memoization request verbatim: "
             f"{learning_expenses_storage_check_nudge()} "
-            "Then tag the improved deliverable with "
-            "onboarding_learning_phase=improved. "
+            "Then send the improved deliverable as a unify_message. "
             f"{learning_expenses_stop_act_for_storage_rule()} "
             "The doing loop must not call "
             "GuidanceManager or FunctionManager store tools — StorageCheck "
@@ -539,17 +541,18 @@ def _coordinator_onboarding_notification_text(
             "Guidance and Functions sections and cite what StorageCheck stored — "
             "I have no tool to navigate the Console for them — invite them to ask "
             "for next month's report, and WAIT again "
-            "before the replay act. Each phase "
-            "deliverable (first attempt, improved version, replay) must be sent "
-            "with send_unify_message using onboarding_learning_phase "
-            "(first_attempt, improved, replay). Brain nudges and attachment "
-            "intro messages are not phase deliverables. Tell the user to open "
+            "before the replay act. Each phase deliverable (first attempt, "
+            "improved version, replay) must be sent with send_unify_message. "
+            "After the replay deliverable, mark the step done with "
+            "set_onboarding_task_state('learn-from-correction', True) — the "
+            "checklist does not auto-detect the tutorial. Brain nudges and "
+            "attachment intro messages are not deliverables. Tell the user to open "
             "the Actions tab themselves before/during each act run — I have no "
             "tool to navigate the Console for them. "
             "On a live in-app Unify Meet call: narrate spoken beats via "
-            "guide_voice_agent, but CSV attachments and all three phase "
-            "deliverables MUST still be sent as tagged unify_message chat "
-            "messages — a report is a document, not a spoken line. "
+            "guide_voice_agent, but CSV attachments and all three deliverables "
+            "MUST still be sent as unify_message chat messages — a report is a "
+            "document, not a spoken line. "
             "On off-console channels (plain phone call, WhatsApp call): do not "
             "run the tutorial; say it is a Console exercise and offer to start "
             "when the user is back in the app."
@@ -558,6 +561,13 @@ def _coordinator_onboarding_notification_text(
             f"{subtype_hint} {body}{framing_note}{scenario_note}{replay_note}"
             f"{medium_note}"
         ).strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        text = f"{subtype_hint} {body}{framing_note}".strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
@@ -657,7 +667,6 @@ async def _handle_coordinator_onboarding_event(
             # New session boundary: forget any prior in-session clicks so a
             # stale click can't keep a re-gated channel's tool unlocked.
             cm.clear_onboarding_clicked_trigger_steps()
-            cm.clear_active_learning_beat()
         if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
             trace = getattr(cm, "_current_event_trace", None) or {}
             # Unlock this channel's send tool for the session (the click is
@@ -673,25 +682,7 @@ async def _handle_coordinator_onboarding_event(
             )
             from unify.file_manager.settings import get_local_root
 
-            trace = getattr(cm, "_current_event_trace", None) or {}
-            details = event.details if isinstance(event.details, dict) else {}
             provision_learning_expenses_fixtures(get_local_root())
-            cm.set_active_learning_beat(details)
-            cm.set_pending_onboarding_outbound(
-                {
-                    **details,
-                    "channel": _LEARNING_BEAT_CHANNEL,
-                    "onboarding_learning_phase": _ONBOARDING_LEARNING_PHASE_FIRST,
-                },
-                origin_event_id=trace.get("event_id", ""),
-            )
-        if event.subtype == _SUBTYPE_STEP_RESET:
-            reset_details = event.details if isinstance(event.details, dict) else {}
-            reset_step_id = reset_details.get("step_id")
-            if reset_step_id == _ONBOARDING_STEP_LEARN_FROM_CORRECTION:
-                cm.clear_active_learning_beat(
-                    _ONBOARDING_STEP_LEARN_FROM_CORRECTION,
-                )
     if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
         return False
     cm.notifications_bar.push_notif(
