@@ -1260,6 +1260,7 @@ class _SessionConfigBase(Event):
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""
+    assistant_slack_team_id: str = ""
     assistant_timezone: str = (
         ""  # IANA timezone identifier; default empty for backward compat
     )

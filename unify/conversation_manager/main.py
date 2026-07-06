@@ -140,6 +140,7 @@ def create_conversation_manager(
         SESSION_DETAILS.assistant.discord_bot_id,
         SESSION_DETAILS.assistant.email_provider,
         SESSION_DETAILS.assistant.slack_bot_user_id,
+        SESSION_DETAILS.assistant.slack_team_id,
         assistant_job_title=SESSION_DETAILS.assistant.job_title,
         project_name=project_name,
         stop=stop_event,

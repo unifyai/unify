@@ -822,6 +822,10 @@ class CommsManager:
                         "assistant_slack_bot_user_id",
                         "",
                     ),
+                    "assistant_slack_team_id": event.get(
+                        "assistant_slack_team_id",
+                        "",
+                    ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
                     "user_number": event["user_number"],
@@ -2393,6 +2397,10 @@ class CommsManager:
                     ),
                     "assistant_slack_bot_user_id": event.get(
                         "assistant_slack_bot_user_id",
+                        "",
+                    ),
+                    "assistant_slack_team_id": event.get(
+                        "assistant_slack_team_id",
                         "",
                     ),
                     "user_first_name": event["user_first_name"],

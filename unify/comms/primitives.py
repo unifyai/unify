@@ -170,6 +170,11 @@ class CommsPrimitives:
             return getattr(self._cm, "assistant_slack_bot_user_id", "") or ""
         return SESSION_DETAILS.assistant.slack_bot_user_id or ""
 
+    def _assistant_slack_team_id(self) -> str:
+        if self._cm is not None:
+            return getattr(self._cm, "assistant_slack_team_id", "") or ""
+        return SESSION_DETAILS.assistant.slack_team_id or ""
+
     def _assistant_has_teams(self) -> bool:
         if self._cm is not None:
             return bool(getattr(self._cm, "assistant_has_teams", False))
@@ -1580,7 +1585,7 @@ class CommsPrimitives:
         *,
         contact_id: int | str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         slack_user_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
@@ -1604,9 +1609,10 @@ class CommsPrimitives:
             search/create tools.
         content : str
             Direct-message body to send.
-        team_id : str
-            Slack workspace ID the bot token belongs to. Required to resolve
-            the workteam-scoped bot token server-side.
+        team_id : str | None, optional
+            Slack workspace/team ID (T...) the bot token belongs to. Auto-
+            resolved from the assistant's connected Slack workspace when
+            omitted; only pass it to override for a multi-workspace send.
         slack_user_id : str | None, optional
             Recipient Slack user ID when the contact does not already have
             one on file.
@@ -1621,6 +1627,7 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:slack_message_sent"
@@ -1790,7 +1797,7 @@ class CommsPrimitives:
         *,
         channel_id: str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
         contact_id: int | str | None = None,
     ) -> dict[str, Any]:
@@ -1817,8 +1824,10 @@ class CommsPrimitives:
             Target Slack channel ID to post into.
         content : str
             Message body to publish.
-        team_id : str
-            Slack workspace ID (used to resolve the bot token server-side).
+        team_id : str | None, optional
+            Slack workspace/team ID (T...). Auto-resolved from the
+            assistant's connected Slack workspace when omitted; only pass it
+            to override for a multi-workspace send.
         thread_ts : str | None, optional
             Slack thread timestamp to reply inside a thread. Pass the value
             surfaced on the inbound message line to keep channel replies
@@ -1836,6 +1845,7 @@ class CommsPrimitives:
             _coerce_contact_id(contact_id) if contact_id is not None else None
         )
         content = normalize_outbound_plain_text(content)
+        team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         resolved_contact = self._normalize_optional_contact(normalized_contact_id)
         if resolved_contact is not None:

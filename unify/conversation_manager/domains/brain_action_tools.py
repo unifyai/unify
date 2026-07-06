@@ -420,7 +420,7 @@ class ConversationManagerBrainActionTools:
         *,
         contact_id: int | str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         slack_user_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
@@ -437,7 +437,7 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
     ) -> dict[str, Any]:
         """Send a Slack direct message to my boss only.
@@ -452,8 +452,11 @@ class ConversationManagerBrainActionTools:
         ----------
         content : str
             Message body to send to my boss.
-        team_id : str
-            Slack workspace/team ID from the inbound boss DM annotation.
+        team_id : str | None, optional
+            Slack workspace/team ID (T...). Auto-resolved from my connected
+            Slack workspace, so leave it unset for the normal single-
+            workspace case; only pass it to override for a multi-workspace
+            send.
         thread_ts : str | None, optional
             Existing boss DM thread timestamp to reply inside.
         """
@@ -471,7 +474,7 @@ class ConversationManagerBrainActionTools:
         *,
         channel_id: str,
         content: str,
-        team_id: str,
+        team_id: str | None = None,
         thread_ts: str | None = None,
         contact_id: int | str | None = None,
     ) -> dict[str, Any]:
