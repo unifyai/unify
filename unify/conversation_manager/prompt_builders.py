@@ -969,6 +969,9 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
             "row — run the guided expenses-etl correction demo from the "
             "notification framing.",
+            "  - `my_computer_beat_requested`: the user clicked the My Computer "
+            "row — on a call run the live desktop demo; off-call ring them via "
+            "`start_unify_meet` with opener + briefing per the notification framing.",
             "Rules for `onboarding_step_started`:",
             "  A. Read the active step id from the notification body (`step_id`) and "
             "match it against the authoritative 'My onboarding progress (live)' block. "
@@ -1189,6 +1192,7 @@ _ONBOARDING_STATUS_MARKERS: dict[str, str] = {
     "locked": "locked",
     "skipped": "skipped (left for later)",
     "coming_soon": "coming soon",
+    "in_progress": "in progress — clicked, awaiting completion",
 }
 
 
@@ -1366,6 +1370,10 @@ def _build_coordinator_onboarding_progress_block(
             step.get("status"),
             step.get("status") or "pending",
         )
+        if step.get("status") == "in_progress":
+            dispatched_at = step.get("dispatched_at")
+            if isinstance(dispatched_at, str) and dispatched_at.strip():
+                marker = f"{marker} since {dispatched_at.strip()}"
         title = step.get("title") or step.get("id") or "step"
         step_id = step.get("id")
         if isinstance(step_id, str) and step_id:
