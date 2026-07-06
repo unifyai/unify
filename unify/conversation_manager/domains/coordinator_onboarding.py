@@ -80,8 +80,8 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     ),
     "my_computer_beat_requested": (
         "The user clicked the My Computer row — run the live desktop demo now "
-        "if you're on a call with them, otherwise invite them to start a call "
-        "so they can watch."
+        "if you're on a call with them, otherwise ring them with start_unify_meet "
+        "— opener introduces the demo, briefing carries the demo script."
     ),
 }
 
@@ -118,6 +118,23 @@ _SUBTYPES_WITHOUT_USER_ACK = frozenset(
         _SUBTYPE_STEP_RESET,
         _SUBTYPE_STEP_COMPLETED,
         _SUBTYPE_ONBOARDING_RENDER_UPDATED,
+    },
+)
+
+# Beat/checklist clicks that must leave a durable thread trace — the one-shot
+# notification is cleared after one LLM turn; this guidance line survives it.
+# Not used for lifecycle subtypes (complete/skip/reset/render/session) — those
+# already update the authoritative progress block. Guidance is in-memory only;
+# Orchestra ``in_progress`` render covers pod restart.
+_SUBTYPES_WITH_DURABLE_CLICK_TRACE = frozenset(
+    {
+        _SUBTYPE_STEP_STARTED,
+        _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED,
+        _SUBTYPE_TASK_BEAT_REQUESTED,
+        _SUBTYPE_TASK_CHIP_REQUESTED,
+        _SUBTYPE_LEARNING_BEAT_REQUESTED,
+        _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
+        _SUBTYPE_WORKSPACE_DEMO_REQUESTED,
     },
 )
 
@@ -202,6 +219,46 @@ def schedule_coordinator_chat_intro_delivery(cm: "ConversationManager") -> bool:
 def _detail_string(details: dict[str, Any], key: str) -> str:
     value = details.get(key)
     return value.strip() if isinstance(value, str) else ""
+
+
+def _onboarding_click_step_labels(details: dict[str, Any]) -> tuple[str, str]:
+    """Resolve step id/title for a durable click-trace guidance line."""
+    step_id = _detail_string(details, "step_id") or _detail_string(
+        details,
+        "trigger_step_id",
+    )
+    step_title = _detail_string(details, "step_title") or step_id or "onboarding step"
+    return step_id, step_title
+
+
+def _push_durable_onboarding_click_trace(
+    event: CoordinatorOnboardingEvent,
+    cm: "ConversationManager",
+) -> None:
+    """Anchor a checklist click in the boss unify_message thread."""
+    from unify.conversation_manager.cm_types.medium import Medium
+
+    details = event.details if isinstance(event.details, dict) else {}
+    step_id, step_title = _onboarding_click_step_labels(details)
+    if not step_id:
+        return
+    boss_id = int(
+        getattr(cm, "boss_contact_id", None) or SESSION_DETAILS.boss_contact_id or 1,
+    )
+    contact_index = getattr(cm, "contact_index", None)
+    if contact_index is None:
+        return
+    contact_index.push_message(
+        contact_id=boss_id,
+        sender_name="guidance",
+        thread_name=Medium.UNIFY_MESSAGE,
+        message_content=(
+            f"[Onboarding] User clicked '{step_title}' (step_id: {step_id}) — "
+            "beat pending until the step is marked done."
+        ),
+        role="guidance",
+        timestamp=event.timestamp,
+    )
 
 
 def _coordinator_onboarding_event_from_payload(
@@ -690,6 +747,8 @@ async def _handle_coordinator_onboarding_event(
         _coordinator_onboarding_notification_text(event),
         event.timestamp,
     )
+    if event.subtype in _SUBTYPES_WITH_DURABLE_CLICK_TRACE:
+        _push_durable_onboarding_click_trace(event, cm)
     cm._session_logger.info(
         "coordinator_onboarding_event",
         "Coordinator onboarding narration requested; "
