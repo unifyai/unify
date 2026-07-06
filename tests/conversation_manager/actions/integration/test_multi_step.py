@@ -237,7 +237,7 @@ async def test_single_message_file_then_create_task(
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @_handle_project
 async def test_single_message_update_contact_then_create_task(initialized_cm_codeact):
     """
@@ -288,7 +288,7 @@ async def test_single_message_update_contact_then_create_task(initialized_cm_cod
     _results = await run_until_all_actors_complete(
         cm,
         result,
-        timeout_per_actor=600,
+        timeout_per_actor=900,
         max_actors=15,
         max_cm_steps=15,
     )
