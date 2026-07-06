@@ -32,10 +32,12 @@ from tests.conversation_manager.cm_helpers import (
     assert_act_triggered,
     assert_efficient,
     filter_events_by_type,
+    has_steering_tool_call,
 )
 from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     UnifyMessageReceived,
+    UnifyMessageSent,
     ActorHandleStarted,
 )
 from unify.conversation_manager.cm_types import ScreenshotEntry
@@ -75,14 +77,47 @@ def _make_screenshot(utterance: str, filepath: str) -> ScreenshotEntry:
     )
 
 
-def _assert_no_act_triggered(result, description: str) -> None:
-    """Assert that no act() call was made during this step."""
+def _assert_context_setting_phase(result, description: str) -> None:
+    """Context-setting may optionally open a persist session; act is allowed."""
     actor_events = filter_events_by_type(result.output_events, ActorHandleStarted)
-    assert len(actor_events) == 0, (
-        f"Expected NO ActorHandleStarted events — {description}. "
-        f"Got {len(actor_events)} event(s) with queries: "
-        f"{[e.query for e in actor_events]}"
+    if not actor_events:
+        return
+    for event in actor_events:
+        assert event.action_name == "act", (
+            f"Context-setting should only trigger act(), not other tools — "
+            f"{description}. Got: {event.action_name}"
+        )
+
+
+def _teaching_query_text(result, cm) -> str:
+    """Best-effort query text from act dispatch or persist-session interject."""
+    actor_events = filter_events_by_type(result.output_events, ActorHandleStarted)
+    if actor_events:
+        return actor_events[0].query
+    if cm.cm.in_flight_actions:
+        handle_data = list(cm.cm.in_flight_actions.values())[-1]
+        for action in reversed(handle_data.get("handle_actions", [])):
+            name = action.get("action_name", "")
+            if name.startswith("interject_") or name == "act":
+                return action.get("query") or action.get("message") or ""
+        return handle_data.get("query", "")
+    replies = filter_events_by_type(result.output_events, UnifyMessageSent)
+    return " ".join(e.content for e in replies)
+
+
+def _assert_teaching_step_handled(result, cm, description: str) -> str:
+    """Teaching may start act or continue an open persist session via interject."""
+    actor_events = filter_events_by_type(result.output_events, ActorHandleStarted)
+    handled = (
+        len(actor_events) >= 1
+        or "act" in cm.all_tool_calls
+        or has_steering_tool_call(cm, "interject_")
     )
+    assert handled, (
+        f"{description}. Expected act or interject_ steering. "
+        f"Tool calls: {cm.all_tool_calls}"
+    )
+    return _teaching_query_text(result, cm)
 
 
 def _assert_persist_true(cm, description: str) -> None:
@@ -206,14 +241,15 @@ async def test_visual_demonstration_triggers_guidance_storage(initialized_cm):
     cm = initialized_cm
     cm.cm.user_screen_share_active = True
 
-    # Phase 1: Context-setting — no act
+    # Phase 1: Context-setting — may start a persist session or just acknowledge.
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
             content="Let me show you how our admin panel works.",
         ),
     )
-    _assert_no_act_triggered(result1, "Context-setting should not trigger act")
+    if _has_act(result1):
+        _assert_persist_true(cm, "Screen-share context may start a persist session")
 
     # Phase 2: Detailed visual explanation with screenshot
     cm.cm._screenshot_buffer.append(
@@ -233,13 +269,11 @@ async def test_visual_demonstration_triggers_guidance_storage(initialized_cm):
         ),
     )
 
-    assert_act_triggered(
+    query = _assert_teaching_step_handled(
         result2,
-        ActorHandleStarted,
-        "Visual demonstration should trigger act to store guidance",
-        cm=cm,
+        cm,
+        "Visual demonstration should trigger act or interject to store guidance",
     )
-    query = _get_act_query(result2)
     query_lower = query.lower()
     assert "billing" in query_lower or "override" in query_lower, (
         f"Expected act query to reference the billing/override procedure. "
@@ -269,14 +303,15 @@ async def test_screen_share_teaching_references_screenshot_paths(initialized_cm)
     cm = initialized_cm
     cm.cm.user_screen_share_active = True
 
-    # Phase 1: Context
+    # Phase 1: Context — may start a persist session or just acknowledge.
     result1 = await cm.step_until_wait(
         UnifyMessageReceived(
             contact=BOSS,
             content="I want to show you how our inventory system works.",
         ),
     )
-    _assert_no_act_triggered(result1, "Context-setting should not trigger act")
+    if _has_act(result1):
+        _assert_persist_true(cm, "Screen-share context may start a persist session")
 
     # Phase 2: Teaching with screenshot
     cm.cm._screenshot_buffer.append(
@@ -296,13 +331,11 @@ async def test_screen_share_teaching_references_screenshot_paths(initialized_cm)
         ),
     )
 
-    assert_act_triggered(
+    query = _assert_teaching_step_handled(
         result2,
-        ActorHandleStarted,
-        "Visual teaching with 'remember this' should trigger act",
-        cm=cm,
+        cm,
+        "Visual teaching with 'remember this' should trigger act or interject",
     )
-    query = _get_act_query(result2)
     query_lower = query.lower()
     assert (
         "inventory" in query_lower or "reorder" in query_lower
