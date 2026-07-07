@@ -897,6 +897,9 @@ class ScreenshotHistory:
         return parts
 
 
+_POD_LOCAL_AGENT_SERVICE_URL = "http://localhost:3000"
+
+
 def _resolve_agent_service_url() -> str:
     """Resolve the agent-service base URL, matching ComputerPrimitives conventions.
 
@@ -911,7 +914,62 @@ def _resolve_agent_service_url() -> str:
 
         parsed = urlparse(desktop_url)
         return f"{parsed.scheme}://{parsed.netloc}/api"
-    return "http://localhost:3000"
+    return _POD_LOCAL_AGENT_SERVICE_URL
+
+
+def effective_agent_service_url(cached: str | None) -> str:
+    """Return the screenshot base URL, upgrading stale pod-local cache when ready."""
+    resolved = _resolve_agent_service_url()
+    if (
+        cached
+        and cached == _POD_LOCAL_AGENT_SERVICE_URL
+        and resolved != _POD_LOCAL_AGENT_SERVICE_URL
+    ):
+        return resolved
+    if cached:
+        return cached
+    return resolved
+
+
+def update_agent_service_url_from_meet_interaction(
+    current: str | None,
+    payload: dict,
+) -> str | None:
+    """Refresh cached agent-service URL from a meet_interaction notification."""
+    if payload.get("source") != "meet_interaction":
+        return current
+    agent_url = (payload.get("agent_service_url") or "").strip()
+    if agent_url:
+        return agent_url
+    return current
+
+
+async def notify_voice_worker_agent_service_url(
+    cm,
+    *,
+    message: str = "",
+) -> None:
+    """Push the resolved agent-service URL to the in-call fast brain."""
+    if not getattr(cm.mode, "is_voice", False):
+        return
+    contact = cm.get_active_contact()
+    if not contact:
+        return
+    socket_server = cm.call_manager._socket_server
+    if not socket_server or not socket_server.has_connected_clients:
+        return
+    from unify.conversation_manager.events import FastBrainNotification
+
+    notification = FastBrainNotification(
+        contact=contact,
+        message=message,
+        source="meet_interaction",
+        agent_service_url=_resolve_agent_service_url(),
+    )
+    await socket_server.queue_for_clients(
+        "app:call:notification",
+        notification.to_json(),
+    )
 
 
 def _ensure_jpeg(b64: str) -> str:
@@ -986,7 +1044,7 @@ async def capture_assistant_screenshot(
     from unify.session_details import SESSION_DETAILS
     from unify.conversation_manager.cm_types.screenshot import ScreenshotEntry
 
-    base_url = agent_service_url or _resolve_agent_service_url()
+    base_url = effective_agent_service_url(agent_service_url)
     auth_key = SESSION_DETAILS.unify_key
     if cached:
         url = f"{base_url}/screenshot/latest"

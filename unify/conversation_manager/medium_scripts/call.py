@@ -2397,7 +2397,12 @@ async def entrypoint(ctx: agents.JobContext):
     screenshot_history = ScreenshotHistory()
     assistant_screen_share_active = False
     user_remote_control_active = False
-    _agent_service_url: str | None = None
+    _agent_service_url: str | None = (
+        meet_agent_service_url
+        or (meta.get("agent_service_url") if meta else None)
+        or os.environ.get("AGENT_SERVICE_URL")
+        or None
+    )
     _visual_ctx_msg_id: str | None = None
     import aiohttp as _aiohttp
 
@@ -3457,7 +3462,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     def on_notification(data: dict) -> None:
         """Handle notifications from conversation manager."""
-        nonlocal assistant_screen_share_active, _agent_service_url
+        nonlocal assistant_screen_share_active, _agent_service_url, meet_agent_service_url
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3467,11 +3472,19 @@ async def entrypoint(ctx: agents.JobContext):
         message = payload.get("message", "")
         # Track screen share state from meet interaction notifications.
         if payload.get("source") == "meet_interaction":
+            from unify.conversation_manager.medium_scripts.common import (
+                update_agent_service_url_from_meet_interaction,
+            )
+
+            _agent_service_url = update_agent_service_url_from_meet_interaction(
+                _agent_service_url,
+                payload,
+            )
+            if _agent_service_url:
+                meet_agent_service_url = _agent_service_url
             low = message.lower()
             if "screen sharing is now on" in low:
                 assistant_screen_share_active = True
-                if payload.get("agent_service_url"):
-                    _agent_service_url = payload["agent_service_url"]
             elif "screen sharing is now off" in low:
                 assistant_screen_share_active = False
                 _clear_visual_context(source="assistant")
