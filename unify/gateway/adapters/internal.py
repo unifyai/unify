@@ -146,6 +146,146 @@ async def unify_message_webhook(
     return Response(status_code=200)
 
 
+_ensured_org_topics: set[str] = set()
+
+
+def _publish_org_chat_frame(
+    *,
+    organization_id: Any,
+    thread: str,
+    event: dict[str, Any],
+    attributes: dict[str, str],
+) -> None:
+    """Publish one Console org-chat frame to ``unity-org-{org_id}``.
+
+    Best-effort: local installs without Pub/Sub (or without the emulator
+    running) log and continue — the message is already persisted in
+    Orchestra, so Console can still load it as history.
+    """
+    try:
+        from google.cloud import pubsub_v1
+    except ImportError:
+        return
+
+    import json as _json
+
+    try:
+        publisher = pubsub_v1.PublisherClient()
+        topic_name = f"unity-org-{organization_id}{SETTINGS.ENV_SUFFIX}"
+        topic_path = publisher.topic_path(SETTINGS.GCP_PROJECT_ID, topic_name)
+        if topic_path not in _ensured_org_topics:
+            try:
+                publisher.create_topic(request={"name": topic_path})
+            except Exception as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
+            _ensured_org_topics.add(topic_path)
+        publisher.publish(
+            topic_path,
+            _json.dumps(
+                {"thread": thread, "event": event},
+            ).encode("utf-8"),
+            **attributes,
+        ).result(timeout=10)
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("unify").warning(
+            "org-chat frame publish failed for org %s: %s",
+            organization_id,
+            exc,
+        )
+
+
+@router.post("/unify/org-chat")
+async def unify_org_chat_webhook(
+    request: Request,
+    context: GatewayContext = Depends(get_gateway_context),
+) -> Response:
+    """Self-host twin of the hosted adapters ``/unify/org-chat`` endpoint.
+
+    Publishes the Console frame to the per-organization topic and fans out
+    ``unify_group_message`` envelopes to each listed assistant runtime.
+    """
+    payload = await request_payload(request)
+    kind = str(payload.get("kind") or "")
+    organization_id = payload.get("organization_id")
+    message = payload.get("message") or {}
+    if isinstance(message, str):
+        message = parse_json_field(message)
+
+    if kind not in {"team", "dm"}:
+        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if not organization_id:
+        return Response(status_code=400, content="organization_id is required")
+    if not message:
+        return Response(status_code=400, content="message is required")
+
+    thread = "team_message" if kind == "team" else "dm_message"
+    attributes = {"thread": thread, "organization_id": str(organization_id)}
+    if kind == "team":
+        team_id = payload.get("team_id") or message.get("team_id")
+        if not team_id:
+            return Response(status_code=400, content="team_id is required")
+        attributes["team_id"] = str(team_id)
+    else:
+        user_ids = message.get("user_ids") or []
+        if len(user_ids) != 2:
+            return Response(
+                status_code=400,
+                content="message.user_ids must be a pair",
+            )
+        attributes["dm_user_a"] = str(user_ids[0])
+        attributes["dm_user_b"] = str(user_ids[1])
+
+    _publish_org_chat_frame(
+        organization_id=organization_id,
+        thread=thread,
+        event=message,
+        attributes=attributes,
+    )
+
+    fanout_assistant_ids = payload.get("fanout_assistant_ids") or []
+    if isinstance(fanout_assistant_ids, str):
+        fanout_assistant_ids = parse_json_field(fanout_assistant_ids)
+    assistant_event = payload.get("assistant_event") or {}
+    if isinstance(assistant_event, str):
+        assistant_event = parse_json_field(assistant_event)
+
+    fanout_errors: list[str] = []
+    for raw_assistant_id in fanout_assistant_ids:
+        try:
+            assistant_data, _contacts = await build_internal_context(
+                context,
+                assistant_id=str(raw_assistant_id),
+                reason="unify_group_message",
+            )
+            assistant_id = str(assistant_data["assistant_id"])
+            await publish_runtime_event(
+                context,
+                assistant_id=assistant_id,
+                thread="unify_group_message",
+                event={**assistant_event, "assistant_id": assistant_id},
+            )
+        except Exception as exc:
+            fanout_errors.append(str(raw_assistant_id))
+            import logging
+
+            logging.getLogger("unify").warning(
+                "unify_group_message fan-out failed for assistant %s: %s",
+                raw_assistant_id,
+                exc,
+            )
+
+    return _json_response(
+        {
+            "published": True,
+            "fanned_out": len(fanout_assistant_ids) - len(fanout_errors),
+            "fanout_errors": fanout_errors,
+        },
+    )
+
+
 @router.post("/unify/reaction")
 async def unify_reaction_webhook(
     request: Request,

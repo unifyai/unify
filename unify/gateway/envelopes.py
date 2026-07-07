@@ -83,6 +83,7 @@ KNOWN_THREADS: frozenset[str] = frozenset(
         "unify_message_reaction",
         "whatsapp_reaction",
         "unify_message_reaction_outbound",
+        "unify_group_message",
     },
 )
 
@@ -175,6 +176,29 @@ class UnifyMessageEnvelope(BaseEnvelope):
     event: UnifyMessageReceivedEvent
 
 
+class UnifyGroupMessageReceivedEvent(BaseInboundEvent):
+    """Inbound team group-chat message (``thread: "unify_group_message"``).
+
+    One envelope is fanned out to every non-coordinator assistant member of
+    the team when a human posts to the team's group chat. ``message`` is the
+    triggering message, ``participants`` lists every human and assistant in
+    the room, and ``recent_messages`` carries prior thread history so the
+    runtime needs no read path of its own.
+    """
+
+    team_id: int
+    team_name: str = ""
+    organization_id: int | None = None
+    message: dict[str, Any] = Field(default_factory=dict)
+    participants: dict[str, Any] = Field(default_factory=dict)
+    recent_messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class UnifyGroupMessageEnvelope(BaseEnvelope):
+    thread: Literal["unify_group_message"] = "unify_group_message"
+    event: UnifyGroupMessageReceivedEvent
+
+
 class UnitySystemEvent(BaseInboundEvent):
     """Internal system signal (``thread: "unity_system_event"``).
 
@@ -227,6 +251,7 @@ Envelope = Annotated[
         SMSEnvelope,
         EmailEnvelope,
         UnifyMessageEnvelope,
+        UnifyGroupMessageEnvelope,
         SystemEventEnvelope,
     ],
     Field(discriminator="thread"),
@@ -251,6 +276,8 @@ def parse_envelope(payload: dict[str, Any]) -> BaseEnvelope:
         return EmailEnvelope.model_validate(payload)
     if thread == "unify_message":
         return UnifyMessageEnvelope.model_validate(payload)
+    if thread == "unify_group_message":
+        return UnifyGroupMessageEnvelope.model_validate(payload)
     if thread == "unity_system_event":
         return SystemEventEnvelope.model_validate(payload)
     return GenericEnvelope.model_validate(payload)
@@ -268,6 +295,8 @@ __all__ = [
     "SMSEnvelope",
     "SMSReceivedEvent",
     "SystemEventEnvelope",
+    "UnifyGroupMessageEnvelope",
+    "UnifyGroupMessageReceivedEvent",
     "UnifyMessageEnvelope",
     "UnifyMessageReceivedEvent",
     "UnitySystemEvent",
