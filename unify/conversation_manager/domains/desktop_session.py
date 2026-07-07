@@ -90,6 +90,18 @@ async def ensure_desktop_session(cm: "ConversationManager") -> None:
     await task
 
 
+async def _notify_desktop_session_ready(cm: "ConversationManager") -> None:
+    """Tell the slow brain that the agent-service desktop session is usable."""
+    from unify.common.prompt_helpers import now as prompt_now
+
+    cm.notifications_bar.push_notif(
+        "System",
+        "Desktop session is ready — computer actions are now available.",
+        prompt_now(as_string=False),
+    )
+    await cm.request_llm_run(delay=0)
+
+
 async def _run_ensure_desktop_session(cm: "ConversationManager") -> None:
     """Create a desktop session in agent-service if one doesn't already exist.
 
@@ -123,6 +135,7 @@ async def _run_ensure_desktop_session(cm: "ConversationManager") -> None:
                 "desktop_session",
                 f"Desktop session ready: {session._session_id}",
             )
+            await _notify_desktop_session_ready(cm)
             return
         except Exception as e:
             if attempt == max_attempts:
