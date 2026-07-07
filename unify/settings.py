@@ -84,6 +84,13 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_ADMIN_KEY: SecretStr = SecretStr("")
 
+    # Multi-tenant MS Teams (Bot Framework) app credentials. A single Azure
+    # bot registration serves every tenant that installs it; the id + secret
+    # mint Bot Connector tokens for outbound proactive replies and verify
+    # inbound activity JWTs. Deployment-level secrets (not per-tenant).
+    MS_TEAMS_BOT_APP_ID: str = ""
+    MS_TEAMS_BOT_APP_SECRET: SecretStr = SecretStr("")
+
     # ─────────────────────────────────────────────────────────────────────────
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
