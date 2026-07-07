@@ -21,6 +21,7 @@ owned by the hosted adapters (mirrored in
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import httpx
@@ -37,16 +38,36 @@ def _log_field(value: object) -> str:
 
 auth_router = APIRouter()
 
-# Bot Connector tokens are minted against the shared botframework tenant
-# for a multi-tenant bot, with the Connector resource scope.
-_BOT_TOKEN_URL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
+# The Azure bot is a *single-tenant* registration living in Unify's own
+# Microsoft tenant, so Bot Connector tokens are minted from that tenant's
+# authority — not the shared ``botframework.com`` authority that multi-tenant
+# bots use. The home tenant is reused from ``MS365_ADMIN_TENANT_ID`` (the same
+# tenant that hosts Unify's MS365 admin app registration and this bot's app
+# registration), so no separate Teams-bot tenant env var is needed.
 _BOT_TOKEN_SCOPE = "https://api.botframework.com/.default"
 
-# A minted Connector token is valid ~24h and is identical across tenants
-# (single app registration), so a tiny process-local cache avoids a token
-# round-trip on every outbound send.
+# The bot is one app registration, so a single minted token (valid ~24h)
+# authenticates every outbound send; a tiny process-local cache avoids a
+# token round-trip on each one.
 _token_cache: dict[str, tuple[str, float]] = {}
 _TOKEN_SKEW_SECONDS = 300
+
+
+def _bot_token_url() -> str:
+    """Client-credentials token endpoint for the bot's home tenant.
+
+    Single-tenant bots authenticate against their own tenant authority.
+    Reuses ``MS365_ADMIN_TENANT_ID`` — the tenant hosting Unify's MS365
+    admin app registration, which is also where the Teams bot app is
+    registered.
+    """
+    tenant_id = os.getenv("MS365_ADMIN_TENANT_ID", "")
+    if not tenant_id:
+        raise HTTPException(
+            status_code=503,
+            detail="MS365_ADMIN_TENANT_ID is not configured for the Teams bot.",
+        )
+    return f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 
 
 def _admin_headers() -> dict:
@@ -60,9 +81,11 @@ async def _mint_connector_token() -> str:
     """Mint (or reuse) a Bot Connector access token via client credentials.
 
     Uses the deployment-level ``MS_TEAMS_BOT_APP_ID`` /
-    ``MS_TEAMS_BOT_APP_SECRET`` — a single multi-tenant Azure bot
-    registration serves every tenant, so one token authenticates outbound
-    to all of them.
+    ``MS_TEAMS_BOT_APP_SECRET``. The bot is a single-tenant registration, so
+    the token is minted from the bot's home-tenant authority
+    (:func:`_bot_token_url`) with the Connector resource scope; the resulting
+    token authenticates outbound sends into every customer tenant the bot has
+    been installed in.
     """
     app_id = SETTINGS.MS_TEAMS_BOT_APP_ID
     app_secret = SETTINGS.MS_TEAMS_BOT_APP_SECRET.get_secret_value()
@@ -72,6 +95,7 @@ async def _mint_connector_token() -> str:
             detail="MS Teams bot app credentials are not configured.",
         )
 
+    token_url = _bot_token_url()
     cached = _token_cache.get(app_id)
     now = time.time()
     if cached is not None and cached[1] - _TOKEN_SKEW_SECONDS > now:
@@ -79,7 +103,7 @@ async def _mint_connector_token() -> str:
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            _BOT_TOKEN_URL,
+            token_url,
             data={
                 "grant_type": "client_credentials",
                 "client_id": app_id,
