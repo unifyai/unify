@@ -218,6 +218,48 @@ def test_incremental_execution_present_and_execution_rules_not_duplicated():
 
 
 @pytest.mark.timeout(30)
+def test_code_act_prompt_includes_platform_self_knowledge():
+    """The prompt teaches both authoritative self-knowledge resources (live
+    docs + baked source trees) and the confidentiality rules for the latter."""
+    actor = CodeActActor()
+    prompt = build_code_act_prompt(
+        environments=_real_envs_mixed(),
+        tools=dict(actor.get_tools("act")),
+    )
+
+    assert "### Platform Self-Knowledge" in prompt
+    # Docs: live fetch, page index, markdown endpoints.
+    assert "https://docs.unify.ai/llms.txt" in prompt
+    assert "append `.md`" in prompt
+    # Source: the running runtime root is always listed (it is the package
+    # root of the imported unify code, wherever this test runs from).
+    import unify as unify_pkg
+    from pathlib import Path
+
+    runtime_root = str(Path(unify_pkg.__file__).resolve().parent.parent)
+    assert runtime_root in prompt
+    assert "never be stale" in prompt
+    # Confidentiality rules.
+    assert "Never reproduce source files or verbatim code excerpts" in prompt
+    assert "`local` execution surface only" in prompt
+    assert "user-visible location" in prompt
+
+
+@pytest.mark.timeout(30)
+def test_platform_self_knowledge_omits_absent_source_snapshots():
+    """Baked snapshot rows appear only when /opt/system-sources exists (hosted
+    image); on dev machines and self-host the table lists just the runtime."""
+    from pathlib import Path
+
+    from unify.actor.prompt_builders import _build_system_self_knowledge
+
+    section = _build_system_self_knowledge()
+    for name in ("orchestra", "console", "unify-deploy", "docs"):
+        expected = Path("/opt/system-sources") / name
+        assert (f"`{expected}`" in section) == expected.is_dir()
+
+
+@pytest.mark.timeout(30)
 def test_code_act_prompt_teaches_execution_surfaces_with_user_desktop_caution():
     """The surface section documents local/assistant/user desktops and cautions
     that the user desktop is a personal machine requiring consent."""

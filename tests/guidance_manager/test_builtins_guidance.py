@@ -17,6 +17,8 @@ from tests.helpers import _handle_project
 from unify.guidance_manager.builtins_catalog import (
     BUILTINS_GUIDANCE_CONTEXT,
     CONTENT_EMBED_HEAD_CHARS,
+    PLATFORM_GUIDANCE_ENTRIES,
+    default_guidance_entries,
     load_snapshot,
     seed_builtin_guidance,
     stable_guidance_id,
@@ -113,7 +115,7 @@ def test_default_catalogue_is_converged():
 
 
 # --------------------------------------------------------------------------- #
-# Default library (the committed snapshot of 14 Anthropic skills)              #
+# Default library (imported-skills snapshot + platform-authored entries)       #
 # --------------------------------------------------------------------------- #
 
 
@@ -123,6 +125,11 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
 ):
     snapshot = load_snapshot()
     assert len(snapshot) == 14
+    entries = default_guidance_entries()
+    assert len(entries) == len(snapshot) + len(PLATFORM_GUIDANCE_ENTRIES)
+    # Platform entries are code-versioned, never part of the snapshot, and
+    # can never be shadowed by an imported-skill key.
+    assert not set(PLATFORM_GUIDANCE_ENTRIES) & set(snapshot)
 
     # Several skills exceed the backend's per-input embedding limit; seeding
     # must still succeed because ranking embeds a truncated content head.
@@ -134,9 +141,9 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
     gm = GuidanceManager()
     builtin_rows = gm.filter(filter="is_builtin == True", limit=100)
     assert {row.title for row in builtin_rows} == {
-        entry["title"] for entry in snapshot.values()
+        entry["title"] for entry in entries.values()
     }
-    assert gm._num_items() == 14
+    assert gm._num_items() == len(entries)
 
     # List-style reads return bounded previews (large skills would otherwise
     # flood the caller's context window), each pointing at get_guidance.
@@ -152,7 +159,7 @@ def test_default_library_seeds_and_surfaces_through_guidance_manager(
 
     # get_guidance returns the complete content verbatim, including entries
     # far beyond both the preview cap and the embedding head window.
-    by_title = {entry["title"]: entry for entry in snapshot.values()}
+    by_title = {entry["title"]: entry for entry in entries.values()}
     for row in truncated:
         full = gm.get_guidance(guidance_id=row.guidance_id)
         assert full.content == by_title[full.title]["content"]
