@@ -2001,10 +2001,193 @@ app.post('/content', isAgentReady, async (req: Request, res: Response) => {
 //
 // The ``ANTICAPTCHA_KEY`` must be set in agent-service's own ``.env``; it
 // is never accepted from the request body.
+// --- Arkose Labs / FunCaptcha solve (best-effort) ---
+//
+// LinkedIn's login checkpoint uses Arkose FunCaptcha (the puzzle-piece "verify
+// you're human"), NOT reCAPTCHA. AntiCaptcha supports it via a FunCaptchaTask,
+// but sitekey extraction + token injection are inherently more heuristic than
+// reCAPTCHA and Arkose Enterprise often binds the token to the solver's IP
+// (proxyless can fail). This handler is therefore BEST-EFFORT: callers treat a
+// non-'solved' result as "hand off to an operator". Extends the /captcha/solve
+// route; reCAPTCHA v2 remains the default path.
+async function solveArkoseFunCaptcha(
+  sessionId: string,
+  clientKey: string,
+  res: Response,
+  t0: number,
+): Promise<Response> {
+  let publicKey: string | null = null;
+  let taskId: number | null = null;
+  try {
+    const session = activeSessions.get(sessionId)!;
+    const page = session.agent.page;
+    const pageUrl: string = page.url();
+
+    // Extract the Arkose public key (pk) and, if present, the funcaptcha API
+    // JS subdomain. Probe common shapes: a data-pkey attribute, the enforcement
+    // config on window, script src, or the FunCaptcha iframe URL.
+    const probe: { publicKey: string | null; subdomain: string | null } =
+      await page.evaluate(() => {
+        const pkFromEl = (document.querySelector('[data-pkey]') as HTMLElement | null)
+          ?.getAttribute('data-pkey');
+        if (pkFromEl) return { publicKey: pkFromEl, subdomain: null };
+
+        const urls: string[] = [];
+        document.querySelectorAll('script[src]').forEach((s) => {
+          urls.push((s as HTMLScriptElement).getAttribute('src') || '');
+        });
+        document.querySelectorAll('iframe[src]').forEach((f) => {
+          urls.push((f as HTMLIFrameElement).getAttribute('src') || '');
+        });
+        let subdomain: string | null = null;
+        for (const raw of urls) {
+          if (!raw) continue;
+          try {
+            const u = new URL(raw, window.location.href);
+            if (/arkoselabs\.com|funcaptcha\.com|arkose/i.test(u.hostname)) {
+              if (/api\.arkoselabs|-api\./i.test(u.hostname)) subdomain = u.hostname;
+              const pk = u.searchParams.get('pk') || u.searchParams.get('public_key');
+              if (pk) return { publicKey: pk, subdomain };
+              const m = raw.match(/[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/i);
+              if (m) return { publicKey: m[0], subdomain };
+            }
+          } catch { /* skip */ }
+        }
+        const cfg: any = (window as any).ArkoseEnforcement || (window as any).arkose;
+        const pk = cfg?.config?.publicKey || cfg?.publicKey || null;
+        return { publicKey: pk, subdomain };
+      });
+
+    publicKey = probe.publicKey;
+    if (!publicKey) {
+      return res.status(400).json({
+        error: 'no_sitekey',
+        message: 'No Arkose/FunCaptcha public key was found on the current page.',
+      });
+    }
+
+    const task: Record<string, unknown> = {
+      type: 'FunCaptchaTaskProxyless',
+      websiteURL: pageUrl,
+      websitePublicKey: publicKey,
+    };
+    if (probe.subdomain) task.funcaptchaApiJSSubdomain = probe.subdomain;
+
+    const createResp = await fetch('https://api.anti-captcha.com/createTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientKey, task }),
+    });
+    const createBody: any = await createResp.json().catch(() => ({}));
+    if (!createResp.ok || createBody?.errorId !== 0) {
+      console.error(
+        `[captcha/solve] arkose createTask failed pk=${publicKey} ` +
+        `httpStatus=${createResp.status} errorCode=${createBody?.errorCode}`,
+      );
+      return res.status(502).json({
+        error: 'anticaptcha_api_error',
+        message: `createTask failed: ${createBody?.errorCode || 'unknown'} - ${createBody?.errorDescription || ''}`,
+      });
+    }
+    taskId = createBody.taskId;
+    console.log(`[captcha/solve] arkose task_created task_id=${taskId} pk=${publicKey}`);
+
+    let token: string | null = null;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      await sleep(3000);
+      const pollResp = await fetch('https://api.anti-captcha.com/getTaskResult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey, taskId }),
+      });
+      const pollBody: any = await pollResp.json().catch(() => ({}));
+      if (!pollResp.ok || pollBody?.errorId !== 0) {
+        return res.status(502).json({
+          error: 'anticaptcha_api_error',
+          message: `getTaskResult failed: ${pollBody?.errorCode || 'unknown'}`,
+        });
+      }
+      if (pollBody.status === 'ready') {
+        token = pollBody.solution?.token || null;
+        break;
+      }
+    }
+
+    if (!token) {
+      return res.status(504).json({
+        error: 'solve_timeout',
+        message: 'AntiCaptcha did not return a FunCaptcha token within ~4 minutes.',
+      });
+    }
+
+    // Inject the Arkose token: fill the known token fields and invoke any
+    // registered Arkose completion callback. Heuristic — Arkose integrations
+    // vary — hence best-effort.
+    const injected: boolean = await page.evaluate((tkn: string) => {
+      let set = false;
+      const selectors = [
+        'input[name="fc-token"]',
+        'input[name="verification-token"]',
+        'input[name="arkose-token"]',
+        '#FunCaptcha-Token',
+        'input#fc-token',
+      ];
+      for (const sel of selectors) {
+        document.querySelectorAll(sel).forEach((el) => {
+          (el as HTMLInputElement).value = tkn;
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch { /* best-effort */ }
+          try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch { /* best-effort */ }
+          set = true;
+        });
+      }
+      try {
+        const ark: any = (window as any).arkose || (window as any).ArkoseEnforcement;
+        const cb = ark?.config?.onCompleted || ark?.onCompleted;
+        if (typeof cb === 'function') { cb({ token: tkn }); set = true; }
+      } catch { /* best-effort */ }
+      return set;
+    }, token);
+
+    let settledVia: 'networkidle' | 'timeout' = 'timeout';
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 15_000 });
+      settledVia = 'networkidle';
+    } catch { settledVia = 'timeout'; }
+
+    const solveTimeMs = Date.now() - t0;
+    console.log(
+      `[captcha/solve] arkose solved task_id=${taskId} pk=${publicKey} ` +
+      `solve_time_ms=${solveTimeMs} injected=${injected} settled_via=${settledVia}`,
+    );
+    return res.json({
+      status: injected ? 'solved' : 'token_uninjected',
+      solve_time_ms: solveTimeMs,
+      sitekey: publicKey,
+      variant: 'arkose',
+      task_id: taskId,
+      injected,
+      settled: settledVia !== 'timeout',
+      settled_via: settledVia,
+      note: 'Arkose/FunCaptcha solve is best-effort; verify the page advanced.',
+    });
+  } catch (err) {
+    console.error(
+      `[captcha/solve] arkose unexpected error task_id=${taskId} pk=${publicKey}: ` +
+      `${err instanceof Error ? err.message : err}`,
+    );
+    handleAgentError(err, res, 'captcha_solve_failed');
+    return res;
+  }
+}
+
 app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => {
   const { sessionId, variant: variantRaw } = req.body;
-  const variant: 'v2_checkbox' | 'v2_invisible' =
-    variantRaw === 'v2_invisible' ? 'v2_invisible' : 'v2_checkbox';
+  const variant: 'v2_checkbox' | 'v2_invisible' | 'arkose' =
+    variantRaw === 'arkose'
+      ? 'arkose'
+      : variantRaw === 'v2_invisible'
+        ? 'v2_invisible'
+        : 'v2_checkbox';
 
   const clientKey = process.env.ANTICAPTCHA_KEY;
   if (!clientKey) {
@@ -2015,6 +2198,13 @@ app.post('/captcha/solve', isAgentReady, async (req: Request, res: Response) => 
   }
 
   const t0 = Date.now();
+
+  // Arkose/FunCaptcha (e.g. LinkedIn login) uses a distinct task type +
+  // injection path; reCAPTCHA v2 continues below.
+  if (variant === 'arkose') {
+    return await solveArkoseFunCaptcha(sessionId, clientKey, res, t0);
+  }
+
   let sitekey: string | null = null;
   let taskId: number | null = null;
 
