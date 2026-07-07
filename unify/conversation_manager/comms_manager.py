@@ -298,7 +298,6 @@ events_map: dict[str, Event] = {
     "whatsapp": WhatsAppReceived,
     "email": EmailReceived,
     "unify_message": UnifyMessageReceived,
-    "unify_group_message": UnifyGroupMessageReceived,
     "api_message": ApiMessageReceived,
     "discord": DiscordMessageReceived,
     "slack": SlackMessageReceived,
@@ -1092,49 +1091,34 @@ class CommsManager:
                     ack_now()
                     return
 
-                if thread == "unify_group_message":
-                    team_id = event.get("team_id")
-                    message = event.get("message") or {}
-                    if not team_id or not message:
-                        LOGGER.error(
-                            f"{DEFAULT_ICON} Error: team_id and message are required "
-                            "for unify_group_message, skipping",
-                        )
-                        ack_now()
-                        return
-
-                    await publish(
-                        "app:comms:unify_group_message_message",
-                        UnifyGroupMessageReceived(
-                            team_id=int(team_id),
-                            team_name=str(event.get("team_name") or ""),
-                            organization_id=event.get("organization_id"),
-                            message=message,
-                            participants=event.get("participants") or {},
-                            recent_messages=event.get("recent_messages") or [],
-                        ).to_json(),
-                    )
-                    ack_now()
-                    return
-
                 if thread == "unify_message":
+                    team_id = event.get("team_id")
                     target_contact_id = event.get("contact_id")
-                    if target_contact_id is None:
-                        LOGGER.error(
-                            f"{DEFAULT_ICON} Error: contact_id is required for unify_message, "
-                            "skipping message",
+                    contact = None
+                    if target_contact_id is not None:
+                        contact = next(
+                            (
+                                c
+                                for c in contacts
+                                if c["contact_id"] == target_contact_id
+                            ),
+                            None,
                         )
-                        ack_now()
-                        return
-
-                    contact = next(
-                        (c for c in contacts if c["contact_id"] == target_contact_id),
-                        None,
-                    )
+                    # Team chat fan-out: the sender may be another org member
+                    # rather than this assistant's owner, in which case the
+                    # adapters layer cannot resolve a per-assistant contact id.
+                    # Resolve the sender against the Contacts table by email —
+                    # the same identity org-member contacts are stored under.
+                    if contact is None and team_id and event.get("sender_email"):
+                        contact = _lookup_known_contact(
+                            "email",
+                            event["sender_email"],
+                        )
                     if contact is None:
                         LOGGER.error(
-                            f"{DEFAULT_ICON} Error: contact_id {target_contact_id} not found in "
-                            f"contacts list, skipping message",
+                            f"{DEFAULT_ICON} Error: could not resolve sender contact "
+                            f"for unify_message (contact_id={target_contact_id}, "
+                            f"team_id={team_id}), skipping message",
                         )
                         ack_now()
                         return
@@ -1146,6 +1130,8 @@ class CommsManager:
                             content=content,
                             contact=contact,
                             attachments=attachments,
+                            team_id=int(team_id) if team_id else None,
+                            team_name=str(event.get("team_name") or ""),
                         ).to_json(),
                     )
 

@@ -923,32 +923,12 @@ class UnifyMessageReceived(Event):
     content: str
     # List of attachment dicts with full metadata (files saved to Attachments/).
     attachments: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class UnifyGroupMessageReceived(Event):
-    """A human posted to a team group chat this assistant belongs to.
-
-    Group chat runs outside the contact-keyed conversation pipeline: sender
-    identity is carried explicitly on ``message`` (``sender_kind`` +
-    ``sender_user_id``/``sender_assistant_id`` + ``sender_name``) and the
-    handler makes a single policy-gated reply decision rather than entering
-    the full brain loop.
-    """
-
-    topic: ClassVar[str | None] = "app:comms:unify_group_message_message"
-    content_logged: ClassVar[bool] = True
-
-    team_id: int = 0
+    # Set when the message was posted in a team group chat (Console org
+    # chat). Team chat is ordinary unify_message traffic — like a large
+    # email CC chain, every team assistant receives a copy — but replies to
+    # the room must pass this team_id back to ``send_unify_message``.
+    team_id: int | None = None
     team_name: str = ""
-    organization_id: int | None = None
-    # The triggering message: {message_id, sender_kind, sender_user_id,
-    # sender_assistant_id, sender_name, content, mentions, timestamp}.
-    message: dict = field(default_factory=dict)
-    # {"humans": [{user_id, name}], "assistants": [{assistant_id, name}]}
-    participants: dict = field(default_factory=dict)
-    # Prior thread messages (most recent last), same shape as ``message``.
-    recent_messages: list[dict] = field(default_factory=list)
 
 
 @dataclass

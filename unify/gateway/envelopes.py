@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 # ---------------------------------------------------------------------------
 # Thread catalogue
@@ -83,7 +83,6 @@ KNOWN_THREADS: frozenset[str] = frozenset(
         "unify_message_reaction",
         "whatsapp_reaction",
         "unify_message_reaction_outbound",
-        "unify_group_message",
     },
 )
 
@@ -164,39 +163,39 @@ class EmailEnvelope(BaseEnvelope):
 
 
 class UnifyMessageReceivedEvent(BaseInboundEvent):
-    """Inbound app-to-assistant message (``thread: "unify_message"``)."""
+    """Inbound app-to-assistant message (``thread: "unify_message"``).
 
-    contact_id: int
+    Team group-chat messages travel on this same thread — every team
+    assistant receives a copy, like a large email CC chain. For those,
+    ``team_id`` (+ sender identity fields) is set and ``contact_id`` may be
+    omitted when the sender is not this assistant's owner: the runtime then
+    resolves the sender against its Contacts table by ``sender_email``.
+    Plain 1:1 messages must carry ``contact_id``.
+    """
+
+    contact_id: int | None = None
     body: str = ""
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    team_id: int | None = None
+    team_name: str = ""
+    sender_user_id: str = ""
+    sender_email: str = ""
+    sender_name: str = ""
+    group_message_id: int | None = None
+
+    @model_validator(mode="after")
+    def _require_contact_or_team(self) -> "UnifyMessageReceivedEvent":
+        if self.contact_id is None and self.team_id is None:
+            raise ValueError(
+                "unify_message requires contact_id (or team_id for team "
+                "group-chat fan-out)",
+            )
+        return self
 
 
 class UnifyMessageEnvelope(BaseEnvelope):
     thread: Literal["unify_message"] = "unify_message"
     event: UnifyMessageReceivedEvent
-
-
-class UnifyGroupMessageReceivedEvent(BaseInboundEvent):
-    """Inbound team group-chat message (``thread: "unify_group_message"``).
-
-    One envelope is fanned out to every non-coordinator assistant member of
-    the team when a human posts to the team's group chat. ``message`` is the
-    triggering message, ``participants`` lists every human and assistant in
-    the room, and ``recent_messages`` carries prior thread history so the
-    runtime needs no read path of its own.
-    """
-
-    team_id: int
-    team_name: str = ""
-    organization_id: int | None = None
-    message: dict[str, Any] = Field(default_factory=dict)
-    participants: dict[str, Any] = Field(default_factory=dict)
-    recent_messages: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class UnifyGroupMessageEnvelope(BaseEnvelope):
-    thread: Literal["unify_group_message"] = "unify_group_message"
-    event: UnifyGroupMessageReceivedEvent
 
 
 class UnitySystemEvent(BaseInboundEvent):
@@ -251,7 +250,6 @@ Envelope = Annotated[
         SMSEnvelope,
         EmailEnvelope,
         UnifyMessageEnvelope,
-        UnifyGroupMessageEnvelope,
         SystemEventEnvelope,
     ],
     Field(discriminator="thread"),
@@ -276,8 +274,6 @@ def parse_envelope(payload: dict[str, Any]) -> BaseEnvelope:
         return EmailEnvelope.model_validate(payload)
     if thread == "unify_message":
         return UnifyMessageEnvelope.model_validate(payload)
-    if thread == "unify_group_message":
-        return UnifyGroupMessageEnvelope.model_validate(payload)
     if thread == "unity_system_event":
         return SystemEventEnvelope.model_validate(payload)
     return GenericEnvelope.model_validate(payload)
@@ -295,8 +291,6 @@ __all__ = [
     "SMSEnvelope",
     "SMSReceivedEvent",
     "SystemEventEnvelope",
-    "UnifyGroupMessageEnvelope",
-    "UnifyGroupMessageReceivedEvent",
     "UnifyMessageEnvelope",
     "UnifyMessageReceivedEvent",
     "UnitySystemEvent",

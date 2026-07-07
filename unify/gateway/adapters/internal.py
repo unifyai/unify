@@ -205,7 +205,7 @@ async def unify_org_chat_webhook(
     """Self-host twin of the hosted adapters ``/unify/org-chat`` endpoint.
 
     Publishes the Console frame to the per-organization topic and fans out
-    ``unify_group_message`` envelopes to each listed assistant runtime.
+    standard ``unify_message`` envelopes to each listed assistant runtime.
     """
     payload = await request_payload(request)
     kind = str(payload.get("kind") or "")
@@ -252,27 +252,44 @@ async def unify_org_chat_webhook(
     if isinstance(assistant_event, str):
         assistant_event = parse_json_field(assistant_event)
 
+    # Team chat fan-out rides the standard unify_message thread — every team
+    # assistant receives a copy, like a large email CC chain. When the sender
+    # is this assistant's owner we can resolve contact_id here; otherwise the
+    # runtime resolves the sender by email against its Contacts table.
     fanout_errors: list[str] = []
     for raw_assistant_id in fanout_assistant_ids:
         try:
-            assistant_data, _contacts = await build_internal_context(
+            assistant_data, contacts = await build_internal_context(
                 context,
                 assistant_id=str(raw_assistant_id),
-                reason="unify_group_message",
+                reason="unify_message",
             )
             assistant_id = str(assistant_data["assistant_id"])
+            event: dict[str, Any] = {
+                **assistant_event,
+                "assistant_id": assistant_id,
+                "contacts": contacts,
+            }
+            sender_user_id = str(assistant_event.get("sender_user_id") or "")
+            if sender_user_id and sender_user_id == str(
+                assistant_data.get("user_id") or "",
+            ):
+                event["contact_id"] = required_contact_id(
+                    assistant_data,
+                    "boss_contact_id",
+                )
             await publish_runtime_event(
                 context,
                 assistant_id=assistant_id,
-                thread="unify_group_message",
-                event={**assistant_event, "assistant_id": assistant_id},
+                thread="unify_message",
+                event=event,
             )
         except Exception as exc:
             fanout_errors.append(str(raw_assistant_id))
             import logging
 
             logging.getLogger("unify").warning(
-                "unify_group_message fan-out failed for assistant %s: %s",
+                "team chat fan-out failed for assistant %s: %s",
                 raw_assistant_id,
                 exc,
             )
