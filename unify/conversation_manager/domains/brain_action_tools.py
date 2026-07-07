@@ -2169,35 +2169,28 @@ class ConversationManagerBrainActionTools:
                 "message": "This assistant has no managed desktop runtime.",
             }
 
-        if self._cm.vm_ready and desktop_agent_session_cached():
+        if desktop_agent_session_cached():
             return {
                 "status": "ready",
                 "message": "My computer is already ready.",
             }
 
-        if desktop_agent_session_cached():
-            return {
-                "status": "ready",
-                "message": "Desktop session is already active.",
-            }
-
-        if desktop_session_ensure_in_flight():
-            return {
-                "status": "warming",
-                "message": (
-                    "Desktop is already warming up — I'll get a notification "
-                    "when my computer is ready."
-                ),
-            }
-
-        schedule_ensure_desktop_session(self._cm)
-        return {
-            "status": "warming",
-            "message": (
+        if self._cm.vm_ready:
+            warming_message = (
+                "VM is up; finishing session setup. I'll get a notification "
+                "when my computer is ready."
+            )
+        else:
+            warming_message = (
                 "Desktop warming up — I'll get a notification when my computer "
                 "is ready."
-            ),
-        }
+            )
+
+        if desktop_session_ensure_in_flight():
+            return {"status": "warming", "message": warming_message}
+
+        schedule_ensure_desktop_session(self._cm)
+        return {"status": "warming", "message": warming_message}
 
     async def set_onboarding_task_state(
         self,
