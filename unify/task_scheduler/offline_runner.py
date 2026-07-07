@@ -144,24 +144,43 @@ def _task_run_update_payload(
     assistant_id: str,
     run_key: str,
     updates: dict[str, Any],
+    source_task_log_id: int | None = None,
 ) -> dict[str, Any]:
-    """Return the admin payload for one partial run update."""
+    """Return the admin payload for one partial run update.
 
-    return {
+    ``source_task_log_id`` pins the task's own surface so team-task runs
+    (living under ``Teams/{id}/Tasks/Runs``) resolve on update exactly as
+    they did on creation.
+    """
+
+    payload = {
         "project_name": TASK_MACHINE_STATE_PROJECT,
         "assistant_id": assistant_id,
         "run_key": run_key,
         "updates": updates,
     }
+    if source_task_log_id is not None:
+        payload["source_task_log_id"] = int(source_task_log_id)
+    return payload
 
 
-def _update_task_run(assistant_id: str, run_key: str, updates: dict[str, Any]) -> None:
+def _update_task_run(
+    assistant_id: str,
+    run_key: str,
+    updates: dict[str, Any],
+    source_task_log_id: int | None = None,
+) -> None:
     """Persist one partial run update back to Orchestra."""
 
     orchestra_url = _require_env("ORCHESTRA_URL")
     response = requests.post(
         f"{orchestra_url}{TASK_RUN_UPDATE_PATH}",
-        json=_task_run_update_payload(assistant_id, run_key, updates),
+        json=_task_run_update_payload(
+            assistant_id,
+            run_key,
+            updates,
+            source_task_log_id=source_task_log_id,
+        ),
         headers=_orchestra_admin_headers(),
         timeout=HTTP_TIMEOUT_SECONDS,
     )
@@ -491,7 +510,8 @@ def main() -> int:
         _update_task_run(
             config.assistant_id,
             config.run_key,
-            {
+            source_task_log_id=config.source_task_log_id,
+            updates={
                 "state": "failed",
                 "completed_at": _now_iso(),
                 "error": error_text,
