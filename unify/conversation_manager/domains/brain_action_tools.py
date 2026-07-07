@@ -1305,12 +1305,15 @@ class ConversationManagerBrainActionTools:
 
         import aiohttp
 
+        from unify.conversation_manager.medium_scripts.common import (
+            _resolve_agent_service_url,
+        )
         from unify.session_details import SESSION_DETAILS
 
         try:
             async with aiohttp.ClientSession() as session:
                 await session.post(
-                    f"http://localhost:3000/{path_prefix}/leave",
+                    f"{_resolve_agent_service_url()}/{path_prefix}/leave",
                     json={"sessionId": session_id},
                     headers={
                         "authorization": f"Bearer {SESSION_DETAILS.unify_key}",
