@@ -568,6 +568,7 @@ def _build_channels_str(
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     assistant_has_slack: bool = False,
 ) -> str:
     """Build a human-readable comma-separated list of available channels."""
@@ -597,6 +598,11 @@ def _build_channels_str(
             available_channels.index("unify messages"),
             "Teams",
         )
+    if assistant_has_ms_teams_bot:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Teams (Unify app)",
+        )
     return ", ".join(available_channels)
 
 
@@ -622,6 +628,7 @@ def _build_comms_tool_listing(
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
     on_voice_call: bool = False,
     call_line_ready: bool = True,
@@ -692,6 +699,15 @@ def _build_comms_tool_listing(
                 '`team_id` (from the inbound `[team_id="..."]` annotation) so '
                 "the right workspace bot token is used; pass `thread_ts` to "
                 "reply inside an existing boss DM thread.",
+            )
+        if assistant_has_ms_teams_bot:
+            lines.append(
+                "- `send_ms_teams_bot_message`: Reply through the org-installed "
+                "Unify Microsoft Teams app. Only usable to answer an inbound "
+                "message that arrived on this channel — pass the `tenant_id` and "
+                "`conversation_id` shown on that inbound Teams message. This is "
+                "the Unify Teams app (Bot Framework), distinct from "
+                "`send_teams_message` (my own Microsoft account).",
             )
         if assistant_has_teams:
             lines.append(
@@ -767,6 +783,16 @@ def _build_comms_tool_listing(
             "original message (for a top-level @mention it is that message's "
             "own id and starts the thread). Use when the inbound thread is "
             "`slack_channel_message`.",
+        )
+    if assistant_has_ms_teams_bot:
+        lines.append(
+            "- `send_ms_teams_bot_message`: Reply through the org-installed "
+            "Unify Microsoft Teams app. Use when the inbound thread is "
+            "`ms_teams_bot_message`: pass the `tenant_id` and `conversation_id` "
+            "shown on the inbound message so the reply routes back into that "
+            "same Teams conversation. This is the Unify Teams app (Bot "
+            "Framework), distinct from `send_teams_message` (a user's delegated "
+            "Microsoft account).",
         )
     if assistant_has_teams:
         lines.append(
@@ -2132,6 +2158,7 @@ def _build_available_outbound_tool_names(
     assistant_has_discord: bool,
     assistant_has_slack: bool,
     assistant_has_teams: bool,
+    assistant_has_ms_teams_bot: bool,
     is_coordinator: bool,
     on_voice_call: bool,
     outbound_voice_line_ready: bool,
@@ -2173,6 +2200,11 @@ def _build_available_outbound_tool_names(
         available_tool_names.insert(idx, "send_slack_message")
         if not is_coordinator:
             available_tool_names.insert(idx + 1, "send_slack_channel_message")
+    if assistant_has_ms_teams_bot:
+        available_tool_names.insert(
+            available_tool_names.index("send_unify_message"),
+            "send_ms_teams_bot_message",
+        )
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
@@ -2321,6 +2353,7 @@ def build_system_prompt(
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
     has_linked_user_desktop: bool = False,
     user_filesys_consented: bool = False,
@@ -2391,6 +2424,10 @@ def build_system_prompt(
         Whether the assistant has Discord configured.
     assistant_has_teams : bool
         Whether the assistant has Microsoft Teams configured.
+    assistant_has_ms_teams_bot : bool
+        Whether the assistant's org has a bound Unify Microsoft Teams bot app
+        install (Bot Framework channel), gating ``send_ms_teams_bot_message``.
+        Distinct from ``assistant_has_teams`` (delegated MS365 Graph).
     has_linked_user_desktop : bool
         Whether the active user has a desktop linked to this assistant. When True,
         the assistant can drive that machine via ``act`` (when no screen share is
@@ -2484,6 +2521,7 @@ def build_system_prompt(
         assistant_has_discord=assistant_has_discord,
         assistant_has_slack=assistant_has_slack,
         assistant_has_teams=assistant_has_teams,
+        assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         is_coordinator=is_coordinator,
         on_voice_call=on_voice_call,
         outbound_voice_line_ready=outbound_voice_line_ready,
@@ -2497,6 +2535,7 @@ def build_system_prompt(
         assistant_has_discord,
         assistant_has_slack,
         assistant_has_teams,
+        assistant_has_ms_teams_bot,
         is_coordinator,
         on_voice_call,
         call_line_ready=outbound_voice_line_ready,
@@ -2712,6 +2751,7 @@ Messages from the current turn have **NEW** tag prepended:
         assistant_has_whatsapp=assistant_has_whatsapp,
         assistant_has_discord=assistant_has_discord,
         assistant_has_teams=assistant_has_teams,
+        assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         assistant_has_slack=assistant_has_slack,
     )
 

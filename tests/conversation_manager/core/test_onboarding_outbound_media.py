@@ -42,6 +42,7 @@ CANONICAL_CHANNEL_TO_MEDIA: dict[str, frozenset[str]] = {
     "phone_call": frozenset({"phone_call"}),
     "slack_message": frozenset({"slack_message", "slack_channel_message"}),
     "discord_message": frozenset({"discord_message", "discord_channel_message"}),
+    "ms_teams_message": frozenset({"ms_teams_bot_message"}),
 }
 
 _ALL_MEDIA: frozenset[str] = frozenset(

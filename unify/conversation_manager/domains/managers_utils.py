@@ -140,6 +140,7 @@ _MESSAGE_PRODUCING_EVENTS = {
     "TeamsMessageSent",
     "TeamsChannelMessageReceived",
     "TeamsChannelMessageSent",
+    "MsTeamsBotMessageSent",
 }
 
 
@@ -416,6 +417,16 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
                     chat_id=getattr(cm_event, "chat_id", None),
+                )
+            case "MsTeamsBotMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.MS_TEAMS_BOT_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    chat_id=getattr(cm_event, "conversation_id", None),
                 )
             case "TeamsChannelMessageReceived":
                 entry = cm.contact_index.build_message(

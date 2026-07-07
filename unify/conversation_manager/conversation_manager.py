@@ -237,6 +237,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_email_provider: str = "",
         assistant_slack_bot_user_id: str = "",
         assistant_slack_team_id: str = "",
+        assistant_has_ms_teams_bot: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -264,6 +265,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
         self.assistant_slack_team_id = assistant_slack_team_id
+        # True when the assistant's org has a bound Unify Microsoft Teams bot
+        # install (Bot Framework channel, distinct from the delegated-Graph
+        # ``assistant_has_teams`` MS365 mailbox capability). Sourced from the
+        # assistant profile and adopted at runtime from inbound bot activities.
+        self.assistant_has_ms_teams_bot = assistant_has_ms_teams_bot
         # Global onboarding scaffolding gate, mirrored from Orchestra's
         # ``Coordinator/State`` and refreshed on a short TTL. When False the
         # slow-brain drops all onboarding scaffolding. Defaults to True until
@@ -2727,6 +2733,9 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_team_id",
             "",
         )
+        self.assistant_has_ms_teams_bot = bool(
+            payload.get("assistant_has_ms_teams_bot", False),
+        )
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -3336,6 +3345,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
+            "ms_teams_message": {"ms_teams_bot_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None

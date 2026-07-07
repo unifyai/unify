@@ -45,6 +45,7 @@ class Medium(StrEnum):
     SLACK_CHANNEL_MESSAGE = "slack_channel_message"
     TEAMS_MESSAGE = "teams_message"
     TEAMS_CHANNEL_MESSAGE = "teams_channel_message"
+    MS_TEAMS_BOT_MESSAGE = "ms_teams_bot_message"
     UNIFY_REACTION = "unify_reaction"
     WHATSAPP_REACTION = "whatsapp_reaction"
 
@@ -146,6 +147,15 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
         description="A message in a Microsoft Teams channel.",
         mode=Mode.TEXT,
     ),
+    Medium.MS_TEAMS_BOT_MESSAGE: MediumInfo(
+        value=Medium.MS_TEAMS_BOT_MESSAGE,
+        description=(
+            "A message sent through the org-installed Unify Microsoft Teams "
+            "bot app (1:1 chat, group chat, or channel thread), routed via the "
+            "Bot Framework rather than a user's delegated Microsoft account."
+        ),
+        mode=Mode.TEXT,
+    ),
     Medium.UNIFY_REACTION: MediumInfo(
         value=Medium.UNIFY_REACTION,
         description="An emoji reaction on a Unify console chat message.",
@@ -182,4 +192,5 @@ MEDIUM_TO_CONTACT_FIELD: dict[Medium, str] = {
     Medium.TEAMS_MESSAGE: "email_address",
     Medium.TEAMS_CHANNEL_MESSAGE: "email_address",
     Medium.TEAMS_MEET: "email_address",
+    Medium.MS_TEAMS_BOT_MESSAGE: "email_address",
 }
