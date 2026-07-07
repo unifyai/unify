@@ -152,6 +152,26 @@ def _already_seen_slack(message_key: str) -> bool:
     return False
 
 
+# In-memory dedup for inbound Unify Teams bot activities. The Bot Connector
+# retries delivery when a webhook ack is slow, so we guard on the stable
+# activity id the same way the Graph Teams and Slack paths do.
+_seen_ms_teams_bot_ids: dict[str, float] = {}
+_MS_TEAMS_BOT_DEDUP_TTL = 300.0
+
+
+def _already_seen_ms_teams_bot(message_key: str) -> bool:
+    """Return True if this Teams bot activity was already processed recently."""
+    now = time.time()
+    cutoff = now - _MS_TEAMS_BOT_DEDUP_TTL
+    expired = [k for k, t in _seen_ms_teams_bot_ids.items() if t < cutoff]
+    for k in expired:
+        del _seen_ms_teams_bot_ids[k]
+    if message_key in _seen_ms_teams_bot_ids:
+        return True
+    _seen_ms_teams_bot_ids[message_key] = now
+    return False
+
+
 if TYPE_CHECKING:
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
     from unify.gateway.ingress import IngressTransport
@@ -303,6 +323,7 @@ events_map: dict[str, Event] = {
     "slack": SlackMessageReceived,
     "teams_chat": TeamsMessageReceived,
     "teams_channel": TeamsChannelMessageReceived,
+    "ms_teams_bot": MsTeamsBotMessageReceived,
 }
 
 
@@ -653,6 +674,38 @@ def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
         if found is not None:
             return found
         LOGGER.error(f"{DEFAULT_ICON} Error creating Slack contact: {e}")
+        return None
+
+
+def _create_ms_teams_bot_contact(display_name: str) -> dict | None:
+    """Create a respondable contact for an addressed Teams bot sender.
+
+    The Bot Framework only delivers an activity to the bot when it is a 1:1
+    chat or an explicit @mention, so an inbound bot message is always intent
+    to converse — the contact is created with ``should_respond=True``.
+
+    Teams activities carry no email (roster/Graph lookup is deferred), so the
+    sender's AAD display name is the only durable key available. A stable
+    display name lets the next inbound message re-match this contact by name.
+    A nameless sender is left unresolved rather than minting an orphan.
+    """
+    full_name = (display_name or "").strip()
+    if not full_name:
+        return None
+    from unify.manager_registry import ManagerRegistry
+
+    cm = ManagerRegistry.get_contact_manager()
+    try:
+        first_name, _, surname = full_name.partition(" ")
+        outcome = cm._create_contact(
+            first_name=first_name or None,
+            surname=surname or None,
+            should_respond=True,
+        )
+        new_id = outcome["details"]["contact_id"]
+        return cm.get_contact_info(new_id).get(new_id)
+    except Exception as e:
+        LOGGER.error(f"{DEFAULT_ICON} Error creating Teams bot contact: {e}")
         return None
 
 
@@ -1828,6 +1881,94 @@ class CommsManager:
                                 message_preview=content[:100] if content else "",
                             ).to_json(),
                         )
+
+                    ack_now()
+                    return
+
+                if thread == "ms_teams_bot":
+                    tenant_id = event.get("tenant_id", "")
+                    conversation_id = event.get("conversation_id", "")
+                    conversation_type = event.get("conversation_type", "personal")
+                    channel_id = event.get("channel_id", "")
+                    team_id = event.get("team_id", "")
+                    thread_id = event.get("thread_id", "")
+                    service_url = event.get("service_url", "")
+                    bot_app_id = event.get("bot_app_id", "")
+                    message_id = event.get("message_id", "")
+                    sender_display_name = event.get("sender_display_name", "")
+                    attachments = event.get("attachments") or []
+                    routing_metadata = event.get("routing_metadata") or {}
+
+                    # A 1:1 chat is a DM; group chats and channels are shared
+                    # conversations that route through the channel medium/tool
+                    # (mirrors Slack's DM vs channel split).
+                    is_channel = conversation_type in ("groupChat", "channel")
+
+                    dedup_key = message_id or event.get("event_id", "")
+                    if dedup_key and _already_seen_ms_teams_bot(dedup_key):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Skipping duplicate Teams bot activity {dedup_key}",
+                        )
+                        ack_now()
+                        return
+
+                    # No email is present on the activity (roster lookup is
+                    # deferred), so match the AAD display name against known
+                    # contacts; a stable name re-matches on later messages. An
+                    # unmatched sender gets a respondable contact (the bot only
+                    # receives 1:1 / @mention activities, i.e. clear intent).
+                    contact = _match_contact_by_name(sender_display_name, contacts)
+                    if contact is None:
+                        contact = _create_ms_teams_bot_contact(sender_display_name)
+
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to resolve contact for Teams bot "
+                            f"from: {sender_display_name!r}",
+                        )
+                        ack_now()
+                        return
+
+                    if is_channel:
+                        await publish(
+                            "app:comms:ms_teams_bot_channel_message",
+                            MsTeamsBotChannelMessageReceived(
+                                contact=contact,
+                                content=content,
+                                tenant_id=tenant_id,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                channel_id=channel_id,
+                                team_id=team_id,
+                                thread_id=thread_id,
+                                service_url=service_url,
+                                bot_app_id=bot_app_id,
+                                message_id=message_id,
+                                attachments=attachments,
+                                routing_metadata=routing_metadata,
+                            ).to_json(),
+                        )
+                    else:
+                        await publish(
+                            "app:comms:ms_teams_bot_message",
+                            MsTeamsBotMessageReceived(
+                                contact=contact,
+                                content=content,
+                                tenant_id=tenant_id,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                channel_id=channel_id,
+                                service_url=service_url,
+                                bot_app_id=bot_app_id,
+                                message_id=message_id,
+                                is_channel=is_channel,
+                                attachments=attachments,
+                                routing_metadata=routing_metadata,
+                            ).to_json(),
+                        )
+
+                    if attachments:
+                        schedule(add_unify_message_attachments(attachments))
 
                     ack_now()
                     return

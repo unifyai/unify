@@ -46,6 +46,7 @@ class Medium(StrEnum):
     TEAMS_MESSAGE = "teams_message"
     TEAMS_CHANNEL_MESSAGE = "teams_channel_message"
     MS_TEAMS_BOT_MESSAGE = "ms_teams_bot_message"
+    MS_TEAMS_BOT_CHANNEL_MESSAGE = "ms_teams_bot_channel_message"
     UNIFY_REACTION = "unify_reaction"
     WHATSAPP_REACTION = "whatsapp_reaction"
 
@@ -150,9 +151,18 @@ MEDIUM_REGISTRY: dict[Medium, MediumInfo] = {
     Medium.MS_TEAMS_BOT_MESSAGE: MediumInfo(
         value=Medium.MS_TEAMS_BOT_MESSAGE,
         description=(
-            "A message sent through the org-installed Unify Microsoft Teams "
-            "bot app (1:1 chat, group chat, or channel thread), routed via the "
-            "Bot Framework rather than a user's delegated Microsoft account."
+            "A 1:1 direct message through the org-installed Unify Microsoft "
+            "Teams bot app, routed via the Bot Framework rather than a user's "
+            "delegated Microsoft account."
+        ),
+        mode=Mode.TEXT,
+    ),
+    Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE: MediumInfo(
+        value=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
+        description=(
+            "A message in a group chat or Microsoft Teams channel thread "
+            "through the org-installed Unify Teams bot app, triggered by "
+            "@mentioning the app and routed via the Bot Framework."
         ),
         mode=Mode.TEXT,
     ),
@@ -193,4 +203,5 @@ MEDIUM_TO_CONTACT_FIELD: dict[Medium, str] = {
     Medium.TEAMS_CHANNEL_MESSAGE: "email_address",
     Medium.TEAMS_MEET: "email_address",
     Medium.MS_TEAMS_BOT_MESSAGE: "email_address",
+    Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE: "email_address",
 }
