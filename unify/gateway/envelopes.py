@@ -178,7 +178,9 @@ class UnifyMessageReceivedEvent(BaseInboundEvent):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     team_id: int | None = None
     team_name: str = ""
+    sender_kind: str = ""
     sender_user_id: str = ""
+    sender_assistant_id: int | None = None
     sender_email: str = ""
     sender_name: str = ""
     group_message_id: int | None = None
