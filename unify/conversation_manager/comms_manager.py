@@ -833,6 +833,11 @@ class CommsManager:
                     "user_whatsapp_number": event.get("user_whatsapp_number", ""),
                     "voice_provider": event["voice_provider"],
                     "voice_id": event["voice_id"],
+                    "default_model": event.get("default_model", ""),
+                    "default_reasoning_effort": event.get(
+                        "default_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),
@@ -2410,6 +2415,11 @@ class CommsManager:
                     "user_whatsapp_number": event.get("user_whatsapp_number", ""),
                     "voice_provider": event["voice_provider"],
                     "voice_id": event["voice_id"],
+                    "default_model": event.get("default_model", ""),
+                    "default_reasoning_effort": event.get(
+                        "default_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),

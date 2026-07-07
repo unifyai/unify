@@ -279,6 +279,10 @@ class AssistantDetails:
     slack_bot_user_id: str = ""
     slack_team_id: str = ""
     is_coordinator: bool = False
+    # Default LLM as a unillm 'model@provider' endpoint plus a reasoning-effort
+    # level. Empty = platform default (UNIFY_MODEL and per-call-site efforts).
+    default_model: str = ""
+    default_reasoning_effort: str = ""
     contact_id: int = 0  # Contact ID in Contacts table
     self_contact_id: int = 0
     desktop_mode: str = "ubuntu"  # "ubuntu" or "windows" - determines VM type
@@ -534,6 +538,8 @@ class SessionDetails:
         team_summaries: list[TeamSummary | dict] | None = None,
         voice_provider: str = "",
         voice_id: str = "",
+        default_model: str = "",
+        default_reasoning_effort: str = "",
         binding_id: str = "",
         desktop_mode: str = "ubuntu",
         user_desktops: "list[UserDesktopLink | dict] | dict[str, UserDesktopLink | dict] | None" = None,
@@ -579,6 +585,10 @@ class SessionDetails:
         self.team_summaries = team_summaries or []
         self.voice.provider = _runtime_str(voice_provider)
         self.voice.id = _runtime_str(voice_id)
+        self.assistant.default_model = _runtime_str(default_model)
+        self.assistant.default_reasoning_effort = _runtime_str(
+            default_reasoning_effort,
+        )
         self._initialized = True
 
     def reset(self) -> None:
@@ -637,6 +647,12 @@ class SessionDetails:
             self.assistant.user_desktops,
         )
         os.environ["ASSISTANT_IS_COORDINATOR"] = str(self.assistant.is_coordinator)
+        os.environ["ASSISTANT_DEFAULT_MODEL"] = _runtime_str(
+            self.assistant.default_model,
+        )
+        os.environ["ASSISTANT_DEFAULT_REASONING_EFFORT"] = _runtime_str(
+            self.assistant.default_reasoning_effort,
+        )
         self.export_contact_ids_to_env()
         os.environ["USER_ID"] = _runtime_str(self.user.id)
         os.environ["USER_FIRST_NAME"] = _runtime_str(self.user.first_name)
@@ -731,6 +747,10 @@ class SessionDetails:
             self.assistant.user_desktops = _decode_user_desktops(val)
         if val := os.environ.get("ASSISTANT_IS_COORDINATOR"):
             self.assistant.is_coordinator = val == "True"
+        if val := os.environ.get("ASSISTANT_DEFAULT_MODEL"):
+            self.assistant.default_model = val
+        if val := os.environ.get("ASSISTANT_DEFAULT_REASONING_EFFORT"):
+            self.assistant.default_reasoning_effort = val
         if val := os.environ.get("USER_ID"):
             self.user.id = val
         if val := os.environ.get("USER_FIRST_NAME"):
