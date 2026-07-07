@@ -481,6 +481,23 @@ class ConversationManagerBrainActionTools:
         )
 
     @slow_brain_direct_comms
+    @wraps(CommsPrimitives.send_ms_teams_bot_message)
+    async def send_ms_teams_bot_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        return await self._comms.send_ms_teams_bot_message(
+            contact_id=contact_id,
+            content=content,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_slack_channel_message)
     async def send_slack_channel_message(
         self,
@@ -2617,6 +2634,8 @@ class ConversationManagerBrainActionTools:
             )
             if not is_coordinator:
                 tools["send_slack_channel_message"] = self.send_slack_channel_message
+        if self._cm.assistant_has_ms_teams_bot:
+            tools["send_ms_teams_bot_message"] = self.send_ms_teams_bot_message
         if self._cm.assistant_has_teams:
             tools["send_teams_message"] = (
                 self.send_teams_message_to_boss

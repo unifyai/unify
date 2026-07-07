@@ -801,6 +801,28 @@ class SlackChannelMessageSent(Event):
 
 
 @dataclass
+class MsTeamsBotMessageSent(Event):
+    """A proactive reply sent through the org-installed Unify Teams bot app.
+
+    Distinct from ``TeamsMessageSent`` (delegated per-user Graph): this is the
+    Bot-Framework channel, keyed by the Microsoft ``tenant_id`` and the Bot
+    Framework ``conversation_id`` the reply was routed into.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
 class TeamsMessageReceived(Event):
     """A message received in a Microsoft Teams chat (1:1, group, or meeting)."""
 

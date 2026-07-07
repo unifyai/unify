@@ -2084,6 +2084,7 @@ def _credit_gate_reply_context(
         TeamsMessageSent,
         TeamsChannelMessageReceived,
         TeamsChannelMessageSent,
+        MsTeamsBotMessageSent,
     ),
 )
 async def _(event, cm: "ConversationManager", *args, **kwargs):
@@ -2459,6 +2460,17 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             cm._session_logger.info(
                 "teams_message_sent",
                 f"Teams chat to {sender_name}: {event.content}",
+            )
+        case MsTeamsBotMessageSent():
+            medium = Medium.MS_TEAMS_BOT_MESSAGE
+            message_content = event.content
+            chat_id = getattr(event, "conversation_id", "") or None
+            notif_content = f"Teams bot message sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_message_sent",
+                f"Teams bot message to {sender_name}: {event.content}",
             )
         case TeamsMessageReceived():
             medium = Medium.TEAMS_MESSAGE

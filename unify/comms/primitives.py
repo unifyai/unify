@@ -34,6 +34,7 @@ from unify.conversation_manager.events import (
     DiscordMessageSent,
     EmailSent,
     Error,
+    MsTeamsBotMessageSent,
     PhoneCallSent,
     SlackChannelMessageSent,
     SlackMessageSent,
@@ -125,6 +126,7 @@ class CommsPrimitives:
         "send_slack_message",
         "send_slack_channel_message",
         "send_teams_message",
+        "send_ms_teams_bot_message",
         "create_teams_channel",
         "create_teams_meet",
         "stop_inactivity_followups",
@@ -1781,6 +1783,134 @@ class CommsPrimitives:
             history_metadata={
                 "contact_display_name": _get_contact_display_name(contact),
             },
+        )
+
+    async def send_ms_teams_bot_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        """Reply through the org-installed Unify Microsoft Teams bot app.
+
+        This is the Bot-Framework Teams channel: the customer's organization
+        installs the Unify Teams *app* once, and the assistant replies into a
+        conversation it has already been addressed in (1:1 chat, group chat,
+        or channel thread). It is distinct from ``send_teams_message``, which
+        sends through an individual user's own delegated Microsoft account.
+
+        Reply into the conversation the inbound Teams activity arrived on by
+        passing the ``tenant_id`` and ``conversation_id`` surfaced on that
+        inbound message. The tenant's Bot Connector endpoint and the shared
+        bot token are resolved server-side — the assistant never handles bot
+        credentials. The send pins the conversation to this assistant so later
+        replies route back to it.
+
+        Parameters
+        ----------
+        contact_id : int | str
+            Recipient contact anchor (the person being replied to) for
+            transcript ownership and response-policy checks.
+        content : str
+            Message body to send.
+        tenant_id : str
+            Microsoft AAD tenant id of the install, from the inbound activity.
+        conversation_id : str
+            Bot Framework conversation id to reply into, from the inbound
+            activity.
+
+        Returns
+        -------
+        dict[str, Any]
+            ``{"status": "ok"}`` on success, or an error payload describing
+            why the reply could not be sent.
+        """
+        contact_id = _coerce_contact_id(contact_id)
+        content = normalize_outbound_plain_text(content)
+        contact = self._get_contact(contact_id=contact_id)
+        topic = "app:comms:ms_teams_bot_message_sent"
+
+        target_metadata = {
+            "contact_id": contact_id,
+            "tenant_id": tenant_id,
+            "conversation_id": conversation_id,
+        }
+        history_metadata = {
+            "contact_display_name": _get_contact_display_name(contact),
+        }
+
+        outbound_error = self._check_outbound_allowed(contact)
+        if outbound_error:
+            return await self._surface_comms_error(
+                outbound_error,
+                topic,
+                contact_id=contact_id,
+                medium=Medium.MS_TEAMS_BOT_MESSAGE,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata=target_metadata,
+                history_metadata=history_metadata,
+            )
+
+        if not tenant_id or not conversation_id:
+            return await self._surface_comms_error(
+                "A tenant_id and conversation_id are required to reply "
+                "through the Microsoft Teams bot.",
+                topic,
+                contact_id=contact_id,
+                medium=Medium.MS_TEAMS_BOT_MESSAGE,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata=target_metadata,
+                history_metadata=history_metadata,
+            )
+
+        offline_reservation, offline_response = self._reserve_offline_operation(
+            method_name="send_ms_teams_bot_message",
+            medium=Medium.MS_TEAMS_BOT_MESSAGE,
+            target_kind="contact",
+            target_metadata=target_metadata,
+            contact_id=contact_id,
+        )
+        if offline_response is not None:
+            return offline_response
+
+        response = await comms_utils.send_ms_teams_bot_message(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            body=content,
+        )
+        if response.get("success"):
+            event = MsTeamsBotMessageSent(
+                contact=contact or {},
+                content=content,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                **self._onboarding_event_kwargs(Medium.MS_TEAMS_BOT_MESSAGE),
+            )
+            await self._publish_comms_event(topic, event)
+            self._record_offline_success(
+                offline_reservation,
+                attempted_content=content,
+                receiver_ids=[contact_id],
+                target_metadata=target_metadata,
+                history_metadata=history_metadata,
+                provider_response=response,
+            )
+            return {"status": "ok"}
+
+        return await self._surface_comms_error(
+            "Failed to send Microsoft Teams bot message",
+            topic,
+            contact_id=contact_id,
+            medium=Medium.MS_TEAMS_BOT_MESSAGE,
+            offline_reservation=offline_reservation,
+            attempted_content=content,
+            receiver_ids=[contact_id],
+            target_metadata=target_metadata,
+            history_metadata=history_metadata,
         )
 
     async def send_slack_channel_message(
