@@ -41,6 +41,8 @@ dependencies = [
     # Microsoft 365 (Outlook + Teams channels in unity.gateway.channels).
     "azure-identity>=1.14.0",
     "msgraph-sdk>=1.0.0",
+    # Bot Framework inbound JWT verification for the MS Teams bot adapter.
+    "pyjwt[crypto]>=2.8.0",
     "uvicorn[standard]>=0.24.0",
     "unisdk",
     "unillm",

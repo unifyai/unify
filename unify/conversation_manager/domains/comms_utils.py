@@ -827,6 +827,61 @@ async def send_slack_message(
             return result
 
 
+async def send_ms_teams_bot_message(
+    *,
+    tenant_id: str,
+    conversation_id: str,
+    body: str = "",
+) -> dict:
+    """Send a proactive MS Teams bot reply via the Communication gateway.
+
+    Replies into an existing Teams conversation (1:1 chat, group chat, or
+    channel thread) identified by its Bot Framework ``conversation_id``.
+    The tenant's ``service_url`` and the shared bot Connector token are
+    resolved server-side from ``tenant_id``; the assistant never sees
+    them. The send also pins the conversation to this assistant so replies
+    return to it.
+
+    Args:
+        tenant_id: Microsoft AAD tenant ID (resolves the install).
+        conversation_id: Bot Framework conversation id to reply into.
+        body: The text content to send.
+
+    Returns:
+        dict with ``success`` and optionally ``activity_id`` /
+        ``conversation_id``.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return {"success": False}
+
+    body = normalize_outbound_plain_text(body)
+
+    payload: dict = {
+        "tenant_id": tenant_id,
+        "conversation_id": conversation_id,
+        "body": body,
+        "assistant_id": agent_id,
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{SETTINGS.conversation.COMMS_URL}/ms-teams-bot/send",
+            headers=headers,
+            json=payload,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(
+                    f"{ICONS['comms_outbound']} Teams bot send failed: {e}",
+                )
+                return {"success": False}
+            result = await response.json()
+            result["success"] = True
+            return result
+
+
 async def resolve_slack_user_profile(
     *,
     team_id: str,
