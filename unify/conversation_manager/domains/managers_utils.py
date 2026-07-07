@@ -141,6 +141,9 @@ _MESSAGE_PRODUCING_EVENTS = {
     "TeamsChannelMessageReceived",
     "TeamsChannelMessageSent",
     "MsTeamsBotMessageSent",
+    "MsTeamsBotMessageReceived",
+    "MsTeamsBotChannelMessageSent",
+    "MsTeamsBotChannelMessageReceived",
 }
 
 
@@ -427,6 +430,46 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     role="assistant",
                     timestamp=ts,
                     chat_id=getattr(cm_event, "conversation_id", None),
+                )
+            case "MsTeamsBotMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.MS_TEAMS_BOT_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    chat_id=getattr(cm_event, "conversation_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
+                )
+            case "MsTeamsBotChannelMessageSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                    chat_id=getattr(cm_event, "conversation_id", None),
+                )
+            case "MsTeamsBotChannelMessageReceived":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    sender_name=sender_name,
+                    thread_name=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
+                    message_content=cm_event.content,
+                    role="user",
+                    timestamp=ts,
+                    attachments=getattr(cm_event, "attachments", None),
+                    chat_id=getattr(cm_event, "conversation_id", None),
+                    channel_id=getattr(cm_event, "channel_id", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    thread_id=getattr(cm_event, "thread_id", None),
+                    message_id=getattr(cm_event, "message_id", None),
+                    routing_metadata=getattr(cm_event, "routing_metadata", None),
                 )
             case "TeamsChannelMessageReceived":
                 entry = cm.contact_index.build_message(
@@ -1027,6 +1070,12 @@ async def log_message(
             Medium.SLACK_CHANNEL_MESSAGE
             if "channel" in event_name
             else Medium.SLACK_MESSAGE
+        )
+    elif "msteamsbot" in event_name:
+        medium = (
+            Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
+            if "channel" in event_name
+            else Medium.MS_TEAMS_BOT_MESSAGE
         )
     elif "teams" in event_name:
         medium = (
