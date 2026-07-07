@@ -139,6 +139,13 @@ _IN_FLIGHT_ACTIONS_PATTERN = re.compile(
 )
 
 
+def _strip_onboarding_completion_tool_lines(text: str) -> str:
+    """Remove CM-only checklist completion instructions from Actor parent context."""
+    return "\n".join(
+        line for line in text.splitlines() if "set_onboarding_task_state" not in line
+    )
+
+
 def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     """Filter CM state snapshot before passing to Actor as parent context.
 
@@ -150,6 +157,10 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     names as callable functions and generate code like:
         await stop_search_the_web_for__1()
     This causes NameError since these tools don't exist in the Actor's scope.
+
+    Onboarding narration that names ``set_onboarding_task_state`` is also
+    stripped — checklist completion is owned by the parent CM brain, not act
+    subtasks.
 
     This function strips the <in_flight_actions> section while preserving
     other useful context (notifications, active_conversations).
@@ -174,12 +185,14 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 filtered_text = _IN_FLIGHT_ACTIONS_PATTERN.sub("", part["text"])
+                filtered_text = _strip_onboarding_completion_tool_lines(filtered_text)
                 filtered_parts.append({**part, "text": filtered_text})
             else:
                 filtered_parts.append(part)
         return {**state_snapshot, "content": filtered_parts}
 
     filtered_content = _IN_FLIGHT_ACTIONS_PATTERN.sub("", content)
+    filtered_content = _strip_onboarding_completion_tool_lines(filtered_content)
     return {**state_snapshot, "content": filtered_content}
 
 
@@ -1415,7 +1428,9 @@ class ConversationManagerBrainActionTools:
                   actor is working, before it sends a response.
 
                 The default (False) is a one-shot task: the actor works until
-                done and the result arrives as an ``ActorResult``.
+                done and the result arrives as an ``ActorResult``. Checklist
+                completion for manual onboarding demo steps stays with the parent
+                CM brain — act subtasks deliver the work only.
             include_conversation_context: Whether to pass the current conversation
                 state to the action. When ``true`` (default), the action receives
                 the full rendered conversation snapshot — messages, notifications,

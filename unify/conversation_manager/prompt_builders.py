@@ -1091,8 +1091,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "is priority-ordered: I default to the first entry, using its nudge "
             "copy framed as clicking that step's row in the Onboarding checklist, "
             "and only pick a lower one when the current channel and conversation "
-            "make it clearly more natural; if none is listed (onboarding complete), "
-            "I congratulate the user and stand down.",
+            "make it clearly more natural. For `integration_connected`, prefer "
+            "the next Integrations-section step (typically `integration-read`) "
+            "before Communication or other phases; for `workspace_connected`, "
+            "prefer the next Workspace-section demo before other phases; if none "
+            "is listed (onboarding complete), I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
             '`guide_voice_agent(message="...")` with the '
@@ -1412,14 +1415,15 @@ def _build_coordinator_onboarding_progress_block(
             "Each step line includes its ``step_id`` for "
             "``set_onboarding_task_state(step_id, completed)`` when I need to "
             "mark non-Communication work complete or undo a manual completion.",
-            "Workspace demo steps (``workspace-mailbox``, ``workspace-drive``, "
-            "``workspace-calendar``) are completed this way, explicitly: they never "
-            "auto-complete, so the checklist does not detect the work on its own. I "
-            "do the demo task — read the relevant area and deliver one short summary "
-            "as a single ``unify_message`` — and then call "
-            "``set_onboarding_task_state(step_id, completed=True)``; the demo is not "
-            "finished until I make that call. Any reply, tidy-up, or flag I offer "
-            "afterwards is an optional follow-up and never gates completion.",
+            "Manual-completion onboarding steps (workspace demos, integration "
+            "demos, learn-from-correction, my-computer-demo, discord-connect) "
+            "never auto-complete. I do the deliverable work, send the required "
+            "``unify_message`` (or attachment where specified), then call "
+            "``set_onboarding_task_state(step_id, completed=True)``; the step is "
+            "not finished until I make that call. Any optional follow-up I offer "
+            "afterwards never gates completion. When I dispatch ``act`` for one "
+            "of these demos, the subtask delivers the work only — I still own "
+            "checklist completion on the ActorResult turn.",
             "While the user is on an onboarding checklist step or asking where to "
             "click in the onboarding UI, I answer from this block and the "
             "onboarding UI reference — I do not dispatch ``act`` just to orient "
@@ -1692,7 +1696,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Just sent a message and already answered the user's latest ask → `wait`
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
-- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn.
+- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn. UNLESS the completed act served a manual-completion onboarding demo step and the deliverable was sent — then call `set_onboarding_task_state(step_id, completed=True)` in the same turn as relaying the result, before `wait`.
 - Completed an action (voice call) → call `guide_voice_agent(message="...")` to relay results, then `wait`
 - Unsure what to *say* but the user sent a new unify_message → still reply briefly with what I know; only `wait` when there is genuinely nothing new to address.
 

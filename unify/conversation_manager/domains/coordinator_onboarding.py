@@ -236,6 +236,47 @@ def _detail_string(details: dict[str, Any], key: str) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _manual_completion_demo_guidance(*, step_id: str = "") -> str:
+    """Shared CM-only checklist completion rule for manual demo steps."""
+    step_note = f" The demo step id is `{step_id}`." if step_id else ""
+    return (
+        f"{step_note} The checklist does NOT auto-detect this deliverable, so "
+        "handling the demo is not finished until I call "
+        "set_onboarding_task_state(step_id, completed=True) after sending it. "
+        "Any optional follow-up I offer afterwards never gates completion."
+    )
+
+
+def _milestone_focus_phase(subtype: str) -> str | None:
+    if subtype == "integration_connected":
+        return "Integrations"
+    if subtype == "workspace_connected":
+        return "Workspace"
+    return None
+
+
+def _milestone_next_step_guidance(*, focus_phase: str | None = None) -> str:
+    phase_note = (
+        f" Prefer the next pending step in the {focus_phase} section from the "
+        "'My onboarding progress (live)' block before suggesting a step from "
+        "another section."
+        if focus_phase
+        else ""
+    )
+    return (
+        "Acknowledge this in one short sentence to the user, name the thing they "
+        "just completed, and preview the next pending onboarding step."
+        f"{phase_note} "
+        "Frame that next step as clicking its row in the Onboarding checklist "
+        "before mentioning any destination tab, dialog, or settings page. "
+        "Stay celebratory but brief — do not re-list every prior step. If a voice "
+        "call is active you MUST speak it by calling "
+        'guide_voice_agent(message="...") — do not send a '
+        "chat message during a call (it is silent to the caller). Otherwise send a "
+        "single chat message."
+    )
+
+
 def _onboarding_click_step_labels(details: dict[str, Any]) -> tuple[str, str]:
     """Resolve step id/title for a durable click-trace guidance line."""
     step_id = _detail_string(details, "step_id") or _detail_string(
@@ -593,12 +634,11 @@ def _coordinator_onboarding_notification_text(
             "connected app and send one short user-facing brief as a unify_message. "
             "For `integration-action`, take one concrete, user-safe action in or "
             "across connected apps and send one short report as a unify_message. "
-            "The checklist does NOT auto-detect this deliverable, so handling the "
-            "demo is not finished until I call set_onboarding_task_state(step_id, "
-            "completed=True) after sending it. If no connected app fits, I explain "
-            "exactly what is missing and do NOT mark the step complete. If a voice "
-            "call is active I speak via guide_voice_agent for the acknowledgement "
-            "but still send the deliverable as a unify_message."
+            f"{_manual_completion_demo_guidance(step_id=step_id)} "
+            "If no connected app fits, I explain exactly what is missing and do NOT "
+            "mark the step complete. If a voice call is active I speak via "
+            "guide_voice_agent for the acknowledgement but still send the deliverable "
+            "as a unify_message."
         )
         text = f"{subtype_hint} {body}{step_note}{instruction_note} {guidance}".strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
@@ -702,15 +742,13 @@ def _coordinator_onboarding_notification_text(
             "The user clicked a workspace demo row: after acking that I am on it, "
             "do the demo task now with my own tools. Read the relevant part of "
             "their connected workspace and deliver one short unify_message summary. "
-            "The checklist does NOT "
-            "auto-detect that summary, so handling this demo is not finished until "
-            "I mark it done by calling set_onboarding_task_state(step_id, "
-            "completed=True) after sending the summary. Any reply, tidy-up, or "
-            "flag is an optional follow-up I only act on if the user says yes; it "
-            "never gates completion. This notification is a poll, not a request to "
-            "repeat finished work: if the task is already done I just confirm it "
-            "and do not redo it or send a duplicate. If a voice call is active I "
-            'speak via guide_voice_agent(message="...") instead of a chat message.'
+            f"{_manual_completion_demo_guidance(step_id=step_id)} "
+            "Any reply, tidy-up, or flag is an optional follow-up I only act on if "
+            "the user says yes; it never gates completion. This notification is a "
+            "poll, not a request to repeat finished work: if the task is already "
+            "done I just confirm it and do not redo it or send a duplicate. If a "
+            'voice call is active I speak via guide_voice_agent(message="...") '
+            "instead of a chat message."
         )
         text = f"{subtype_hint} {body}{step_note} {guidance}".strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
@@ -731,16 +769,8 @@ def _coordinator_onboarding_notification_text(
         ).strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
-    guidance = (
-        "Acknowledge this in one short sentence to the user, name the thing they "
-        "just completed, and preview the next pending onboarding step. "
-        "Frame that next step as clicking its row in the Onboarding checklist "
-        "before mentioning any destination tab, dialog, or settings page. "
-        "Stay celebratory but brief — do not re-list every prior step. If a voice "
-        "call is active you MUST speak it by calling "
-        'guide_voice_agent(message="...") — do not send a '
-        "chat message during a call (it is silent to the caller). Otherwise send a "
-        "single chat message."
+    guidance = _milestone_next_step_guidance(
+        focus_phase=_milestone_focus_phase(event.subtype),
     )
     if not body:
         text = f"{subtype_hint} {guidance}"
