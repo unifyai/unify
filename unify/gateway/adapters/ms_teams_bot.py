@@ -231,6 +231,14 @@ async def ms_teams_bot_messages_webhook(
     )
     contacts = default_contacts(assistant)
 
+    # Channel identity: the team owns the channel, and a channel
+    # conversation id encodes the root thread as ``…;messageid=<rootId>``.
+    conversation_id = conversation.get("id", "") or ""
+    team_id = (channel_data.get("team") or {}).get("id", "") or ""
+    thread_id = ""
+    if ";messageid=" in conversation_id:
+        thread_id = conversation_id.split(";messageid=", 1)[1]
+
     await context.runtime_activator.activate(
         assistant_id,
         reason="ms_teams_bot_event",
@@ -245,9 +253,11 @@ async def ms_teams_bot_messages_webhook(
             "event_id": activity.get("id", "") or "",
             "message_id": activity.get("id", "") or "",
             "tenant_id": (channel_data.get("tenant") or {}).get("id", "") or "",
-            "conversation_id": conversation.get("id", "") or "",
+            "conversation_id": conversation_id,
             "conversation_type": conversation_type,
             "channel_id": (channel_data.get("channel") or {}).get("id", "") or "",
+            "team_id": team_id,
+            "thread_id": thread_id,
             "service_url": activity.get("serviceUrl", "") or "",
             "bot_app_id": SETTINGS.MS_TEAMS_BOT_APP_ID,
             "sender_aad_object_id": sender.get("aadObjectId", "") or "",

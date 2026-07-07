@@ -823,6 +823,94 @@ class MsTeamsBotMessageSent(Event):
 
 
 @dataclass
+class MsTeamsBotMessageReceived(Event):
+    """A message received via the org-installed Unify Teams bot app.
+
+    Distinct from ``TeamsMessageReceived`` (delegated per-user Graph): this is
+    the Bot-Framework channel, keyed by the Microsoft ``tenant_id`` and the Bot
+    Framework ``conversation_id``. Those two fields flow into the reply context
+    so a reply routes back into the same Teams conversation via
+    ``send_ms_teams_bot_message``.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    addressing, coordinator fallback, ambiguous-token hints) and is surfaced to
+    the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    conversation_type: str = "personal"
+    channel_id: str = ""
+    service_url: str = ""
+    bot_app_id: str = ""
+    message_id: str = ""
+    is_channel: bool = False
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class MsTeamsBotChannelMessageSent(Event):
+    """A message sent into a group chat or Teams channel thread via the bot app.
+
+    Distinct from the 1:1 ``MsTeamsBotMessageSent``: this targets a shared
+    conversation (group chat or channel), still keyed by the Microsoft
+    ``tenant_id`` and the Bot Framework ``conversation_id`` the reply routes
+    into.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_channel_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
+class MsTeamsBotChannelMessageReceived(Event):
+    """A message received in a group chat or Teams channel via the bot app.
+
+    The group-chat / channel counterpart of ``MsTeamsBotMessageReceived``,
+    triggered by @mentioning the app. ``tenant_id`` and ``conversation_id``
+    flow into the reply context so a reply routes back into the same
+    conversation via ``send_ms_teams_bot_channel_message``. ``team_id`` and
+    ``thread_id`` carry the channel/thread identity for context.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    addressing, thread inheritance, coordinator fallback, ambiguous-token
+    hints) and is surfaced to the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_channel_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    conversation_type: str = "channel"
+    channel_id: str = ""
+    team_id: str = ""
+    thread_id: str = ""
+    service_url: str = ""
+    bot_app_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
 class TeamsMessageReceived(Event):
     """A message received in a Microsoft Teams chat (1:1, group, or meeting)."""
 
