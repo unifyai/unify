@@ -926,6 +926,32 @@ class UnifyMessageReceived(Event):
 
 
 @dataclass
+class UnifyGroupMessageReceived(Event):
+    """A human posted to a team group chat this assistant belongs to.
+
+    Group chat runs outside the contact-keyed conversation pipeline: sender
+    identity is carried explicitly on ``message`` (``sender_kind`` +
+    ``sender_user_id``/``sender_assistant_id`` + ``sender_name``) and the
+    handler makes a single policy-gated reply decision rather than entering
+    the full brain loop.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:unify_group_message_message"
+    content_logged: ClassVar[bool] = True
+
+    team_id: int = 0
+    team_name: str = ""
+    organization_id: int | None = None
+    # The triggering message: {message_id, sender_kind, sender_user_id,
+    # sender_assistant_id, sender_name, content, mentions, timestamp}.
+    message: dict = field(default_factory=dict)
+    # {"humans": [{user_id, name}], "assistants": [{assistant_id, name}]}
+    participants: dict = field(default_factory=dict)
+    # Prior thread messages (most recent last), same shape as ``message``.
+    recent_messages: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class UnifyMessageReactionChanged(Event):
     """A user reacted to a Unify console chat message."""
 

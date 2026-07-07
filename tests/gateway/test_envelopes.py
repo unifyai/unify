@@ -21,6 +21,7 @@ from unify.gateway.envelopes import (
     SMSEnvelope,
     SMSReceivedEvent,
     SystemEventEnvelope,
+    UnifyGroupMessageEnvelope,
     UnifyMessageEnvelope,
     UnifyMessageReceivedEvent,
     UnitySystemEvent,
@@ -126,6 +127,39 @@ def test_unify_message_envelope_requires_contact_id() -> None:
     raw_missing["event"].pop("contact_id")
     with pytest.raises(ValidationError):
         UnifyMessageEnvelope.model_validate(raw_missing)
+
+
+def test_unify_group_message_envelope_roundtrip() -> None:
+    raw = {
+        "thread": "unify_group_message",
+        "publish_timestamp": 1700000000.0,
+        "event": {
+            "assistant_id": "42",
+            "contacts": [],
+            "team_id": 3,
+            "team_name": "Growth",
+            "organization_id": 11,
+            "message": {
+                "message_id": 7,
+                "sender_kind": "user",
+                "sender_user_id": "user-1",
+                "sender_name": "Dana",
+                "content": "Morning everyone",
+                "mentions": [],
+            },
+            "participants": {"humans": [], "assistants": []},
+            "recent_messages": [],
+        },
+    }
+    env = parse_envelope(raw)
+    assert isinstance(env, UnifyGroupMessageEnvelope)
+    assert env.event.team_id == 3
+    assert env.event.message["content"] == "Morning everyone"
+
+    raw_missing = {**raw, "event": {**raw["event"]}}
+    raw_missing["event"].pop("team_id")
+    with pytest.raises(ValidationError):
+        UnifyGroupMessageEnvelope.model_validate(raw_missing)
 
 
 def test_system_event_envelope_requires_event_type() -> None:

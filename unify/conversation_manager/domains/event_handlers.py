@@ -2905,6 +2905,18 @@ async def _(
         await cm.request_llm_run(delay=0)
 
 
+@EventHandler.register(UnifyGroupMessageReceived)
+async def _(
+    event: UnifyGroupMessageReceived,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    from unify.conversation_manager.domains.group_chat import handle_group_message
+
+    await handle_group_message(event, cm)
+
+
 @EventHandler.register(AssistantPresenceObserved)
 async def _(
     event: AssistantPresenceObserved,
