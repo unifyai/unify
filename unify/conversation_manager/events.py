@@ -1256,6 +1256,10 @@ class _SessionConfigBase(Event):
     voice_id: str
     binding_id: str = ""
     voice_provider: str = "cartesia"
+    # Per-assistant default LLM as a unillm 'model@provider' endpoint plus a
+    # reasoning-effort level. Empty = platform default (UNIFY_MODEL).
+    default_model: str = ""
+    default_reasoning_effort: str = ""
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""

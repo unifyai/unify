@@ -9,10 +9,8 @@ from pydantic import BaseModel
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
+from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
-
-# Default model resolved from production settings.
-DEFAULT_MODEL = SETTINGS.UNIFY_MODEL
 
 _THINKING_ICON = ICONS["llm_thinking"]
 
@@ -51,6 +49,23 @@ class PendingThinkingLog:
             )
 
 
+def resolve_default_model() -> tuple[str, str | None]:
+    """Resolve the session's default LLM as (model, reasoning_effort).
+
+    The per-assistant default (from Orchestra, via SESSION_DETAILS) takes
+    priority over the deployment-wide UNIFY_MODEL. A returned effort of None
+    means the assistant carries no effort override and per-call-site effort
+    levels apply.
+    """
+    session_model = SESSION_DETAILS.assistant.default_model
+    if session_model:
+        return (
+            session_model,
+            SESSION_DETAILS.assistant.default_reasoning_effort or None,
+        )
+    return SETTINGS.UNIFY_MODEL, None
+
+
 def new_llm_client(
     model: str | None = None,
     *,
@@ -62,7 +77,9 @@ def new_llm_client(
     """
     Create a configured Unify client.
 
-    If model is not specified, uses UNIFY_MODEL from settings.
+    If model is not specified, uses the assistant's default model when one is
+    set (which also pins its reasoning effort, overriding the call site), and
+    otherwise UNIFY_MODEL from settings.
     Defaults to max reasoning_effort and priority service_tier where applicable.
     Callers that want a lighter setting (e.g. the ConversationManager slow brain
     at "high", or fast-path helpers) pass ``reasoning_effort`` explicitly.
@@ -70,8 +87,9 @@ def new_llm_client(
     Returns an AsyncUnify client by default, or a synchronous Unify client when
     async_client=False.
     """
+    default_effort: str | None = None
     if model is None:
-        model = SETTINGS.UNIFY_MODEL
+        model, default_effort = resolve_default_model()
 
     config = {
         "reasoning_effort": "max",
@@ -80,6 +98,8 @@ def new_llm_client(
         "origin": origin,
     }
     config.update(kwargs)
+    if default_effort is not None:
+        config["reasoning_effort"] = default_effort
 
     if async_client:
         client = unillm.AsyncUnify(model, **config)

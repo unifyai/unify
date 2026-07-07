@@ -2233,12 +2233,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
         else:
             client = new_llm_client(
-                SETTINGS.UNIFY_MODEL,
                 origin="ConversationManager",
                 # Slow brain stays at "high"; the system default is "max" (used by
                 # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
                 # hardest tasks at extra latency; on MiniMax M3 all non-none effort
-                # levels enable the same adaptive thinking mode.
+                # levels enable the same adaptive thinking mode. When the
+                # assistant carries a default-model effort override, it takes
+                # priority over this value inside new_llm_client().
                 reasoning_effort="high",
             )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
@@ -2738,6 +2739,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.voice_provider = payload["voice_provider"]
         if payload.get("voice_id"):
             self.voice_id = payload["voice_id"]
+        # Adopt the default model unconditionally: unlike voice, empty is a
+        # meaningful value (reset to the platform default model).
+        self.default_model = payload.get("default_model", "")
+        self.default_reasoning_effort = payload.get("default_reasoning_effort", "")
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "ubuntu")
         self.user_desktops = payload.get("user_desktops") or []
@@ -2780,6 +2785,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             team_summaries=team_summaries,
             voice_provider=self.voice_provider,
             voice_id=self.voice_id,
+            default_model=self.default_model,
+            default_reasoning_effort=self.default_reasoning_effort,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
             user_desktops=self.user_desktops,
