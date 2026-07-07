@@ -2035,6 +2035,8 @@ def _credit_gate_reply_context(
     bot_id: str | None = None,
     message_id: str | None = None,
     routing_metadata: dict | None = None,
+    tenant_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     context = {
         "medium": medium.value,
@@ -2053,6 +2055,8 @@ def _credit_gate_reply_context(
         "bot_id": bot_id,
         "message_id": message_id,
         "routing_metadata": routing_metadata,
+        "tenant_id": tenant_id,
+        "conversation_id": conversation_id,
     }
     for key, value in optional_fields.items():
         if value:
@@ -2085,6 +2089,9 @@ def _credit_gate_reply_context(
         TeamsChannelMessageReceived,
         TeamsChannelMessageSent,
         MsTeamsBotMessageSent,
+        MsTeamsBotMessageReceived,
+        MsTeamsBotChannelMessageSent,
+        MsTeamsBotChannelMessageReceived,
     ),
 )
 async def _(event, cm: "ConversationManager", *args, **kwargs):
@@ -2104,6 +2111,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     routing_metadata = None
     guild_id = None
     bot_id = None
+    tenant_id = None
+    conversation_id = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -2472,6 +2481,67 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 "ms_teams_bot_message_sent",
                 f"Teams bot message to {sender_name}: {event.content}",
             )
+        case MsTeamsBotMessageReceived():
+            # A routed bot activity proves the org has a bound install, so adopt
+            # the capability on the live CM. This registers
+            # send_ms_teams_bot_message for the responding turn even when the
+            # boot-time activation payload didn't carry the flag.
+            cm.assistant_has_ms_teams_bot = True
+            medium = Medium.MS_TEAMS_BOT_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            # tenant_id + conversation_id are the routing keys the reply needs
+            # to target the same Teams conversation via send_ms_teams_bot_message.
+            tenant_id = getattr(event, "tenant_id", "") or None
+            conversation_id = getattr(event, "conversation_id", "") or None
+            chat_id = conversation_id
+            channel_id = getattr(event, "channel_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Teams bot message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_message_received",
+                f"Teams bot message from {sender_name}: {event.content}",
+            )
+        case MsTeamsBotChannelMessageSent():
+            medium = Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
+            message_content = event.content
+            chat_id = getattr(event, "conversation_id", "") or None
+            notif_content = "Teams bot channel message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_channel_message_sent",
+                f"Teams bot channel message to {sender_name}: {event.content}",
+            )
+        case MsTeamsBotChannelMessageReceived():
+            # A routed channel activity proves the org has a bound install, so
+            # adopt the capability on the live CM (registers the send tools for
+            # the responding turn even if the boot payload lacked the flag).
+            cm.assistant_has_ms_teams_bot = True
+            medium = Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            # tenant_id + conversation_id are the routing keys the reply needs
+            # to target the same Teams conversation via
+            # send_ms_teams_bot_channel_message.
+            tenant_id = getattr(event, "tenant_id", "") or None
+            conversation_id = getattr(event, "conversation_id", "") or None
+            chat_id = conversation_id
+            channel_id = getattr(event, "channel_id", "") or None
+            team_id = getattr(event, "team_id", "") or None
+            thread_id = getattr(event, "thread_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Teams bot channel message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_channel_message_received",
+                f"Teams bot channel message from {sender_name}: {event.content}",
+            )
         case TeamsMessageReceived():
             medium = Medium.TEAMS_MESSAGE
             message_content = event.content
@@ -2582,6 +2652,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 bot_id=bot_id,
                 message_id=message_id,
                 routing_metadata=routing_metadata,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
             )
             if role == "user"
             else None

@@ -540,6 +540,25 @@ def _build_slack_guidelines(assistant_has_slack: bool) -> str:
     )
 
 
+def _build_ms_teams_bot_guidelines(assistant_has_ms_teams_bot: bool) -> str:
+    """Unify Teams bot addressing/threading conventions (Bot Framework)."""
+    if not assistant_has_ms_teams_bot:
+        return ""
+    return (
+        "- **Unify Teams app addressing & threads:** In group chats and "
+        "channels, the org-installed Teams bot is shared across all assistants "
+        "in the org. The user picks me by @mentioning the bot **and** my first "
+        "name as a routing token when starting a thread; replies inside that "
+        "thread automatically reach the same assistant. To reply in a shared "
+        "conversation, call `send_ms_teams_bot_channel_message` with the "
+        "inbound message's `tenant_id` and `conversation_id`. 1:1 DMs are "
+        "simpler: reply with `send_ms_teams_bot_message` using the inbound "
+        "`tenant_id` and `conversation_id`. This is the org-installed Unify "
+        "Teams app (Bot Framework), distinct from `send_teams_message` (a "
+        "delegated Microsoft account)."
+    )
+
+
 def _build_coordinator_guidelines(is_coordinator: bool) -> str:
     """Extra guidance for Twin in org routing fallback cases."""
     if not is_coordinator:
@@ -709,6 +728,13 @@ def _build_comms_tool_listing(
                 "the Unify Teams app (Bot Framework), distinct from "
                 "`send_teams_message` (my own Microsoft account).",
             )
+            lines.append(
+                "- `send_ms_teams_bot_channel_message`: Reply into a group chat "
+                "or Teams channel through the Unify Teams app. Use when the "
+                "inbound message is a `ms_teams_bot_channel_message` (shared "
+                "conversation) rather than a 1:1 DM — pass the `tenant_id` and "
+                "`conversation_id` shown on that inbound message.",
+            )
         if assistant_has_teams:
             lines.append(
                 "- `send_teams_message`: Send a Teams direct message to my boss "
@@ -788,11 +814,19 @@ def _build_comms_tool_listing(
         lines.append(
             "- `send_ms_teams_bot_message`: Reply through the org-installed "
             "Unify Microsoft Teams app. Use when the inbound thread is "
-            "`ms_teams_bot_message`: pass the `tenant_id` and `conversation_id` "
+            "`ms_teams_bot_message` (a 1:1 DM): pass the `tenant_id` and "
+            "`conversation_id` shown on the inbound message so the reply routes "
+            "back into that same Teams conversation. This is the Unify Teams "
+            "app (Bot Framework), distinct from `send_teams_message` (a user's "
+            "delegated Microsoft account).",
+        )
+        lines.append(
+            "- `send_ms_teams_bot_channel_message`: Reply into a group chat or "
+            "Teams channel through the Unify Teams app. Use when the inbound "
+            "thread is `ms_teams_bot_channel_message` (a shared conversation) "
+            "rather than a 1:1 DM: pass the `tenant_id` and `conversation_id` "
             "shown on the inbound message so the reply routes back into that "
-            "same Teams conversation. This is the Unify Teams app (Bot "
-            "Framework), distinct from `send_teams_message` (a user's delegated "
-            "Microsoft account).",
+            "same conversation.",
         )
     if assistant_has_teams:
         lines.append(
@@ -2201,10 +2235,9 @@ def _build_available_outbound_tool_names(
         if not is_coordinator:
             available_tool_names.insert(idx + 1, "send_slack_channel_message")
     if assistant_has_ms_teams_bot:
-        available_tool_names.insert(
-            available_tool_names.index("send_unify_message"),
-            "send_ms_teams_bot_message",
-        )
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_ms_teams_bot_message")
+        available_tool_names.insert(idx + 1, "send_ms_teams_bot_channel_message")
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
@@ -2501,6 +2534,9 @@ def build_system_prompt(
     )
     slack_guidelines = _build_slack_guidelines(
         assistant_has_slack and not is_coordinator,
+    )
+    ms_teams_bot_guidelines = _build_ms_teams_bot_guidelines(
+        assistant_has_ms_teams_bot,
     )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     # Reference-quiz comms tools withheld until the user clicks the channel's
@@ -2834,6 +2870,7 @@ Messages from the current turn have **NEW** tag prepended:
         + (f"\n{missing_email_notice}" if missing_email_notice else "")
         + (f"\n{whatsapp_change_notice}" if whatsapp_change_notice else "")
         + (f"\n{slack_guidelines}" if slack_guidelines else "")
+        + (f"\n{ms_teams_bot_guidelines}" if ms_teams_bot_guidelines else "")
         + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
 

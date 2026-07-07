@@ -1722,6 +1722,28 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 channel_id=reply_context.get("channel_id"),
                 team_id=reply_context.get("team_id"),
             )
+        elif (
+            medium == Medium.MS_TEAMS_BOT_MESSAGE.value
+            and reply_context.get("tenant_id")
+            and reply_context.get("conversation_id")
+        ):
+            await tools.send_ms_teams_bot_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tenant_id=reply_context["tenant_id"],
+                conversation_id=reply_context["conversation_id"],
+            )
+        elif (
+            medium == Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE.value
+            and reply_context.get("tenant_id")
+            and reply_context.get("conversation_id")
+        ):
+            await tools.send_ms_teams_bot_channel_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tenant_id=reply_context["tenant_id"],
+                conversation_id=reply_context["conversation_id"],
+            )
         else:
             return False
 

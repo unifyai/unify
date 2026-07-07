@@ -79,6 +79,8 @@ from unify.conversation_manager.events import (
     UserWebcamStopped,
     UserFilesysAccessStarted,
     UserFilesysAccessStopped,
+    MsTeamsBotChannelMessageReceived,
+    MsTeamsBotMessageReceived,
 )
 from unify.contact_manager.types.contact import UNASSIGNED
 
@@ -430,6 +432,220 @@ class TestSMSMessageHandling:
             assert event.content == "Hello from SMS!"
 
             # Message should be acked
+            assert message._acked
+
+
+# =============================================================================
+# Test: Microsoft Teams Bot (Unify app) Message Handling
+# =============================================================================
+
+
+class TestMsTeamsBotMessageHandling:
+    """Inbound activities from the org-installed Unify Teams bot app."""
+
+    @pytest.mark.asyncio
+    async def test_matches_contact_by_display_name(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """A sender whose AAD display name matches a known contact routes to it,
+        and the reply-routing keys (tenant_id, conversation_id) are preserved."""
+        from unify.conversation_manager import comms_manager as cm_mod
+        from unify.conversation_manager.comms_manager import CommsManager
+
+        cm_mod._seen_ms_teams_bot_ids.clear()
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            contacts = [
+                {
+                    "contact_id": 7,
+                    "first_name": "Alice",
+                    "surname": "Smith",
+                    "phone_number": "",
+                    "email_address": "alice@contact.com",
+                },
+            ]
+            message = create_pubsub_message(
+                "ms_teams_bot",
+                {
+                    "event_id": "activity-1",
+                    "message_id": "activity-1",
+                    "tenant_id": "tenant-abc",
+                    "conversation_id": "conv-xyz",
+                    "conversation_type": "personal",
+                    "channel_id": "",
+                    "service_url": "https://smba.example/",
+                    "bot_app_id": "bot-app-123",
+                    "sender_display_name": "Alice Smith",
+                    "body": "Hello from Teams bot!",
+                    "is_channel": False,
+                    "attachments": [],
+                    "routing_metadata": {"addressing": "coordinator"},
+                    "contacts": contacts,
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:ms_teams_bot_message",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, MsTeamsBotMessageReceived)
+            assert event.content == "Hello from Teams bot!"
+            assert event.tenant_id == "tenant-abc"
+            assert event.conversation_id == "conv-xyz"
+            assert event.contact["contact_id"] == 7
+            assert event.routing_metadata == {"addressing": "coordinator"}
+            assert message._acked
+
+    @pytest.mark.asyncio
+    async def test_duplicate_activity_is_deduped(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """A redelivered activity (same id) publishes the event only once."""
+        from unify.conversation_manager import comms_manager as cm_mod
+        from unify.conversation_manager.comms_manager import CommsManager
+
+        cm_mod._seen_ms_teams_bot_ids.clear()
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            contacts = [
+                {
+                    "contact_id": 7,
+                    "first_name": "Alice",
+                    "surname": "Smith",
+                    "phone_number": "",
+                    "email_address": "alice@contact.com",
+                },
+            ]
+            event_payload = {
+                "event_id": "dup-activity",
+                "message_id": "dup-activity",
+                "tenant_id": "tenant-abc",
+                "conversation_id": "conv-xyz",
+                "sender_display_name": "Alice Smith",
+                "body": "Hello twice",
+                "contacts": contacts,
+            }
+
+            first = create_pubsub_message("ms_teams_bot", event_payload)
+            cm.handle_message(first)
+            await _wait_for_condition(lambda: first._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:ms_teams_bot_message",
+            )
+            assert msg is not None
+
+            second = create_pubsub_message("ms_teams_bot", event_payload)
+            cm.handle_message(second)
+            await _wait_for_condition(lambda: second._acked)
+
+            # The redelivery must not produce a second inbound event.
+            dup = await get_message_on_channel(
+                pubsub,
+                "app:comms:ms_teams_bot_message",
+                timeout=0.5,
+            )
+            assert dup is None
+            assert second._acked
+
+    @pytest.mark.asyncio
+    async def test_channel_activity_routes_to_channel_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """A groupChat/channel activity publishes the channel event (not the DM
+        event) and carries the team_id/thread_id channel identity."""
+        from unify.conversation_manager import comms_manager as cm_mod
+        from unify.conversation_manager.comms_manager import CommsManager
+
+        cm_mod._seen_ms_teams_bot_ids.clear()
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            contacts = [
+                {
+                    "contact_id": 7,
+                    "first_name": "Alice",
+                    "surname": "Smith",
+                    "phone_number": "",
+                    "email_address": "alice@contact.com",
+                },
+            ]
+            message = create_pubsub_message(
+                "ms_teams_bot",
+                {
+                    "event_id": "chan-activity-1",
+                    "message_id": "chan-activity-1",
+                    "tenant_id": "tenant-abc",
+                    "conversation_id": "19:channel@thread.tacv2;messageid=root-1",
+                    "conversation_type": "channel",
+                    "channel_id": "19:channel@thread.tacv2",
+                    "team_id": "team-42",
+                    "thread_id": "root-1",
+                    "service_url": "https://smba.example/",
+                    "bot_app_id": "bot-app-123",
+                    "sender_display_name": "Alice Smith",
+                    "body": "Hey team, ping the assistant",
+                    "attachments": [],
+                    "routing_metadata": {"addressing": "token_addressed"},
+                    "contacts": contacts,
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:ms_teams_bot_channel_message",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, MsTeamsBotChannelMessageReceived)
+            assert event.content == "Hey team, ping the assistant"
+            assert event.tenant_id == "tenant-abc"
+            assert event.conversation_id == "19:channel@thread.tacv2;messageid=root-1"
+            assert event.team_id == "team-42"
+            assert event.thread_id == "root-1"
+            assert event.contact["contact_id"] == 7
+
+            # A channel activity must NOT publish on the DM topic.
+            dm = await get_message_on_channel(
+                pubsub,
+                "app:comms:ms_teams_bot_message",
+                timeout=0.5,
+            )
+            assert dm is None
             assert message._acked
 
 
