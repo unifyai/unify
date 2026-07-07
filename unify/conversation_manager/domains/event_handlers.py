@@ -2288,7 +2288,17 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.UNIFY_MESSAGE
             message_content = event.content
             attachments = event.attachments
-            notif_content = f"Unify message from {sender_name}"
+            # Carried through push_message and the reply context (the same
+            # pipeline slot MS Teams channel messages use), so the brain sees
+            # which room the message belongs to and can reply there.
+            team_id = str(event.team_id) if getattr(event, "team_id", None) else None
+            if team_id:
+                team_label = event.team_name or f"team {team_id}"
+                notif_content = (
+                    f"Team chat message from {sender_name} in '{team_label}'"
+                )
+            else:
+                notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
@@ -2903,18 +2913,6 @@ async def _(
 ):
     if await _handle_inactivity_followup_event(event, cm):
         await cm.request_llm_run(delay=0)
-
-
-@EventHandler.register(UnifyGroupMessageReceived)
-async def _(
-    event: UnifyGroupMessageReceived,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    from unify.conversation_manager.domains.group_chat import handle_group_message
-
-    await handle_group_message(event, cm)
 
 
 @EventHandler.register(AssistantPresenceObserved)

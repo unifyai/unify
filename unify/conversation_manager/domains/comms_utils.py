@@ -276,10 +276,45 @@ async def get_whatsapp_window(to_number: str) -> bool | None:
         return None
 
 
+def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
+    """Persist + publish one team-chat reply via Orchestra's admin API.
+
+    Team-chat replies do not go to the assistant's own topic (that is the
+    1:1 Console thread); Orchestra appends them to the team's GroupChat
+    context and publishes them on the per-organization topic so every
+    member's Console sees them. Orchestra never fans assistant replies out
+    to other runtimes, so AI messages cannot cascade.
+    """
+    base_url = SETTINGS.ORCHESTRA_URL or ""
+    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value() or ""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if not base_url or not admin_key or agent_id is None:
+        return {"success": False, "error": "orchestra config missing"}
+    try:
+        from unisdk.utils import http
+
+        response = http.post(
+            f"{base_url.rstrip('/')}/admin/teams/{int(team_id)}/messages",
+            headers={"Authorization": f"Bearer {admin_key}"},
+            json={"assistant_id": int(agent_id), "content": content},
+            timeout=15,
+        )
+        if 200 <= response.status_code < 300:
+            return {"success": True}
+        return {
+            "success": False,
+            "error": f"orchestra returned {response.status_code}: "
+            f"{getattr(response, 'text', '')}",
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 async def send_unify_message(
     content: str,
     contact_id: int = 1,
     attachment: dict | None = None,
+    team_id: int | None = None,
 ) -> dict:
     """
     Send a unify message to a contact, optionally with an attachment.
@@ -291,11 +326,30 @@ async def send_unify_message(
             - id: Unique identifier for the attachment
             - filename: The name of the file
             - url: Signed URL to download the file
+        team_id: When set, the message is posted into that team's group chat
+            (via Orchestra) instead of the contact's 1:1 Console thread.
 
     Returns:
         dict with "success" key indicating delivery status.
     """
     content = normalize_outbound_plain_text(content)
+
+    if team_id is not None:
+        result = await asyncio.to_thread(
+            _post_team_message_to_orchestra,
+            team_id,
+            content,
+        )
+        if result.get("success"):
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Team chat message posted to team {team_id}",
+            )
+        else:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error posting team chat message: "
+                f"{result.get('error')}",
+            )
+        return result
 
     agent_id = SESSION_DETAILS.assistant.agent_id
     event_data = {"content": content, "role": "assistant", "contact_id": contact_id}

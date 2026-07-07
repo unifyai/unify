@@ -109,6 +109,7 @@ def app(gateway_context: GatewayContext, monkeypatch: pytest.MonkeyPatch) -> Fas
     async def fake_get_assistant(*, assistant_id=None, **kwargs):
         return {
             "assistant_id": assistant_id or "123",
+            "user_id": "owner-user-1",
             "boss_contact_id": 456,
             "self_contact_id": 789,
             "assistant_first_name": "Unity",
@@ -588,9 +589,11 @@ def test_console_org_chat_fans_out_group_message_envelopes(
                 "team_id": 3,
                 "team_name": "Growth",
                 "organization_id": 11,
-                "message": message,
-                "participants": {"humans": [], "assistants": []},
-                "recent_messages": [],
+                "body": "Morning everyone",
+                "group_message_id": 7,
+                "sender_user_id": "user-1",
+                "sender_email": "dana@example.com",
+                "sender_name": "Dana",
             },
         },
     )
@@ -603,16 +606,61 @@ def test_console_org_chat_fans_out_group_message_envelopes(
     assert published_frames[0]["thread"] == "team_message"
     assert published_frames[0]["attributes"]["team_id"] == "3"
 
-    # Each fan-out assistant received a unify_group_message envelope.
+    # Each fan-out assistant received a standard unify_message envelope with
+    # the team context attached (no contact_id: the sender is not this
+    # assistant's owner, so the runtime resolves them by email).
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
     assistant_id, envelope, thread = sink.published[-1]
     assert assistant_id == "123"
     assert thread == "inbound"
-    assert envelope["thread"] == "unify_group_message"
+    assert envelope["thread"] == "unify_message"
     assert envelope["event"]["team_id"] == 3
     assert envelope["event"]["assistant_id"] == "123"
-    assert envelope["event"]["message"]["content"] == "Morning everyone"
+    assert envelope["event"]["body"] == "Morning everyone"
+    assert envelope["event"]["sender_email"] == "dana@example.com"
+    assert "contact_id" not in envelope["event"]
+
+
+def test_console_org_chat_owner_sender_resolves_boss_contact(
+    client: TestClient,
+    gateway_context: GatewayContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unify.gateway.adapters import internal
+
+    monkeypatch.setattr(internal, "_publish_org_chat_frame", lambda **kwargs: None)
+
+    response = client.post(
+        "/unify/org-chat",
+        headers=ADMIN_HEADERS,
+        json={
+            "kind": "team",
+            "organization_id": 11,
+            "team_id": 3,
+            "message": {"message_id": 8, "team_id": 3, "content": "hi team"},
+            "fanout_assistant_ids": [123],
+            "assistant_event": {
+                "team_id": 3,
+                "team_name": "Growth",
+                "organization_id": 11,
+                "body": "hi team",
+                "group_message_id": 8,
+                # Matches the fake assistant's owner, so the fan-out resolves
+                # contact_id to the boss contact.
+                "sender_user_id": "owner-user-1",
+                "sender_email": "owner@example.com",
+                "sender_name": "Owner User",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    sink = gateway_context.envelope_sink
+    assert isinstance(sink, FakeEnvelopeSink)
+    _assistant_id, envelope, _thread = sink.published[-1]
+    assert envelope["thread"] == "unify_message"
+    assert envelope["event"]["contact_id"] == 456
 
 
 def test_console_org_chat_dm_publishes_frame_only(
@@ -654,9 +702,8 @@ def test_console_org_chat_dm_publishes_frame_only(
     assert published_frames[0]["attributes"]["dm_user_a"] == "user-a"
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
-    assert all(
-        envelope["thread"] != "unify_group_message" for _, envelope, _ in sink.published
-    )
+    # DMs never reach assistant runtimes.
+    assert sink.published == []
 
 
 def test_console_reaction_dispatch_publishes_runtime_event(

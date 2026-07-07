@@ -2845,6 +2845,7 @@ class CommsPrimitives:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
+        team_id: int | None = None,
     ) -> dict[str, Any]:
         """Send an assistant-owned Unify inbox message to one contact.
 
@@ -2856,9 +2857,15 @@ class CommsPrimitives:
 
         ``contact_id`` must be the integer id of an existing contact record.
         Shared-team routing tokens such as ``team:80`` are for memory and
-        task destinations only; they are not valid here. To notify people who
-        collaborate in a shared team, message each member's contact id
-        individually. There is no comms primitive that posts to a team channel.
+        task destinations only; they are not valid here.
+
+        Team group chat: when an inbound Unify message carries a ``team_id``
+        in its context, it was posted in that team's group chat, which every
+        team member (human and AI) can read — like a large email CC chain.
+        To reply IN THAT ROOM, pass the same ``team_id`` here; the message is
+        then visible to the whole team. Without ``team_id`` the reply goes to
+        the contact's private 1:1 thread instead. Team chat replies do not
+        support attachments.
 
         Parameters
         ----------
@@ -2868,6 +2875,9 @@ class CommsPrimitives:
             Integer contact id for the recipient. Not a ``team:<id>`` token.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment to upload and include.
+        team_id : int | None, optional
+            Post into this team's group chat instead of the 1:1 thread. Use
+            the ``team_id`` from the inbound message context.
 
         Returns
         -------
@@ -2877,6 +2887,11 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if team_id is not None and attachment_filepath:
+            return {
+                "error": "Team group-chat messages do not support attachments. "
+                "Send the attachment to individual contacts instead.",
+            }
         offline_reservation, offline_response = self._reserve_offline_operation(
             method_name="send_unify_message",
             medium=Medium.UNIFY_MESSAGE,
@@ -3024,6 +3039,7 @@ class CommsPrimitives:
             content=content,
             contact_id=contact_id,
             attachment=attachment,
+            team_id=team_id,
         )
         if response.get("success"):
             fresh_contact = self._get_contact(contact_id=contact_id) or contact or {}
