@@ -810,6 +810,88 @@ def _build_filesystem_context() -> str:
     """).strip()
 
 
+# Repos snapshotted into the hosted runtime image for self-reference.
+# The unify runtime source itself is importable and lives at the package root.
+_SYSTEM_SOURCES_ROOT = "/opt/system-sources"
+_SYSTEM_SOURCE_DESCRIPTIONS = {
+    "orchestra": "Backend API + Postgres: users, projects, contexts, logging, assistants, billing.",
+    "console": "Next.js web Console: dashboards, assistant management, onboarding UI.",
+    "unify-deploy": "Hosted comms (phone/SMS/email/WhatsApp), adapters, deployment infra, self-host stack.",
+    "docs": "User-facing documentation source (the pages served at docs.unify.ai).",
+}
+
+
+def _build_system_self_knowledge() -> str:
+    """Teach the actor where authoritative platform knowledge lives.
+
+    The section is assembled from the live filesystem: the runtime source
+    root always exists (it is the running code), while the read-only
+    platform source snapshots under ``/opt/system-sources`` are only baked
+    into the hosted image and are omitted when absent (self-host, local).
+    """
+    from pathlib import Path
+
+    import unify as _unify_pkg
+
+    runtime_root = Path(_unify_pkg.__file__).resolve().parent.parent
+    rows = [
+        "|----------|----------|",
+        f"| `{runtime_root}` | The running assistant runtime (`unify`) — this exact "
+        "code is what you are executing right now, so it can never be stale. |",
+    ]
+    sources_root = Path(_SYSTEM_SOURCES_ROOT)
+    grep_example_root = runtime_root
+    for name, description in _SYSTEM_SOURCE_DESCRIPTIONS.items():
+        path = sources_root / name
+        if path.is_dir():
+            rows.append(f"| `{path}` | {description} |")
+            if name == "orchestra":
+                grep_example_root = path
+    source_table = "\n        ".join(rows)
+
+    return textwrap.dedent(f"""
+        ### Platform Self-Knowledge
+
+        You are part of the Unify assistant platform.  When the user asks
+        whether something is possible, how a feature works, why the system
+        behaved a certain way, or any open-ended question about your own
+        capabilities, you have two authoritative resources — do not guess
+        and do not say "I don't know" before consulting them.
+
+        **1. Product documentation (always current).**  The full user-facing
+        docs are served at https://docs.unify.ai — fetch
+        https://docs.unify.ai/llms.txt for the page index, and append `.md`
+        to any page URL for clean markdown.  Retrieve pages with
+        `primitives.web`.  Prefer the docs for "what can you do" and
+        "how do I use X" questions: they are written for users and always
+        reflect the live deployment.
+
+        **2. Platform source code (ground truth).**  Read-only source trees
+        are available on the **`local` execution surface only**:
+
+        | Location | Contents |
+        {source_table}
+
+        Grep and read these with shell or Python in `execute_code` (e.g.
+        `grep -rn "pattern" {grep_example_root}`).  Use the source when
+        the docs are silent or you need precise behavior: exact limits,
+        edge cases, supported providers, wire formats.
+
+        **Non-negotiable confidentiality rules.**  The source trees are
+        proprietary and are provided for your understanding only:
+
+        - Never reproduce source files or verbatim code excerpts to the
+          user, over any channel.
+        - Never copy anything from these trees into `~/Unity/Local`,
+          `Outputs/`, attachments, or any synced or user-visible location.
+        - Never read these trees from the assistant-desktop or user-desktop
+          surfaces; they exist only on the `local` surface.
+        - Answer in your own words, describing behavior and capabilities at
+          the level a user needs.  Summaries, explanations, and "yes/no with
+          caveats" are always fine; file contents are not.
+    """).strip()
+
+
 # ---------------------------------------------------------------------------
 # Private helpers with real logic
 # ---------------------------------------------------------------------------
@@ -987,6 +1069,7 @@ def build_code_act_prompt(
             )
 
         parts.append(_build_filesystem_context())
+        parts.append(_build_system_self_knowledge())
 
         primary_names = [
             "execute_function",
