@@ -420,6 +420,64 @@ def _get_or_create_unknown_contact(
             return None
 
 
+def _get_or_create_team_chat_sender_contact(
+    sender_name: str,
+    sender_email: str,
+) -> dict | None:
+    """Resolve a team-chat sender to a contact, provisioning one if needed.
+
+    Team group-chat fan-out can carry messages from senders the receiving
+    assistant has never talked to: another member's assistant, or an org
+    member whose contact row was never provisioned. Teammates are known,
+    trusted collaborators — unlike arbitrary unknown inbound senders — so
+    resolution is not gated by the blacklist-check flag and the created
+    contact is a normal responsive system contact.
+    """
+    if not sender_email:
+        return None
+
+    with _unknown_contact_lock:
+        try:
+            from unify.manager_registry import ManagerRegistry
+
+            cm = ManagerRegistry.get_contact_manager()
+            if cm is None:
+                return None
+
+            result = cm.filter_contacts(
+                filter=f"email_address == '{sender_email}'",
+                limit=1,
+            )
+            existing = result.get("contacts", [])
+            if existing:
+                contact = existing[0]
+                return (
+                    contact.model_dump() if hasattr(contact, "model_dump") else contact
+                )
+
+            name_parts = (sender_name or "").strip().split(" ", 1)
+            outcome = cm._create_contact(
+                first_name=name_parts[0] or None,
+                surname=name_parts[1] if len(name_parts) > 1 else None,
+                email_address=sender_email,
+                should_respond=True,
+                response_policy=(
+                    "Teammate in a shared team chat. Use normal judgement when "
+                    "deciding whether their messages need a reply."
+                ),
+                is_system=True,
+            )
+            new_contact_id = outcome["details"]["contact_id"]
+            contact_info = cm.get_contact_info(new_contact_id)
+            return contact_info.get(new_contact_id)
+        except Exception as e:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Error resolving team chat sender "
+                f"{sender_email!r}: {e}",
+            )
+            return None
+
+
 def _lookup_known_contact(medium: str, contact_detail: str) -> dict | None:
     """Resolve a sender to an existing contact via the live ContactManager.
 
@@ -1105,14 +1163,18 @@ class CommsManager:
                             None,
                         )
                     # Team chat fan-out: the sender may be another org member
-                    # rather than this assistant's owner, in which case the
-                    # adapters layer cannot resolve a per-assistant contact id.
-                    # Resolve the sender against the Contacts table by email —
-                    # the same identity org-member contacts are stored under.
+                    # or a fellow team assistant rather than this assistant's
+                    # owner, in which case the adapters layer cannot resolve a
+                    # per-assistant contact id. Resolve the sender by email —
+                    # the same identity org-member contacts are stored under —
+                    # provisioning a teammate contact on first message.
                     if contact is None and team_id and event.get("sender_email"):
                         contact = _lookup_known_contact(
                             "email",
                             event["sender_email"],
+                        ) or _get_or_create_team_chat_sender_contact(
+                            str(event.get("sender_name") or ""),
+                            str(event.get("sender_email") or ""),
                         )
                     if contact is None:
                         LOGGER.error(
