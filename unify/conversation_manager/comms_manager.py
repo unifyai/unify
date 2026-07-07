@@ -420,60 +420,85 @@ def _get_or_create_unknown_contact(
             return None
 
 
+def _filter_single_contact(cm, contact_filter: str) -> dict | None:
+    """Return one contact matching a filter, or None (errors swallowed)."""
+    try:
+        result = cm.filter_contacts(filter=contact_filter, limit=1)
+    except Exception:
+        # Filters on custom columns (e.g. agent_id) fail before the column
+        # exists; treat as "not found".
+        return None
+    contacts = result.get("contacts", [])
+    if not contacts:
+        return None
+    contact = contacts[0]
+    return contact.model_dump() if hasattr(contact, "model_dump") else contact
+
+
 def _get_or_create_team_chat_sender_contact(
     sender_name: str,
     sender_email: str,
+    sender_assistant_id: int | str | None = None,
 ) -> dict | None:
     """Resolve a team-chat sender to a contact, provisioning one if needed.
 
     Team group-chat fan-out can carry messages from senders the receiving
     assistant has never talked to: another member's assistant, or an org
-    member whose contact row was never provisioned. Teammates are known,
-    trusted collaborators — unlike arbitrary unknown inbound senders — so
-    resolution is not gated by the blacklist-check flag and the created
-    contact is a normal responsive system contact.
+    member whose contact row was never provisioned. Assistant senders are
+    keyed on their stable ``agent_id`` (provisioned into teammate contacts at
+    startup), so resolution works even when the sender has no provisioned
+    email; email is the fallback identity. Teammates are known, trusted
+    collaborators — unlike arbitrary unknown inbound senders — so resolution
+    is not gated by the blacklist-check flag and the created contact is a
+    normal responsive system contact.
     """
-    if not sender_email:
+    if not sender_email and sender_assistant_id is None:
         return None
 
     with _unknown_contact_lock:
         try:
             from unify.manager_registry import ManagerRegistry
+            from unify.contact_manager.system_contacts import (
+                TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+            )
 
             cm = ManagerRegistry.get_contact_manager()
             if cm is None:
                 return None
 
-            result = cm.filter_contacts(
-                filter=f"email_address == '{sender_email}'",
-                limit=1,
-            )
-            existing = result.get("contacts", [])
-            if existing:
-                contact = existing[0]
-                return (
-                    contact.model_dump() if hasattr(contact, "model_dump") else contact
+            contact = None
+            if sender_assistant_id is not None:
+                contact = _filter_single_contact(
+                    cm,
+                    f"agent_id == '{sender_assistant_id}'",
                 )
+            if contact is None and sender_email:
+                contact = _filter_single_contact(
+                    cm,
+                    f"email_address == '{sender_email}'",
+                )
+            if contact is not None:
+                return contact
 
             name_parts = (sender_name or "").strip().split(" ", 1)
-            outcome = cm._create_contact(
-                first_name=name_parts[0] or None,
-                surname=name_parts[1] if len(name_parts) > 1 else None,
-                email_address=sender_email,
-                should_respond=True,
-                response_policy=(
-                    "Teammate in a shared team chat. Use normal judgement when "
-                    "deciding whether their messages need a reply."
-                ),
-                is_system=True,
-            )
+            create_kwargs = {
+                "first_name": name_parts[0] or None,
+                "surname": name_parts[1] if len(name_parts) > 1 else None,
+                "email_address": sender_email or None,
+                "should_respond": True,
+                "response_policy": TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+                "is_system": True,
+            }
+            if sender_assistant_id is not None:
+                create_kwargs["agent_id"] = str(sender_assistant_id)
+            outcome = cm._create_contact(**create_kwargs)
             new_contact_id = outcome["details"]["contact_id"]
             contact_info = cm.get_contact_info(new_contact_id)
             return contact_info.get(new_contact_id)
         except Exception as e:
             LOGGER.error(
                 f"{DEFAULT_ICON} Error resolving team chat sender "
-                f"{sender_email!r}: {e}",
+                f"(email={sender_email!r}, assistant={sender_assistant_id!r}): {e}",
             )
             return None
 
@@ -1165,16 +1190,17 @@ class CommsManager:
                     # Team chat fan-out: the sender may be another org member
                     # or a fellow team assistant rather than this assistant's
                     # owner, in which case the adapters layer cannot resolve a
-                    # per-assistant contact id. Resolve the sender by email —
-                    # the same identity org-member contacts are stored under —
-                    # provisioning a teammate contact on first message.
-                    if contact is None and team_id and event.get("sender_email"):
-                        contact = _lookup_known_contact(
-                            "email",
-                            event["sender_email"],
-                        ) or _get_or_create_team_chat_sender_contact(
+                    # per-assistant contact id. Assistant senders resolve by
+                    # their stable agent_id (teammate contacts are provisioned
+                    # at startup); humans resolve by email — the identity
+                    # org-member contacts are stored under. Either way a
+                    # teammate contact is provisioned on first message if the
+                    # startup sync has not covered the sender yet.
+                    if contact is None and team_id:
+                        contact = _get_or_create_team_chat_sender_contact(
                             str(event.get("sender_name") or ""),
                             str(event.get("sender_email") or ""),
+                            event.get("sender_assistant_id"),
                         )
                     if contact is None:
                         LOGGER.error(

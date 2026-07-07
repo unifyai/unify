@@ -45,6 +45,7 @@ from .system_contacts import (
     provision_assistant_contact as _sys_provision_assistant_contact,
     provision_user_contact as _sys_provision_user_contact,
     provision_org_member_contacts as _sys_provision_org_member_contacts,
+    provision_team_assistant_contacts as _sys_provision_team_assistant_contacts,
 )
 from .custom_columns import (
     create_custom_column as _cc_create,
@@ -1588,6 +1589,9 @@ class ContactManager(BaseContactManager):
 
         # Sync org members (returns early if not org API key)
         _sys_provision_org_member_contacts(self)
+
+        # Sync teammate assistants (returns early when not on any team)
+        _sys_provision_team_assistant_contacts(self)
 
     # Validation / sanitization
     def _allowed_fields(self) -> list[str]:
