@@ -38,3 +38,24 @@ class Secret(AuthoredRow):
         default_factory=list,
         description="Vector embedding of the description for semantic search.",
     )
+    custom_key: str | None = Field(
+        default=None,
+        description="Stable source key for deployment-defined secrets.",
+    )
+    custom_hash: str | None = Field(
+        default=None,
+        description="Content hash for deployment-defined secrets.",
+    )
+
+
+class SecretMeta(AuthoredRow):
+    """Metadata record for source-defined custom secret sync state."""
+
+    meta_id: int = Field(
+        1,
+        description="Fixed ID for the single metadata row.",
+    )
+    custom_secrets_hash: str = Field(
+        "",
+        description="Hash of all source-defined custom secret entries.",
+    )
