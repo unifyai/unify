@@ -25,7 +25,10 @@ from unify.integrations.embedding_text import (
     humanize_auth_modes,
     normalize_embedding_text,
 )
-from unify.integrations.provider_resolution import resolve_public_catalog_apps
+from unify.integrations.provider_resolution import (
+    resolve_public_catalog_apps,
+    resolve_public_catalog_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -708,7 +711,9 @@ def list_catalog_tools(
             project=project,
         ),
     )
-    return [dict(row.entries) for row in rows or []]
+    return resolve_public_catalog_tools(
+        [dict(row.entries) for row in rows or []],
+    )
 
 
 __all__ = [
