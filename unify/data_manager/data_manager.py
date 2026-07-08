@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from contextlib import contextmanager
+from threading import RLock
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+
+import unisdk
 
 
 from unify.data_manager.base import BaseDataManager
@@ -71,10 +75,16 @@ from unify.common.context_registry import (
     ContextRegistry,
     TableContext,
 )
+from unify.common.log_utils import create_logs as unity_create_logs
+from unify.common.model_to_fields import model_to_fields
 from unify.common.tool_outcome import ToolErrorException
+from unify.data_manager.custom_data import compute_custom_data_hash
+from unify.data_manager.types.meta import DataMeta
 from unify.session_details import SESSION_DETAILS
 
 logger = logging.getLogger(__name__)
+
+DATA_META_TABLE = "Data/Meta"
 
 
 # Known absolute prefixes that indicate a path should not be resolved
@@ -114,12 +124,23 @@ class DataManager(BaseDataManager):
                 unique_keys=None,
                 auto_counting=None,
             ),
+            TableContext(
+                name=DATA_META_TABLE,
+                description="Metadata for source-defined custom data sync state.",
+                fields=model_to_fields(DataMeta),
+                unique_keys={"meta_id": "int"},
+            ),
         ]
 
     def __init__(self) -> None:
         """Initialize DataManager with context registration."""
         super().__init__()
         self._base_ctx = ContextRegistry.get_context(self, "Data")
+        self._meta_ctx = ContextRegistry.get_context(self, DATA_META_TABLE)
+        self._custom_data_synced = False
+        self._custom_data_synced_contexts: set[str] = set()
+        self._destination_context_lock = RLock()
+        self._destination_write_scoped = False
 
         logger.debug("DataManager initialized with base context: %s", self._base_ctx)
 
@@ -1241,3 +1262,352 @@ class DataManager(BaseDataManager):
             async_embeddings=async_embeddings,
         )
         return len(row_ids) if row_ids else 0
+
+    def _meta_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Data/Meta context."""
+        root_context = ContextRegistry.write_root(
+            self,
+            DATA_META_TABLE,
+            destination=destination,
+        )
+        return f"{root_context.strip('/')}/{DATA_META_TABLE}"
+
+    @contextmanager
+    def _temporary_meta_context(self, context: str):
+        """Temporarily bind meta storage to a resolved destination context."""
+        with self._destination_context_lock:
+            original = self._meta_ctx
+            was_write_scoped = self._destination_write_scoped
+            self._meta_ctx = context
+            self._destination_write_scoped = True
+            try:
+                yield
+            finally:
+                self._meta_ctx = original
+                self._destination_write_scoped = was_write_scoped
+
+    def _sync_destination_contexts(
+        self,
+        destination: str | None,
+    ) -> tuple[str, bool]:
+        """Return destination-scoped meta context and personal flag."""
+        meta_context = self._meta_context_for_destination(destination)
+        return meta_context, destination in (None, "personal")
+
+    def _get_stored_custom_data_hash(self) -> str:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                return logs[0].entries.get("custom_data_hash", "") or ""
+        except Exception as exc:
+            logger.warning("Failed to read custom data hash: %s", exc)
+        return ""
+
+    def _store_custom_data_hash(self, hash_value: str) -> None:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={"custom_data_hash": hash_value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, "custom_data_hash": hash_value}],
+                    stamp_authoring=True,
+                )
+        except Exception as exc:
+            logger.warning("Failed to store custom data hash: %s", exc)
+
+    def _table_exists(
+        self,
+        context: str,
+        destination: str | None,
+    ) -> bool:
+        try:
+            resolved = self._resolve_context_for_write(
+                context,
+                destination=destination,
+            )
+            get_table_impl(resolved)
+            return True
+        except Exception:
+            return False
+
+    def _unique_key_for_table(
+        self,
+        context: str,
+        destination: str | None,
+    ) -> str:
+        resolved = self._first_successful_read_context(context)
+        ctx_info = get_table_impl(resolved)
+        keys = ctx_info.get("unique_keys")
+        if isinstance(keys, list) and keys:
+            return keys[0]
+        if isinstance(keys, str):
+            return keys
+        if isinstance(keys, dict) and keys:
+            return next(iter(keys))
+        return "row_id"
+
+    def _get_custom_rows_for_table(
+        self,
+        context: str,
+        destination: str | None,
+    ) -> Dict[str, Dict[str, Any]]:
+        resolved = self._resolve_context_for_write(
+            context,
+            destination=destination,
+        )
+        rows = filter_impl(
+            resolved,
+            filter="custom_hash != None",
+            limit=1000,
+        )
+        unique_key = self._unique_key_for_table(context, destination)
+        indexed: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            custom_key = row.get("custom_key")
+            if not custom_key:
+                continue
+            indexed[str(custom_key)] = row
+            if unique_key in row:
+                indexed[str(custom_key)][unique_key] = row[unique_key]
+        return indexed
+
+    def _find_unmanaged_row_by_seed(
+        self,
+        *,
+        context: str,
+        seed_key: str,
+        seed_value: str,
+        destination: str | None,
+    ) -> Optional[Dict[str, Any]]:
+        resolved = self._resolve_context_for_write(
+            context,
+            destination=destination,
+        )
+        rows = filter_impl(
+            resolved,
+            filter=f"{seed_key} == '{seed_value}' and custom_hash == None",
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    def _insert_custom_row(
+        self,
+        *,
+        context: str,
+        row_data: Dict[str, Any],
+        destination: str | None,
+    ) -> None:
+        unique_key = self._unique_key_for_table(context, destination)
+        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        self.insert_rows(context, [clean], destination=destination)
+
+    def _update_custom_row(
+        self,
+        *,
+        context: str,
+        row_id: int,
+        row_data: Dict[str, Any],
+        destination: str | None,
+    ) -> None:
+        unique_key = self._unique_key_for_table(context, destination)
+        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        self.update_rows(
+            context,
+            updates=clean,
+            filter=f"{unique_key} == {int(row_id)}",
+            destination=destination,
+        )
+
+    def _delete_custom_row_by_key(
+        self,
+        *,
+        context: str,
+        custom_key: str,
+        destination: str | None,
+    ) -> None:
+        self.delete_rows(
+            context,
+            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            destination=destination,
+        )
+
+    def sync_custom_data(
+        self,
+        *,
+        source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
+    ) -> bool:
+        """Ensure deployment-defined data rows match source definitions."""
+        meta_context, is_personal = self._sync_destination_contexts(destination)
+        with self._temporary_meta_context(meta_context):
+            if source_tables is None:
+                source_tables = {}
+            expected_hash = compute_custom_data_hash(
+                source_tables=source_tables,
+            )
+            current_hash = self._get_stored_custom_data_hash()
+            already_synced = (
+                self._custom_data_synced
+                if is_personal
+                else meta_context in self._custom_data_synced_contexts
+            )
+
+            if already_synced and current_hash == expected_hash:
+                return False
+
+            if current_hash == expected_hash:
+                logger.debug("Custom data hash matches, skipping sync")
+                if is_personal:
+                    self._custom_data_synced = True
+                else:
+                    self._custom_data_synced_contexts.add(meta_context)
+                return False
+
+            logger.info(
+                "Custom data hash mismatch " "(current=%s, expected=%s), syncing...",
+                current_hash,
+                expected_hash,
+            )
+
+            processed_keys_by_context: Dict[str, Set[str]] = {}
+
+            for context, table_spec in source_tables.items():
+                rows = table_spec.get("rows", [])
+                if not rows:
+                    continue
+                seed_key = table_spec.get("seed_key")
+                if not seed_key:
+                    logger.warning(
+                        "Data table %s has no seed_key, skipping",
+                        context,
+                    )
+                    continue
+
+                if not self._table_exists(context, destination):
+                    unique_keys = table_spec.get("unique_keys")
+                    auto_counting = table_spec.get("auto_counting")
+                    self.create_table(
+                        context,
+                        description=table_spec.get("description"),
+                        fields=table_spec.get("fields"),
+                        unique_keys=unique_keys,
+                        auto_counting=auto_counting,
+                        destination=destination,
+                    )
+
+                db_rows = self._get_custom_rows_for_table(context, destination)
+                unique_key = self._unique_key_for_table(context, destination)
+                processed_keys: Set[str] = set()
+                processed_keys_by_context[context] = processed_keys
+
+                for row in rows:
+                    custom_key = str(row.get("custom_key", ""))
+                    if not custom_key:
+                        continue
+                    processed_keys.add(custom_key)
+                    seed_value = str(row.get(seed_key, ""))
+                    row_data = {
+                        k: v for k, v in row.items() if k not in {"destination"}
+                    }
+
+                    if custom_key in db_rows:
+                        db_entry = db_rows[custom_key]
+                        if db_entry.get("custom_hash") != row_data.get("custom_hash"):
+                            logger.info(
+                                "Updating custom data row: %s",
+                                custom_key,
+                            )
+                            self._update_custom_row(
+                                context=context,
+                                row_id=int(db_entry[unique_key]),
+                                row_data=row_data,
+                                destination=destination,
+                            )
+                    else:
+                        unmanaged = self._find_unmanaged_row_by_seed(
+                            context=context,
+                            seed_key=seed_key,
+                            seed_value=seed_value,
+                            destination=destination,
+                        )
+                        if unmanaged is not None:
+                            logger.info(
+                                "Adopting unmanaged data row: %s",
+                                custom_key,
+                            )
+                            self._update_custom_row(
+                                context=context,
+                                row_id=int(unmanaged[unique_key]),
+                                row_data=row_data,
+                                destination=destination,
+                            )
+                        else:
+                            logger.info(
+                                "Inserting custom data row: %s",
+                                custom_key,
+                            )
+                            self._insert_custom_row(
+                                context=context,
+                                row_data=row_data,
+                                destination=destination,
+                            )
+
+            for context in processed_keys_by_context:
+                db_rows = self._get_custom_rows_for_table(context, destination)
+                processed_keys = processed_keys_by_context[context]
+                for custom_key in db_rows:
+                    if custom_key not in processed_keys:
+                        logger.info(
+                            "Deleting removed custom data row: %s",
+                            custom_key,
+                        )
+                        self._delete_custom_row_by_key(
+                            context=context,
+                            custom_key=custom_key,
+                            destination=destination,
+                        )
+
+            self._store_custom_data_hash(expected_hash)
+            if is_personal:
+                self._custom_data_synced = True
+            else:
+                self._custom_data_synced_contexts.add(meta_context)
+            return True
+
+    def sync_custom(
+        self,
+        *,
+        source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        """Sync custom data from pre-collected sources across destinations."""
+        if source_tables is None:
+            source_tables = {}
+
+        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for context, table_spec in source_tables.items():
+            destination = table_spec.get("destination") or "personal"
+            by_destination.setdefault(destination, {})[context] = table_spec
+
+        changed = False
+        for destination, tables in by_destination.items():
+            destination_arg = None if destination == "personal" else destination
+            changed |= self.sync_custom_data(
+                source_tables=tables,
+                destination=destination_arg,
+            )
+        return changed
