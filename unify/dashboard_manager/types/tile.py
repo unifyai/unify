@@ -175,6 +175,14 @@ class TileRecordRow(AuthoredRow):
         default=None,
         description="ISO-8601 last-update timestamp",
     )
+    custom_key: Optional[str] = Field(
+        default=None,
+        description="Stable deployment-defined merge key for custom sync.",
+    )
+    custom_hash: Optional[str] = Field(
+        default=None,
+        description="Hash of deployment-defined tile content for custom sync.",
+    )
 
 
 class TileRecord(TileRecordRow):
