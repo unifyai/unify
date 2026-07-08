@@ -121,6 +121,7 @@ def _project_manifest(
 
     function_dir = root / "functions"
     guidance_dir = root / "guidance"
+    jsonl_path = guidance_dir / "guidance.jsonl"
     return {
         "slug": manifest.slug,
         "label": manifest.name,
@@ -133,7 +134,7 @@ def _project_manifest(
         "function_names": sorted(function_names),
         "guidance_titles": sorted(guidance_titles),
         "function_dir": function_dir if function_dir.is_dir() else None,
-        "guidance_dir": guidance_dir if guidance_dir.is_dir() else None,
+        "guidance_dir": guidance_dir if jsonl_path.is_file() else None,
     }
 
 

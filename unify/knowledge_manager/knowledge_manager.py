@@ -4,7 +4,10 @@ import asyncio
 import uuid
 import unisdk
 import functools
-from typing import Any, Dict, List, Optional, Type, Union, TYPE_CHECKING
+import logging
+from contextlib import contextmanager
+from threading import RLock
+from typing import Any, Dict, List, Optional, Set, Type, Union, TYPE_CHECKING
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -17,7 +20,10 @@ from unify.common.tool_outcome import ToolErrorException, ToolOutcome
 from unify.common.token_utils import count_tokens_per_utf_byte
 from unify.common import token_utils as _tok
 from unify.common.grouping_helpers import build_grouped_dump_payload
-from .types import ColumnType
+from .types import ColumnType, KnowledgeMeta
+from .custom_knowledge import compute_custom_knowledge_hash
+from ..common.model_to_fields import model_to_fields
+from ..common.log_utils import create_logs as unity_create_logs
 from ..common.llm_helpers import (
     methods_to_tool_dict,
     make_request_clarification_tool,
@@ -44,6 +50,8 @@ from ..common.filter_utils import normalize_filter_expr
 from ..events.event_bus import EVENT_BUS, Event
 
 KNOWLEDGE_TABLE = "Knowledge"
+KNOWLEDGE_META_TABLE = "Knowledge/Meta"
+logger = logging.getLogger(__name__)
 KNOWLEDGE_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this knowledge row lives. Pass ``"personal"`` (the default)
     for working notes, private hypotheses, draft research, and any fact tied
@@ -93,6 +101,12 @@ class KnowledgeManager(BaseKnowledgeManager):
             TableContext(
                 name=KNOWLEDGE_TABLE,
                 description="Knowledge base for the assistant.",
+            ),
+            TableContext(
+                name=KNOWLEDGE_META_TABLE,
+                description="Metadata for source-defined custom knowledge sync state.",
+                fields=model_to_fields(KnowledgeMeta),
+                unique_keys={"meta_id": "int"},
             ),
         ]
 
@@ -235,6 +249,11 @@ class KnowledgeManager(BaseKnowledgeManager):
 
         # Lazily-initialized DataManager for delegation
         self.__data_manager: Optional["DataManager"] = None
+        self._meta_ctx = ContextRegistry.get_context(self, KNOWLEDGE_META_TABLE)
+        self._custom_knowledge_synced = False
+        self._custom_knowledge_synced_contexts: set[str] = set()
+        self._destination_context_lock = RLock()
+        self._destination_write_scoped = False
 
     def _knowledge_namespace_for_root(self, root_context: str) -> str:
         """Return the concrete Knowledge namespace under a registry root."""
@@ -2233,6 +2252,336 @@ class KnowledgeManager(BaseKnowledgeManager):
             result_limit=result_limit,
             result_offset=result_offset,
         )
+
+    def _meta_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Knowledge/Meta context."""
+        root_context = ContextRegistry.write_root(
+            self,
+            KNOWLEDGE_META_TABLE,
+            destination=destination,
+        )
+        return f"{root_context.strip('/')}/{KNOWLEDGE_META_TABLE}"
+
+    @contextmanager
+    def _temporary_meta_context(self, context: str):
+        """Temporarily bind meta storage to a resolved destination context."""
+        with self._destination_context_lock:
+            original = self._meta_ctx
+            was_write_scoped = self._destination_write_scoped
+            self._meta_ctx = context
+            self._destination_write_scoped = True
+            try:
+                yield
+            finally:
+                self._meta_ctx = original
+                self._destination_write_scoped = was_write_scoped
+
+    def _sync_destination_contexts(
+        self,
+        destination: str | None,
+    ) -> tuple[str, bool]:
+        """Return destination-scoped meta context and personal flag."""
+        meta_context = self._meta_context_for_destination(destination)
+        return meta_context, destination in (None, "personal")
+
+    def _get_stored_custom_knowledge_hash(self) -> str:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                return logs[0].entries.get("custom_knowledge_hash", "") or ""
+        except Exception as exc:
+            logger.warning("Failed to read custom knowledge hash: %s", exc)
+        return ""
+
+    def _store_custom_knowledge_hash(self, hash_value: str) -> None:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={"custom_knowledge_hash": hash_value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, "custom_knowledge_hash": hash_value}],
+                    stamp_authoring=True,
+                )
+        except Exception as exc:
+            logger.warning("Failed to store custom knowledge hash: %s", exc)
+
+    def _table_exists(self, table: str, destination: str | None) -> bool:
+        namespace = self._knowledge_namespace_for_destination(destination)
+        prefix = f"{namespace}/"
+        ctx_info = self._data_manager.list_tables(
+            prefix=prefix,
+            include_column_info=False,
+        )
+        available = ctx_info.keys() if isinstance(ctx_info, dict) else ctx_info
+        return f"{namespace}/{table}" in available
+
+    def _unique_key_for_table(self, table: str, destination: str | None) -> str:
+        ctx = _storage_ctx_for_table(self, table, destination=destination)
+        ctx_info = self._data_manager.get_table(ctx)
+        keys = ctx_info.get("unique_keys")
+        if isinstance(keys, list) and keys:
+            return keys[0]
+        if isinstance(keys, str):
+            return keys
+        return "row_id"
+
+    def _get_custom_rows_for_table(
+        self,
+        table: str,
+        destination: str | None,
+    ) -> Dict[str, Dict[str, Any]]:
+        ctx = _storage_ctx_for_table(self, table, destination=destination)
+        rows = self._data_manager.filter(
+            ctx,
+            filter="custom_hash != None",
+            limit=1000,
+        )
+        unique_key = self._unique_key_for_table(table, destination)
+        indexed: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            custom_key = row.get("custom_key")
+            if not custom_key:
+                continue
+            indexed[str(custom_key)] = row
+            if unique_key in row:
+                indexed[str(custom_key)][unique_key] = row[unique_key]
+        return indexed
+
+    def _find_unmanaged_row_by_seed(
+        self,
+        *,
+        table: str,
+        seed_key: str,
+        seed_value: str,
+        destination: str | None,
+    ) -> Optional[Dict[str, Any]]:
+        ctx = _storage_ctx_for_table(self, table, destination=destination)
+        rows = self._data_manager.filter(
+            ctx,
+            filter=f"{seed_key} == '{seed_value}' and custom_hash == None",
+            limit=1,
+        )
+        return rows[0] if rows else None
+
+    def _insert_custom_row(
+        self,
+        *,
+        table: str,
+        row_data: Dict[str, Any],
+        destination: str | None,
+    ) -> None:
+        unique_key = self._unique_key_for_table(table, destination)
+        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        self._add_rows(table=table, rows=[clean], destination=destination)
+
+    def _update_custom_row(
+        self,
+        *,
+        table: str,
+        row_id: int,
+        row_data: Dict[str, Any],
+        destination: str | None,
+    ) -> None:
+        unique_key = self._unique_key_for_table(table, destination)
+        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        self._update_rows(
+            table=table,
+            updates={row_id: clean},
+            destination=destination,
+        )
+
+    def _delete_custom_row_by_key(
+        self,
+        *,
+        table: str,
+        custom_key: str,
+        destination: str | None,
+    ) -> None:
+        self._delete_rows(
+            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            tables=[table],
+            destination=destination,
+        )
+
+    def sync_custom_knowledge(
+        self,
+        *,
+        source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
+    ) -> bool:
+        """Ensure deployment-defined knowledge rows match source definitions."""
+        meta_context, is_personal = self._sync_destination_contexts(destination)
+        with self._temporary_meta_context(meta_context):
+            if source_tables is None:
+                source_tables = {}
+            expected_hash = compute_custom_knowledge_hash(
+                source_tables=source_tables,
+            )
+            current_hash = self._get_stored_custom_knowledge_hash()
+            already_synced = (
+                self._custom_knowledge_synced
+                if is_personal
+                else meta_context in self._custom_knowledge_synced_contexts
+            )
+
+            if already_synced and current_hash == expected_hash:
+                return False
+
+            if current_hash == expected_hash:
+                logger.debug("Custom knowledge hash matches, skipping sync")
+                if is_personal:
+                    self._custom_knowledge_synced = True
+                else:
+                    self._custom_knowledge_synced_contexts.add(meta_context)
+                return False
+
+            logger.info(
+                "Custom knowledge hash mismatch "
+                "(current=%s, expected=%s), syncing...",
+                current_hash,
+                expected_hash,
+            )
+
+            processed_keys_by_table: Dict[str, Set[str]] = {}
+
+            for table_name, table_spec in source_tables.items():
+                rows = table_spec.get("rows", [])
+                if not rows:
+                    continue
+                seed_key = table_spec.get("seed_key")
+                if not seed_key:
+                    logger.warning(
+                        "Knowledge table %s has no seed_key, skipping",
+                        table_name,
+                    )
+                    continue
+
+                if not self._table_exists(table_name, destination):
+                    self._create_table(
+                        name=table_name,
+                        description=table_spec.get("description"),
+                        columns=table_spec.get("columns"),
+                        destination=destination,
+                    )
+
+                db_rows = self._get_custom_rows_for_table(table_name, destination)
+                unique_key = self._unique_key_for_table(table_name, destination)
+                processed_keys: Set[str] = set()
+                processed_keys_by_table[table_name] = processed_keys
+
+                for row in rows:
+                    custom_key = str(row.get("custom_key", ""))
+                    if not custom_key:
+                        continue
+                    processed_keys.add(custom_key)
+                    seed_value = str(row.get(seed_key, ""))
+                    row_data = {
+                        k: v for k, v in row.items() if k not in {"destination"}
+                    }
+
+                    if custom_key in db_rows:
+                        db_entry = db_rows[custom_key]
+                        if db_entry.get("custom_hash") != row_data.get("custom_hash"):
+                            logger.info(
+                                "Updating custom knowledge row: %s",
+                                custom_key,
+                            )
+                            self._update_custom_row(
+                                table=table_name,
+                                row_id=int(db_entry[unique_key]),
+                                row_data=row_data,
+                                destination=destination,
+                            )
+                    else:
+                        unmanaged = self._find_unmanaged_row_by_seed(
+                            table=table_name,
+                            seed_key=seed_key,
+                            seed_value=seed_value,
+                            destination=destination,
+                        )
+                        if unmanaged is not None:
+                            logger.info(
+                                "Adopting unmanaged knowledge row: %s",
+                                custom_key,
+                            )
+                            self._update_custom_row(
+                                table=table_name,
+                                row_id=int(unmanaged[unique_key]),
+                                row_data=row_data,
+                                destination=destination,
+                            )
+                        else:
+                            logger.info(
+                                "Inserting custom knowledge row: %s",
+                                custom_key,
+                            )
+                            self._insert_custom_row(
+                                table=table_name,
+                                row_data=row_data,
+                                destination=destination,
+                            )
+
+            for table_name, db_rows in (
+                (name, self._get_custom_rows_for_table(name, destination))
+                for name in processed_keys_by_table
+            ):
+                processed_keys = processed_keys_by_table[table_name]
+                for custom_key in db_rows:
+                    if custom_key not in processed_keys:
+                        logger.info(
+                            "Deleting removed custom knowledge row: %s",
+                            custom_key,
+                        )
+                        self._delete_custom_row_by_key(
+                            table=table_name,
+                            custom_key=custom_key,
+                            destination=destination,
+                        )
+
+            self._store_custom_knowledge_hash(expected_hash)
+            if is_personal:
+                self._custom_knowledge_synced = True
+            else:
+                self._custom_knowledge_synced_contexts.add(meta_context)
+            return True
+
+    def sync_custom(
+        self,
+        *,
+        source_tables: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        """Sync custom knowledge from pre-collected sources across destinations."""
+        if source_tables is None:
+            source_tables = {}
+
+        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for table_name, table_spec in source_tables.items():
+            destination = table_spec.get("destination") or "personal"
+            by_destination.setdefault(destination, {})[table_name] = table_spec
+
+        changed = False
+        for destination, tables in by_destination.items():
+            destination_arg = None if destination == "personal" else destination
+            changed |= self.sync_custom_knowledge(
+                source_tables=tables,
+                destination=destination_arg,
+            )
+        return changed
 
 
 def _append_destination_guidance(method_name: str) -> None:

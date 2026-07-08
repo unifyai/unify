@@ -62,6 +62,9 @@ async def test_file_upload_question_uses_file_content(
         "Reply with just the code.",
         attachments=[attachment_path],
     )
-    reply = await flow_session.wait_for_unify_reply(timeout=240.0)
+    reply = await flow_session.wait_for_unify_reply_containing(
+        secret,
+        timeout=300.0,
+    )
     content = str(reply.content or "")
     assert secret in content

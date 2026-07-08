@@ -3102,11 +3102,43 @@ class FunctionManager(BaseFunctionManager):
             limit=limit,
         )
 
-        active_app_slugs = {
-            normalize_app_slug(connection["canonical_app_slug"])
-            for connection in active_connections
-            if isinstance(connection.get("canonical_app_slug"), str)
-        }
+        connected_backend_by_app: dict[str, str] = {}
+        for connection in active_connections:
+            raw_conn_app = connection.get("canonical_app_slug")
+            conn_app = (
+                normalize_app_slug(raw_conn_app)
+                if isinstance(raw_conn_app, str)
+                else raw_conn_app
+            )
+            if not isinstance(conn_app, str) or not conn_app:
+                continue
+            backend = str(connection.get("backend_id") or "provider")
+            existing = connected_backend_by_app.get(conn_app)
+            if existing and existing != backend:
+                from unify.integrations.provider_resolution import (
+                    PREFERRED_BACKEND_ORDER,
+                )
+
+                def _rank(value: str) -> int:
+                    try:
+                        return PREFERRED_BACKEND_ORDER.index(value)
+                    except ValueError:
+                        return len(PREFERRED_BACKEND_ORDER)
+
+                if _rank(backend) < _rank(existing):
+                    connected_backend_by_app[conn_app] = backend
+                logger.warning(
+                    "Multiple connected backends for app_slug=%s (%s, %s); "
+                    "materializing preferred backend=%s",
+                    conn_app,
+                    existing,
+                    backend,
+                    connected_backend_by_app[conn_app],
+                )
+            else:
+                connected_backend_by_app[conn_app] = backend
+
+        active_app_slugs = set(connected_backend_by_app)
         rows_by_key: dict[str, list[Dict[str, Any]]] = {}
         key_to_app: dict[str, tuple[str | None, str]] = {}
         for item in tools_response or []:
@@ -3132,6 +3164,9 @@ class FunctionManager(BaseFunctionManager):
             if not item_app or item_app not in active_app_slugs:
                 continue
             backend_id = integration_backend_id(row) or "provider"
+            expected_backend = connected_backend_by_app.get(item_app)
+            if expected_backend and backend_id != expected_backend:
+                continue
             key = self._integration_hash_key(backend_id=backend_id, app_slug=item_app)
             rows_by_key.setdefault(key, []).append(row)
             key_to_app[key] = (backend_id, item_app)

@@ -262,8 +262,18 @@ def _build_task_machine_context_name(
     user_context: str | None = None,
     assistant_context: str | None = None,
 ) -> str:
-    """Return one assistant-scoped task-machine context path."""
+    """Return one assistant-scoped task-machine context path.
 
+    Team-owned assistants have no ``{user}/{agent}`` root: their task-machine
+    surfaces live on the owning team's shared Tasks tree, matching where
+    team task runs are already created and updated.
+    """
+
+    if user_context is None and SESSION_DETAILS.team_owned:
+        return (
+            f"Teams/{SESSION_DETAILS.owner_team_id}/"
+            f"{TASKS_CONTEXT_NAME}/{leaf_name}"
+        )
     resolved_user_context = _coerce_str(user_context) or SESSION_DETAILS.user_context
     resolved_assistant_context = (
         _coerce_str(assistant_context) or SESSION_DETAILS.assistant_context

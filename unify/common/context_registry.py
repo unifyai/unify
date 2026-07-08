@@ -63,13 +63,18 @@ class ContextRegistry:
     def _owner_for_root(root_identity: str) -> tuple[Optional[str], Optional[int]]:
         """Map a root identity to the explicit ownership of contexts under it.
 
-        ``Teams/{team_id}`` roots are team-owned; the personal root is owned by
-        the active assistant. Returns ``(None, None)`` when the owner cannot be
-        stated confidently (e.g. an unassigned container with no agent_id), so
-        the backend falls back to inferring it from the context name.
+        ``Teams/{team_id}`` roots are team-owned; a team-owned assistant's
+        base root (``Teams/{owner}/Assistants/{agent}``) is owned by its team;
+        the personal root is owned by the active assistant. Returns
+        ``(None, None)`` when the owner cannot be stated confidently (e.g. an
+        unassigned container with no agent_id), so the backend falls back to
+        inferring it from the context name.
         """
         if root_identity.startswith(TEAM_CONTEXT_PREFIX):
-            return "team", int(root_identity[len(TEAM_CONTEXT_PREFIX) :])
+            team_segment = root_identity[len(TEAM_CONTEXT_PREFIX) :].split("/", 1)[0]
+            return "team", int(team_segment)
+        if SESSION_DETAILS.team_owned:
+            return "team", int(SESSION_DETAILS.owner_team_id)
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
             return None, None
@@ -162,12 +167,22 @@ class ContextRegistry:
         return f"{TEAM_DESTINATION_PREFIX}{team_id}"
 
     @classmethod
+    def _home_shared_team_id(cls) -> int | None:
+        """Owning team id when the assistant's home is a team root."""
+        owner_team_id = SESSION_DETAILS.owner_team_id
+        return int(owner_team_id) if owner_team_id is not None else None
+
+    @classmethod
     def implicit_shared_destinations(cls) -> list[str | None]:
         """Return implicit write destinations for transcript/image fanout."""
-        team_ids = sorted({int(team_id) for team_id in SESSION_DETAILS.team_ids})
+        team_ids = {int(team_id) for team_id in SESSION_DETAILS.team_ids}
+        owner_team_id = cls._home_shared_team_id()
+        if owner_team_id is not None:
+            # The owning team is always reachable, membership row or not.
+            team_ids.add(owner_team_id)
         if not team_ids:
             return [None]
-        return [f"{TEAM_DESTINATION_PREFIX}{team_id}" for team_id in team_ids]
+        return [f"{TEAM_DESTINATION_PREFIX}{team_id}" for team_id in sorted(team_ids)]
 
     @classmethod
     def _parse_destination(
@@ -185,7 +200,15 @@ class ContextRegistry:
                 destination if isinstance(destination, str) else None,
                 str(exc),
             )
+        owner_team_id = cls._home_shared_team_id()
         if canonical_destination is None:
+            # A team-owned assistant's home for shared tables is its owning
+            # team's root; there is no personal root to fall back to. Its
+            # non-shared runtime tables live under the base subtree
+            # (Teams/{owner}/Assistants/{agent}).
+            if owner_team_id is not None and cls._is_shared_scoped(table_name):
+                root_identity = cls._team_root_identity(owner_team_id)
+                return root_identity, root_identity
             return PERSONAL_ROOT_IDENTITY, cls._personal_root(manager_name, table_name)
 
         if not cls._is_shared_scoped(table_name):
@@ -196,7 +219,7 @@ class ContextRegistry:
             )
 
         team_id = int(canonical_destination[len(TEAM_DESTINATION_PREFIX) :])
-        if team_id not in SESSION_DETAILS.team_ids:
+        if team_id not in SESSION_DETAILS.team_ids and team_id != owner_team_id:
             raise cls._invalid_destination(
                 table_name,
                 canonical_destination,
@@ -353,6 +376,11 @@ class ContextRegistry:
     def forget_departed_team_roots(cls, team_ids: list[int]) -> None:
         """Drop cached entries for shared roots the assistant can no longer reach."""
         reachable_roots = {cls._team_root_identity(team_id) for team_id in team_ids}
+        owner_team_id = cls._home_shared_team_id()
+        if owner_team_id is not None:
+            # The owning team's root is the assistant's home; it is always
+            # reachable regardless of membership refresh payloads.
+            reachable_roots.add(cls._team_root_identity(owner_team_id))
         for key in list(cls._registry):
             root_identity = key[2]
             if root_identity.startswith(TEAM_CONTEXT_PREFIX) and (
@@ -424,15 +452,40 @@ class ContextRegistry:
         manager: Union[BaseStateManager, Type[BaseStateManager]],
         table_name: str,
     ) -> list[str]:
-        """Resolve and provision the ordered roots a read should fan out across."""
+        """Resolve and provision the ordered roots a read should fan out across.
+
+        User-owned assistants read their personal root first, then every
+        member team's root for shared tables. Team-owned assistants have no
+        personal root: shared tables read the owning team's root first, then
+        other member teams; non-shared runtime tables read only the base
+        subtree (``Teams/{owner}/Assistants/{agent}``).
+        """
         manager_name = cls._get_manager_name(manager)
-        personal_root = cls._personal_root(manager_name, table_name)
-        roots = [(PERSONAL_ROOT_IDENTITY, personal_root)]
+        owner_team_id = cls._home_shared_team_id()
+        roots: list[tuple[str, str]]
         if cls._is_shared_scoped(table_name):
-            roots.extend(
-                (cls._team_root_identity(team_id), cls._team_root_identity(team_id))
-                for team_id in sorted(set(SESSION_DETAILS.team_ids))
-            )
+            if owner_team_id is not None:
+                team_ids = [owner_team_id] + sorted(
+                    {int(team_id) for team_id in SESSION_DETAILS.team_ids}
+                    - {owner_team_id},
+                )
+                roots = [
+                    (cls._team_root_identity(team_id), cls._team_root_identity(team_id))
+                    for team_id in team_ids
+                ]
+            else:
+                personal_root = cls._personal_root(manager_name, table_name)
+                roots = [(PERSONAL_ROOT_IDENTITY, personal_root)]
+                roots.extend(
+                    (
+                        cls._team_root_identity(team_id),
+                        cls._team_root_identity(team_id),
+                    )
+                    for team_id in sorted(set(SESSION_DETAILS.team_ids))
+                )
+        else:
+            personal_root = cls._personal_root(manager_name, table_name)
+            roots = [(PERSONAL_ROOT_IDENTITY, personal_root)]
 
         for root_identity, root_context in roots:
             cls._ensure_context(manager, table_name, root_identity, root_context)
@@ -444,13 +497,22 @@ class ContextRegistry:
         manager: Union[BaseStateManager, Type[BaseStateManager]],
         ctx_name: str,
     ) -> Optional[str]:
-        """Get the context from the registry, creating it if it doesn't exist."""
+        """Get the manager's home context, creating it if it doesn't exist.
+
+        Routes through the same home-resolution as writes with no explicit
+        destination, so a team-owned assistant's shared tables resolve to the
+        owning team's root rather than a personal one.
+        """
         manager_name = cls._get_manager_name(manager)
-        root_context = cls._personal_root(manager_name, ctx_name)
+        root_identity, root_context = cls._parse_destination(
+            manager_name,
+            ctx_name,
+            None,
+        )
         return cls._ensure_context(
             manager,
             ctx_name,
-            PERSONAL_ROOT_IDENTITY,
+            root_identity,
             root_context,
         )
 
@@ -468,16 +530,30 @@ class ContextRegistry:
         contexts) via :meth:`_create_context_wrapper`.
         """
         cls._base_context = base
+        owner_team_id = cls._home_shared_team_id()
 
         with ThreadPoolExecutor() as executor:
             futures = []
             for manager in managers:
                 manager_name = cls._get_manager_name(manager)
-                for _, entry in cls._get_contexts_for_manager(
+                base_entries = cls._get_contexts_for_manager(
                     manager,
                     base,
                     PERSONAL_ROOT_IDENTITY,
-                ).items():
+                )
+                team_entries: Dict[str, Dict] = {}
+                if owner_team_id is not None:
+                    # Team-owned assistants keep shared tables at the owning
+                    # team's root, never under the per-assistant base subtree.
+                    team_root = cls._team_root_identity(owner_team_id)
+                    team_entries = cls._get_contexts_for_manager(
+                        manager,
+                        team_root,
+                        team_root,
+                    )
+                for table_name, entry in base_entries.items():
+                    if owner_team_id is not None and cls._is_shared_scoped(table_name):
+                        entry = team_entries[table_name]
                     futures.append(
                         executor.submit(
                             cls._create_context_wrapper,

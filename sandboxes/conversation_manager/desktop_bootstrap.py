@@ -30,6 +30,7 @@ ProgressCallback = Callable[[str], None]
 
 DESKTOP_IMAGE_TAG = "unity-desktop"
 DESKTOP_CONTAINER_NAME = "unity-desktop-sandbox"
+_DEFAULT_LOCAL_COMMS_URL = "http://localhost:8787"
 
 # Env vars referenced by deploy/desktop/supervisord.conf via %(ENV_X)s interpolation.
 # These must be passed as explicit ``docker run -e KEY=VALUE`` flags — supervisord
@@ -41,6 +42,7 @@ CONTAINER_ENV_KEYS: tuple[str, ...] = (
     "UNITY_GATEWAY_URL",
     "UNITY_COMMS_URL",
     "UNIFY_MODEL",
+    "UNITY_AGENT_SERVICE_LLM_MODEL",
     "ANTHROPIC_API_KEY",
 )
 
@@ -388,27 +390,112 @@ def _parse_env_file(env_file: Path) -> dict[str, str]:
     return values
 
 
-def _container_env_values(*, repo_root: Path) -> dict[str, str]:
+def _rewrite_local_host_for_container(value: str) -> str:
+    """Map host-loopback URLs so processes inside Docker reach the host."""
+    return value.replace("localhost", "host.docker.internal").replace(
+        "127.0.0.1",
+        "host.docker.internal",
+    )
+
+
+def _container_env_values(
+    *,
+    repo_root: Path,
+    llm_model: str | None = None,
+) -> dict[str, str]:
     """Resolve container env vars from the process environment and repo ``.env``."""
     file_values = _parse_env_file(repo_root / ".env")
     resolved: dict[str, str] = {}
     for key in CONTAINER_ENV_KEYS:
         value = os.environ.get(key) or file_values.get(key) or ""
         value = value.strip()
-        if not value:
-            continue
-        if "localhost" in value:
-            value = value.replace("localhost", "host.docker.internal")
-        resolved[key] = value
+        if value:
+            resolved[key] = value
+
+    gateway = (
+        resolved.get("UNITY_GATEWAY_URL")
+        or resolved.get("UNITY_COMMS_URL")
+        or _DEFAULT_LOCAL_COMMS_URL
+    )
+    comms = resolved.get("UNITY_COMMS_URL") or gateway
+    gateway = resolved.get("UNITY_GATEWAY_URL") or comms
+    resolved["UNITY_GATEWAY_URL"] = gateway
+    resolved["UNITY_COMMS_URL"] = comms
+
+    if llm_model:
+        resolved["UNITY_AGENT_SERVICE_LLM_MODEL"] = llm_model.strip()
+        resolved["UNIFY_MODEL"] = llm_model.strip()
+
+    if not resolved.get("UNIFY_MODEL"):
+        try:
+            from unify.settings import SETTINGS
+
+            resolved["UNIFY_MODEL"] = SETTINGS.UNIFY_MODEL
+        except Exception:
+            pass
+
+    if not resolved.get("UNITY_AGENT_SERVICE_LLM_MODEL"):
+        resolved["UNITY_AGENT_SERVICE_LLM_MODEL"] = resolved.get(
+            "UNIFY_MODEL",
+            "",
+        )
+
+    for key, value in list(resolved.items()):
+        resolved[key] = _rewrite_local_host_for_container(value)
     return resolved
 
 
-def _docker_env_args(*, repo_root: Path) -> list[str]:
+def _docker_env_args(
+    *,
+    repo_root: Path,
+    llm_model: str | None = None,
+) -> list[str]:
     """Return ``docker run`` ``-e KEY=VALUE`` args for the desktop container."""
     args: list[str] = []
-    for key, value in _container_env_values(repo_root=repo_root).items():
+    for key, value in _container_env_values(
+        repo_root=repo_root,
+        llm_model=llm_model,
+    ).items():
         args.extend(["-e", f"{key}={value}"])
     return args
+
+
+def _running_container_env(container_name: str) -> dict[str, str]:
+    """Return env vars baked into a running container's config."""
+    try:
+        import json
+
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{json .Config.Env}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return {}
+        raw = (result.stdout or "").strip()
+        if not raw:
+            return {}
+        entries = json.loads(raw)
+        env: dict[str, str] = {}
+        for entry in entries:
+            if "=" in entry:
+                key, value = entry.split("=", 1)
+                env[key] = value
+        return env
+    except Exception:
+        return {}
+
+
+def _container_matches_llm_model(
+    container_name: str,
+    *,
+    llm_model: str,
+) -> bool:
+    """Return True when the running container was started with the same LLM model."""
+    env = _running_container_env(container_name)
+    configured = env.get("UNITY_AGENT_SERVICE_LLM_MODEL", "").strip()
+    return configured == llm_model.strip()
 
 
 def _container_startup_logs(container_name: str, *, tail: int = 40) -> str:
@@ -431,12 +518,13 @@ def _start_container(
     repo_root: Path,
     tag: str = DESKTOP_IMAGE_TAG,
     name: str = DESKTOP_CONTAINER_NAME,
+    llm_model: str | None = None,
     progress: Optional[ProgressCallback] = None,
 ) -> Optional[str]:
     """Run the desktop container in detached mode. Returns container ID or None."""
     progress = progress or (lambda _m: None)
 
-    env_values = _container_env_values(repo_root=repo_root)
+    env_values = _container_env_values(repo_root=repo_root, llm_model=llm_model)
     missing = [key for key in _SUPERVISORD_ENV_KEYS if not env_values.get(key)]
     if missing:
         progress(
@@ -463,7 +551,15 @@ def _start_container(
         # Allow the container to reach host-side services (e.g. Orchestra).
         "--add-host=host.docker.internal:host-gateway",
     ]
-    cmd.extend(_docker_env_args(repo_root=repo_root))
+    supervisord_conf = repo_root / "deploy/desktop/supervisord.conf"
+    if supervisord_conf.is_file():
+        cmd.extend(
+            [
+                "-v",
+                f"{supervisord_conf.resolve()}:/app/desktop/supervisord.conf:ro",
+            ],
+        )
+    cmd.extend(_docker_env_args(repo_root=repo_root, llm_model=llm_model))
     cmd.append(tag)
 
     progress(f"[desktop] Starting container '{name}' from image '{tag}'...")
@@ -491,6 +587,7 @@ def try_start_desktop_direct(
     *,
     repo_root: Path,
     agent_server_url: str,
+    llm_model: str | None = None,
     progress: Optional[ProgressCallback] = None,
     timeout_s: float = 60.0,
 ) -> DesktopBootstrapResult:
@@ -508,20 +605,30 @@ def try_start_desktop_direct(
             summary="UNIFY_KEY is not set (required for agent-service auth)",
         )
 
-    # Already running and healthy?
+    # Already running and healthy with the requested model?
     existing = _find_running_container(DESKTOP_CONTAINER_NAME)
     if existing and _validate_agent_service(
         agent_server_url=agent_server_url,
         unify_key=unify_key,
     ):
-        progress(
-            f"[desktop] Reusing existing desktop container — view at {_desktop_novnc_url()}",
-        )
-        return DesktopBootstrapResult(
-            ok=True,
-            summary=f"Desktop container already running — view at {_desktop_novnc_url()}",
-            container_id=existing,
-        )
+        if llm_model and not _container_matches_llm_model(
+            DESKTOP_CONTAINER_NAME,
+            llm_model=llm_model,
+        ):
+            progress(
+                f"[desktop] LLM model changed to {llm_model!r} — recreating container...",
+            )
+            stop_desktop_container(DESKTOP_CONTAINER_NAME, progress=progress)
+            existing = None
+        else:
+            progress(
+                f"[desktop] Reusing existing desktop container — view at {_desktop_novnc_url()}",
+            )
+            return DesktopBootstrapResult(
+                ok=True,
+                summary=f"Desktop container already running — view at {_desktop_novnc_url()}",
+                container_id=existing,
+            )
 
     # Stop any stale container with the same name.
     if existing:
@@ -553,6 +660,7 @@ def try_start_desktop_direct(
 
     container_id = _start_container(
         repo_root=repo_root,
+        llm_model=llm_model,
         progress=progress,
     )
     if not container_id:
@@ -573,6 +681,7 @@ def try_auto_bootstrap_desktop(
     *,
     repo_root: Path,
     agent_server_url: str,
+    llm_model: str | None = None,
     progress: Optional[ProgressCallback] = None,
     timeout_s: float = 90.0,
 ) -> DesktopBootstrapResult:
@@ -589,20 +698,30 @@ def try_auto_bootstrap_desktop(
             summary="UNIFY_KEY is not set (required for agent-service auth)",
         )
 
-    # Already running and healthy?
+    # Already running and healthy with the requested model?
     existing = _find_running_container(DESKTOP_CONTAINER_NAME)
     if existing and _validate_agent_service(
         agent_server_url=agent_server_url,
         unify_key=unify_key,
     ):
-        progress(
-            f"[desktop] Reusing existing desktop container — view at {_desktop_novnc_url()}",
-        )
-        return DesktopBootstrapResult(
-            ok=True,
-            summary=f"Desktop container already running — view at {_desktop_novnc_url()}",
-            container_id=existing,
-        )
+        if llm_model and not _container_matches_llm_model(
+            DESKTOP_CONTAINER_NAME,
+            llm_model=llm_model,
+        ):
+            progress(
+                f"[desktop] LLM model changed to {llm_model!r} — recreating container...",
+            )
+            stop_desktop_container(DESKTOP_CONTAINER_NAME, progress=progress)
+            existing = None
+        else:
+            progress(
+                f"[desktop] Reusing existing desktop container — view at {_desktop_novnc_url()}",
+            )
+            return DesktopBootstrapResult(
+                ok=True,
+                summary=f"Desktop container already running — view at {_desktop_novnc_url()}",
+                container_id=existing,
+            )
 
     # Stop any stale container.
     if existing:
@@ -635,6 +754,7 @@ def try_auto_bootstrap_desktop(
 
     container_id = _start_container(
         repo_root=repo_root,
+        llm_model=llm_model,
         progress=progress,
     )
     if not container_id:

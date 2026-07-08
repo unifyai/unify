@@ -4,14 +4,17 @@ import asyncio
 import functools
 import logging
 import os
-from threading import Lock
+from contextlib import contextmanager
+from threading import Lock, RLock
 from time import monotonic
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Type
 from pydantic import BaseModel
 
 import unisdk
 from unify.common.llm_client import new_llm_client
-from unify.common.log_utils import log as unity_log
+from unify.common.log_utils import log as unity_log, create_logs as unity_create_logs
+from unify.common.authorship import strip_authoring_assistant_id
+from unify.common.embed_utils import list_private_fields
 
 logger = logging.getLogger(__name__)
 from ..common.llm_helpers import methods_to_tool_dict
@@ -29,7 +32,8 @@ from ..common.tool_outcome import ToolError, ToolErrorException, ToolOutcome
 from ..common.embed_utils import ensure_vector_column
 from ..common.context_store import TableStore
 from ..common.model_to_fields import model_to_fields
-from .types import Secret
+from .types import Secret, SecretMeta
+from .custom_secrets import compute_custom_secrets_hash
 from .base import BaseSecretManager
 from .prompt_builders import build_ask_prompt, build_update_prompt
 from ..common.filter_utils import normalize_filter_expr
@@ -48,6 +52,7 @@ from ..common.context_registry import (
 )
 
 SECRETS_TABLE = "Secrets"  # pragma: allowlist secret
+SECRETS_META_TABLE = "Secrets/Meta"  # pragma: allowlist secret
 DESTINATION_FILTER_PATTERN = (
     r"destination\s*==\s*(?P<quote>['\"])(?P<destination>[^'\"]+)(?P=quote)"
 )
@@ -67,17 +72,28 @@ class SecretManager(BaseSecretManager):
     class Config:
         required_contexts = [
             TableContext(
-                name="Secrets",
+                name=SECRETS_TABLE,
                 description="Key-value secrets with descriptions and embeddings.",
                 fields=model_to_fields(Secret),
                 unique_keys={"secret_id": "int", "name": "str"},
                 auto_counting={"secret_id": None},
+            ),
+            TableContext(
+                name=SECRETS_META_TABLE,
+                description="Metadata for source-defined custom secret sync state.",
+                fields=model_to_fields(SecretMeta),
+                unique_keys={"meta_id": "int"},
             ),
         ]
 
     def __init__(self) -> None:
         super().__init__()
         self._ctx = ContextRegistry.get_context(self, SECRETS_TABLE)
+        self._meta_ctx = ContextRegistry.get_context(self, SECRETS_META_TABLE)
+        self._custom_secrets_synced = False
+        self._custom_secrets_synced_contexts: set[str] = set()
+        self._destination_context_lock = RLock()
+        self._destination_write_scoped = False
         self._assistant_secret_sync_lock = Lock()
         self._last_assistant_secret_sync_success_at: float | None = None
         self._last_assistant_secret_sync_failure_at: float | None = None
@@ -1470,3 +1486,261 @@ class SecretManager(BaseSecretManager):
         finally:
             self._invalidate_credential_processes()
         return {"outcome": "secret deleted", "details": {"name": name}}
+
+    def _meta_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Secrets/Meta context."""
+        destination = self._effective_destination(destination)
+        root_context = ContextRegistry.write_root(
+            self,
+            SECRETS_META_TABLE,
+            destination=destination,
+        )
+        return f"{root_context.strip('/')}/{SECRETS_META_TABLE}"
+
+    @contextmanager
+    def _temporary_secret_context(self, attr_name: str, context: str):
+        """Temporarily bind an existing storage method to a resolved context."""
+        with self._destination_context_lock:
+            original = getattr(self, attr_name)
+            was_write_scoped = self._destination_write_scoped
+            setattr(self, attr_name, context)
+            self._destination_write_scoped = True
+            try:
+                yield
+            finally:
+                setattr(self, attr_name, original)
+                self._destination_write_scoped = was_write_scoped
+
+    def _sync_destination_contexts(
+        self,
+        destination: str | None,
+    ) -> tuple[str, str, bool]:
+        """Return destination-scoped secrets context, meta context, and personal flag."""
+        data_context = self._secret_context_for_destination(destination)
+        meta_context = self._meta_context_for_destination(destination)
+        return data_context, meta_context, destination in (None, "personal")
+
+    def _get_stored_custom_secrets_hash(self) -> str:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                return logs[0].entries.get("custom_secrets_hash", "") or ""
+        except Exception as exc:
+            logger.warning("Failed to read custom secrets hash: %s", exc)
+        return ""
+
+    def _store_custom_secrets_hash(self, hash_value: str) -> None:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={"custom_secrets_hash": hash_value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, "custom_secrets_hash": hash_value}],
+                    stamp_authoring=True,
+                )
+        except Exception as exc:
+            logger.warning("Failed to store custom secrets hash: %s", exc)
+
+    def _get_custom_secrets_from_db(self) -> Dict[str, Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._ctx),
+        )
+        return {
+            lg.entries.get("custom_key"): lg.entries
+            for lg in logs
+            if lg.entries.get("custom_key")
+        }
+
+    def _secret_exists_without_custom_hash(self, name: str) -> bool:
+        logs = unisdk.get_logs(
+            context=self._ctx,
+            filter=f"name == {name!r} and custom_hash == None",
+            limit=1,
+        )
+        return bool(logs)
+
+    def _update_custom_secret(
+        self,
+        secret_id: int,
+        data: Dict[str, Any],
+    ) -> None:
+        log_ids = unisdk.get_logs(
+            context=self._ctx,
+            filter=f"secret_id == {int(secret_id)}",
+            limit=1,
+            return_ids_only=True,
+        )
+        if not log_ids:
+            raise ValueError(
+                f"No secret found with secret_id {secret_id} to update.",
+            )
+        update_data = strip_authoring_assistant_id(
+            {k: v for k, v in data.items() if k != "secret_id"},
+        )
+        unisdk.update_logs(
+            context=self._ctx,
+            logs=[log_ids[0]],
+            entries=update_data,
+            overwrite=True,
+        )
+        value = update_data.get("value")
+        name = update_data.get("name")
+        if value is not None and name and self._is_personal_context(self._ctx):
+            try:
+                self._env_set(name, value)
+            except Exception:
+                pass
+        self._invalidate_credential_processes()
+
+    def _insert_custom_secret(self, data: Dict[str, Any]) -> int:
+        insert_data = {k: v for k, v in data.items() if k != "secret_id"}
+        result = unity_create_logs(
+            context=self._ctx,
+            entries=[insert_data],
+            stamp_authoring=True,
+            recompute_derived=True,
+        )
+        name = insert_data.get("name")
+        value = insert_data.get("value")
+        if name and value and self._is_personal_context(self._ctx):
+            try:
+                self._env_set(name, value)
+            except Exception:
+                pass
+        self._invalidate_credential_processes()
+        if isinstance(result, list) and len(result) > 0:
+            log = result[0]
+            if hasattr(log, "entries"):
+                return log.entries.get("secret_id", -1)
+        elif isinstance(result, dict):
+            log_ids = result.get("log_event_ids", [])
+            if log_ids:
+                logs = unisdk.get_logs(
+                    context=self._ctx,
+                    filter=f"id == {log_ids[0]}",
+                    limit=1,
+                )
+                if logs and hasattr(logs[0], "entries"):
+                    return logs[0].entries.get("secret_id")
+        return -1
+
+    def sync_custom_secrets(
+        self,
+        *,
+        source_secrets: Optional[Dict[str, Dict[str, Any]]] = None,
+        destination: str | None = None,
+    ) -> bool:
+        """Ensure deployment-defined secret rows match source definitions."""
+        try:
+            secrets_context, meta_context, is_personal = (
+                self._sync_destination_contexts(destination)
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+
+        with (
+            self._temporary_secret_context("_ctx", secrets_context),
+            self._temporary_secret_context("_meta_ctx", meta_context),
+        ):
+            if source_secrets is None:
+                source_secrets = {}
+            expected_hash = compute_custom_secrets_hash(
+                source_secrets=source_secrets,
+            )
+            current_hash = self._get_stored_custom_secrets_hash()
+            already_synced = (
+                self._custom_secrets_synced
+                if is_personal
+                else secrets_context in self._custom_secrets_synced_contexts
+            )
+
+            if already_synced and current_hash == expected_hash:
+                return False
+
+            if current_hash == expected_hash:
+                logger.debug("Custom secrets hash matches, skipping sync")
+                if is_personal:
+                    self._custom_secrets_synced = True
+                else:
+                    self._custom_secrets_synced_contexts.add(secrets_context)
+                return False
+
+            logger.info(
+                "Custom secrets hash mismatch " "(current=%s, expected=%s), syncing...",
+                current_hash,
+                expected_hash,
+            )
+
+            db_secrets = self._get_custom_secrets_from_db()
+            processed_keys: Set[str] = set()
+
+            for custom_key, source_data in source_secrets.items():
+                processed_keys.add(custom_key)
+                secret_data = {
+                    k: v for k, v in source_data.items() if k not in {"destination"}
+                }
+                name = secret_data["name"]
+
+                if custom_key in db_secrets:
+                    db_entry = db_secrets[custom_key]
+                    if db_entry.get("custom_hash") != secret_data["custom_hash"]:
+                        logger.info("Updating custom secret entry: %s", custom_key)
+                        self._update_custom_secret(
+                            secret_id=db_entry["secret_id"],
+                            data=secret_data,
+                        )
+                elif self._secret_exists_without_custom_hash(name):
+                    logger.info(
+                        "Skipping deploy secret %s: user-owned credential exists",
+                        custom_key,
+                    )
+                else:
+                    logger.info("Inserting custom secret entry: %s", custom_key)
+                    self._insert_custom_secret(secret_data)
+
+            self._store_custom_secrets_hash(expected_hash)
+            if is_personal:
+                self._custom_secrets_synced = True
+            else:
+                self._custom_secrets_synced_contexts.add(secrets_context)
+            return True
+
+    def sync_custom(
+        self,
+        *,
+        source_secrets: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        """Sync custom secrets from pre-collected sources across destinations."""
+        if source_secrets is None:
+            source_secrets = {}
+
+        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for custom_key, source_data in source_secrets.items():
+            destination = source_data.get("destination") or "personal"
+            by_destination.setdefault(destination, {})[custom_key] = source_data
+
+        changed = False
+        for destination, group in by_destination.items():
+            destination_arg = None if destination == "personal" else destination
+            changed |= self.sync_custom_secrets(
+                source_secrets=group,
+                destination=destination_arg,
+            )
+        return changed

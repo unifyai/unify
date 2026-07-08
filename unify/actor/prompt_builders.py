@@ -31,6 +31,13 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
       together. Search results include `function_ids` pointing back to
       concrete implementations.
 
+    **Discovery index scope:** search indexes **user-stored** entries only.
+    Built-in `primitives.*`, prompt-injected functions, and prompt-injected
+    guidance (unpacked elsewhere in this prompt) are deliberately excluded —
+    they will never appear in search results. Empty discovery therefore does
+    **not** mean they are unavailable; call them by exact name via
+    `execute_function`.
+
     Always search **both** before deciding how to execute:
 
     1. `FunctionManager_search_functions` — find existing implementations
@@ -102,7 +109,7 @@ _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
     **Call both on your first turn** — they are independent and can be issued
     as parallel tool calls in a single assistant message. Once both discovery
     calls complete, the full tool set unlocks automatically — including
-    `execute_code`, primitives, FunctionManager write tools
+    `execute_function`, `execute_code`, FunctionManager write tools
     (`FunctionManager_add_functions`, `FunctionManager_delete_function`),
     and GuidanceManager write tools (`GuidanceManager_add_guidance`,
     `GuidanceManager_update_guidance`, `GuidanceManager_delete_guidance`).
@@ -1130,14 +1137,20 @@ def build_code_act_prompt(
                 f"{guidelines}",
             )
 
+        if has_fm_tools or has_gm_tools:
+            parts.append(_FUNCTION_AND_GUIDANCE_LIBRARY)
+            if discovery_first_policy:
+                parts.append(_DISCOVERY_FIRST_POLICY)
+
         workflow = (
             "### Workflow\n\n"
             "1. **Discover** stored functions using `FunctionManager_search_functions`,\n"
             "   `FunctionManager_filter_functions`, or `FunctionManager_list_functions`.\n"
-            "2. **Pick** the best match by name from the search results.\n"
-            "3. **Execute** it via `execute_function(function_name=..., call_kwargs=...)`.\n"
-            "4. If no matching function exists, report that clearly — do NOT attempt to\n"
-            "   write or compose code yourself."
+            "2. **Execute** via `execute_function` — a stored match from discovery,\n"
+            "   or a prompt-documented callable by exact name (see Discovery index\n"
+            "   scope above).\n"
+            "3. Report inability only when neither applies — do NOT write or compose\n"
+            "   code yourself."
         )
         if additional_tools_block:
             workflow += f"\n\n{additional_tools_block}"

@@ -1397,6 +1397,8 @@ class _SessionConfigBase(Event):
     org_name: str = ""
     team_ids: list[int] = field(default_factory=list)
     team_summaries: list[dict[str, Any]] = field(default_factory=list)
+    # Owning team for team-owned assistants (None = user-owned).
+    owner_team_id: int | None = None
     is_coordinator: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)

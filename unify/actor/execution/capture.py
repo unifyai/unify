@@ -137,8 +137,8 @@ def _ensure_stream_router_installed() -> None:
 # ---------------------------------------------------------------------------
 # Display function for rich output (images, etc.)
 # ---------------------------------------------------------------------------
-_IMAGE_BASE64_LIMIT = 5_242_880  # Anthropic's per-image limit (5 MB)
-_IMAGE_MAX_EDGE = 8_000  # Anthropic hard-rejects images with any edge > 8000px
+_IMAGE_BASE64_LIMIT = 5_242_880  # Per-image base64 limit (5 MB)
+_SAFETY_MAX_EDGE = 8_000  # Hard reject cap if policy somehow exceeds this
 
 
 def _make_display(
@@ -168,17 +168,23 @@ def _make_display(
 def _encode_image_for_llm(img: Any) -> tuple[str, str]:
     """Encode a PIL Image to base64, ensuring it stays within API limits.
 
-    Downscales images whose largest edge exceeds the provider's hard pixel
-    limit, then tries PNG for lossless quality.  If the result exceeds the
-    base64 size limit, falls back to JPEG with progressive quality reduction.
-    Raises if the image cannot be brought under the limit.
+    First fits the image to the model-aware observation space (aspect targets
+    and provider max-edge caps), then applies PNG encoding with JPEG fallback
+    if the base64 payload exceeds the size limit.
     """
+    from unify.common.observation_scaling import (
+        _cap_dimensions,
+        fit_image_to_observation_space,
+    )
+
+    img = fit_image_to_observation_space(img)
+
     w, h = img.size
-    if max(w, h) > _IMAGE_MAX_EDGE:
-        scale = _IMAGE_MAX_EDGE / max(w, h)
+    capped_w, capped_h = _cap_dimensions(w, h, _SAFETY_MAX_EDGE)
+    if (capped_w, capped_h) != (w, h):
         from PIL import Image as _Image
 
-        img = img.resize((round(w * scale), round(h * scale)), _Image.LANCZOS)
+        img = img.resize((capped_w, capped_h), _Image.LANCZOS)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
