@@ -35,11 +35,9 @@ _SEND_TOOL_BY_MEDIUM: dict[Medium, tuple[str, str]] = {
     Medium.EMAIL: ("send_email", "send_email_to_boss"),
     Medium.SLACK_MESSAGE: ("send_slack_message", "send_slack_message_to_boss"),
     Medium.TEAMS_MESSAGE: ("send_teams_message", "send_teams_message_to_boss"),
-    # The Unify Teams bot reply routes into a conversation, not a per-boss DM,
-    # so there is no ``_to_boss`` variant — both roles use the same tool.
     Medium.MS_TEAMS_BOT_MESSAGE: (
         "send_ms_teams_bot_message",
-        "send_ms_teams_bot_message",
+        "send_ms_teams_bot_message_to_boss",
     ),
 }
 
