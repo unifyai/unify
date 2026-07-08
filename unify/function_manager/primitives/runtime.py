@@ -72,6 +72,7 @@ _COMPUTER_METHODS = (
     "right_click",
     "drag",
     "scroll",
+    "move",
     "type_text",
     "press_enter",
     "press_tab",
@@ -88,8 +89,12 @@ _COMPUTER_METHODS = (
     "execute_actions",
 )
 
+# ``move`` (bezier cursor motion) and ``solve_captcha`` are web-only actions;
+# the desktop backend has no registered handler for them.
 _DESKTOP_METHODS = tuple(
-    name for name in _COMPUTER_METHODS if name not in ("get_content", "solve_captcha")
+    name
+    for name in _COMPUTER_METHODS
+    if name not in ("get_content", "solve_captcha", "move")
 )
 _WEB_SESSION_METHODS = _COMPUTER_METHODS
 
