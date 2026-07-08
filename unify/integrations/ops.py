@@ -179,5 +179,45 @@ def stage_composio_file(
         return _request_failed("stage_composio_file", exc)
 
 
+def stage_integration_file(
+    content: bytes,
+    *,
+    backend_id: str,
+    filename: str,
+    mimetype: str,
+    toolkit_slug: str,
+    tool_slug: str,
+) -> Any:
+    try:
+        return unisdk.stage_integration_file(
+            content,
+            backend_id=backend_id,
+            filename=filename,
+            mimetype=mimetype,
+            toolkit_slug=toolkit_slug,
+            tool_slug=tool_slug,
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("stage_integration_file", exc)
+
+
+def download_integration_file(
+    *,
+    backend_id: str,
+    s3_key: str,
+) -> Any:
+    try:
+        return unisdk.download_integration_file(
+            backend_id=backend_id,
+            s3_key=s3_key,
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("download_integration_file", exc)
+
+
 def _clean_scope(scope: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in scope.items() if value is not None}

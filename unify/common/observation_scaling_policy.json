@@ -1,0 +1,21 @@
+{
+  "defaultAspectTargets": [
+    { "width": 1024, "height": 768 },
+    { "width": 1280, "height": 800 },
+    { "width": 1366, "height": 768 }
+  ],
+  "providerMaxEdge": {
+    "anthropic": 1568,
+    "openai": 2048,
+    "google": 4096,
+    "gemini": 4096,
+    "minimax": 2048,
+    "default": 8000
+  },
+  "modelObservationMaxEdge": {
+    "claude-4.6-sonnet@anthropic": 1568,
+    "claude-4.6-opus@anthropic": 1568,
+    "gpt-5.5@openai": 2048,
+    "minimax-v3@minimax": 2048
+  }
+}

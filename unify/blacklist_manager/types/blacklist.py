@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Optional
 from pydantic import (
     Field,
     model_validator,
@@ -48,6 +48,14 @@ class BlackList(AuthoredRow):
     destination: str = Field(
         default="personal",
         description="Blacklist root that owns this entry, such as personal or team:<id>.",
+    )
+    custom_key: Optional[str] = Field(
+        default=None,
+        description="Stable key for source-defined blacklist rows managed by sync.",
+    )
+    custom_hash: Optional[str] = Field(
+        default=None,
+        description="Content hash for source-defined blacklist rows managed by sync.",
     )
 
     @model_validator(mode="before")

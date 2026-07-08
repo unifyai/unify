@@ -160,6 +160,7 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "is_local": assistant.get("is_local", False),
         "team_ids": assistant.get("team_ids", []),
         "team_summaries": assistant.get("team_summaries", []),
+        "owner_team_id": assistant.get("owner_team_id"),
         "self_contact_id": assistant.get("self_contact_id", 0),
         "boss_contact_id": assistant.get("boss_contact_id", 1),
         "is_coordinator": assistant.get("is_coordinator", False),

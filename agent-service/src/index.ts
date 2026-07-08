@@ -4,7 +4,7 @@ import http from 'http';
 import expressWs from 'express-ws';
 import WebSocket from 'ws';
 import util from 'util';
-import { startBrowserAgent, BrowserAgent, BrowserConnector, AgentError, BrowserOptions, AgentMemory, Observation } from 'magnitude-core';
+import { startBrowserAgent, BrowserAgent, BrowserConnector, AgentError, BrowserOptions, AgentMemory, Observation, Image, formatLastBrowserLifecycleHint } from 'magnitude-core';
 import { z, ZodTypeAny, ZodAny, ZodType } from 'zod';
 import { partitionHtml, serializeToMarkdown, PartitionOptions, MarkdownSerializerOptions } from 'magnitude-extract';
 import dotenv from 'dotenv';
@@ -17,7 +17,14 @@ import { randomUUID } from 'crypto';
 import { ChildProcess, spawn, execSync } from 'child_process';
 import multer from 'multer';
 import { jsonSchemaToZod } from './jsonSchemaToZod';
-import { getLlmConfig } from './llmConfig';
+import { getLlmConfig, resolveAgentServiceModel } from './llmConfig';
+import {
+  computeNativeObservationScale,
+  NativeObservationScale,
+  ObservationScalingPolicy,
+  resolveObservationScalingPolicy,
+  scaleObservationCoordsToDisplay,
+} from './observationScaling';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -339,6 +346,13 @@ interface SessionInfo {
   actHistory: ActHistoryEntry[];
   latestScreenshot: string;
   latestCursorPosition: { x: number; y: number } | null;
+  /** Present for web-vm and desktop sessions; drives native X11 input/output. */
+  displayHarness?: DisplayHarness;
+  /** Maps LLM observation coordinates to full X11 display coordinates. */
+  nativeObservationScale?: NativeObservationScale;
+  /** Model/policy used to derive observation dimensions for this session. */
+  observationModel: string;
+  observationPolicy: ObservationScalingPolicy;
 }
 
 function cacheScreenshot(sessionId: string, screenshot: string, cursorPosition: { x: number; y: number } | null) {
@@ -357,12 +371,17 @@ function refreshDesktopCache(triggerSessionId: string) {
   const [deskId, deskSession] = desktopEntry;
   (async () => {
     try {
-      const connector = deskSession.agent.require(BrowserConnector);
-      const harness = connector.getHarness();
-      const rawImage = await harness.screenshot();
-      const image = await connector.transformScreenshot(rawImage);
-      const deskScreenshot = await image.toBase64();
-      cacheScreenshot(deskId, deskScreenshot, harness.getCursorPosition());
+      if (deskSession.displayHarness) {
+        const { observationB64 } = await captureNativeObservation(deskSession);
+        cacheScreenshot(deskId, observationB64, null);
+      } else {
+        const connector = deskSession.agent.require(BrowserConnector);
+        const harness = connector.getHarness();
+        const rawImage = await harness.screenshot();
+        const image = await connector.transformScreenshot(rawImage);
+        const deskScreenshot = await image.toBase64();
+        cacheScreenshot(deskId, deskScreenshot, harness.getCursorPosition());
+      }
     } catch (err) {
       console.warn(`[cache] Desktop screenshot refresh failed: ${err}`);
     }
@@ -742,6 +761,7 @@ const startBrowser = async (
   headless: boolean,
   urlMappings?: Record<string, string>,
   storageStateName?: string,
+  sessionMeta?: { sessionId?: string; sessionLabel?: string },
 ): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
@@ -754,6 +774,8 @@ const startBrowser = async (
       ),
       narrate: true,
       urlMappings,
+      sessionId: sessionMeta?.sessionId,
+      sessionLabel: sessionMeta?.sessionLabel,
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -765,7 +787,10 @@ const startBrowser = async (
   }
 }
 
-const startBrowserOnVm = async (urlMappings?: Record<string, string>): Promise<BrowserAgent> => {
+const startBrowserOnVm = async (
+  urlMappings?: Record<string, string>,
+  sessionMeta?: { sessionId?: string; sessionLabel?: string },
+): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
       url: "https://www.google.com/",
@@ -784,6 +809,8 @@ const startBrowserOnVm = async (urlMappings?: Record<string, string>): Promise<B
       },
       narrate: true,
       urlMappings,
+      sessionId: sessionMeta?.sessionId,
+      sessionLabel: sessionMeta?.sessionLabel,
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -1232,12 +1259,13 @@ app.post('/start', async (req: Request, res: Response) => {
     if (mode === "desktop") {
       agent = await startDesktop();
     } else if (mode === "web-vm") {
-      agent = await startBrowserOnVm(mappings);
+      agent = await startBrowserOnVm(mappings, { sessionId, sessionLabel: label });
     } else {
       agent = await startBrowser(
         headless ?? false,
         mappings,
         typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
+        { sessionId, sessionLabel: label },
       );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);
@@ -1334,6 +1362,21 @@ app.post('/start', async (req: Request, res: Response) => {
       }
     }
 
+    let displayHarness: DisplayHarness | undefined;
+    if (mode === 'web-vm' || mode === 'desktop') {
+      displayHarness = new DisplayHarness(':99');
+      // Warm the Chromium window cache asynchronously so the first action
+      // does not bear the wmctrl discovery latency.
+      setTimeout(() => {
+        displayHarness!.findChromiumWindow()
+          .then(id => { if (id) console.log(`[start] Chromium window cached: ${id}`); })
+          .catch(() => { /* best effort */ });
+      }, 3000);
+    }
+
+    const observationModel = resolveAgentServiceModel();
+    const observationPolicy = resolveObservationScalingPolicy(observationModel);
+
     activeSessions.set(sessionId, {
       agent,
       mode,
@@ -1342,6 +1385,9 @@ app.post('/start', async (req: Request, res: Response) => {
       actHistory: [],
       latestScreenshot: '',
       latestCursorPosition: null,
+      displayHarness,
+      observationModel,
+      observationPolicy,
     });
 
     console.log(`[start] DONE mode=${mode} sessionId=${sessionId} total=${Date.now() - t0}ms active_sessions=${activeSessions.size}`);
@@ -1429,16 +1475,26 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
         console.log(`${lineageLabel}🔄 Verify pass ${iteration + 1}: re-observing and re-planning...`);
       }
 
-      await agent.recordConnectorObservations(memory);
+      if (session.displayHarness) {
+        // Downscale to LLM observation space; scale coords back up before xdotool.
+        const { observation } = await captureNativeObservation(session);
+        memory.recordObservation(
+          Observation.fromConnector('web', observation, { type: 'screenshot', limit: 2, dedupe: true }),
+        );
+        console.log(`${lineageLabel}📸 native observation recorded`);
+      } else {
+        await agent.recordConnectorObservations(memory);
+      }
 
       if (MAGNITUDE_DEBUG) {
         try {
-          const harness = agent.require(BrowserConnector).getHarness();
-          const planImg = await harness.screenshot();
-          debugSaveImage(actId, iteration === 0 ? 'planning_screenshot' : `verify_${iteration}_screenshot`, await planImg.toBase64());
-
-          if (session.mode === 'desktop') {
-            debugSaveImage(actId, iteration === 0 ? 'native_screenshot' : `verify_${iteration}_native`, nativeScreenshot());
+          if (session.displayHarness) {
+            const b64 = await session.displayHarness.screenshot();
+            debugSaveImage(actId, iteration === 0 ? 'planning_screenshot' : `verify_${iteration}_screenshot`, b64);
+          } else {
+            const harness = agent.require(BrowserConnector).getHarness();
+            const planImg = await harness.screenshot();
+            debugSaveImage(actId, iteration === 0 ? 'planning_screenshot' : `verify_${iteration}_screenshot`, await planImg.toBase64());
           }
         } catch (debugErr) {
           console.warn(`[debug] Pre-plan screenshot capture failed: ${debugErr}`);
@@ -1456,6 +1512,7 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
       iterationPlannedActions.push(actions);
       memory.recordThought(reasoning);
 
+      let hadNativeActions = false;
       for (let i = 0; i < actions.length; i++) {
         const action = actions[i];
         const actionDef = agent.identifyAction(action);
@@ -1466,7 +1523,19 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
         const actionT0 = Date.now();
         let actionError: string | undefined;
         try {
-          await agent.exec(action, memory);
+          if (session.displayHarness && NATIVE_ACTION_VARIANTS.has(action.variant)) {
+            await dispatchNativeAction(
+              session.displayHarness,
+              action,
+              session.nativeObservationScale,
+            );
+            memory.recordObservation(
+              Observation.fromActionTaken(action.variant, JSON.stringify(action)),
+            );
+            hadNativeActions = true;
+          } else {
+            await agent.exec(action, memory);
+          }
         } catch (err) {
           actionError = err instanceof Error ? err.message : String(err);
           throw err;
@@ -1486,8 +1555,14 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
 
           if (MAGNITUDE_DEBUG) {
             try {
-              const harness = agent.require(BrowserConnector).getHarness();
-              const postImg = await harness.screenshot();
+              let postB64: string;
+              if (session.displayHarness) {
+                postB64 = await session.displayHarness.screenshot();
+              } else {
+                const harness = agent.require(BrowserConnector).getHarness();
+                const postImg = await harness.screenshot();
+                postB64 = await postImg.toBase64();
+              }
               const coordLabel = ('x' in action && 'y' in action)
                 ? `_${action.x}_${action.y}`
                 : ('from' in action && typeof action.from === 'object')
@@ -1497,7 +1572,7 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
               debugSaveImage(
                 actId,
                 `post_action/${padIdx}_${action.variant.replace(/:/g, '_')}${coordLabel}`,
-                await postImg.toBase64(),
+                postB64,
               );
             } catch (debugErr) {
               console.warn(`[debug] Post-action screenshot failed: ${debugErr}`);
@@ -1506,6 +1581,16 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
 
           actionTraces.push(actionTrace);
         }
+      }
+
+      // Inject one post-iteration screenshot into memory after all native
+      // actions have been dispatched so the next planning step sees the
+      // final display state without taking N screenshots per iteration.
+      if (hadNativeActions && session.displayHarness) {
+        const { observation } = await captureNativeObservation(session);
+        memory.recordObservation(
+          Observation.fromConnector('web', observation, { type: 'screenshot', limit: 2, dedupe: true }),
+        );
       }
 
       totalActionsExecuted += actions.length;
@@ -1553,12 +1638,18 @@ app.post('/act', isAgentReady, async (req: Request, res: Response) => {
 
     let screenshot = '';
     try {
-      const connector = session.agent.require(BrowserConnector);
-      const harness = connector.getHarness();
-      const rawImage = await harness.screenshot();
-      const image = await connector.transformScreenshot(rawImage);
-      screenshot = await image.toBase64();
-      cacheScreenshot(sessionId, screenshot, harness.getCursorPosition());
+      if (session.displayHarness) {
+        const { observationB64 } = await captureNativeObservation(session);
+        screenshot = observationB64;
+        cacheScreenshot(sessionId, screenshot, null);
+      } else {
+        const connector = session.agent.require(BrowserConnector);
+        const harness = connector.getHarness();
+        const rawImage = await harness.screenshot();
+        const image = await connector.transformScreenshot(rawImage);
+        screenshot = await image.toBase64();
+        cacheScreenshot(sessionId, screenshot, harness.getCursorPosition());
+      }
     } catch (screenshotErr) {
       console.warn(`[act] Post-act screenshot failed: ${screenshotErr}`);
     }
@@ -1587,7 +1678,29 @@ app.post('/execute-actions', isAgentReady, async (req: Request, res: Response) =
     const variants = actions.map((a: any) => a.variant).join(', ');
     console.log(`[execute-actions] Executing ${actions.length} action(s) [${variants}] for session ${sessionId}`);
 
-    await agent.executeTrajectory(actions, { memory: agent.memory, recordObservations: false });
+    if (session.displayHarness) {
+      // Ensure observation scale is current before translating LLM coords.
+      await captureNativeObservation(session);
+      const scale = session.nativeObservationScale;
+      const browserActions: any[] = [];
+      for (const action of actions) {
+        if (NATIVE_ACTION_VARIANTS.has(action.variant)) {
+          if (browserActions.length > 0) {
+            await agent.executeTrajectory(browserActions, { memory: agent.memory, recordObservations: false });
+            browserActions.length = 0;
+          }
+          console.log(`[execute-actions] native: ${action.variant}`);
+          await dispatchNativeAction(session.displayHarness, action, scale);
+        } else {
+          browserActions.push(action);
+        }
+      }
+      if (browserActions.length > 0) {
+        await agent.executeTrajectory(browserActions, { memory: agent.memory, recordObservations: false });
+      }
+    } else {
+      await agent.executeTrajectory(actions, { memory: agent.memory, recordObservations: false });
+    }
 
     const execMs = Date.now() - t0;
     console.log(`[execute-actions] ${actions.length} action(s) executed [${execMs}ms]`);
@@ -1595,13 +1708,19 @@ app.post('/execute-actions', isAgentReady, async (req: Request, res: Response) =
     let screenshot = '';
     let cursorPosition: { x: number; y: number } | null = null;
     try {
-      const connector = agent.require(BrowserConnector);
-      const harness = connector.getHarness();
-      const rawImage = await harness.screenshot();
-      const image = await connector.transformScreenshot(rawImage);
-      screenshot = await image.toBase64();
-      cursorPosition = harness.getCursorPosition();
-      cacheScreenshot(sessionId, screenshot, cursorPosition);
+      if (session.displayHarness) {
+        const { observationB64 } = await captureNativeObservation(session);
+        screenshot = observationB64;
+        cacheScreenshot(sessionId, screenshot, null);
+      } else {
+        const connector = agent.require(BrowserConnector);
+        const harness = connector.getHarness();
+        const rawImage = await harness.screenshot();
+        const image = await connector.transformScreenshot(rawImage);
+        screenshot = await image.toBase64();
+        cursorPosition = harness.getCursorPosition();
+        cacheScreenshot(sessionId, screenshot, cursorPosition);
+      }
     } catch (screenshotErr) {
       console.warn(`[execute-actions] Post-execution screenshot failed: ${screenshotErr}`);
     }
@@ -1628,11 +1747,17 @@ app.post('/extract', isAgentReady, async (req: Request, res: Response) => {
       const shouldBypassDomProcessing =
         bypassDomProcessing === true || session.mode === 'desktop';
 
-      // Desktop sessions are rendered through the live noVNC iframe, so DOM
-      // expansion is both meaningless and destructive. Always use screenshot-
-      // only extraction there, even if the caller forgets to request it.
-      if (shouldBypassDomProcessing) {
-        const screenshot = await session.agent.require(BrowserConnector).getHarness().screenshot();
+      // Desktop and web-vm sessions bypass DOM processing: DOM expansion is
+      // meaningless for a full-display screenshot and destructive for noVNC.
+      // Native sessions use a full-display screenshot for accurate extraction.
+      if (shouldBypassDomProcessing || session.displayHarness) {
+        let screenshot: Image;
+        if (session.displayHarness) {
+          const { observation } = await captureNativeObservation(session);
+          screenshot = observation;
+        } else {
+          screenshot = await session.agent.require(BrowserConnector).getHarness().screenshot();
+        }
         const data = await (session.agent.models as any).extract(instructions, zodSchema as ZodTypeAny, screenshot, '');
         return res.json({ data });
       } else {
@@ -1674,44 +1799,301 @@ app.post('/query', isAgentReady, async (req: Request, res: Response) => {
   }
 });
 
-// --- Native desktop screenshot via OS commands ---
+// --- DisplayHarness: native X11 input/output via xdotool + scrot ---
 
-function nativeScreenshotCommand(dest: string): string {
-  switch (process.platform) {
-    case 'win32':
-      // PowerShell: capture full primary screen using System.Drawing
-      return [
-        'powershell.exe -NoProfile -Command "',
-        'Add-Type -AssemblyName System.Windows.Forms;',
-        'Add-Type -AssemblyName System.Drawing;',
-        '$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;',
-        '$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height);',
-        '$g = [System.Drawing.Graphics]::FromImage($bmp);',
-        '$g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size);',
-        '$g.Dispose();',
-        `$bmp.Save('${dest.replace(/'/g, "''")}');`,
-        '$bmp.Dispose();"',
-      ].join(' ');
-    case 'darwin':
-      return `screencapture -x "${dest}"`;
+async function downscaleDisplayScreenshotForObservation(
+  displayB64: string,
+  session: SessionInfo,
+): Promise<{ observation: Image; observationB64: string }> {
+  const displayImage = Image.fromBase64(displayB64);
+  const { width, height } = await displayImage.getDimensions();
+  const scale = computeNativeObservationScale(width, height, session.observationPolicy);
+  session.nativeObservationScale = scale;
+
+  if (
+    scale.observationWidth === scale.displayWidth
+    && scale.observationHeight === scale.displayHeight
+  ) {
+    return { observation: displayImage, observationB64: displayB64 };
+  }
+
+  const observation = await displayImage.resize(scale.observationWidth, scale.observationHeight);
+  const observationB64 = await observation.toBase64();
+  console.log(
+    `[native-scale] model=${scale.model} provider=${scale.provider} `
+    + `display=${scale.displayWidth}x${scale.displayHeight} `
+    + `observation=${scale.observationWidth}x${scale.observationHeight}`,
+  );
+  return { observation, observationB64 };
+}
+
+async function captureNativeObservation(session: SessionInfo): Promise<{
+  observation: Image;
+  observationB64: string;
+}> {
+  const displayB64 = await session.displayHarness!.screenshot();
+  const { observation, observationB64 } = await downscaleDisplayScreenshotForObservation(
+    displayB64,
+    session,
+  );
+  return { observation, observationB64 };
+}
+
+/**
+ * Maps Playwright-style key names to xdotool key names where they differ.
+ * Keys not listed here are passed through unchanged.
+ */
+const XDOTOOL_KEY_MAP: Record<string, string> = {
+  ArrowDown: 'Down',
+  ArrowUp: 'Up',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Enter: 'Return',
+  Escape: 'Escape',
+  Backspace: 'BackSpace',
+  Delete: 'Delete',
+  Tab: 'Tab',
+  ' ': 'space',
+  PageDown: 'Next',
+  PageUp: 'Prior',
+  Home: 'Home',
+  End: 'End',
+};
+
+/**
+ * Maps Playwright modifier key names to xdotool modifier names.
+ */
+const XDOTOOL_MODIFIER_MAP: Record<string, string> = {
+  Control: 'ctrl',
+  Meta: 'super',
+  cmd: 'super',
+  Alt: 'alt',
+  Shift: 'shift',
+};
+
+/**
+ * Routes mouse and keyboard actions through the host X11 display using
+ * xdotool (input) and scrot/xfce4-screenshooter (screenshot capture).
+ *
+ * Used for web-vm and desktop sessions where Playwright controls a Chromium
+ * window that is itself running on a virtual X11 display (:99). Native input
+ * bypasses Playwright's CDP layer so that actions land on browser chrome,
+ * desktop windows, and other UI at absolute display coordinates. Mouse actions
+ * do not raise Chromium first — the topmost window at each coordinate receives
+ * the click, matching manual pointer behavior.
+ */
+class DisplayHarness {
+  private readonly display: string;
+  private chromiumWindowId: string | null = null;
+
+  constructor(display = ':99') {
+    this.display = display;
+  }
+
+  private async execDisplay(command: string, timeoutMs = 10_000): Promise<ExecResult> {
+    return executeCommand(
+      `DISPLAY=${this.display} ${command}`,
+      LOCAL_ROOT,
+      timeoutMs,
+    );
+  }
+
+  /** Capture the full virtual display as a base64-encoded PNG. */
+  async screenshot(): Promise<string> {
+    const dest = path.join(os.tmpdir(), `unity-display-${randomUUID()}.png`);
+    try {
+      const result = await this.execDisplay(
+        `xfce4-screenshooter -f -s "${dest}" 2>/dev/null || scrot "${dest}"`,
+        15_000,
+      );
+      if (result.exitCode !== 0 && !fs.existsSync(dest)) {
+        throw new Error(`Native screenshot failed (exit ${result.exitCode}): ${result.stderr}`);
+      }
+      const buf = fs.readFileSync(dest);
+      return buf.toString('base64');
+    } finally {
+      try { fs.unlinkSync(dest); } catch { /* best effort */ }
+    }
+  }
+
+  /** Return the pixel dimensions of the virtual display via xdpyinfo. */
+  /**
+   * Find the X11 window ID of the first Chromium/Chrome window on the display.
+   * Returns null when wmctrl finds no matching window.
+   */
+  async findChromiumWindow(): Promise<string | null> {
+    try {
+      const result = await this.execDisplay('wmctrl -l');
+      for (const line of result.stdout.split('\n')) {
+        if (/chromium|chrome/i.test(line)) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length > 0) return parts[0];
+        }
+      }
+    } catch {
+      // wmctrl may not be installed or the display may have no windows yet
+    }
+    return null;
+  }
+
+  /** Focus the tracked Chromium window before delivering input events. */
+  async focusChromium(): Promise<void> {
+    if (!this.chromiumWindowId) {
+      this.chromiumWindowId = await this.findChromiumWindow();
+    }
+    if (this.chromiumWindowId) {
+      await this.execDisplay(`wmctrl -i -a ${this.chromiumWindowId}`).catch(() => {
+        // Window may have been replaced; clear the cache so we retry next time.
+        this.chromiumWindowId = null;
+      });
+    }
+  }
+
+  private invalidateWindowCache(): void {
+    this.chromiumWindowId = null;
+  }
+
+  async click(x: number, y: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<void> {
+    const btn = { left: 1, middle: 2, right: 3 }[button];
+    await this.execDisplay(`xdotool mousemove --sync ${x} ${y} click ${btn}`);
+  }
+
+  async doubleClick(x: number, y: number): Promise<void> {
+    await this.execDisplay(`xdotool mousemove --sync ${x} ${y} click --repeat 2 --delay 100 1`);
+  }
+
+  async drag(fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
+    await this.execDisplay(
+      `xdotool mousemove --sync ${fromX} ${fromY} mousedown 1 ` +
+      `sleep 0.1 mousemove --sync ${toX} ${toY} mouseup 1`,
+    );
+  }
+
+  async scroll(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    await this.execDisplay(`xdotool mousemove --sync ${x} ${y}`);
+    // xdotool: button 4 = scroll up, 5 = scroll down, 6 = left, 7 = right
+    const cmds: string[] = [];
+    if (deltaY !== 0) {
+      const btn = deltaY < 0 ? 4 : 5;
+      const n = Math.max(1, Math.ceil(Math.abs(deltaY) / 100));
+      cmds.push(`xdotool click --repeat ${n} --delay 50 ${btn}`);
+    }
+    if (deltaX !== 0) {
+      const btn = deltaX < 0 ? 6 : 7;
+      const n = Math.max(1, Math.ceil(Math.abs(deltaX) / 100));
+      cmds.push(`xdotool click --repeat ${n} --delay 50 ${btn}`);
+    }
+    for (const cmd of cmds) {
+      await this.execDisplay(cmd);
+    }
+  }
+
+  async type(text: string): Promise<void> {
+    await this.focusChromium();
+    const tmpFile = path.join(os.tmpdir(), `unity-type-${randomUUID()}.txt`);
+    try {
+      await fs.promises.writeFile(tmpFile, text, 'utf-8');
+      await this.execDisplay(
+        `xdotool type --clearmodifiers --delay 30 --file "${tmpFile}"`,
+        30_000,
+      );
+    } finally {
+      await fs.promises.unlink(tmpFile).catch(() => {});
+    }
+  }
+
+  async key(key: string): Promise<void> {
+    await this.focusChromium();
+    const xKey = XDOTOOL_KEY_MAP[key] ?? key;
+    await this.execDisplay(`xdotool key --clearmodifiers ${xKey}`);
+  }
+
+  async hotkey(keys: string[]): Promise<void> {
+    await this.focusChromium();
+    const xKeys = keys.map(k => XDOTOOL_MODIFIER_MAP[k] ?? XDOTOOL_KEY_MAP[k] ?? k);
+    await this.execDisplay(`xdotool key --clearmodifiers ${xKeys.join('+')}`);
+  }
+}
+
+// Dispatch a single action variant to a DisplayHarness.
+async function dispatchNativeAction(
+  harness: DisplayHarness,
+  action: any,
+  scale?: NativeObservationScale,
+): Promise<void> {
+  const mapPoint = (x: number, y: number) =>
+    (scale ? scaleObservationCoordsToDisplay(x, y, scale) : { x, y });
+
+  const v = action.variant as string;
+  switch (v) {
+    case 'mouse:click': {
+      const { x, y } = mapPoint(action.x, action.y);
+      await harness.click(x, y);
+      break;
+    }
+    case 'mouse:double_click': {
+      const { x, y } = mapPoint(action.x, action.y);
+      await harness.doubleClick(x, y);
+      break;
+    }
+    case 'mouse:right_click': {
+      const { x, y } = mapPoint(action.x, action.y);
+      await harness.click(x, y, 'right');
+      break;
+    }
+    case 'mouse:drag': {
+      const from = mapPoint(action.from.x, action.from.y);
+      const to = mapPoint(action.to.x, action.to.y);
+      await harness.drag(from.x, from.y, to.x, to.y);
+      break;
+    }
+    case 'mouse:scroll': {
+      const { x, y } = mapPoint(action.x, action.y);
+      await harness.scroll(x, y, action.deltaX ?? 0, action.deltaY ?? 0);
+      break;
+    }
+    case 'keyboard:type':
+      await harness.type(action.content);
+      break;
+    case 'keyboard:enter':
+      await harness.key('Return');
+      break;
+    case 'keyboard:tab':
+      await harness.key('Tab');
+      break;
+    case 'keyboard:backspace':
+      await harness.key('BackSpace');
+      break;
+    case 'keyboard:select_all':
+      await harness.hotkey(['ctrl', 'a']);
+      break;
+    case 'keyboard:key': {
+      const k = action.key as string;
+      if (k.includes('+')) {
+        await harness.hotkey(k.split('+').map((s: string) => s.trim()));
+      } else {
+        await harness.key(k);
+      }
+      break;
+    }
     default:
-      // Linux / other Unix — xfce4-screenshooter ships with xfce4-goodies
-      // (installed in the desktop Docker image). Falls back to scrot, then
-      // ImageMagick's import for non-XFCE environments.
-      return `xfce4-screenshooter -f -s "${dest}" 2>/dev/null || scrot "${dest}" 2>/dev/null || import -window root "${dest}"`;
+      throw new Error(`dispatchNativeAction: unhandled variant "${v}"`);
   }
 }
 
-function nativeScreenshot(): string {
-  const dest = path.join(os.tmpdir(), `unity-screenshot-${randomUUID()}.png`);
-  try {
-    execSync(nativeScreenshotCommand(dest), { timeout: 10_000 });
-    const buf = fs.readFileSync(dest);
-    return buf.toString('base64');
-  } finally {
-    try { fs.unlinkSync(dest); } catch (_) { /* already cleaned or never created */ }
-  }
-}
+const NATIVE_ACTION_VARIANTS = new Set([
+  'mouse:click',
+  'mouse:double_click',
+  'mouse:right_click',
+  'mouse:drag',
+  'mouse:scroll',
+  'keyboard:type',
+  'keyboard:enter',
+  'keyboard:tab',
+  'keyboard:backspace',
+  'keyboard:select_all',
+  'keyboard:key',
+]);
 
 let _screenshotInFlight = 0;
 
@@ -1722,26 +2104,31 @@ app.post('/screenshot', isAgentReady, async (req: Request, res: Response) => {
   const session = activeSessions.get(sessionId)!;
   console.log(`[screenshot] START session=${sessionId} mode=${session.mode} in_flight=${_screenshotInFlight}`);
   try {
-    // Use harness screenshot + transformScreenshot for ALL modes. This ensures the
-    // screenshot coordinate space matches the click coordinate space (both go through
-    // the Playwright page). For desktop mode, this captures the noVNC page which
-    // renders the VM desktop with noVNC's own scaling — the same coordinate space
-    // that page.mouse.click() uses.
-    const connector = session.agent.require(BrowserConnector);
-    const harness = connector.getHarness();
-    const tHarness = Date.now();
-    console.log(`[screenshot] harness_acquired=${tHarness - t0}ms`);
-    const rawImage = await harness.screenshot();
-    const tCapture = Date.now();
-    console.log(`[screenshot] playwright_capture=${tCapture - tHarness}ms`);
-    const image = await connector.transformScreenshot(rawImage);
-    const base64Image = await image.toBase64();
-    const cursorPosition = harness.getCursorPosition();
-    const tEncode = Date.now();
-    console.log(`[screenshot] base64_encode=${tEncode - tCapture}ms b64_len=${base64Image.length} total=${tEncode - t0}ms`);
-
-    cacheScreenshot(sessionId, base64Image, cursorPosition);
-    res.json({ screenshot: base64Image, cursorPosition });
+    if (session.displayHarness) {
+      const tNative = Date.now();
+      const { observationB64 } = await captureNativeObservation(session);
+      const tCapture = Date.now();
+      console.log(`[screenshot] native_capture=${tCapture - tNative}ms b64_len=${observationB64.length} total=${tCapture - t0}ms`);
+      cacheScreenshot(sessionId, observationB64, null);
+      res.json({ screenshot: observationB64, cursorPosition: null });
+    } else {
+      // Playwright path: page viewport screenshot with DPR normalisation and
+      // optional aspect-ratio scaling for headless web sessions.
+      const connector = session.agent.require(BrowserConnector);
+      const harness = connector.getHarness();
+      const tHarness = Date.now();
+      console.log(`[screenshot] harness_acquired=${tHarness - t0}ms`);
+      const rawImage = await harness.screenshot();
+      const tCapture = Date.now();
+      console.log(`[screenshot] playwright_capture=${tCapture - tHarness}ms`);
+      const image = await connector.transformScreenshot(rawImage);
+      const base64Image = await image.toBase64();
+      const cursorPosition = harness.getCursorPosition();
+      const tEncode = Date.now();
+      console.log(`[screenshot] base64_encode=${tEncode - tCapture}ms b64_len=${base64Image.length} total=${tEncode - t0}ms`);
+      cacheScreenshot(sessionId, base64Image, cursorPosition);
+      res.json({ screenshot: base64Image, cursorPosition });
+    }
     _screenshotInFlight--;
     console.log(`[screenshot] DONE total=${Date.now() - t0}ms in_flight=${_screenshotInFlight}`);
   } catch (err) {
@@ -1758,14 +2145,20 @@ app.post('/screenshot/latest', isAgentReady, async (req: Request, res: Response)
     res.json({ screenshot: session.latestScreenshot, cursorPosition: session.latestCursorPosition });
   } else {
     try {
-      const connector = session.agent.require(BrowserConnector);
-      const harness = connector.getHarness();
-      const rawImage = await harness.screenshot();
-      const image = await connector.transformScreenshot(rawImage);
-      const screenshot = await image.toBase64();
-      const cursorPosition = harness.getCursorPosition();
-      cacheScreenshot(sessionId!, screenshot, cursorPosition);
-      res.json({ screenshot, cursorPosition });
+      if (session.displayHarness) {
+        const { observationB64 } = await captureNativeObservation(session);
+        cacheScreenshot(sessionId!, observationB64, null);
+        res.json({ screenshot: observationB64, cursorPosition: null });
+      } else {
+        const connector = session.agent.require(BrowserConnector);
+        const harness = connector.getHarness();
+        const rawImage = await harness.screenshot();
+        const image = await connector.transformScreenshot(rawImage);
+        const screenshot = await image.toBase64();
+        const cursorPosition = harness.getCursorPosition();
+        cacheScreenshot(sessionId!, screenshot, cursorPosition);
+        res.json({ screenshot, cursorPosition });
+      }
     } catch (err) {
       handleAgentError(err, res, 'screenshot_failed');
     }
@@ -1854,24 +2247,37 @@ async function getFullPageContentForExtraction(page: any): Promise<string> {
   // Get all iframe element handles
   const iframeHandles = await page.locator('iframe').elementHandles();
 
-  // Iterate through each iframe handle and expand inline
+  // Iterate through each iframe handle and expand inline.
+  //
+  // Best-effort per iframe: the inline expansion runs an in-page
+  // DOMParser/innerHTML write, which is (a) a live DOM *mutation* and (b) a
+  // Trusted Types sink. Sites that enforce Trusted Types (e.g. LinkedIn) throw
+  // at `parseFromString` — importantly BEFORE the `replaceChild`, so nothing is
+  // mutated. We must not let one iframe abort the whole extraction: catch, skip
+  // that iframe, and fall through to the passive `page.content()` below, which
+  // serializes `documentElement.outerHTML` in the isolated world (no mutation,
+  // no main-world script, not a Trusted Types sink).
   for (const iframeHandle of iframeHandles) {
-    const frame = await iframeHandle.contentFrame();
-    if (frame) {
-      const iframeContent = await frame.content();
-      await iframeHandle.evaluate((iframeNode: HTMLIFrameElement, { content }: { content: string }) => {
-        const div = document.createElement('div');
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(content, 'text/html');
-        while (doc.body.firstChild) {
-          div.appendChild(doc.body.firstChild);
-        }
-        const headElements = doc.head.querySelectorAll('style, link[rel="stylesheet"]');
-        headElements.forEach(el => div.appendChild(el.cloneNode(true)));
-        div.dataset.expandedFromIframe = 'true';
-        div.dataset.iframeSrc = iframeNode.getAttribute('src') || '';
-        iframeNode.parentNode?.replaceChild(div, iframeNode);
-      }, { content: iframeContent });
+    try {
+      const frame = await iframeHandle.contentFrame();
+      if (frame) {
+        const iframeContent = await frame.content();
+        await iframeHandle.evaluate((iframeNode: HTMLIFrameElement, { content }: { content: string }) => {
+          const div = document.createElement('div');
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(content, 'text/html');
+          while (doc.body.firstChild) {
+            div.appendChild(doc.body.firstChild);
+          }
+          const headElements = doc.head.querySelectorAll('style, link[rel="stylesheet"]');
+          headElements.forEach(el => div.appendChild(el.cloneNode(true)));
+          div.dataset.expandedFromIframe = 'true';
+          div.dataset.iframeSrc = iframeNode.getAttribute('src') || '';
+          iframeNode.parentNode?.replaceChild(div, iframeNode);
+        }, { content: iframeContent });
+      }
+    } catch (err) {
+      console.warn(`[content] iframe inline-expansion skipped (likely Trusted Types): ${err}`);
     }
   }
 
@@ -3598,7 +4004,14 @@ function handleAgentError(err: unknown, res: Response, defaultErrorType = 'unkno
       adaptable: agentErr.options.adaptable
     });
   } else {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    let errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage.includes('closed')) {
+      const lifecycleHint = formatLastBrowserLifecycleHint();
+      if (lifecycleHint) {
+        console.error(`[browser-lifecycle] ${lifecycleHint}`);
+        errorMessage = `${errorMessage} | ${lifecycleHint}`;
+      }
+    }
     console.error(`Unknown Error: ${errorMessage}`);
     res.status(500).json({
       error: defaultErrorType,

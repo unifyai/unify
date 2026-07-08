@@ -24,7 +24,7 @@ create_auth_configs = false
 force = false
 
 [providers.pipedream]
-status = "disabled"
+status = "enabled"
 display_name = "Pipedream"
 default_priority = 20
 
@@ -35,17 +35,6 @@ max_items = 50000
 
 [providers.pipedream.sync]
 mode = "partial"
-app_slugs = [
-  "slack",
-  "github",
-  "hubspot",
-  "microsoft_outlook",
-  "microsoft_teams",
-  "microsoft_excel",
-  "onedrive",
-  "airtable",
-  "linear",
-  "salesforce"
-]
+app_slugs = []
 component_limit_per_app = 0
-include_all_apps = false
+include_all_apps = true

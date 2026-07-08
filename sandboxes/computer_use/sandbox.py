@@ -10,6 +10,7 @@ control for fast iteration on computer-use capabilities.
 
 Usage:
     .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject
+    .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject --model minimax-v3@minimax
     .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject --agent-url http://localhost:3000
 """
 
@@ -19,6 +20,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import re
 import sys
 import time
@@ -41,9 +43,31 @@ from sandboxes.utils import (
 
 LG = logging.getLogger("computer_use_sandbox")
 
-ANTHROPIC_MAX_EDGE = 1568
+from unify.common.observation_scaling import (
+    resolve_observation_scaling_policy,
+    compute_native_observation_scale,
+    scale_observation_coords_to_display,
+)
+from unify.settings import SETTINGS
 
 DEBUG_DIR = ROOT / ".debug_computer_use"
+
+_SANDBOX_LLM_MODEL: str = ""
+
+
+def resolve_sandbox_llm_model(explicit: str | None = None) -> str:
+    """Resolve the vision LLM model for agent-service and sandbox diagnostics."""
+    if explicit and explicit.strip():
+        return explicit.strip()
+    env_model = os.environ.get("UNITY_AGENT_SERVICE_LLM_MODEL", "").strip()
+    if env_model:
+        return env_model
+    return SETTINGS.UNIFY_MODEL
+
+
+def sandbox_llm_model() -> str:
+    """Return the active sandbox LLM model (set during ``main()``)."""
+    return _SANDBOX_LLM_MODEL or resolve_sandbox_llm_model()
 
 
 # ---------------------------------------------------------------------------
@@ -94,17 +118,143 @@ def save_debug_image(img: "Image.Image", name: str) -> Path:
 
 
 def log_dimensions(source: str, img: "Image.Image") -> None:
-    """Print image dimensions and warn about API downscaling."""
+    """Print image dimensions and report observation-space scaling for the configured model."""
     w, h = img.size
+    model = sandbox_llm_model()
+    policy = resolve_observation_scaling_policy(model)
+    scale = compute_native_observation_scale(w, h, policy)
     print(f"  [screenshot] {source} -> {w}x{h}")
-    if max(w, h) > ANTHROPIC_MAX_EDGE:
-        scale = ANTHROPIC_MAX_EDGE / max(w, h)
-        api_w, api_h = round(w * scale), round(h * scale)
+    if scale.observation_width != w or scale.observation_height != h:
         print(
-            f"  [warning] Anthropic API will downscale to ~{api_w}x{api_h} "
-            f"(max edge {ANTHROPIC_MAX_EDGE}px). LLM coordinates will be in "
-            f"the downscaled space, not {w}x{h}!",
+            f"  [observation] Model {model} -> observation space "
+            f"{scale.observation_width}x{scale.observation_height} "
+            f"(max edge {policy.max_edge}px). LLM coordinates will be in "
+            f"the observation space, not {w}x{h}!",
         )
+
+
+# ---------------------------------------------------------------------------
+# Native X11 diagnostics (xdotool / OS screenshot via agent-service /exec)
+# ---------------------------------------------------------------------------
+
+_NATIVE_SHOT_FILE = "_sandbox_native.png"
+
+_XDOTOOL_KEY_ALIASES = {
+    "ArrowDown": "Down",
+    "ArrowUp": "Up",
+    "ArrowLeft": "Left",
+    "ArrowRight": "Right",
+    "Enter": "Return",
+    "Escape": "Escape",
+    "Backspace": "BackSpace",
+    "Delete": "Delete",
+    "Tab": "Tab",
+}
+
+
+def _agent_auth_headers() -> dict[str, str]:
+    from unify.session_details import SESSION_DETAILS
+
+    return {"authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
+
+
+async def native_exec(agent_url: str, command: str, *, timeout: int = 30) -> dict:
+    """Run a shell command inside the desktop container via agent-service ``/exec``."""
+    import aiohttp
+
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            f"{agent_url}/exec",
+            json={"command": command, "timeout": timeout * 1000},
+            headers=_agent_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=timeout + 15),
+        ) as resp:
+            body = await resp.json()
+            if resp.status >= 400:
+                raise RuntimeError(f"/exec HTTP {resp.status}: {body}")
+            return body
+
+
+async def native_screenshot(agent_url: str, label: str = "native") -> "Image.Image":
+    """Capture the full ``:99`` X11 display (includes native menus and browser chrome)."""
+    import aiohttp
+    from PIL import Image
+
+    remote = _NATIVE_SHOT_FILE
+    shot_cmd = (
+        f"DISPLAY=:99 bash -lc "
+        f"'xfce4-screenshooter -f -s /Unity/Local/{remote} 2>/dev/null "
+        f"|| scrot /Unity/Local/{remote}'"
+    )
+    result = await native_exec(agent_url, shot_cmd)
+    if result.get("exitCode") != 0:
+        raise RuntimeError(f"native screenshot command failed: {result}")
+
+    async with aiohttp.ClientSession() as http:
+        async with http.post(
+            f"{agent_url}/files",
+            json={
+                "action": "read",
+                "filename": remote,
+                "encoding": "base64",
+            },
+            headers=_agent_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            body = await resp.json()
+            if resp.status >= 400:
+                raise RuntimeError(f"/files read failed: {body}")
+
+    img = Image.open(io.BytesIO(base64.b64decode(body["content"])))
+    save_debug_image(img, f"{time.strftime('%H%M%S')}_{label}")
+    log_dimensions(f"native:{label}", img)
+    return img
+
+
+async def native_click(
+    agent_url: str,
+    x: int,
+    y: int,
+    *,
+    button: str = "left",
+) -> dict:
+    """Click at display coordinates on ``:99`` (left/middle/right)."""
+    btn_map = {"left": 1, "middle": 2, "right": 3}
+    btn = btn_map.get(button, 1)
+    cmd = f"DISPLAY=:99 xdotool mousemove --sync {x} {y} click {btn}"
+    return await native_exec(agent_url, cmd)
+
+
+async def native_key(agent_url: str, key: str) -> dict:
+    """Send a key via xdotool (accepts Playwright-style names like ``ArrowDown``)."""
+    xdotool_key = _XDOTOOL_KEY_ALIASES.get(key, key)
+    cmd = f"DISPLAY=:99 xdotool key --clearmodifiers {xdotool_key}"
+    return await native_exec(agent_url, cmd)
+
+
+async def native_windows(agent_url: str) -> str:
+    """List X11 windows (``wmctrl -l`` output)."""
+    result = await native_exec(agent_url, "DISPLAY=:99 wmctrl -l")
+    return result.get("stdout", "")
+
+
+async def compare_native_vs_playwright(
+    session: Any,
+    agent_url: str,
+    *,
+    label: str = "overlay_compare",
+) -> tuple["Image.Image", "Image.Image"]:
+    """Save Playwright page screenshot vs full native display screenshot side by side."""
+    ts = time.strftime("%H%M%S")
+    pw_img = await _get_screenshot_logged(session, "playwright")
+    save_debug_image(pw_img, f"{ts}_{label}_playwright")
+    nat_img = await native_screenshot(agent_url, f"{label}_native")
+    print(
+        f"  Playwright {pw_img.size} = page viewport only (no native context menus).\n"
+        f"  Native     {nat_img.size} = full :99 display (menus/chrome visible).\n"
+        f"  Saved to {DEBUG_DIR}/{ts}_{label}_*.png",
+    )
+    return pw_img, nat_img
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +349,7 @@ async def ask_coords(
     img.save(buf, format="PNG")
     b64_data = base64.b64encode(buf.getvalue()).decode("ascii")
 
-    client = new_llm_client("claude-4.6-opus@anthropic", origin="computer_use_sandbox")
+    client = new_llm_client(sandbox_llm_model(), origin="computer_use_sandbox")
 
     messages = [
         {
@@ -233,19 +383,23 @@ async def ask_coords(
 
     cx, cy = int(match.group(1)), int(match.group(2))
 
-    if max(w, h) > ANTHROPIC_MAX_EDGE:
-        scale = ANTHROPIC_MAX_EDGE / max(w, h)
-        api_w, api_h = round(w * scale), round(h * scale)
-        if cx <= api_w and cy <= api_h:
-            inv_scale = max(w, h) / ANTHROPIC_MAX_EDGE
-            orig_cx, orig_cy = round(cx * inv_scale), round(cy * inv_scale)
-            print(
-                f"  [coords] LLM returned ({cx}, {cy}) — likely in downscaled "
-                f"{api_w}x{api_h} space",
+    model = sandbox_llm_model()
+    policy = resolve_observation_scaling_policy(model)
+    obs_scale = compute_native_observation_scale(w, h, policy)
+    if obs_scale.observation_width != w or obs_scale.observation_height != h:
+        obs_w, obs_h = obs_scale.observation_width, obs_scale.observation_height
+        if cx <= obs_w and cy <= obs_h:
+            orig_cx, orig_cy = scale_observation_coords_to_display(
+                cx,
+                cy,
+                obs_scale,
             )
             print(
-                f"  [scaled] Mapped to viewport: ({orig_cx}, {orig_cy}) "
-                f"(scale factor: {inv_scale:.3f})",
+                f"  [coords] LLM returned ({cx}, {cy}) — likely in observation "
+                f"{obs_w}x{obs_h} space (model={model})",
+            )
+            print(
+                f"  [scaled] Mapped to viewport: ({orig_cx}, {orig_cy})",
             )
             marked = draw_click_marker(
                 img,
@@ -629,6 +783,7 @@ class AsyncREPL:
         print("Available objects:")
         print("  cp            - ComputerPrimitives instance")
         print("  agent_url     - Agent service URL")
+        print("  llm_model     - Vision LLM configured for act()")
         print()
         print("--- Web-VM mode (browser on VM desktop) ---")
         print("  session = await cp.web.new_session(visible=True)")
@@ -648,6 +803,14 @@ class AsyncREPL:
         print("  coords = await ask_coords(session, 'the Submit button')")
         print("  await test_click(session, 'the Email input field')")
         print("  await compare_screenshots(session, cp)")
+        print()
+        print("Native X11 probes (via agent-service /exec — restart REPL if missing):")
+        print("  await native_windows(agent_url)")
+        print("  img = await native_screenshot(agent_url, 'desktop')")
+        print("  await native_click(agent_url, x, y)          # display coords")
+        print("  await native_click(agent_url, x, y, button='right')")
+        print("  await native_key(agent_url, 'ArrowDown')")
+        print("  await compare_native_vs_playwright(session, agent_url)")
         print()
         print("Coordinate debug (pass session or cp.desktop):")
         print(
@@ -752,7 +915,22 @@ def main() -> None:
         default="http://localhost:3000",
         help="URL of the Magnitude agent service (Docker container).",
     )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Vision LLM for agent-service act() and sandbox diagnostics "
+            "(e.g. minimax-v3@minimax, claude-4.6-sonnet@anthropic). "
+            "Defaults to UNITY_AGENT_SERVICE_LLM_MODEL, then UNIFY_MODEL."
+        ),
+    )
     args = parser.parse_args()
+
+    global _SANDBOX_LLM_MODEL
+    _SANDBOX_LLM_MODEL = resolve_sandbox_llm_model(args.model)
 
     activate_project(args.project_name, args.overwrite)
     configure_sandbox_logging(
@@ -765,11 +943,27 @@ def main() -> None:
     from sandboxes.conversation_manager.desktop_bootstrap import (
         try_auto_bootstrap_desktop,
     )
+    from sandboxes.conversation_manager.gateway_bootstrap import (
+        stop_gateway,
+        try_start_gateway_direct,
+    )
 
-    print(f"\nBootstrapping desktop container...")
+    print("\nBootstrapping local gateway...")
+    gw_result = try_start_gateway_direct(
+        repo_root=ROOT,
+        progress=lambda msg: print(f"  {msg}"),
+    )
+    if not gw_result.ok:
+        print(f"\n  Gateway bootstrap failed: {gw_result.summary}")
+        sys.exit(1)
+    print(f"  {gw_result.summary}")
+    gateway_process = gw_result.process
+
+    print("\nBootstrapping desktop container...")
     boot_result = try_auto_bootstrap_desktop(
         repo_root=ROOT,
         agent_server_url=agent_url,
+        llm_model=_SANDBOX_LLM_MODEL,
         progress=lambda msg: print(f"  {msg}"),
     )
     if not boot_result.ok:
@@ -787,11 +981,15 @@ def main() -> None:
     webbrowser.open(novnc_url)
 
     print(f"\nAgent service: {agent_url}")
+    print(f"LLM model:     {_SANDBOX_LLM_MODEL}")
     print(f"Debug output:  {DEBUG_DIR}/")
 
+    from unify.function_manager.primitives.runtime import _vm_ready
+
+    _vm_ready.set()
     cp = ComputerPrimitives(
         computer_mode="magnitude",
-        agent_server_url=agent_url,
+        container_url=agent_url,
     )
 
     loop = asyncio.new_event_loop()
@@ -800,6 +998,7 @@ def main() -> None:
     namespace = {
         "cp": cp,
         "agent_url": agent_url,
+        "llm_model": _SANDBOX_LLM_MODEL,
         "asyncio": asyncio,
         "click_debug": click_debug,
         "type_debug": type_debug,
@@ -813,6 +1012,12 @@ def main() -> None:
         "js_eval": js_eval,
         "viewport_info": viewport_info,
         "diagnose_coordinates": diagnose_coordinates,
+        "native_exec": native_exec,
+        "native_screenshot": native_screenshot,
+        "native_click": native_click,
+        "native_key": native_key,
+        "native_windows": native_windows,
+        "compare_native_vs_playwright": compare_native_vs_playwright,
         "DEBUG_DIR": DEBUG_DIR,
     }
 
@@ -847,6 +1052,8 @@ def main() -> None:
         )
 
         stop_desktop_container(progress=lambda msg: print(f"  {msg}"))
+        if gateway_process is not None:
+            stop_gateway(gateway_process, progress=lambda msg: print(f"  {msg}"))
         print("Done.")
 
 

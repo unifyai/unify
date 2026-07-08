@@ -476,3 +476,23 @@ def test_update_task_outbound_operation_record_posts_partial_updates(monkeypatch
         "provider_message_id": "msg-123",
         "history_message_id": 9,
     }
+
+
+def test_task_machine_contexts_route_to_owner_team_for_team_owned():
+    """Team-owned assistants keep task-machine state on the team Tasks tree."""
+    from unify.session_details import SESSION_DETAILS
+
+    original_owner = SESSION_DETAILS.owner_team_id
+    SESSION_DETAILS.owner_team_id = 5
+    try:
+        assert build_task_activation_context_name() == "Teams/5/Tasks/Activations"
+    finally:
+        SESSION_DETAILS.owner_team_id = original_owner
+
+    # Explicit user/assistant contexts still take precedence (cross-assistant
+    # admin paths address a specific personal tree).
+    explicit = build_task_activation_context_name(
+        user_context="user123",
+        assistant_context="42",
+    )
+    assert explicit == "user123/42/Tasks/Activations"
