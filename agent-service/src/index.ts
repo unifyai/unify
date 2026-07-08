@@ -1854,24 +1854,37 @@ async function getFullPageContentForExtraction(page: any): Promise<string> {
   // Get all iframe element handles
   const iframeHandles = await page.locator('iframe').elementHandles();
 
-  // Iterate through each iframe handle and expand inline
+  // Iterate through each iframe handle and expand inline.
+  //
+  // Best-effort per iframe: the inline expansion runs an in-page
+  // DOMParser/innerHTML write, which is (a) a live DOM *mutation* and (b) a
+  // Trusted Types sink. Sites that enforce Trusted Types (e.g. LinkedIn) throw
+  // at `parseFromString` — importantly BEFORE the `replaceChild`, so nothing is
+  // mutated. We must not let one iframe abort the whole extraction: catch, skip
+  // that iframe, and fall through to the passive `page.content()` below, which
+  // serializes `documentElement.outerHTML` in the isolated world (no mutation,
+  // no main-world script, not a Trusted Types sink).
   for (const iframeHandle of iframeHandles) {
-    const frame = await iframeHandle.contentFrame();
-    if (frame) {
-      const iframeContent = await frame.content();
-      await iframeHandle.evaluate((iframeNode: HTMLIFrameElement, { content }: { content: string }) => {
-        const div = document.createElement('div');
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(content, 'text/html');
-        while (doc.body.firstChild) {
-          div.appendChild(doc.body.firstChild);
-        }
-        const headElements = doc.head.querySelectorAll('style, link[rel="stylesheet"]');
-        headElements.forEach(el => div.appendChild(el.cloneNode(true)));
-        div.dataset.expandedFromIframe = 'true';
-        div.dataset.iframeSrc = iframeNode.getAttribute('src') || '';
-        iframeNode.parentNode?.replaceChild(div, iframeNode);
-      }, { content: iframeContent });
+    try {
+      const frame = await iframeHandle.contentFrame();
+      if (frame) {
+        const iframeContent = await frame.content();
+        await iframeHandle.evaluate((iframeNode: HTMLIFrameElement, { content }: { content: string }) => {
+          const div = document.createElement('div');
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(content, 'text/html');
+          while (doc.body.firstChild) {
+            div.appendChild(doc.body.firstChild);
+          }
+          const headElements = doc.head.querySelectorAll('style, link[rel="stylesheet"]');
+          headElements.forEach(el => div.appendChild(el.cloneNode(true)));
+          div.dataset.expandedFromIframe = 'true';
+          div.dataset.iframeSrc = iframeNode.getAttribute('src') || '';
+          iframeNode.parentNode?.replaceChild(div, iframeNode);
+        }, { content: iframeContent });
+      }
+    } catch (err) {
+      console.warn(`[content] iframe inline-expansion skipped (likely Trusted Types): ${err}`);
     }
   }
 
