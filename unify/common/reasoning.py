@@ -166,11 +166,11 @@ async def query_llm(
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
-    **Text-only.** ``query_llm`` takes a string ``prompt`` and cannot accept
-    images — do not embed base64 or data-URIs in the prompt (the model cannot
-    see them). To reason about a screenshot or image, ``display()`` it (you can
-    then see it directly on your next turn) or use a computer session's
-    ``observe()`` for structured extraction.
+    **Text and vision.** ``query_llm`` takes a string ``prompt``. For screenshots
+    or other raster images, pass them through ``images=[...]`` (local path, PNG
+    bytes, or ``data:image/...`` URL). Images are scaled to the same
+    model-aware observation space as ``display()`` before the vision call.
+    Do not embed base64 in the prompt text itself.
 
     Good uses
     ---------
@@ -317,7 +317,11 @@ async def query_llm(
             **generate_kwargs,
         )
     else:
-        from unify.common.image_content import to_image_content_block
+        from unify.common.image_content import (
+            scale_image_payload_for_observation,
+            to_image_content_block,
+        )
+        from unify.common.observation_scaling import resolve_observation_model
 
         if model is None:
             client = new_vision_llm_client(**client_config)
@@ -325,7 +329,12 @@ async def query_llm(
             client = new_llm_client(model, **client_config)
 
         client.set_system_message(system or DEFAULT_LLM_QUERY_SYSTEM)
-        image_blocks = [to_image_content_block(image) for image in images]
+        observation_model = model or resolve_observation_model()
+        scaled_images = [
+            scale_image_payload_for_observation(image, model=observation_model)
+            for image in images
+        ]
+        image_blocks = [to_image_content_block(image) for image in scaled_images]
         messages = [
             {
                 "role": "user",
