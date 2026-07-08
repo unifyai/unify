@@ -203,6 +203,52 @@ class TeamsChannelMessage(CommsMessage):
 
 
 @dataclass
+class MsTeamsBotMessage(CommsMessage):
+    """A 1:1 DM via the org-installed Unify Teams app (Bot Framework).
+
+    Distinct from :class:`TeamsMessage` (delegated per-user Graph). Replies route
+    back into the same Teams conversation via ``send_ms_teams_bot_message`` using
+    the Microsoft ``tenant_id`` and the Bot Framework ``conversation_id`` — both
+    are surfaced to the assistant by the renderer.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    tenant_id: str = ""
+    conversation_id: str = ""
+    channel_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class MsTeamsBotChannelMessage(CommsMessage):
+    """A group chat / Teams channel message via the org-installed Unify Teams app.
+
+    The shared-conversation counterpart of :class:`MsTeamsBotMessage`. Replies
+    route back via ``send_ms_teams_bot_channel_message`` using the Microsoft
+    ``tenant_id`` and the Bot Framework ``conversation_id``; ``team_id`` /
+    ``channel_id`` / ``thread_id`` identify the channel thread.
+    """
+
+    name: str
+    content: str
+    timestamp: datetime
+    role: str  # "user" or "assistant"
+    tenant_id: str = ""
+    conversation_id: str = ""
+    team_id: str = ""
+    channel_id: str = ""
+    thread_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
 class ApiMessage(CommsMessage):
     """A programmatic API message, optionally with attachments and developer-supplied tags.
 
@@ -540,6 +586,8 @@ class ContactIndex:
         routing_metadata: dict | None = None,
         guild_id: str | None = None,
         bot_id: str | None = None,
+        tenant_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> "GlobalThreadEntry":
         """
         Build a GlobalThreadEntry without appending it to the global thread.
@@ -657,6 +705,34 @@ class ContactIndex:
                 message_id=message_id or "",
                 attachments=attachments or [],
             )
+        elif thread_name == Medium.MS_TEAMS_BOT_MESSAGE:
+            message = MsTeamsBotMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                tenant_id=tenant_id or "",
+                conversation_id=conversation_id or chat_id or "",
+                channel_id=channel_id or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+                routing_metadata=routing_metadata or {},
+            )
+        elif thread_name == Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE:
+            message = MsTeamsBotChannelMessage(
+                name=name,
+                content=message_content or "",
+                timestamp=timestamp,
+                role=role,
+                tenant_id=tenant_id or "",
+                conversation_id=conversation_id or chat_id or "",
+                team_id=team_id or "",
+                channel_id=channel_id or "",
+                thread_id=thread_id or "",
+                message_id=message_id or "",
+                attachments=attachments or [],
+                routing_metadata=routing_metadata or {},
+            )
         elif thread_name == Medium.API_MESSAGE:
             message = ApiMessage(
                 name=name,
@@ -709,6 +785,8 @@ class ContactIndex:
         routing_metadata: dict | None = None,
         guild_id: str | None = None,
         bot_id: str | None = None,
+        tenant_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> int:
         """
         Build a message and append it to the shared global thread.
@@ -741,6 +819,8 @@ class ContactIndex:
             routing_metadata=routing_metadata,
             guild_id=guild_id,
             bot_id=bot_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
         )
         self.global_thread.append(entry)
         msg = entry.message

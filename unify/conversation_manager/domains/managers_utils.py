@@ -429,7 +429,8 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     message_content=cm_event.content,
                     role="assistant",
                     timestamp=ts,
-                    chat_id=getattr(cm_event, "conversation_id", None),
+                    tenant_id=getattr(cm_event, "tenant_id", None),
+                    conversation_id=getattr(cm_event, "conversation_id", None),
                 )
             case "MsTeamsBotMessageReceived":
                 entry = cm.contact_index.build_message(
@@ -440,7 +441,8 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     role="user",
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
-                    chat_id=getattr(cm_event, "conversation_id", None),
+                    tenant_id=getattr(cm_event, "tenant_id", None),
+                    conversation_id=getattr(cm_event, "conversation_id", None),
                     channel_id=getattr(cm_event, "channel_id", None),
                     message_id=getattr(cm_event, "message_id", None),
                     routing_metadata=getattr(cm_event, "routing_metadata", None),
@@ -453,7 +455,8 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     message_content=cm_event.content,
                     role="assistant",
                     timestamp=ts,
-                    chat_id=getattr(cm_event, "conversation_id", None),
+                    tenant_id=getattr(cm_event, "tenant_id", None),
+                    conversation_id=getattr(cm_event, "conversation_id", None),
                 )
             case "MsTeamsBotChannelMessageReceived":
                 entry = cm.contact_index.build_message(
@@ -464,7 +467,8 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     role="user",
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
-                    chat_id=getattr(cm_event, "conversation_id", None),
+                    tenant_id=getattr(cm_event, "tenant_id", None),
+                    conversation_id=getattr(cm_event, "conversation_id", None),
                     channel_id=getattr(cm_event, "channel_id", None),
                     team_id=getattr(cm_event, "team_id", None),
                     thread_id=getattr(cm_event, "thread_id", None),
