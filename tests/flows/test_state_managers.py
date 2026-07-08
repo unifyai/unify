@@ -60,9 +60,10 @@ async def test_core_state_managers_persist_and_recall(
 
     # Secrets: natural-language store -> primitives.secrets.update -> secret.
     secret_name = f"FLOW_SECRET_{token.upper()}"
+    secret_value = f"flow-val-{token}"
     async with capture_events("ManagerMethod") as secret_events:
         await flow_session.inject_unify_message(
-            f"Store a secret named {secret_name} with the value sk-flow-{token}. "
+            f"Store a secret named {secret_name} with the value {secret_value}. "
             "Confirm once it is saved.",
         )
         await flow_session.wait_for_secret_name(secret_name, timeout=240.0)
