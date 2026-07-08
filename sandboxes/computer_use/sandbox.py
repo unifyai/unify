@@ -10,6 +10,7 @@ control for fast iteration on computer-use capabilities.
 
 Usage:
     .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject
+    .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject --model minimax-v3@minimax
     .venv/bin/python -m sandboxes.computer_use.sandbox -p TestProject --agent-url http://localhost:3000
 """
 
@@ -19,6 +20,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import re
 import sys
 import time
@@ -41,9 +43,31 @@ from sandboxes.utils import (
 
 LG = logging.getLogger("computer_use_sandbox")
 
-ANTHROPIC_MAX_EDGE = 1568
+from unify.common.observation_scaling import (
+    resolve_observation_scaling_policy,
+    compute_native_observation_scale,
+    scale_observation_coords_to_display,
+)
+from unify.settings import SETTINGS
 
 DEBUG_DIR = ROOT / ".debug_computer_use"
+
+_SANDBOX_LLM_MODEL: str = ""
+
+
+def resolve_sandbox_llm_model(explicit: str | None = None) -> str:
+    """Resolve the vision LLM model for agent-service and sandbox diagnostics."""
+    if explicit and explicit.strip():
+        return explicit.strip()
+    env_model = os.environ.get("UNITY_AGENT_SERVICE_LLM_MODEL", "").strip()
+    if env_model:
+        return env_model
+    return SETTINGS.UNIFY_MODEL
+
+
+def sandbox_llm_model() -> str:
+    """Return the active sandbox LLM model (set during ``main()``)."""
+    return _SANDBOX_LLM_MODEL or resolve_sandbox_llm_model()
 
 
 # ---------------------------------------------------------------------------
@@ -94,16 +118,18 @@ def save_debug_image(img: "Image.Image", name: str) -> Path:
 
 
 def log_dimensions(source: str, img: "Image.Image") -> None:
-    """Print image dimensions and warn about API downscaling."""
+    """Print image dimensions and report observation-space scaling for the configured model."""
     w, h = img.size
+    model = sandbox_llm_model()
+    policy = resolve_observation_scaling_policy(model)
+    scale = compute_native_observation_scale(w, h, policy)
     print(f"  [screenshot] {source} -> {w}x{h}")
-    if max(w, h) > ANTHROPIC_MAX_EDGE:
-        scale = ANTHROPIC_MAX_EDGE / max(w, h)
-        api_w, api_h = round(w * scale), round(h * scale)
+    if scale.observation_width != w or scale.observation_height != h:
         print(
-            f"  [warning] Anthropic API will downscale to ~{api_w}x{api_h} "
-            f"(max edge {ANTHROPIC_MAX_EDGE}px). LLM coordinates will be in "
-            f"the downscaled space, not {w}x{h}!",
+            f"  [observation] Model {model} -> observation space "
+            f"{scale.observation_width}x{scale.observation_height} "
+            f"(max edge {policy.max_edge}px). LLM coordinates will be in "
+            f"the observation space, not {w}x{h}!",
         )
 
 
@@ -323,7 +349,7 @@ async def ask_coords(
     img.save(buf, format="PNG")
     b64_data = base64.b64encode(buf.getvalue()).decode("ascii")
 
-    client = new_llm_client("claude-4.6-opus@anthropic", origin="computer_use_sandbox")
+    client = new_llm_client(sandbox_llm_model(), origin="computer_use_sandbox")
 
     messages = [
         {
@@ -357,19 +383,23 @@ async def ask_coords(
 
     cx, cy = int(match.group(1)), int(match.group(2))
 
-    if max(w, h) > ANTHROPIC_MAX_EDGE:
-        scale = ANTHROPIC_MAX_EDGE / max(w, h)
-        api_w, api_h = round(w * scale), round(h * scale)
-        if cx <= api_w and cy <= api_h:
-            inv_scale = max(w, h) / ANTHROPIC_MAX_EDGE
-            orig_cx, orig_cy = round(cx * inv_scale), round(cy * inv_scale)
-            print(
-                f"  [coords] LLM returned ({cx}, {cy}) — likely in downscaled "
-                f"{api_w}x{api_h} space",
+    model = sandbox_llm_model()
+    policy = resolve_observation_scaling_policy(model)
+    obs_scale = compute_native_observation_scale(w, h, policy)
+    if obs_scale.observation_width != w or obs_scale.observation_height != h:
+        obs_w, obs_h = obs_scale.observation_width, obs_scale.observation_height
+        if cx <= obs_w and cy <= obs_h:
+            orig_cx, orig_cy = scale_observation_coords_to_display(
+                cx,
+                cy,
+                obs_scale,
             )
             print(
-                f"  [scaled] Mapped to viewport: ({orig_cx}, {orig_cy}) "
-                f"(scale factor: {inv_scale:.3f})",
+                f"  [coords] LLM returned ({cx}, {cy}) — likely in observation "
+                f"{obs_w}x{obs_h} space (model={model})",
+            )
+            print(
+                f"  [scaled] Mapped to viewport: ({orig_cx}, {orig_cy})",
             )
             marked = draw_click_marker(
                 img,
@@ -753,6 +783,7 @@ class AsyncREPL:
         print("Available objects:")
         print("  cp            - ComputerPrimitives instance")
         print("  agent_url     - Agent service URL")
+        print("  llm_model     - Vision LLM configured for act()")
         print()
         print("--- Web-VM mode (browser on VM desktop) ---")
         print("  session = await cp.web.new_session(visible=True)")
@@ -884,7 +915,22 @@ def main() -> None:
         default="http://localhost:3000",
         help="URL of the Magnitude agent service (Docker container).",
     )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Vision LLM for agent-service act() and sandbox diagnostics "
+            "(e.g. minimax-v3@minimax, claude-4.6-sonnet@anthropic). "
+            "Defaults to UNITY_AGENT_SERVICE_LLM_MODEL, then UNIFY_MODEL."
+        ),
+    )
     args = parser.parse_args()
+
+    global _SANDBOX_LLM_MODEL
+    _SANDBOX_LLM_MODEL = resolve_sandbox_llm_model(args.model)
 
     activate_project(args.project_name, args.overwrite)
     configure_sandbox_logging(
@@ -917,6 +963,7 @@ def main() -> None:
     boot_result = try_auto_bootstrap_desktop(
         repo_root=ROOT,
         agent_server_url=agent_url,
+        llm_model=_SANDBOX_LLM_MODEL,
         progress=lambda msg: print(f"  {msg}"),
     )
     if not boot_result.ok:
@@ -934,6 +981,7 @@ def main() -> None:
     webbrowser.open(novnc_url)
 
     print(f"\nAgent service: {agent_url}")
+    print(f"LLM model:     {_SANDBOX_LLM_MODEL}")
     print(f"Debug output:  {DEBUG_DIR}/")
 
     from unify.function_manager.primitives.runtime import _vm_ready
@@ -950,6 +998,7 @@ def main() -> None:
     namespace = {
         "cp": cp,
         "agent_url": agent_url,
+        "llm_model": _SANDBOX_LLM_MODEL,
         "asyncio": asyncio,
         "click_debug": click_debug,
         "type_debug": type_debug,
