@@ -386,6 +386,8 @@ def test_discovery_first_guidance_separates_search_from_execution_choice():
         discovery_first_policy=True,
     )
 
+    assert "Discovery index scope" in prompt
+    assert "deliberately excluded" in prompt
     assert "Search is a discovery step" in prompt
     assert "not an execution decision." in prompt
     assert (
@@ -552,6 +554,8 @@ def test_external_app_integration_absent_without_execute_code():
     )
 
     assert "### External App Integration" not in prompt
+    assert "Discovery index scope" in prompt
+    assert "prompt-documented callable by exact name" in prompt
 
 
 # ────────────────────────────────────────────────────────────────────────────
