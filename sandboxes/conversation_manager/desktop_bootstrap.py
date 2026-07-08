@@ -30,6 +30,7 @@ ProgressCallback = Callable[[str], None]
 
 DESKTOP_IMAGE_TAG = "unity-desktop"
 DESKTOP_CONTAINER_NAME = "unity-desktop-sandbox"
+_DEFAULT_LOCAL_COMMS_URL = "http://localhost:8787"
 
 # Env vars referenced by deploy/desktop/supervisord.conf via %(ENV_X)s interpolation.
 # These must be passed as explicit ``docker run -e KEY=VALUE`` flags — supervisord
@@ -388,6 +389,14 @@ def _parse_env_file(env_file: Path) -> dict[str, str]:
     return values
 
 
+def _rewrite_local_host_for_container(value: str) -> str:
+    """Map host-loopback URLs so processes inside Docker reach the host."""
+    return value.replace("localhost", "host.docker.internal").replace(
+        "127.0.0.1",
+        "host.docker.internal",
+    )
+
+
 def _container_env_values(*, repo_root: Path) -> dict[str, str]:
     """Resolve container env vars from the process environment and repo ``.env``."""
     file_values = _parse_env_file(repo_root / ".env")
@@ -395,11 +404,29 @@ def _container_env_values(*, repo_root: Path) -> dict[str, str]:
     for key in CONTAINER_ENV_KEYS:
         value = os.environ.get(key) or file_values.get(key) or ""
         value = value.strip()
-        if not value:
-            continue
-        if "localhost" in value:
-            value = value.replace("localhost", "host.docker.internal")
-        resolved[key] = value
+        if value:
+            resolved[key] = value
+
+    gateway = (
+        resolved.get("UNITY_GATEWAY_URL")
+        or resolved.get("UNITY_COMMS_URL")
+        or _DEFAULT_LOCAL_COMMS_URL
+    )
+    comms = resolved.get("UNITY_COMMS_URL") or gateway
+    gateway = resolved.get("UNITY_GATEWAY_URL") or comms
+    resolved["UNITY_GATEWAY_URL"] = gateway
+    resolved["UNITY_COMMS_URL"] = comms
+
+    if not resolved.get("UNIFY_MODEL"):
+        try:
+            from unify.settings import SETTINGS
+
+            resolved["UNIFY_MODEL"] = SETTINGS.UNIFY_MODEL
+        except Exception:
+            pass
+
+    for key, value in list(resolved.items()):
+        resolved[key] = _rewrite_local_host_for_container(value)
     return resolved
 
 
