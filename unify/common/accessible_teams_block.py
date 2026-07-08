@@ -24,7 +24,8 @@ _ROUTING_RULES = """Routing rules:
 - Use a shared team only when the content clearly belongs to that team's named team, domain, or scope of work.
 - If the user asks you to write something more broadly than personal memory and the right team is unclear, ask a brief clarifying question before writing.
 - Never invent a shared team destination. Use only personal memory or one of the listed team ids.
-- ``team:<id>`` tokens route memory and tasks only. Contact-addressed comms (``send_unify_message``, SMS, email, and similar) require an integer contact id; never pass a team token as ``contact_id``."""
+- ``team:<id>`` tokens route memory and tasks only. Contact-addressed comms (``send_unify_message``, SMS, email, and similar) require an integer contact id; never pass a team token as ``contact_id``.
+- Team group chat is the one exception: a Unify message whose context carries a ``team_id`` was posted in that team's group chat (visible to every member, like a large email CC chain). Reply in the room by passing the same integer ``team_id`` to ``send_unify_message``; omit it to reply privately in the sender's 1:1 thread."""
 
 
 def build_accessible_teams_block(team_summaries: list[TeamSummary]) -> str:

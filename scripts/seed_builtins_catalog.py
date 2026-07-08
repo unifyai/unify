@@ -68,6 +68,10 @@ BOOTSTRAP_TERMINAL_STATUSES = {BOOTSTRAP_STATUS_SUCCESS, "skipped", "failed"}
 BOOTSTRAP_POLL_BACKOFF_CAP = 60.0
 BUILTINS_BOOTSTRAP_SEED_OWNER = "public-builtins"
 INTEGRATION_BOOTSTRAP_EXECUTORS = {"direct_worker", "api", "none"}
+FORCE_OVERRIDE_ENV = "UNITY_INTEGRATION_BOOTSTRAP_FORCE_OVERRIDE"
+FORCE_TRUE_VALUES = {"1", "true", "yes", "on", "force", "forced"}
+FORCE_FALSE_VALUES = {"0", "false", "no", "off", "skip", "disabled", "disable"}
+FORCE_MANIFEST_VALUES = {"", "manifest", "auto", "default", "unset"}
 
 
 class ProviderBootstrapPlan(NamedTuple):
@@ -82,6 +86,23 @@ class ProviderBootstrapPlan(NamedTuple):
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in FORCE_TRUE_VALUES
+
+
+def _force_override_from_env(name: str = FORCE_OVERRIDE_ENV) -> bool | None:
+    value = os.environ.get(name, "").strip().lower()
+    if value in FORCE_MANIFEST_VALUES:
+        return None
+    if value in FORCE_TRUE_VALUES:
+        return True
+    if value in FORCE_FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"{name} must be one of manifest/auto, true/on, or false/off; got {value!r}",
+    )
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -110,12 +131,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--force",
         action="store_true",
-        default=os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_FORCE", "").lower()
-        in {"1", "true", "yes", "on"},
+        default=_env_flag("UNITY_INTEGRATION_BOOTSTRAP_FORCE"),
         help=(
             "Force a full integration resync: bypass the manifest-hash bootstrap-state "
             "skip and the server-side per-unit hash/checkpoint skips so every app and "
-            "tool row is rewritten. Defaults to UNITY_INTEGRATION_BOOTSTRAP_FORCE."
+            "tool row is rewritten. Defaults to UNITY_INTEGRATION_BOOTSTRAP_FORCE; "
+            f"{FORCE_OVERRIDE_ENV}=true|false|manifest takes precedence."
         ),
     )
     return parser.parse_args(argv)
@@ -794,13 +815,15 @@ def _sync_integration_bootstrap_manifest(
     base_url: str,
     admin_key: str,
     force: bool = False,
+    force_override: bool | None = None,
 ) -> bool:
     manifest = _load_manifest(manifest_path)
     logging.info(
-        "Starting integration bootstrap manifest path=%s providers=%s force=%s",
+        "Starting integration bootstrap manifest path=%s providers=%s force=%s force_override=%s",
         manifest_path,
         len(manifest["providers"]),
         force,
+        force_override,
     )
     changed = False
     for backend_id, config in sorted(manifest["providers"].items()):
@@ -812,14 +835,17 @@ def _sync_integration_bootstrap_manifest(
             config=config,
         )
         executor = _integration_bootstrap_executor(plan.environment)
-        provider_force = force or plan.force
+        provider_force = (
+            force_override if force_override is not None else force or plan.force
+        )
         logging.info(
-            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s executor=%s force=%s",
+            "Checking integration bootstrap state backend=%s environment=%s desired_hash=%s executor=%s force=%s manifest_force=%s",
             plan.backend_id,
             plan.environment,
             plan.desired_hash,
             executor,
             provider_force,
+            plan.force,
         )
         state = _bootstrap_state(
             base_url=base_url,
@@ -940,6 +966,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=base_url,
             admin_key=args.admin_key,
             force=args.force,
+            force_override=_force_override_from_env(),
         )
     else:
         integrations_changed = seed_builtin_integrations()

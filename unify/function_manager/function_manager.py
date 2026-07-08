@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import dataclasses
 import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -5007,59 +5008,6 @@ class FunctionManager(BaseFunctionManager):
 
     # 4. Filter --------------------------------------------------------- #
 
-    def _get_logs_with_retry(
-        self,
-        context: str,
-        *,
-        filter: Optional[str] = None,
-        offset: int = 0,
-        limit: Optional[int] = None,
-        project: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Query a context with retries for 404 (lazy context creation)."""
-        import time as _time
-
-        rows: List[Dict[str, Any]] = []
-        last_exc: Exception | None = None
-        kwargs: Dict[str, Any] = {
-            "context": context,
-            "project": project,
-            "exclude_fields": list_private_fields(context, project=project),
-        }
-        if filter is not None:
-            kwargs["filter"] = filter
-        if limit is not None:
-            kwargs["limit"] = limit
-        if offset:
-            kwargs["offset"] = offset
-
-        for delay in (0.0, 0.05, 0.15):
-            if delay:
-                _time.sleep(delay)
-            try:
-                logs = unisdk.get_logs(**kwargs)
-                rows = [lg.entries for lg in logs]
-                last_exc = None
-                break
-            except _UnifyRequestError as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                if status == 404:
-                    last_exc = e
-                    continue
-                raise
-            except Exception as e:
-                last_exc = e
-                break
-
-        if isinstance(last_exc, _UnifyRequestError):
-            status = getattr(getattr(last_exc, "response", None), "status_code", None)
-            if status == 404:
-                rows = []
-        elif last_exc is not None:
-            raise last_exc
-
-        return rows
-
     @functools.wraps(BaseFunctionManager.filter_functions, updated=())
     def filter_functions(
         self,
@@ -5091,25 +5039,22 @@ class FunctionManager(BaseFunctionManager):
         if self._include_primitives:
             contexts.extend(self._primitive_read_specs())
 
-        def fetcher(spec, row_filter, _sorting, fetch_limit):
-            combined = row_filter
-            if combined and spec.row_filter:
-                combined = f"({combined}) and ({spec.row_filter})"
-            elif spec.row_filter:
-                combined = spec.row_filter
-            return self._get_logs_with_retry(
-                spec.context,
-                filter=combined,
-                limit=fetch_limit,
-                project=spec.project,
+        contexts = [
+            dataclasses.replace(
+                spec,
+                excluded_fields=list_private_fields(
+                    spec.context,
+                    project=spec.project,
+                ),
             )
+            for spec in contexts
+        ]
 
         rows = federated_filter(
             contexts,
             filter=caller_filter,
             offset=offset,
             limit=limit,
-            fetcher=fetcher,
         )
 
         if not _return_callable:

@@ -44,6 +44,7 @@ from unify.gateway.channels.discord import router as discord_router
 from unify.gateway.channels.drive import router as drive_router
 from unify.gateway.channels.email import router as email_router
 from unify.gateway.channels.gmail import router as gmail_router
+from unify.gateway.channels.ms_teams_bot import auth_router as ms_teams_bot_auth_router
 from unify.gateway.channels.outlook import router as outlook_router
 from unify.gateway.channels.phone import (
     auth_router as phone_auth_router,
@@ -68,6 +69,7 @@ from unify.gateway.adapters import (
     google_router,
     internal_router,
     microsoft_router,
+    ms_teams_bot_adapter_router,
     slack_adapter_router,
     twilio_router,
 )
@@ -276,6 +278,11 @@ def create_app(
         dependencies=admin_auth_dependency,
     )
     app.include_router(
+        ms_teams_bot_auth_router,
+        prefix="/ms-teams-bot",
+        dependencies=admin_auth_dependency,
+    )
+    app.include_router(
         internal_router,
         dependencies=admin_auth_dependency,
         tags=["internal-adapters"],
@@ -287,6 +294,10 @@ def create_app(
     app.include_router(google_router, tags=["google-adapters"])
     app.include_router(microsoft_router, tags=["microsoft-adapters"])
     app.include_router(slack_adapter_router, tags=["slack-adapters"])
+    app.include_router(
+        ms_teams_bot_adapter_router,
+        tags=["ms-teams-bot-adapters"],
+    )
     app.include_router(twilio_router, tags=["twilio-adapters"])
 
     # Built-in user-API-key authed channel (auth is enforced inside the route).

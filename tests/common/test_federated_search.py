@@ -5,7 +5,6 @@ import pytest
 from unify.common.federated_search import (
     FederatedSearchContext,
     SortSpec,
-    default_filter_fetcher,
     federated_count,
     federated_filter,
     federated_ranked_search,
@@ -209,69 +208,102 @@ def test_federated_filter_fetches_offset_plus_limit_per_context_and_sorts():
     assert [row["name"] for row in rows] == ["assistant-mid", "builtin-low"]
 
 
-def test_default_filter_fetcher_combines_context_and_caller_filters(monkeypatch):
+def test_federated_filter_without_fetcher_delegates_to_server(monkeypatch):
     calls = []
 
-    class Row:
-        def __init__(self, entries):
-            self.entries = entries
-
-    def fake_get_logs(**kwargs):
+    def fake_get_logs_federated(**kwargs):
         calls.append(kwargs)
-        return [Row({"name": "row"})]
+        return {
+            "logs": [{"name": "row", "_federated_source": "assistant"}],
+            "count": 1,
+            "counts": {"assistant": 1},
+        }
 
-    monkeypatch.setattr("unify.common.federated_search.unisdk.get_logs", fake_get_logs)
-
-    rows = default_filter_fetcher(
-        FederatedSearchContext(
-            "assistant/Guidance",
-            "assistant",
-            row_filter="is_builtin == False",
-            allowed_fields=["name", "priority"],
-        ),
-        "'github' in title",
-        [SortSpec("priority", direction="descending")],
-        5,
+    monkeypatch.setattr(
+        "unify.common.federated_search.unisdk.get_logs_federated",
+        fake_get_logs_federated,
     )
 
-    assert rows == [{"name": "row"}]
+    rows = federated_filter(
+        [
+            FederatedSearchContext(
+                "assistant/Guidance",
+                "assistant",
+                row_filter="is_builtin == False",
+                allowed_fields=["name", "priority"],
+            ),
+            FederatedSearchContext(
+                "Builtins/Guidance",
+                "builtins",
+                excluded_fields=["_embedding"],
+                project="Builtins",
+            ),
+        ],
+        filter="'github' in title",
+        sorting=[SortSpec("priority", direction="descending", missing="first")],
+        offset=1,
+        limit=2,
+        unique_id_field="guidance_id",
+    )
+
+    assert rows == [{"name": "row", "_federated_source": "assistant"}]
     assert calls == [
         {
-            "context": "assistant/Guidance",
-            "project": None,
-            "filter": "('github' in title) and (is_builtin == False)",
-            "sorting": {"priority": "descending"},
-            "limit": 5,
-            "offset": 0,
-            "from_fields": ["name", "priority"],
+            "contexts": [
+                {
+                    "context": "assistant/Guidance",
+                    "source": "assistant",
+                    "filter": "is_builtin == False",
+                    "from_fields": ["name", "priority"],
+                },
+                {
+                    "context": "Builtins/Guidance",
+                    "source": "builtins",
+                    "exclude_fields": ["_embedding"],
+                    "project_name": "Builtins",
+                },
+            ],
+            "filter": "'github' in title",
+            "sorting": [
+                {
+                    "field": "priority",
+                    "direction": "descending",
+                    "missing": "first",
+                },
+            ],
+            "offset": 1,
+            "limit": 2,
+            "unique_id_field": "guidance_id",
+            "annotate": True,
         },
     ]
 
 
-def test_default_filter_fetcher_fetches_all_rows_when_missing_first(monkeypatch):
+def test_federated_count_delegates_to_server_count_only_read(monkeypatch):
     calls = []
 
-    class Row:
-        def __init__(self, entries):
-            self.entries = entries
-
-    def fake_get_logs(**kwargs):
+    def fake_get_logs_federated(**kwargs):
         calls.append(kwargs)
-        return [Row({"name": f"row-{kwargs['offset']}"})]
+        return {"logs": [], "count": 7, "counts": {"a": 3, "b": 4}}
 
-    monkeypatch.setattr("unify.common.federated_search.unisdk.get_logs", fake_get_logs)
-
-    rows = default_filter_fetcher(
-        FederatedSearchContext("ctx", "source"),
-        None,
-        [SortSpec("priority", missing="first")],
-        2,
+    monkeypatch.setattr(
+        "unify.common.federated_search.unisdk.get_logs_federated",
+        fake_get_logs_federated,
     )
 
-    # The backend sorts NULLs last, so missing="first" must ignore the window
-    # limit and page through everything (page size 1000).
-    assert rows == [{"name": "row-0"}]
-    assert calls[0]["limit"] == 1000
+    total = federated_count(
+        [
+            FederatedSearchContext("ctx/a", "a"),
+            FederatedSearchContext("ctx/b", "b"),
+        ],
+        key="row_id",
+        filter="status == 'open'",
+    )
+
+    assert total == 7
+    assert calls[0]["limit"] == 0
+    assert calls[0]["filter"] == "(status == 'open') and (exists(row_id))"
+    assert federated_count([], key="row_id") == 0
 
 
 def test_federated_ranked_search_fetches_offset_plus_limit_per_context():
@@ -434,21 +466,32 @@ def test_federated_reduce_combines_decomposable_metrics():
     assert reduce("mean") == 10.0  # 50 / 5
 
 
-def test_federated_reduce_falls_back_to_rows_for_grouped_and_exotic_metrics():
+def test_federated_reduce_falls_back_to_rows_for_grouped_and_exotic_metrics(
+    monkeypatch,
+):
     contexts = [
         FederatedSearchContext("ctx/a", "a"),
         FederatedSearchContext("ctx/b", "b"),
     ]
-    rows_by_context = {
-        "ctx/a": [
-            {"status": "open", "amount": 1},
-            {"status": "closed", "amount": 3},
-        ],
-        "ctx/b": [{"status": "open", "amount": 5}],
-    }
 
-    def row_fetcher(spec, filter):
-        return rows_by_context[spec.context]
+    def fake_get_logs_federated(**kwargs):
+        assert kwargs["annotate"] is False
+        if kwargs["offset"]:
+            return {"logs": [], "count": 3, "counts": {}}
+        return {
+            "logs": [
+                {"status": "open", "amount": 1},
+                {"status": "closed", "amount": 3},
+                {"status": "open", "amount": 5},
+            ],
+            "count": 3,
+            "counts": {"a": 2, "b": 1},
+        }
+
+    monkeypatch.setattr(
+        "unify.common.federated_search.unisdk.get_logs_federated",
+        fake_get_logs_federated,
+    )
 
     def metric_fetcher(*args):
         raise AssertionError("decomposable path must not be used")
@@ -458,7 +501,6 @@ def test_federated_reduce_falls_back_to_rows_for_grouped_and_exotic_metrics():
         metric="median",
         columns="amount",
         metric_fetcher=metric_fetcher,
-        row_fetcher=row_fetcher,
     )
     assert median == 3
 
@@ -468,7 +510,6 @@ def test_federated_reduce_falls_back_to_rows_for_grouped_and_exotic_metrics():
         columns="amount",
         group_by="status",
         metric_fetcher=metric_fetcher,
-        row_fetcher=row_fetcher,
     )
     assert grouped == {"open": 6, "closed": 3}
 
@@ -501,25 +542,3 @@ def test_federated_reduce_validates_metric_and_contexts():
         )
     with pytest.raises(ValueError, match="at least one context"):
         federated_reduce([], metric="count", columns="amount")
-
-
-def test_federated_count_sums_per_context_counts():
-    counts = {"ctx/a": 3, "ctx/b": None, "ctx/c": 4}
-
-    def metric_fetcher(spec, metric, keys, filter, group_by):
-        assert metric == "count"
-        assert keys == "row_id"
-        return counts[spec.context]
-
-    total = federated_count(
-        [
-            FederatedSearchContext("ctx/a", "a"),
-            FederatedSearchContext("ctx/b", "b"),
-            FederatedSearchContext("ctx/c", "c"),
-        ],
-        key="row_id",
-        metric_fetcher=metric_fetcher,
-    )
-
-    assert total == 7
-    assert federated_count([], key="row_id") == 0

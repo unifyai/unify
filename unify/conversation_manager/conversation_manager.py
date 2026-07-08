@@ -237,6 +237,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         assistant_email_provider: str = "",
         assistant_slack_bot_user_id: str = "",
         assistant_slack_team_id: str = "",
+        assistant_has_ms_teams_bot: bool = False,
         assistant_job_title: str = "",
         past_events: list | None = None,
         conv_context_length: int = 50,
@@ -264,6 +265,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.assistant_discord_bot_id = assistant_discord_bot_id
         self.assistant_slack_bot_user_id = assistant_slack_bot_user_id
         self.assistant_slack_team_id = assistant_slack_team_id
+        # True when the assistant's org has a bound Unify Microsoft Teams bot
+        # install (Bot Framework channel, distinct from the delegated-Graph
+        # ``assistant_has_teams`` MS365 mailbox capability). Sourced from the
+        # assistant profile and adopted at runtime from inbound bot activities.
+        self.assistant_has_ms_teams_bot = assistant_has_ms_teams_bot
         # Global onboarding scaffolding gate, mirrored from Orchestra's
         # ``Coordinator/State`` and refreshed on a short TTL. When False the
         # slow-brain drops all onboarding scaffolding. Defaults to True until
@@ -1716,6 +1722,28 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 channel_id=reply_context.get("channel_id"),
                 team_id=reply_context.get("team_id"),
             )
+        elif (
+            medium == Medium.MS_TEAMS_BOT_MESSAGE.value
+            and reply_context.get("tenant_id")
+            and reply_context.get("conversation_id")
+        ):
+            await tools.send_ms_teams_bot_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tenant_id=reply_context["tenant_id"],
+                conversation_id=reply_context["conversation_id"],
+            )
+        elif (
+            medium == Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE.value
+            and reply_context.get("tenant_id")
+            and reply_context.get("conversation_id")
+        ):
+            await tools.send_ms_teams_bot_channel_message(
+                contact_id=contact_id,
+                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                tenant_id=reply_context["tenant_id"],
+                conversation_id=reply_context["conversation_id"],
+            )
         else:
             return False
 
@@ -2233,12 +2261,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
         else:
             client = new_llm_client(
-                SETTINGS.UNIFY_MODEL,
                 origin="ConversationManager",
                 # Slow brain stays at "high"; the system default is "max" (used by
                 # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
                 # hardest tasks at extra latency; on MiniMax M3 all non-none effort
-                # levels enable the same adaptive thinking mode.
+                # levels enable the same adaptive thinking mode. When the
+                # assistant carries a default-model effort override, it takes
+                # priority over this value inside new_llm_client().
                 reasoning_effort="high",
             )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
@@ -2726,6 +2755,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_team_id",
             "",
         )
+        # Default to the current value (not False) so a capability adopted at
+        # runtime from an inbound bot activity — or forced on via the
+        # ASSISTANT_HAS_MS_TEAMS_BOT env var at startup — survives assistant
+        # updates whose payload omits the key (Orchestra does not yet emit it).
+        self.assistant_has_ms_teams_bot = bool(
+            payload.get(
+                "assistant_has_ms_teams_bot",
+                self.assistant_has_ms_teams_bot,
+            ),
+        )
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
         self.user_number = payload["user_number"]
@@ -2738,6 +2777,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             self.voice_provider = payload["voice_provider"]
         if payload.get("voice_id"):
             self.voice_id = payload["voice_id"]
+        # Adopt the default model unconditionally: unlike voice, empty is a
+        # meaningful value (reset to the platform default model).
+        self.default_model = payload.get("default_model", "")
+        self.default_reasoning_effort = payload.get("default_reasoning_effort", "")
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "ubuntu")
         self.user_desktops = payload.get("user_desktops") or []
@@ -2767,6 +2810,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
             assistant_slack_team_id=self.assistant_slack_team_id,
+            assistant_has_ms_teams_bot=self.assistant_has_ms_teams_bot,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,
@@ -2780,6 +2824,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             team_summaries=team_summaries,
             voice_provider=self.voice_provider,
             voice_id=self.voice_id,
+            default_model=self.default_model,
+            default_reasoning_effort=self.default_reasoning_effort,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
             user_desktops=self.user_desktops,
@@ -3329,6 +3375,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "phone_call": {"phone_call"},
             "slack_message": {"slack_message", "slack_channel_message"},
             "discord_message": {"discord_message", "discord_channel_message"},
+            "ms_teams_message": {"ms_teams_bot_message"},
         }.get(str(pending.get("channel", "")), set())
         if medium not in expected_media:
             return None

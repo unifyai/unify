@@ -55,8 +55,6 @@ def filter(
     if limit > 1000:
         raise ValueError("Limit must be less than 1000")
 
-    dm = knowledge_manager._data_manager
-
     if tables is None:
         resolved_tables = list(table_contexts_for_read(knowledge_manager).keys())
 
@@ -73,28 +71,19 @@ def filter(
 
     normalized = normalize_filter_expr(filter)
 
-    def fetcher(spec, row_filter, _sorting, fetch_limit):
-        excl = list_private_fields(spec.context)
-        # Delegate to DataManager.filter
-        rows = dm.filter(
-            spec.context,
-            filter=row_filter,
-            limit=fetch_limit,
-            offset=0,
-        )
-        # Exclude private fields from results
-        return [{k: v for k, v in row.items() if k not in excl} for row in rows]
-
     def _fetch_table(table_name: str) -> tuple[str, List[Dict[str, Any]]]:
         table_rows = federated_filter(
             [
-                FederatedSearchContext(context=ctx, source=ctx)
+                FederatedSearchContext(
+                    context=ctx,
+                    source=ctx,
+                    excluded_fields=list_private_fields(ctx),
+                )
                 for ctx in contexts_for_table(knowledge_manager, table_name)
             ],
             filter=normalized,
             offset=offset,
             limit=limit,
-            fetcher=fetcher,
             annotate=False,
         )
         return table_name, table_rows

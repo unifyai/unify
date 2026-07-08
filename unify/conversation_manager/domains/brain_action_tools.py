@@ -139,6 +139,13 @@ _IN_FLIGHT_ACTIONS_PATTERN = re.compile(
 )
 
 
+def _strip_onboarding_completion_tool_lines(text: str) -> str:
+    """Remove CM-only checklist completion instructions from Actor parent context."""
+    return "\n".join(
+        line for line in text.splitlines() if "set_onboarding_task_state" not in line
+    )
+
+
 def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     """Filter CM state snapshot before passing to Actor as parent context.
 
@@ -150,6 +157,10 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     names as callable functions and generate code like:
         await stop_search_the_web_for__1()
     This causes NameError since these tools don't exist in the Actor's scope.
+
+    Onboarding narration that names ``set_onboarding_task_state`` is also
+    stripped — checklist completion is owned by the parent CM brain, not act
+    subtasks.
 
     This function strips the <in_flight_actions> section while preserving
     other useful context (notifications, active_conversations).
@@ -174,12 +185,14 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
                 filtered_text = _IN_FLIGHT_ACTIONS_PATTERN.sub("", part["text"])
+                filtered_text = _strip_onboarding_completion_tool_lines(filtered_text)
                 filtered_parts.append({**part, "text": filtered_text})
             else:
                 filtered_parts.append(part)
         return {**state_snapshot, "content": filtered_parts}
 
     filtered_content = _IN_FLIGHT_ACTIONS_PATTERN.sub("", content)
+    filtered_content = _strip_onboarding_completion_tool_lines(filtered_content)
     return {**state_snapshot, "content": filtered_content}
 
 
@@ -465,6 +478,80 @@ class ConversationManagerBrainActionTools:
             content=content,
             team_id=team_id,
             thread_ts=thread_ts,
+        )
+
+    @slow_brain_direct_comms
+    @wraps(CommsPrimitives.send_ms_teams_bot_message)
+    async def send_ms_teams_bot_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        return await self._comms.send_ms_teams_bot_message(
+            contact_id=contact_id,
+            content=content,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+
+    @slow_brain_direct_comms
+    async def send_ms_teams_bot_message_to_boss(
+        self,
+        *,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        """Reply to my boss only through the org-installed Unify Teams app.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to DM anyone else or post in group chats or Teams channels. If my boss
+        asks me to draft or send Teams messages on their behalf, route that
+        work through ``act`` instead.
+
+        The org-installed Unify Teams app (Bot Framework) replies into a
+        conversation it was already addressed in, so this tool can only answer
+        an inbound Teams message from my boss — pass the ``tenant_id`` and
+        ``conversation_id`` surfaced on that inbound message. It is distinct
+        from ``send_teams_message`` (my boss's own delegated Microsoft
+        account).
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        tenant_id : str
+            Microsoft AAD tenant id from the inbound boss Teams message.
+        conversation_id : str
+            Bot Framework conversation id to reply into, from the inbound
+            boss Teams message.
+        """
+        return await self._comms.send_ms_teams_bot_message(
+            contact_id=self._boss_contact_id(),
+            content=content,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+
+    @slow_brain_direct_comms
+    @wraps(CommsPrimitives.send_ms_teams_bot_channel_message)
+    async def send_ms_teams_bot_channel_message(
+        self,
+        *,
+        contact_id: int | str,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        return await self._comms.send_ms_teams_bot_channel_message(
+            contact_id=contact_id,
+            content=content,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
         )
 
     @slow_brain_direct_comms
@@ -1305,12 +1392,15 @@ class ConversationManagerBrainActionTools:
 
         import aiohttp
 
+        from unify.conversation_manager.medium_scripts.common import (
+            _resolve_agent_service_url,
+        )
         from unify.session_details import SESSION_DETAILS
 
         try:
             async with aiohttp.ClientSession() as session:
                 await session.post(
-                    f"http://localhost:3000/{path_prefix}/leave",
+                    f"{_resolve_agent_service_url()}/{path_prefix}/leave",
                     json={"sessionId": session_id},
                     headers={
                         "authorization": f"Bearer {SESSION_DETAILS.unify_key}",
@@ -1412,7 +1502,9 @@ class ConversationManagerBrainActionTools:
                   actor is working, before it sends a response.
 
                 The default (False) is a one-shot task: the actor works until
-                done and the result arrives as an ``ActorResult``.
+                done and the result arrives as an ``ActorResult``. Checklist
+                completion for manual onboarding demo steps stays with the parent
+                CM brain — act subtasks deliver the work only.
             include_conversation_context: Whether to pass the current conversation
                 state to the action. When ``true`` (default), the action receives
                 the full rendered conversation snapshot — messages, notifications,
@@ -2142,6 +2234,53 @@ class ConversationManagerBrainActionTools:
         """
         return await self._cm._patch_coordinator_onboarding_active(active=True)
 
+    async def prepare_desktop(self) -> dict[str, Any]:
+        """Warm up the managed desktop VM ahead of a computer demo or act.
+
+        Call this when a task will need the desktop soon — for example the My
+        Computer onboarding demo — then continue the conversation. Typical boot
+        takes 30–60 seconds; I receive a notification when my computer is ready
+        and can ring the user or start the demo then.
+
+        Returns immediately while the warm-up runs in the background. Safe to
+        call again while warming — concurrent triggers coalesce onto one boot.
+        """
+        from unify.conversation_manager.domains.desktop_session import (
+            desktop_agent_session_cached,
+            desktop_session_ensure_in_flight,
+            has_managed_desktop_runtime,
+            schedule_ensure_desktop_session,
+        )
+
+        if not has_managed_desktop_runtime():
+            return {
+                "status": "unavailable",
+                "message": "This assistant has no managed desktop runtime.",
+            }
+
+        if desktop_agent_session_cached():
+            return {
+                "status": "ready",
+                "message": "My computer is already ready.",
+            }
+
+        if self._cm.vm_ready:
+            warming_message = (
+                "VM is up; finishing session setup. I'll get a notification "
+                "when my computer is ready."
+            )
+        else:
+            warming_message = (
+                "Desktop warming up — I'll get a notification when my computer "
+                "is ready."
+            )
+
+        if desktop_session_ensure_in_flight():
+            return {"status": "warming", "message": warming_message}
+
+        schedule_ensure_desktop_session(self._cm)
+        return {"status": "warming", "message": warming_message}
+
     async def set_onboarding_task_state(
         self,
         step_id: str,
@@ -2552,6 +2691,16 @@ class ConversationManagerBrainActionTools:
             )
             if not is_coordinator:
                 tools["send_slack_channel_message"] = self.send_slack_channel_message
+        if self._cm.assistant_has_ms_teams_bot:
+            tools["send_ms_teams_bot_message"] = (
+                self.send_ms_teams_bot_message_to_boss
+                if is_coordinator
+                else self.send_ms_teams_bot_message
+            )
+            if not is_coordinator:
+                tools["send_ms_teams_bot_channel_message"] = (
+                    self.send_ms_teams_bot_channel_message
+                )
         if self._cm.assistant_has_teams:
             tools["send_teams_message"] = (
                 self.send_teams_message_to_boss
@@ -2565,6 +2714,12 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
+        from unify.conversation_manager.domains.desktop_session import (
+            has_managed_desktop_runtime,
+        )
+
+        if has_managed_desktop_runtime():
+            tools["prepare_desktop"] = self.prepare_desktop
         if SETTINGS.DEMO_MODE:
             tools["set_boss_details"] = self.set_boss_details
         elif self._cm.initialized:

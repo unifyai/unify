@@ -2035,6 +2035,8 @@ def _credit_gate_reply_context(
     bot_id: str | None = None,
     message_id: str | None = None,
     routing_metadata: dict | None = None,
+    tenant_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     context = {
         "medium": medium.value,
@@ -2053,6 +2055,8 @@ def _credit_gate_reply_context(
         "bot_id": bot_id,
         "message_id": message_id,
         "routing_metadata": routing_metadata,
+        "tenant_id": tenant_id,
+        "conversation_id": conversation_id,
     }
     for key, value in optional_fields.items():
         if value:
@@ -2084,6 +2088,10 @@ def _credit_gate_reply_context(
         TeamsMessageSent,
         TeamsChannelMessageReceived,
         TeamsChannelMessageSent,
+        MsTeamsBotMessageSent,
+        MsTeamsBotMessageReceived,
+        MsTeamsBotChannelMessageSent,
+        MsTeamsBotChannelMessageReceived,
     ),
 )
 async def _(event, cm: "ConversationManager", *args, **kwargs):
@@ -2103,6 +2111,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     routing_metadata = None
     guild_id = None
     bot_id = None
+    tenant_id = None
+    conversation_id = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -2288,7 +2298,17 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.UNIFY_MESSAGE
             message_content = event.content
             attachments = event.attachments
-            notif_content = f"Unify message from {sender_name}"
+            # Carried through push_message and the reply context (the same
+            # pipeline slot MS Teams channel messages use), so the brain sees
+            # which room the message belongs to and can reply there.
+            team_id = str(event.team_id) if getattr(event, "team_id", None) else None
+            if team_id:
+                team_label = event.team_name or f"team {team_id}"
+                notif_content = (
+                    f"Team chat message from {sender_name} in '{team_label}'"
+                )
+            else:
+                notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
@@ -2450,6 +2470,78 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 "teams_message_sent",
                 f"Teams chat to {sender_name}: {event.content}",
             )
+        case MsTeamsBotMessageSent():
+            medium = Medium.MS_TEAMS_BOT_MESSAGE
+            message_content = event.content
+            chat_id = getattr(event, "conversation_id", "") or None
+            notif_content = f"Teams bot message sent to {sender_name}"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_message_sent",
+                f"Teams bot message to {sender_name}: {event.content}",
+            )
+        case MsTeamsBotMessageReceived():
+            # A routed bot activity proves the org has a bound install, so adopt
+            # the capability on the live CM. This registers
+            # send_ms_teams_bot_message for the responding turn even when the
+            # boot-time activation payload didn't carry the flag.
+            cm.assistant_has_ms_teams_bot = True
+            medium = Medium.MS_TEAMS_BOT_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            # tenant_id + conversation_id are the routing keys the reply needs
+            # to target the same Teams conversation via send_ms_teams_bot_message.
+            tenant_id = getattr(event, "tenant_id", "") or None
+            conversation_id = getattr(event, "conversation_id", "") or None
+            chat_id = conversation_id
+            channel_id = getattr(event, "channel_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Teams bot message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_message_received",
+                f"Teams bot message from {sender_name}: {event.content}",
+            )
+        case MsTeamsBotChannelMessageSent():
+            medium = Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
+            message_content = event.content
+            chat_id = getattr(event, "conversation_id", "") or None
+            notif_content = "Teams bot channel message sent"
+            role = "assistant"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_channel_message_sent",
+                f"Teams bot channel message to {sender_name}: {event.content}",
+            )
+        case MsTeamsBotChannelMessageReceived():
+            # A routed channel activity proves the org has a bound install, so
+            # adopt the capability on the live CM (registers the send tools for
+            # the responding turn even if the boot payload lacked the flag).
+            cm.assistant_has_ms_teams_bot = True
+            medium = Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE
+            message_content = event.content
+            attachments = event.attachments
+            # tenant_id + conversation_id are the routing keys the reply needs
+            # to target the same Teams conversation via
+            # send_ms_teams_bot_channel_message.
+            tenant_id = getattr(event, "tenant_id", "") or None
+            conversation_id = getattr(event, "conversation_id", "") or None
+            chat_id = conversation_id
+            channel_id = getattr(event, "channel_id", "") or None
+            team_id = getattr(event, "team_id", "") or None
+            thread_id = getattr(event, "thread_id", "") or None
+            message_id = getattr(event, "message_id", "") or None
+            routing_metadata = getattr(event, "routing_metadata", None) or None
+            notif_content = f"Teams bot channel message from {sender_name}"
+            role = "user"
+            event_trace = getattr(cm, "_current_event_trace", None) or {}
+            cm._session_logger.info(
+                "ms_teams_bot_channel_message_received",
+                f"Teams bot channel message from {sender_name}: {event.content}",
+            )
         case TeamsMessageReceived():
             medium = Medium.TEAMS_MESSAGE
             message_content = event.content
@@ -2513,6 +2605,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             routing_metadata=routing_metadata,
             guild_id=guild_id,
             bot_id=bot_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":
@@ -2560,6 +2654,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 bot_id=bot_id,
                 message_id=message_id,
                 routing_metadata=routing_metadata,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
             )
             if role == "user"
             else None
@@ -3150,53 +3246,12 @@ def _recent_conversation_snippet(cm: "ConversationManager", n: int = 4) -> str |
 
 
 async def _ensure_desktop_session(cm: "ConversationManager") -> None:
-    """Create a desktop session in agent-service if one doesn't already exist.
+    """Await the coalesced desktop agent-service session ensure."""
+    from unify.conversation_manager.domains.desktop_session import (
+        ensure_desktop_session,
+    )
 
-    Sessions are lazy (created on first ``get_session`` call), so this must be
-    called explicitly to guarantee the ``/screenshot`` endpoint has an active
-    session to fall back to.  ``get_session`` is idempotent — calling it when a
-    session already exists returns the cached instance.
-
-    Retries with exponential backoff because the VM's Caddy reverse proxy may
-    still be starting up or obtaining its TLS certificate from Let's Encrypt
-    even after the Communication service reports the VM as "ready".
-    """
-    from unify.function_manager.primitives.runtime import ComputerPrimitives
-    from unify.manager_registry import ManagerRegistry
-
-    cp = ManagerRegistry.get_instance(ComputerPrimitives)
-    if cp is None:
-        return
-
-    max_attempts = 12
-    base_delay = 5.0
-    max_delay = 30.0
-    delay = base_delay
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            session = await cp.backend.get_session("desktop")
-            cm._session_logger.info(
-                "desktop_session",
-                f"Desktop session ready: {session._session_id}",
-            )
-            return
-        except Exception as e:
-            if attempt == max_attempts:
-                cm._session_logger.warning(
-                    "desktop_session",
-                    f"Failed to create desktop session after {max_attempts} attempts: "
-                    f"{type(e).__name__}: {e}",
-                )
-                return
-            cm._session_logger.debug(
-                "desktop_session",
-                f"Attempt {attempt}/{max_attempts} failed ({type(e).__name__}), "
-                f"retrying in {delay:.0f}s",
-            )
-            await asyncio.sleep(delay)
-            delay = min(delay * 1.5, max_delay)
-            cp.backend.clear_session("desktop")
+    await ensure_desktop_session(cm)
 
 
 # --------------------------------------------------------------------------- #
@@ -3524,7 +3579,11 @@ async def _(
     await cm.schedule_proactive_speech()
 
     if isinstance(event, AssistantScreenShareStarted):
-        asyncio.ensure_future(_ensure_desktop_session(cm))
+        from unify.conversation_manager.domains.desktop_session import (
+            schedule_ensure_desktop_session,
+        )
+
+        schedule_ensure_desktop_session(cm)
 
     # Broadcast remote-control state change to all active CodeActActor loops
     # via the ComputerPrimitives singleton interject queue registry.

@@ -27,18 +27,7 @@ from unify.helpers import (
 if TYPE_CHECKING:
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
 
-
-def _resolve_agent_service_url() -> str:
-    """Resolve agent-service base URL (same logic as common.py)."""
-    from unify.session_details import SESSION_DETAILS
-
-    desktop_url = SESSION_DETAILS.assistant.desktop_url
-    if desktop_url:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(desktop_url)
-        return f"{parsed.scheme}://{parsed.netloc}/api"
-    return "http://localhost:3000"
+from unify.conversation_manager.medium_scripts.common import _resolve_agent_service_url
 
 
 def make_room_name(assistant_id: str, medium: str) -> str:
@@ -608,6 +597,7 @@ class LivekitCallManager:
                 "is_coordinator": self.is_coordinator,
                 "ipc_socket_path": socket_path or "",
                 "unify_key": SESSION_DETAILS.unify_key,
+                "agent_service_url": _resolve_agent_service_url(),
             }
             meta_dict["voice_profiles"] = self._get_voice_profiles(contact, boss)
             if extra_metadata:
@@ -983,7 +973,7 @@ class LivekitCallManager:
 
         from unify.session_details import SESSION_DETAILS
 
-        base_url = "http://localhost:3000"
+        base_url = _resolve_agent_service_url()
         auth_key = SESSION_DETAILS.unify_key
 
         room_name = make_room_name(self.assistant_id, room_suffix)
@@ -1029,7 +1019,7 @@ class LivekitCallManager:
             "meet_session_id": "",
             "meet_url": meet_url,
             "meet_display_name": display_name,
-            "agent_service_url": "http://localhost:3000",
+            "agent_service_url": _resolve_agent_service_url(),
         }
         if meet_opening_config:
             meet_extra["opening_config"] = meet_opening_config
@@ -1120,7 +1110,7 @@ class LivekitCallManager:
         if session_id:
             from unify.session_details import SESSION_DETAILS
 
-            base_url = "http://localhost:3000"
+            base_url = _resolve_agent_service_url()
             auth_key = SESSION_DETAILS.unify_key
             try:
                 async with aiohttp.ClientSession() as session:
@@ -1166,7 +1156,7 @@ class LivekitCallManager:
         )
 
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = "http://localhost:3000"
+        base_url = _resolve_agent_service_url()
         auth_key = SESSION_DETAILS.unify_key
         try:
             async with aiohttp.ClientSession() as session:
@@ -1200,7 +1190,7 @@ class LivekitCallManager:
         from unify.session_details import SESSION_DETAILS
 
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = "http://localhost:3000"
+        base_url = _resolve_agent_service_url()
         auth_key = SESSION_DETAILS.unify_key
         try:
             async with aiohttp.ClientSession() as session:

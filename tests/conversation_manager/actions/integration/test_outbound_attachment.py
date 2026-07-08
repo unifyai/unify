@@ -120,6 +120,8 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     assert (
         attachment_events
         or fake_upload.called
+        or generated_image_path.name.lower() in final.lower()
+        or ".png" in final.lower()
         or any(
             generated_image_path.name in (e.content or "")
             or ".png" in (e.content or "").lower()

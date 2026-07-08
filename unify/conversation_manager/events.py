@@ -801,6 +801,116 @@ class SlackChannelMessageSent(Event):
 
 
 @dataclass
+class MsTeamsBotMessageSent(Event):
+    """A proactive reply sent through the org-installed Unify Teams bot app.
+
+    Distinct from ``TeamsMessageSent`` (delegated per-user Graph): this is the
+    Bot-Framework channel, keyed by the Microsoft ``tenant_id`` and the Bot
+    Framework ``conversation_id`` the reply was routed into.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
+class MsTeamsBotMessageReceived(Event):
+    """A message received via the org-installed Unify Teams bot app.
+
+    Distinct from ``TeamsMessageReceived`` (delegated per-user Graph): this is
+    the Bot-Framework channel, keyed by the Microsoft ``tenant_id`` and the Bot
+    Framework ``conversation_id``. Those two fields flow into the reply context
+    so a reply routes back into the same Teams conversation via
+    ``send_ms_teams_bot_message``.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    addressing, coordinator fallback, ambiguous-token hints) and is surfaced to
+    the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    conversation_type: str = "personal"
+    channel_id: str = ""
+    service_url: str = ""
+    bot_app_id: str = ""
+    message_id: str = ""
+    is_channel: bool = False
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class MsTeamsBotChannelMessageSent(Event):
+    """A message sent into a group chat or Teams channel thread via the bot app.
+
+    Distinct from the 1:1 ``MsTeamsBotMessageSent``: this targets a shared
+    conversation (group chat or channel), still keyed by the Microsoft
+    ``tenant_id`` and the Bot Framework ``conversation_id`` the reply routes
+    into.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_channel_message_sent"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    onboarding_trigger_step_id: str | None = None
+    onboarding_reply_step_id: str | None = None
+    onboarding_request_id: str | None = None
+    onboarding_origin_event_id: str | None = None
+
+
+@dataclass
+class MsTeamsBotChannelMessageReceived(Event):
+    """A message received in a group chat or Teams channel via the bot app.
+
+    The group-chat / channel counterpart of ``MsTeamsBotMessageReceived``,
+    triggered by @mentioning the app. ``tenant_id`` and ``conversation_id``
+    flow into the reply context so a reply routes back into the same
+    conversation via ``send_ms_teams_bot_channel_message``. ``team_id`` and
+    ``thread_id`` carry the channel/thread identity for context.
+
+    ``routing_metadata`` carries Orchestra-side routing context (token
+    addressing, thread inheritance, coordinator fallback, ambiguous-token
+    hints) and is surfaced to the assistant via the renderer.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:ms_teams_bot_channel_message"
+    content_logged: ClassVar[bool] = True
+
+    contact: dict
+    content: str
+    tenant_id: str = ""
+    conversation_id: str = ""
+    conversation_type: str = "channel"
+    channel_id: str = ""
+    team_id: str = ""
+    thread_id: str = ""
+    service_url: str = ""
+    bot_app_id: str = ""
+    message_id: str = ""
+    attachments: list[dict] = field(default_factory=list)
+    routing_metadata: dict = field(default_factory=dict)
+
+
+@dataclass
 class TeamsMessageReceived(Event):
     """A message received in a Microsoft Teams chat (1:1, group, or meeting)."""
 
@@ -923,6 +1033,12 @@ class UnifyMessageReceived(Event):
     content: str
     # List of attachment dicts with full metadata (files saved to Attachments/).
     attachments: list[dict] = field(default_factory=list)
+    # Set when the message was posted in a team group chat (Console org
+    # chat). Team chat is ordinary unify_message traffic — like a large
+    # email CC chain, every team assistant receives a copy — but replies to
+    # the room must pass this team_id back to ``send_unify_message``.
+    team_id: int | None = None
+    team_name: str = ""
 
 
 @dataclass
@@ -1256,10 +1372,15 @@ class _SessionConfigBase(Event):
     voice_id: str
     binding_id: str = ""
     voice_provider: str = "cartesia"
+    # Per-assistant default LLM as a unillm 'model@provider' endpoint plus a
+    # reasoning-effort level. Empty = platform default (UNIFY_MODEL).
+    default_model: str = ""
+    default_reasoning_effort: str = ""
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""
     assistant_slack_team_id: str = ""
+    assistant_has_ms_teams_bot: bool = False
     assistant_timezone: str = (
         ""  # IANA timezone identifier; default empty for backward compat
     )
