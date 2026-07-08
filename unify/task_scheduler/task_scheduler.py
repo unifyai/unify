@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import os
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -37,8 +39,9 @@ from ..common.context_registry import (
     TEAM_DESTINATION_PREFIX,
     TableContext,
 )
-from ..common.embed_utils import ensure_vector_column
+from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
+from ..common.log_utils import create_logs as unity_create_logs
 from ..common.llm_client import new_llm_client
 from ..common.llm_helpers import methods_to_tool_dict
 from ..common.metrics_utils import reduce_logs
@@ -47,7 +50,7 @@ from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.search_utils import table_search_top_k
 from ..common.sentinels import _UnsetSentinel
 from ..common.task_execution_context import current_task_execution_delegate
-from ..common.tool_outcome import ToolOutcome
+from ..common.tool_outcome import ToolOutcome, ToolErrorException
 from ..common.tool_spec import ToolSpec, read_only
 from ..events.manager_event_logging import log_manager_call
 from ..manager_registry import ManagerRegistry
@@ -55,6 +58,10 @@ from ..session_details import SESSION_DETAILS
 from ..settings import SETTINGS
 from .active_task import ActiveTask
 from .base import BaseTaskScheduler
+from .custom_tasks import (
+    compute_custom_tasks_hash,
+    derive_initial_task_status,
+)
 from .machine_state import (
     TaskRunProvenance,
     build_task_run_key,
@@ -72,6 +79,7 @@ from .prompt_builders import (
 )
 from .storage import TasksStore
 from .types.activated_by import ActivatedBy
+from .types.meta import TaskMeta
 from .types.priority import Priority
 from .types.repetition import (
     Frequency,
@@ -89,6 +97,9 @@ ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[Trigger, Dict[str, Any]]]
 RepeatLike = Optional[List[Union[RepeatPattern, Dict[str, Any]]]]
 ToolsDict = Dict[str, Callable[..., Any]]
+
+TASKS_META_TABLE = "Tasks/Meta"
+logger = logging.getLogger(__name__)
 
 OFFLINE_CERTIFICATION_REQUIRED_EVIDENCE_FIELDS = {
     "idempotency_contract",
@@ -154,6 +165,12 @@ class TaskScheduler(BaseTaskScheduler):
                     },
                 ],
             ),
+            TableContext(
+                name=TASKS_META_TABLE,
+                description="Metadata for source-defined custom task sync state.",
+                fields=model_to_fields(TaskMeta),
+                unique_keys={"meta_id": "int"},
+            ),
         ]
 
     def __init__(
@@ -216,8 +233,12 @@ class TaskScheduler(BaseTaskScheduler):
         self.__actor = actor
         self._ctx = ContextRegistry.get_context(self, "Tasks")
         self._personal_tasks_context = self._ctx
+        self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores: Dict[str, TasksStore] = {}
         self._active_task_root_context: Optional[str] = None
+        self._custom_tasks_synced = False
+        self._custom_tasks_synced_contexts: set[str] = set()
+        self._destination_context_lock = threading.RLock()
         self._provision_storage()
 
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
@@ -636,9 +657,13 @@ class TaskScheduler(BaseTaskScheduler):
         self._active_task_root_context = None
 
         ContextRegistry.forget(self, "Tasks")
+        ContextRegistry.forget(self, TASKS_META_TABLE)
         self._ctx = ContextRegistry.get_context(self, "Tasks")
         self._personal_tasks_context = self._ctx
+        self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores.clear()
+        self._custom_tasks_synced = False
+        self._custom_tasks_synced_contexts.clear()
         self._provision_storage()
 
     def _task_id_to_log_id_map(self, task_ids: List[int]) -> Dict[int, int]:
@@ -2268,3 +2293,433 @@ class TaskScheduler(BaseTaskScheduler):
             if str(task.get("status")) != str(Status.active):
                 task.pop("activated_by", None)
         return task
+
+    def _meta_context_for_destination(self, destination: str | None) -> str:
+        """Resolve a public destination into one concrete Tasks/Meta context."""
+        root_context = ContextRegistry.write_root(
+            self,
+            TASKS_META_TABLE,
+            destination=destination,
+        )
+        return f"{root_context.strip('/')}/{TASKS_META_TABLE}"
+
+    @contextmanager
+    def _temporary_tasks_meta_context(self, context: str):
+        """Temporarily bind task meta reads/writes to a resolved context."""
+        with self._destination_context_lock:
+            original = self._meta_ctx
+            self._meta_ctx = context
+            try:
+                yield
+            finally:
+                self._meta_ctx = original
+
+    def _sync_destination_contexts(
+        self,
+        destination: str | None,
+    ) -> tuple[str, str, bool]:
+        """Return destination-scoped tasks context, meta context, and personal flag."""
+        data_context = self._task_context_for_destination(destination)
+        meta_context = self._meta_context_for_destination(destination)
+        return data_context, meta_context, destination in (None, "personal")
+
+    def _get_stored_custom_tasks_hash(self) -> str:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                return logs[0].entries.get("custom_tasks_hash", "") or ""
+        except Exception as exc:
+            logger.warning("Failed to read custom tasks hash: %s", exc)
+        return ""
+
+    def _store_custom_tasks_hash(self, hash_value: str) -> None:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={"custom_tasks_hash": hash_value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, "custom_tasks_hash": hash_value}],
+                    stamp_authoring=True,
+                )
+        except Exception as exc:
+            logger.warning("Failed to store custom tasks hash: %s", exc)
+
+    def _get_custom_tasks_from_db(self) -> Dict[str, Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._ctx,
+            filter="custom_hash != None and instance_id == 0",
+            limit=1000,
+            exclude_fields=list_private_fields(self._ctx),
+        )
+        return {
+            lg.entries.get("custom_key"): lg.entries
+            for lg in logs
+            if lg.entries.get("custom_key")
+        }
+
+    def _delete_custom_task_by_key(self, custom_key: str) -> bool:
+        logs = unisdk.get_logs(
+            context=self._ctx,
+            filter=(
+                f"custom_key == '{custom_key}' and custom_hash != None "
+                "and instance_id == 0"
+            ),
+            limit=1,
+        )
+        if not logs:
+            return False
+        task_id = int(logs[0].entries["task_id"])
+        try:
+            self._delete_task(task_id=task_id, _root_applied=True)
+        except RuntimeError:
+            logger.warning(
+                "Skipping delete for active custom task key=%s task_id=%s",
+                custom_key,
+                task_id,
+            )
+            return False
+        return True
+
+    def _insert_custom_task(
+        self,
+        data: Dict[str, Any],
+        *,
+        function_name_to_id: Dict[str, int],
+    ) -> int:
+        payload = dict(data)
+        custom_key = payload.pop("custom_key")
+        custom_hash = payload.pop("custom_hash")
+        destination = payload.pop("destination", None)
+        entrypoint_function = payload.pop("entrypoint_function", None)
+        schedule = payload.pop("schedule", None)
+        trigger = payload.pop("trigger", None)
+        deadline = payload.pop("deadline", None)
+        repeat = payload.pop("repeat", None)
+        priority = payload.pop("priority", Priority.normal)
+        response_policy = payload.pop("response_policy", None)
+        offline = bool(payload.pop("offline", False))
+        name = payload.pop("name")
+        description = payload.pop("description")
+
+        entrypoint = None
+        if entrypoint_function:
+            entrypoint = function_name_to_id.get(entrypoint_function)
+            if entrypoint is None:
+                logger.warning(
+                    "Could not resolve entrypoint_function=%s for task key=%s",
+                    entrypoint_function,
+                    custom_key,
+                )
+
+        destination_arg = None if destination in (None, "personal") else destination
+        with self._use_task_destination(destination_arg):
+            result = self._create_task(
+                name=name,
+                description=description,
+                schedule=schedule,
+                trigger=trigger,
+                deadline=deadline,
+                repeat=repeat,
+                priority=priority,
+                response_policy=response_policy,
+                entrypoint=entrypoint,
+                offline=offline,
+                destination=destination_arg,
+                _root_applied=True,
+            )
+            task_id = int(result["details"]["task_id"])
+            log_ids = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                return_ids_only=True,
+            )
+            self._write_log_entries(
+                logs=log_ids,
+                entries={
+                    "custom_key": custom_key,
+                    "custom_hash": custom_hash,
+                },
+            )
+            return task_id
+
+    def _update_custom_task(
+        self,
+        *,
+        task_id: int,
+        data: Dict[str, Any],
+        function_name_to_id: Dict[str, int],
+        current_status: Status,
+    ) -> None:
+        payload = dict(data)
+        custom_key = payload.pop("custom_key")
+        custom_hash = payload.pop("custom_hash")
+        payload.pop("destination", None)
+        entrypoint_function = payload.pop("entrypoint_function", None)
+        schedule = payload.pop("schedule", None)
+        trigger = payload.pop("trigger", None)
+        deadline = payload.pop("deadline", None)
+        repeat = payload.pop("repeat", None)
+        priority = payload.pop("priority", None)
+        response_policy = payload.pop("response_policy", None)
+        offline = payload.pop("offline", None)
+        name = payload.pop("name", None)
+        description = payload.pop("description", None)
+
+        entrypoint: Any = _UNSET
+        if entrypoint_function is not None:
+            if entrypoint_function == "":
+                entrypoint = None
+            else:
+                resolved = function_name_to_id.get(entrypoint_function)
+                if resolved is None:
+                    logger.warning(
+                        "Could not resolve entrypoint_function=%s for task key=%s",
+                        entrypoint_function,
+                        custom_key,
+                    )
+                else:
+                    entrypoint = resolved
+
+        desired_status = None
+        if current_status in (Status.scheduled, Status.triggerable):
+            desired_status = derive_initial_task_status(
+                schedule=schedule,
+                trigger=trigger,
+            )
+
+        self._ensure_not_active_task(task_id)
+
+        if schedule is not None and trigger is not None:
+            raise ValueError("A task cannot have both a schedule and a trigger.")
+
+        if desired_status is not None:
+            self._validate_scheduled_invariants(
+                status=desired_status,
+                schedule=schedule,
+                trigger=trigger,
+                err_prefix=f"While updating custom task {task_id}:",
+            )
+
+        entries: Dict[str, Any] = {
+            "custom_key": custom_key,
+            "custom_hash": custom_hash,
+            "name": name,
+            "description": description,
+            "schedule": schedule,
+            "trigger": trigger,
+            "deadline": deadline,
+            "response_policy": response_policy,
+            "offline": bool(offline) if offline is not None else None,
+        }
+        if repeat is not None:
+            normalized_repeat = normalize_repeat_patterns(
+                [
+                    RepeatPattern(**item) if isinstance(item, dict) else item
+                    for item in repeat
+                ],
+            )
+            entries["repeat"] = [
+                (
+                    item.model_dump(mode="json")
+                    if isinstance(item, RepeatPattern)
+                    else item
+                )
+                for item in normalized_repeat or []
+            ]
+        if priority is not None:
+            entries["priority"] = (
+                priority if isinstance(priority, Priority) else Priority(str(priority))
+            )
+        if entrypoint is not _UNSET:
+            entries["entrypoint"] = entrypoint
+        if desired_status is not None:
+            entries["status"] = desired_status
+
+        entries = {key: value for key, value in entries.items() if value is not _UNSET}
+
+        log_ids = self._store.get_rows(
+            filter=f"task_id == {task_id}",
+            return_ids_only=True,
+        )
+        self._write_log_entries(logs=log_ids, entries=entries)
+
+    def sync_custom_tasks(
+        self,
+        *,
+        source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
+        function_name_to_id: Optional[Dict[str, int]] = None,
+        destination: str | None = None,
+    ) -> bool:
+        """Ensure custom task rows match source ``tasks.jsonl`` definitions."""
+        try:
+            tasks_context, meta_context, is_personal = self._sync_destination_contexts(
+                destination,
+            )
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+
+        previous_context = self._ctx
+        previous_store = self._store
+        previous_active_root = self._active_task_root_context
+        self._ctx = tasks_context
+        self._store = self._store_for_task_context(tasks_context)
+        self._active_task_root_context = tasks_context
+
+        with self._temporary_tasks_meta_context(meta_context):
+            if source_tasks is None:
+                source_tasks = {}
+            expected_hash = compute_custom_tasks_hash(source_tasks=source_tasks)
+            current_hash = self._get_stored_custom_tasks_hash()
+            already_synced = (
+                self._custom_tasks_synced
+                if is_personal
+                else tasks_context in self._custom_tasks_synced_contexts
+            )
+
+            if already_synced and current_hash == expected_hash:
+                self._ctx = previous_context
+                self._store = previous_store
+                self._active_task_root_context = previous_active_root
+                return False
+
+            if current_hash == expected_hash:
+                logger.debug("Custom tasks hash matches, skipping sync")
+                if is_personal:
+                    self._custom_tasks_synced = True
+                else:
+                    self._custom_tasks_synced_contexts.add(tasks_context)
+                self._ctx = previous_context
+                self._store = previous_store
+                self._active_task_root_context = previous_active_root
+                return False
+
+            logger.info(
+                "Custom tasks hash mismatch (current=%s, expected=%s), syncing...",
+                current_hash,
+                expected_hash,
+            )
+
+            function_name_to_id = function_name_to_id or {}
+            db_tasks = self._get_custom_tasks_from_db()
+            processed_keys: set[str] = set()
+
+            for custom_key, source_data in source_tasks.items():
+                processed_keys.add(custom_key)
+                task_data = dict(source_data)
+                destination_value = task_data.get("destination") or "personal"
+                destination_arg = (
+                    None
+                    if destination_value in (None, "personal")
+                    else destination_value
+                )
+
+                if custom_key in db_tasks:
+                    db_entry = db_tasks[custom_key]
+                    if db_entry.get("custom_hash") == task_data.get("custom_hash"):
+                        logger.debug("Custom task unchanged: %s", custom_key)
+                        continue
+                    task_id = int(db_entry["task_id"])
+                    current_status = to_status(db_entry.get("status"))
+                    if current_status == Status.active:
+                        logger.warning(
+                            "Skipping update for active custom task key=%s task_id=%s",
+                            custom_key,
+                            task_id,
+                        )
+                        continue
+                    logger.info("Updating custom task: %s", custom_key)
+                    try:
+                        self._update_custom_task(
+                            task_id=task_id,
+                            data=task_data,
+                            function_name_to_id=function_name_to_id,
+                            current_status=current_status,
+                        )
+                    except RuntimeError:
+                        logger.warning(
+                            "Skipping update for active custom task key=%s task_id=%s",
+                            custom_key,
+                            task_id,
+                        )
+                else:
+                    existing = unisdk.get_logs(
+                        context=self._ctx,
+                        filter=f"custom_key == '{custom_key}' and instance_id == 0",
+                        limit=1,
+                    )
+                    if existing:
+                        logger.info(
+                            "Overwriting user-added task with custom definition: %s",
+                            custom_key,
+                        )
+                        task_id = int(existing[0].entries["task_id"])
+                        try:
+                            self._delete_task(task_id=task_id, _root_applied=True)
+                        except RuntimeError:
+                            logger.warning(
+                                "Skipping adopt for active task key=%s task_id=%s",
+                                custom_key,
+                                task_id,
+                            )
+                            continue
+
+                    logger.info("Inserting custom task: %s", custom_key)
+                    self._insert_custom_task(
+                        task_data,
+                        function_name_to_id=function_name_to_id,
+                    )
+
+            for custom_key in db_tasks:
+                if custom_key not in processed_keys:
+                    logger.info("Deleting removed custom task: %s", custom_key)
+                    self._delete_custom_task_by_key(custom_key)
+
+            self._store_custom_tasks_hash(expected_hash)
+            if is_personal:
+                self._custom_tasks_synced = True
+            else:
+                self._custom_tasks_synced_contexts.add(tasks_context)
+
+        self._ctx = previous_context
+        self._store = previous_store
+        self._active_task_root_context = previous_active_root
+        return True
+
+    def sync_custom(
+        self,
+        *,
+        source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
+        function_name_to_id: Optional[Dict[str, int]] = None,
+    ) -> bool:
+        """Sync custom tasks from pre-collected sources across destinations."""
+        if source_tasks is None:
+            source_tasks = {}
+
+        by_destination: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for custom_key, source_data in source_tasks.items():
+            destination = source_data.get("destination") or "personal"
+            by_destination.setdefault(destination, {})[custom_key] = source_data
+
+        changed = False
+        for destination, group in by_destination.items():
+            destination_arg = None if destination == "personal" else destination
+            changed |= self.sync_custom_tasks(
+                source_tasks=group,
+                function_name_to_id=function_name_to_id,
+                destination=destination_arg,
+            )
+        return changed

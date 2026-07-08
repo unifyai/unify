@@ -105,6 +105,20 @@ class TaskBase(AuthoredRow):
         default=None,
         description="A summary of what happened during the execution of the task, generated upon completion.",
     )
+    custom_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Stable source-defined key for sync identity. "
+            "None for runtime-created entries."
+        ),
+    )
+    custom_hash: Optional[str] = Field(
+        default=None,
+        description=(
+            "Hash of source-defined custom task content for sync detection. "
+            "None for runtime-created entries."
+        ),
+    )
 
     @model_validator(mode="after")
     def _mutually_exclusive_schedule_trigger(self):
