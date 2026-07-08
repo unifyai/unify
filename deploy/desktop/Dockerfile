@@ -59,6 +59,9 @@ WORKDIR /app/agent-service
 COPY agent-service/ ./
 RUN npm ci
 
+# Shared observation scaling policy (read by agent-service TS at runtime)
+COPY unify/common/observation_scaling_policy.json /app/unify/common/observation_scaling_policy.json
+
 # Install browser runtimes using magnitude-core's patchright (Playwright fork)
 # so the browser build matches what magnitude-core expects at runtime.
 # Install into unityuser-accessible cache — symlinking /root/.cache breaks because
