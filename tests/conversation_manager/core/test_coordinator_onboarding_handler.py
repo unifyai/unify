@@ -107,6 +107,32 @@ async def test_integration_connect_chip_requested_refreshes_render_without_compl
 
 
 @pytest.mark.anyio
+async def test_render_updated_integration_connected_apps_triggers_notif_and_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(SETTINGS, "UNITY_CONSOLE_UI", True)
+    cm = _fake_cm()
+    event = CoordinatorOnboardingEvent(
+        subtype="onboarding_render_updated",
+        message="Onboarding progress updated.",
+        details={
+            "reason": "integration_connected",
+            "newly_completed_step_ids": ["apps"],
+            "completed_step_ids": ["email-reference", "apps"],
+            "onboarding": _RENDER,
+            "canonical_app_slug": "clickup",
+        },
+    )
+
+    should_run = await _handle_coordinator_onboarding_event(event, cm)
+
+    assert should_run is True
+    cm.set_coordinator_onboarding_render.assert_called_once_with(_RENDER)
+    cm.notifications_bar.push_notif.assert_called_once()
+    cm.set_pending_onboarding_outbound.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_render_updated_refreshes_render_without_notif_or_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

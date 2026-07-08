@@ -838,6 +838,28 @@ async def _handle_coordinator_onboarding_event(
 
             provision_learning_expenses_fixtures(get_local_root())
     if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
+        details = event.details if isinstance(event.details, dict) else {}
+        if details.get("reason") == "integration_connected" and "apps" in (
+            details.get("newly_completed_step_ids") or []
+        ):
+            synthetic = CoordinatorOnboardingEvent(
+                subtype="integration_connected",
+                message=event.message
+                or _SUBTYPE_DEFAULT_MESSAGES["integration_connected"],
+                details=details,
+                timestamp=event.timestamp,
+            )
+            cm.notifications_bar.push_notif(
+                _NOTIFICATION_TYPE,
+                _coordinator_onboarding_notification_text(synthetic),
+                event.timestamp,
+            )
+            cm._session_logger.info(
+                "coordinator_onboarding_event",
+                "Apps step completed via integration_connected render update; "
+                "brain will narrate next Integrations step.",
+            )
+            return True
         return False
     cm.notifications_bar.push_notif(
         _NOTIFICATION_TYPE,
