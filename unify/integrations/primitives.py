@@ -10,6 +10,7 @@ from typing import Any, Optional
 from unify.integrations import ops as integration_ops
 from unify.integrations.builtins_catalog import list_catalog_apps, list_catalog_tools
 from unify.integrations.function_metadata import (
+    integration_backend_id,
     integration_connection_id,
     integration_input_schema,
     integration_metadata,
@@ -346,11 +347,23 @@ class IntegrationPrimitives:
                 if source_type == "native" and isinstance(app_slug, str)
                 else None
             )
+            connection_row = (
+                connection_by_app.get(_normalize_app_slug(app_slug))
+                if isinstance(app_slug, str)
+                else None
+            )
             materialized_rows = (
                 self._materialized_function_rows_for_native_app(manifest_row)
                 if source_type == "native"
                 else (
-                    self._materialized_tool_rows_for_app(app_slug)
+                    self._materialized_tool_rows_for_app(
+                        app_slug,
+                        backend_id=(
+                            connection_row.get("backend_id")
+                            if isinstance(connection_row, dict)
+                            else None
+                        ),
+                    )
                     if isinstance(app_slug, str)
                     else []
                 )
@@ -360,11 +373,6 @@ class IntegrationPrimitives:
                 ("enabled" if manifest_row else "not_enabled")
                 if source_type == "native"
                 else "global_catalog"
-            )
-            connection_row = (
-                connection_by_app.get(_normalize_app_slug(app_slug))
-                if isinstance(app_slug, str)
-                else None
             )
             connection_status = (
                 self._native_connection_status(manifest_row)
@@ -520,7 +528,31 @@ class IntegrationPrimitives:
         except Exception:
             return []
 
-    def _materialized_tool_rows_for_app(self, app_slug: str) -> list[dict[str, Any]]:
+    def _connected_backend_for_app(self, app_slug: str) -> str | None:
+        normalized = _normalize_app_slug(app_slug)
+        connections = integration_ops.list_connections(**self._effective_owner_scope())
+        if isinstance(connections, dict) and connections.get("error"):
+            return None
+        for connection in connections or []:
+            if not isinstance(connection, dict):
+                continue
+            if connection.get("status") != "connected":
+                continue
+            raw_app = connection.get("canonical_app_slug")
+            if not isinstance(raw_app, str):
+                continue
+            if _normalize_app_slug(raw_app) != normalized:
+                continue
+            backend_id = connection.get("backend_id")
+            return str(backend_id) if backend_id else None
+        return None
+
+    def _materialized_tool_rows_for_app(
+        self,
+        app_slug: str,
+        *,
+        backend_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         normalized = _normalize_app_slug(app_slug)
         try:
             import unisdk
@@ -530,13 +562,19 @@ class IntegrationPrimitives:
             contexts = (
                 [f"{root}/Functions/Primitives"] if root else ["Functions/Primitives"]
             )
+            row_filter = (
+                'metadata["source"] == "provider_backed" '
+                f'and metadata["integration"]["app_slug"] == {json.dumps(normalized)}'
+            )
+            if backend_id:
+                row_filter = (
+                    f"({row_filter}) and "
+                    f'metadata["integration"]["backend_id"] == {json.dumps(backend_id)}'
+                )
             for context in contexts:
                 rows = unisdk.get_logs(
                     context=context,
-                    filter=(
-                        'metadata["source"] == "provider_backed" '
-                        f'and metadata["integration"]["app_slug"] == {json.dumps(normalized)}'
-                    ),
+                    filter=row_filter,
                     limit=100,
                 )
                 if rows:
@@ -1156,7 +1194,14 @@ class IntegrationPrimitives:
         cached = self._tool_row_cache.get((app_slug, tool_name))
         if cached is not None:
             return cached
+        preferred_backend = self._connected_backend_for_app(app_slug)
         name = f"primitives.integrations.{app_slug}.{tool_name}"
+
+        def _matches_backend(row: dict[str, Any]) -> bool:
+            if not preferred_backend:
+                return True
+            return integration_backend_id(row) == preferred_backend
+
         try:
             from unify.manager_registry import ManagerRegistry
 
@@ -1164,7 +1209,11 @@ class IntegrationPrimitives:
             resolver = getattr(fm, "_get_stored_primitive_data_by_name", None)
             if callable(resolver):
                 row = resolver(name=name, provider_backed_only=True)
-                if isinstance(row, dict) and integration_tool_id(row):
+                if (
+                    isinstance(row, dict)
+                    and integration_tool_id(row)
+                    and _matches_backend(row)
+                ):
                     self._tool_row_cache[(app_slug, tool_name)] = row
                     return row
         except Exception:
@@ -1184,11 +1233,15 @@ class IntegrationPrimitives:
                         f"name == {json.dumps(name)} "
                         'and metadata["source"] == "provider_backed"'
                     ),
-                    limit=1,
+                    limit=10,
                 )
                 for raw_row in rows or []:
                     row = dict(raw_row.entries)
-                    if is_provider_backed_function(row) and integration_tool_id(row):
+                    if (
+                        is_provider_backed_function(row)
+                        and integration_tool_id(row)
+                        and _matches_backend(row)
+                    ):
                         self._tool_row_cache[(app_slug, tool_name)] = row
                         return row
         except Exception:

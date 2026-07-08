@@ -93,6 +93,83 @@ def _backend_preference_rank(backend_id: str) -> int:
         return len(PREFERRED_BACKEND_ORDER)
 
 
+def normalize_tool_name(name: str | None) -> str:
+    return _slugify(str(name or ""))
+
+
+def tool_dedup_key(
+    *,
+    canonical_app_slug: str,
+    display_name: str | None = None,
+    provider_app_id: str | None = None,
+    provider_tool_id: str | None = None,
+    tool_name: str | None = None,
+) -> tuple[str, str]:
+    app_key = logical_app_key(
+        canonical_app_slug=canonical_app_slug,
+        display_name=display_name,
+        provider_app_id=provider_app_id,
+    )
+    normalized_tool = normalize_tool_name(
+        tool_name or provider_tool_id or "",
+    )
+    return app_key, normalized_tool
+
+
+def resolve_public_catalog_tools(
+    tools: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in tools:
+        metadata = entry.get("metadata") or {}
+        integration = (
+            metadata.get("integration") if isinstance(metadata, dict) else {}
+        ) or {}
+        app_slug = _slugify(
+            str(
+                integration.get("app_slug")
+                or entry.get("canonical_app_slug")
+                or entry.get("app_slug")
+                or "",
+            ),
+        )
+        key = tool_dedup_key(
+            canonical_app_slug=app_slug,
+            display_name=str(
+                integration.get("app_display_name") or entry.get("display_name") or "",
+            )
+            or None,
+            provider_app_id=str(integration.get("provider_app_id") or "") or None,
+            provider_tool_id=str(integration.get("provider_tool_id") or "") or None,
+            tool_name=str(
+                entry.get("name")
+                or integration.get("tool_name")
+                or integration.get("provider_tool_id")
+                or "",
+            ),
+        )
+        grouped.setdefault(key, []).append(dict(entry))
+    resolved: list[dict[str, Any]] = []
+    for key in sorted(grouped):
+        rows = grouped[key]
+        rows.sort(
+            key=lambda row: (
+                _backend_preference_rank(
+                    str(
+                        ((row.get("metadata") or {}).get("integration") or {}).get(
+                            "backend_id",
+                        )
+                        or row.get("backend_id")
+                        or "provider",
+                    ),
+                ),
+                str(row.get("name") or ""),
+            ),
+        )
+        resolved.append(rows[0])
+    return resolved
+
+
 def resolve_public_catalog_apps(
     apps: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:

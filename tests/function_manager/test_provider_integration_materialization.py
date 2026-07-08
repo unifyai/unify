@@ -511,6 +511,7 @@ def test_materialized_rows_include_pipedream_metadata_without_user_state(
         {
             "connection_id": "conn-pd",
             "canonical_app_slug": "slack",
+            "backend_id": "pipedream",
             "status": "connected",
         },
     ]
@@ -559,6 +560,59 @@ def test_materialized_rows_include_pipedream_metadata_without_user_state(
     assert "activation_state" not in metadata
     assert "provider_error_status" not in metadata
     assert row["verify"] is True
+
+
+def test_sync_materializes_only_connected_backend_tools(monkeypatch) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-pd",
+            "canonical_app_slug": "slack",
+            "backend_id": "pipedream",
+            "status": "connected",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:slack:send_message",
+            "backend_id": "composio",
+            "provider_app_id": "slack",
+            "provider_tool_id": "send_message",
+            "canonical_name": "primitives.integrations.slack.send_message",
+            "function_manager_name": "primitives_integrations__slack__send_message",
+            "app_slug": "slack",
+            "tool_display_name": "Send message (Composio)",
+            "activation_state": "connected_ready",
+        },
+        {
+            **MOCK_TOOL,
+            "tool_id": "pipedream:slack:send_message",
+            "backend_id": "pipedream",
+            "provider_app_id": "slack",
+            "provider_tool_id": "send_message",
+            "canonical_name": "primitives.integrations.slack.send_message",
+            "function_manager_name": "primitives_integrations__slack__send_message",
+            "app_slug": "slack",
+            "tool_display_name": "Send message (Pipedream)",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+
+    result = fm.sync_provider_integration_tools(app_slug="slack")
+
+    assert result["status"] == "synced"
+    assert len(fm._inserted_rows) == 1
+    assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "pipedream"
 
 
 def test_insert_primitives_preserves_validated_integration_metadata(
