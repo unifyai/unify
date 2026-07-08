@@ -152,6 +152,26 @@ def _already_seen_slack(message_key: str) -> bool:
     return False
 
 
+# In-memory dedup for inbound Unify Teams bot activities. The Bot Connector
+# retries delivery when a webhook ack is slow, so we guard on the stable
+# activity id the same way the Graph Teams and Slack paths do.
+_seen_ms_teams_bot_ids: dict[str, float] = {}
+_MS_TEAMS_BOT_DEDUP_TTL = 300.0
+
+
+def _already_seen_ms_teams_bot(message_key: str) -> bool:
+    """Return True if this Teams bot activity was already processed recently."""
+    now = time.time()
+    cutoff = now - _MS_TEAMS_BOT_DEDUP_TTL
+    expired = [k for k, t in _seen_ms_teams_bot_ids.items() if t < cutoff]
+    for k in expired:
+        del _seen_ms_teams_bot_ids[k]
+    if message_key in _seen_ms_teams_bot_ids:
+        return True
+    _seen_ms_teams_bot_ids[message_key] = now
+    return False
+
+
 if TYPE_CHECKING:
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
     from unify.gateway.ingress import IngressTransport
@@ -303,6 +323,7 @@ events_map: dict[str, Event] = {
     "slack": SlackMessageReceived,
     "teams_chat": TeamsMessageReceived,
     "teams_channel": TeamsChannelMessageReceived,
+    "ms_teams_bot": MsTeamsBotMessageReceived,
 }
 
 
@@ -417,6 +438,89 @@ def _get_or_create_unknown_contact(
 
         except Exception as e:
             LOGGER.error(f"{DEFAULT_ICON} Error in _get_or_create_unknown_contact: {e}")
+            return None
+
+
+def _filter_single_contact(cm, contact_filter: str) -> dict | None:
+    """Return one contact matching a filter, or None (errors swallowed)."""
+    try:
+        result = cm.filter_contacts(filter=contact_filter, limit=1)
+    except Exception:
+        # Filters on custom columns (e.g. agent_id) fail before the column
+        # exists; treat as "not found".
+        return None
+    contacts = result.get("contacts", [])
+    if not contacts:
+        return None
+    contact = contacts[0]
+    return contact.model_dump() if hasattr(contact, "model_dump") else contact
+
+
+def _get_or_create_team_chat_sender_contact(
+    sender_name: str,
+    sender_email: str,
+    sender_assistant_id: int | str | None = None,
+) -> dict | None:
+    """Resolve a team-chat sender to a contact, provisioning one if needed.
+
+    Team group-chat fan-out can carry messages from senders the receiving
+    assistant has never talked to: another member's assistant, or an org
+    member whose contact row was never provisioned. Assistant senders are
+    keyed on their stable ``agent_id`` (provisioned into teammate contacts at
+    startup), so resolution works even when the sender has no provisioned
+    email; email is the fallback identity. Teammates are known, trusted
+    collaborators — unlike arbitrary unknown inbound senders — so resolution
+    is not gated by the blacklist-check flag and the created contact is a
+    normal responsive system contact.
+    """
+    if not sender_email and sender_assistant_id is None:
+        return None
+
+    with _unknown_contact_lock:
+        try:
+            from unify.manager_registry import ManagerRegistry
+            from unify.contact_manager.system_contacts import (
+                TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+            )
+
+            cm = ManagerRegistry.get_contact_manager()
+            if cm is None:
+                return None
+
+            contact = None
+            if sender_assistant_id is not None:
+                contact = _filter_single_contact(
+                    cm,
+                    f"agent_id == '{sender_assistant_id}'",
+                )
+            if contact is None and sender_email:
+                contact = _filter_single_contact(
+                    cm,
+                    f"email_address == '{sender_email}'",
+                )
+            if contact is not None:
+                return contact
+
+            name_parts = (sender_name or "").strip().split(" ", 1)
+            create_kwargs = {
+                "first_name": name_parts[0] or None,
+                "surname": name_parts[1] if len(name_parts) > 1 else None,
+                "email_address": sender_email or None,
+                "should_respond": True,
+                "response_policy": TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+                "is_system": True,
+            }
+            if sender_assistant_id is not None:
+                create_kwargs["agent_id"] = str(sender_assistant_id)
+            outcome = cm._create_contact(**create_kwargs)
+            new_contact_id = outcome["details"]["contact_id"]
+            contact_info = cm.get_contact_info(new_contact_id)
+            return contact_info.get(new_contact_id)
+        except Exception as e:
+            LOGGER.error(
+                f"{DEFAULT_ICON} Error resolving team chat sender "
+                f"(email={sender_email!r}, assistant={sender_assistant_id!r}): {e}",
+            )
             return None
 
 
@@ -570,6 +674,38 @@ def _create_slack_contact(slack_user_id: str, profile: dict) -> dict | None:
         if found is not None:
             return found
         LOGGER.error(f"{DEFAULT_ICON} Error creating Slack contact: {e}")
+        return None
+
+
+def _create_ms_teams_bot_contact(display_name: str) -> dict | None:
+    """Create a respondable contact for an addressed Teams bot sender.
+
+    The Bot Framework only delivers an activity to the bot when it is a 1:1
+    chat or an explicit @mention, so an inbound bot message is always intent
+    to converse — the contact is created with ``should_respond=True``.
+
+    Teams activities carry no email (roster/Graph lookup is deferred), so the
+    sender's AAD display name is the only durable key available. A stable
+    display name lets the next inbound message re-match this contact by name.
+    A nameless sender is left unresolved rather than minting an orphan.
+    """
+    full_name = (display_name or "").strip()
+    if not full_name:
+        return None
+    from unify.manager_registry import ManagerRegistry
+
+    cm = ManagerRegistry.get_contact_manager()
+    try:
+        first_name, _, surname = full_name.partition(" ")
+        outcome = cm._create_contact(
+            first_name=first_name or None,
+            surname=surname or None,
+            should_respond=True,
+        )
+        new_id = outcome["details"]["contact_id"]
+        return cm.get_contact_info(new_id).get(new_id)
+    except Exception as e:
+        LOGGER.error(f"{DEFAULT_ICON} Error creating Teams bot contact: {e}")
         return None
 
 
@@ -826,6 +962,10 @@ class CommsManager:
                         "assistant_slack_team_id",
                         "",
                     ),
+                    "assistant_has_ms_teams_bot": event.get(
+                        "assistant_has_ms_teams_bot",
+                        SESSION_DETAILS.assistant.has_ms_teams_bot,
+                    ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
                     "user_number": event["user_number"],
@@ -833,6 +973,11 @@ class CommsManager:
                     "user_whatsapp_number": event.get("user_whatsapp_number", ""),
                     "voice_provider": event["voice_provider"],
                     "voice_id": event["voice_id"],
+                    "default_model": event.get("default_model", ""),
+                    "default_reasoning_effort": event.get(
+                        "default_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),
@@ -1087,23 +1232,38 @@ class CommsManager:
                     return
 
                 if thread == "unify_message":
+                    team_id = event.get("team_id")
                     target_contact_id = event.get("contact_id")
-                    if target_contact_id is None:
-                        LOGGER.error(
-                            f"{DEFAULT_ICON} Error: contact_id is required for unify_message, "
-                            "skipping message",
+                    contact = None
+                    if target_contact_id is not None:
+                        contact = next(
+                            (
+                                c
+                                for c in contacts
+                                if c["contact_id"] == target_contact_id
+                            ),
+                            None,
                         )
-                        ack_now()
-                        return
-
-                    contact = next(
-                        (c for c in contacts if c["contact_id"] == target_contact_id),
-                        None,
-                    )
+                    # Team chat fan-out: the sender may be another org member
+                    # or a fellow team assistant rather than this assistant's
+                    # owner, in which case the adapters layer cannot resolve a
+                    # per-assistant contact id. Assistant senders resolve by
+                    # their stable agent_id (teammate contacts are provisioned
+                    # at startup); humans resolve by email — the identity
+                    # org-member contacts are stored under. Either way a
+                    # teammate contact is provisioned on first message if the
+                    # startup sync has not covered the sender yet.
+                    if contact is None and team_id:
+                        contact = _get_or_create_team_chat_sender_contact(
+                            str(event.get("sender_name") or ""),
+                            str(event.get("sender_email") or ""),
+                            event.get("sender_assistant_id"),
+                        )
                     if contact is None:
                         LOGGER.error(
-                            f"{DEFAULT_ICON} Error: contact_id {target_contact_id} not found in "
-                            f"contacts list, skipping message",
+                            f"{DEFAULT_ICON} Error: could not resolve sender contact "
+                            f"for unify_message (contact_id={target_contact_id}, "
+                            f"team_id={team_id}), skipping message",
                         )
                         ack_now()
                         return
@@ -1115,6 +1275,8 @@ class CommsManager:
                             content=content,
                             contact=contact,
                             attachments=attachments,
+                            team_id=int(team_id) if team_id else None,
+                            team_name=str(event.get("team_name") or ""),
                         ).to_json(),
                     )
 
@@ -1719,6 +1881,94 @@ class CommsManager:
                                 message_preview=content[:100] if content else "",
                             ).to_json(),
                         )
+
+                    ack_now()
+                    return
+
+                if thread == "ms_teams_bot":
+                    tenant_id = event.get("tenant_id", "")
+                    conversation_id = event.get("conversation_id", "")
+                    conversation_type = event.get("conversation_type", "personal")
+                    channel_id = event.get("channel_id", "")
+                    team_id = event.get("team_id", "")
+                    thread_id = event.get("thread_id", "")
+                    service_url = event.get("service_url", "")
+                    bot_app_id = event.get("bot_app_id", "")
+                    message_id = event.get("message_id", "")
+                    sender_display_name = event.get("sender_display_name", "")
+                    attachments = event.get("attachments") or []
+                    routing_metadata = event.get("routing_metadata") or {}
+
+                    # A 1:1 chat is a DM; group chats and channels are shared
+                    # conversations that route through the channel medium/tool
+                    # (mirrors Slack's DM vs channel split).
+                    is_channel = conversation_type in ("groupChat", "channel")
+
+                    dedup_key = message_id or event.get("event_id", "")
+                    if dedup_key and _already_seen_ms_teams_bot(dedup_key):
+                        LOGGER.debug(
+                            f"{DEFAULT_ICON} Skipping duplicate Teams bot activity {dedup_key}",
+                        )
+                        ack_now()
+                        return
+
+                    # No email is present on the activity (roster lookup is
+                    # deferred), so match the AAD display name against known
+                    # contacts; a stable name re-matches on later messages. An
+                    # unmatched sender gets a respondable contact (the bot only
+                    # receives 1:1 / @mention activities, i.e. clear intent).
+                    contact = _match_contact_by_name(sender_display_name, contacts)
+                    if contact is None:
+                        contact = _create_ms_teams_bot_contact(sender_display_name)
+
+                    if contact is None:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Failed to resolve contact for Teams bot "
+                            f"from: {sender_display_name!r}",
+                        )
+                        ack_now()
+                        return
+
+                    if is_channel:
+                        await publish(
+                            "app:comms:ms_teams_bot_channel_message",
+                            MsTeamsBotChannelMessageReceived(
+                                contact=contact,
+                                content=content,
+                                tenant_id=tenant_id,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                channel_id=channel_id,
+                                team_id=team_id,
+                                thread_id=thread_id,
+                                service_url=service_url,
+                                bot_app_id=bot_app_id,
+                                message_id=message_id,
+                                attachments=attachments,
+                                routing_metadata=routing_metadata,
+                            ).to_json(),
+                        )
+                    else:
+                        await publish(
+                            "app:comms:ms_teams_bot_message",
+                            MsTeamsBotMessageReceived(
+                                contact=contact,
+                                content=content,
+                                tenant_id=tenant_id,
+                                conversation_id=conversation_id,
+                                conversation_type=conversation_type,
+                                channel_id=channel_id,
+                                service_url=service_url,
+                                bot_app_id=bot_app_id,
+                                message_id=message_id,
+                                is_channel=is_channel,
+                                attachments=attachments,
+                                routing_metadata=routing_metadata,
+                            ).to_json(),
+                        )
+
+                    if attachments:
+                        schedule(add_unify_message_attachments(attachments))
 
                     ack_now()
                     return
@@ -2403,6 +2653,10 @@ class CommsManager:
                         "assistant_slack_team_id",
                         "",
                     ),
+                    "assistant_has_ms_teams_bot": event.get(
+                        "assistant_has_ms_teams_bot",
+                        SESSION_DETAILS.assistant.has_ms_teams_bot,
+                    ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
                     "user_number": event["user_number"],
@@ -2410,6 +2664,11 @@ class CommsManager:
                     "user_whatsapp_number": event.get("user_whatsapp_number", ""),
                     "voice_provider": event["voice_provider"],
                     "voice_id": event["voice_id"],
+                    "default_model": event.get("default_model", ""),
+                    "default_reasoning_effort": event.get(
+                        "default_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),

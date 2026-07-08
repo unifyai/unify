@@ -151,6 +151,13 @@ async def apply_managed_desktop_ready(
             "Self-host file sync did not start — deferring FileSyncComplete",
         )
 
+    if api_desktop_url:
+        from unify.conversation_manager.medium_scripts.common import (
+            notify_voice_worker_agent_service_url,
+        )
+
+        await notify_voice_worker_agent_service_url(cm)
+
     if publish_console_ready and liveview_base:
         _t0 = time.perf_counter()
         await comms_utils.publish_assistant_desktop_ready(

@@ -87,6 +87,16 @@ def test_integration_connect_chip_does_not_complete_apps() -> None:
     assert "actual integration credential lands" in text
 
 
+def test_integration_connected_prefers_integrations_phase_next_step() -> None:
+    event = CoordinatorOnboardingEvent(
+        subtype="integration_connected",
+        message="User just connected the 'CLICKUP' integration to you.",
+        details={"canonical_app_slug": "clickup"},
+    )
+    text = _coordinator_onboarding_notification_text(event)
+    assert "Integrations" in text
+
+
 def test_step_completed_notification_requires_no_action() -> None:
     event = CoordinatorOnboardingEvent(
         subtype="onboarding_step_completed",

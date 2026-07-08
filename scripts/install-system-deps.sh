@@ -158,7 +158,7 @@ if [ "$MINIMAL" = false ]; then
     # non-headless browser sessions, e.g. Google Meet join via local browser)
     # =========================================================================
     apt-get install -y --no-install-recommends \
-        tigervnc-standalone-server tigervnc-common \
+        tigervnc-standalone-server tigervnc-common tigervnc-tools \
         xfce4 xfce4-goodies xfce4-terminal \
         xdotool wmctrl xterm dbus dbus-x11 \
         x11-xserver-utils \

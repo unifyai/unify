@@ -29,9 +29,12 @@ GPT_5_5_HIGH_ACT_LLM_PROFILE = "gpt_5_5_high"
 
 
 _MINIMAX_PRICE_BASELINE = (
-    "Baseline profile. Uses the actor's configured model, normally "
-    "minimax-v3@minimax. The MiniMax M3 registry rate is about "
-    "$0.30/M input tokens and $1.20/M output tokens."
+    "Baseline profile. Uses the actor's configured model: the assistant's "
+    "per-assistant default model when one is set, otherwise the platform "
+    "default (normally minimax-v3@minimax). The MiniMax M3 registry rate is "
+    "about $0.30/M input tokens and $1.20/M output tokens; premium defaults "
+    "such as GPT-5.5, Claude Opus 4.8, or Claude Fable 5 cost substantially "
+    "more."
 )
 _GPT_5_5_PRICE = (
     "Premium OpenAI profile. gpt-5.5@openai is about $5/M input tokens and "

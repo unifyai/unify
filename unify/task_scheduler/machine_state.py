@@ -141,10 +141,18 @@ class TaskRunProvenance:
 
 @dataclass(frozen=True)
 class TaskRunReference:
-    """Stable identifiers needed to patch a materialized task run later."""
+    """Stable identifiers needed to patch a materialized task run later.
+
+    ``source_task_log_id`` pins the task's own surface so team-task runs
+    (which live under ``Teams/{id}/Tasks/Runs``) resolve on update exactly
+    as they did on creation.
+    """
 
     assistant_id: str
     run_key: str
+    # Routing metadata, not identity: excluded from equality so references
+    # compare by (assistant_id, run_key) alone.
+    source_task_log_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -165,10 +173,17 @@ class TaskOutboundOperationProvenance:
 
 @dataclass(frozen=True)
 class TaskOutboundOperationReference:
-    """Stable identifiers needed to patch one outbound ledger row later."""
+    """Stable identifiers needed to patch one outbound ledger row later.
+
+    ``source_task_log_id`` pins the task's own surface so team-task rows
+    resolve on update exactly as they did on creation.
+    """
 
     assistant_id: str
     operation_key: str
+    # Routing metadata, not identity: excluded from equality so references
+    # compare by (assistant_id, operation_key) alone.
+    source_task_log_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -486,6 +501,7 @@ def create_or_adopt_live_task_run(
     return TaskRunReference(
         assistant_id=provenance.assistant_id,
         run_key=persisted_run_key,
+        source_task_log_id=provenance.source_task_log_id,
     )
 
 
@@ -499,12 +515,15 @@ def update_task_run_record(
         return
     _orchestra_admin_post(
         _TASK_RUN_UPDATE_PATH,
-        {
-            "project_name": TASK_MACHINE_STATE_PROJECT,
-            "assistant_id": run_reference.assistant_id,
-            "run_key": run_reference.run_key,
-            "updates": _drop_none_values(dict(updates)),
-        },
+        _drop_none_values(
+            {
+                "project_name": TASK_MACHINE_STATE_PROJECT,
+                "assistant_id": run_reference.assistant_id,
+                "run_key": run_reference.run_key,
+                "source_task_log_id": run_reference.source_task_log_id,
+                "updates": _drop_none_values(dict(updates)),
+            },
+        ),
     )
 
 
@@ -539,6 +558,7 @@ def latest_task_run_reference_for_source(
     return TaskRunReference(
         assistant_id=normalized_assistant_id,
         run_key=run_key,
+        source_task_log_id=int(source_task_log_id),
     )
 
 
@@ -583,6 +603,7 @@ def create_or_adopt_task_outbound_operation(
         reference=TaskOutboundOperationReference(
             assistant_id=provenance.assistant_id,
             operation_key=persisted_operation_key,
+            source_task_log_id=provenance.source_task_log_id,
         ),
         payload=dict(operation_payload),
         created=bool(response_body.get("created")),
@@ -599,12 +620,15 @@ def update_task_outbound_operation_record(
         return
     _orchestra_admin_post(
         _TASK_OUTBOUND_OPERATION_UPDATE_PATH,
-        {
-            "project_name": TASK_MACHINE_STATE_PROJECT,
-            "assistant_id": operation_reference.assistant_id,
-            "operation_key": operation_reference.operation_key,
-            "updates": _drop_none_values(dict(updates)),
-        },
+        _drop_none_values(
+            {
+                "project_name": TASK_MACHINE_STATE_PROJECT,
+                "assistant_id": operation_reference.assistant_id,
+                "operation_key": operation_reference.operation_key,
+                "source_task_log_id": operation_reference.source_task_log_id,
+                "updates": _drop_none_values(dict(updates)),
+            },
+        ),
     )
 
 

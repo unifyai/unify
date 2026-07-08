@@ -540,6 +540,25 @@ def _build_slack_guidelines(assistant_has_slack: bool) -> str:
     )
 
 
+def _build_ms_teams_bot_guidelines(assistant_has_ms_teams_bot: bool) -> str:
+    """Unify Teams bot addressing/threading conventions (Bot Framework)."""
+    if not assistant_has_ms_teams_bot:
+        return ""
+    return (
+        "- **Unify Teams app addressing & threads:** In group chats and "
+        "channels, the org-installed Teams bot is shared across all assistants "
+        "in the org. The user picks me by @mentioning the bot **and** my first "
+        "name as a routing token when starting a thread; replies inside that "
+        "thread automatically reach the same assistant. To reply in a shared "
+        "conversation, call `send_ms_teams_bot_channel_message` with the "
+        "inbound message's `tenant_id` and `conversation_id`. 1:1 DMs are "
+        "simpler: reply with `send_ms_teams_bot_message` using the inbound "
+        "`tenant_id` and `conversation_id`. This is the org-installed Unify "
+        "Teams app (Bot Framework), distinct from `send_teams_message` (a "
+        "delegated Microsoft account)."
+    )
+
+
 def _build_coordinator_guidelines(is_coordinator: bool) -> str:
     """Extra guidance for Twin in org routing fallback cases."""
     if not is_coordinator:
@@ -568,6 +587,7 @@ def _build_channels_str(
     assistant_has_whatsapp: bool = False,
     assistant_has_discord: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     assistant_has_slack: bool = False,
 ) -> str:
     """Build a human-readable comma-separated list of available channels."""
@@ -597,6 +617,11 @@ def _build_channels_str(
             available_channels.index("unify messages"),
             "Teams",
         )
+    if assistant_has_ms_teams_bot:
+        available_channels.insert(
+            available_channels.index("unify messages"),
+            "Teams (Unify app)",
+        )
     return ", ".join(available_channels)
 
 
@@ -622,6 +647,7 @@ def _build_comms_tool_listing(
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
     on_voice_call: bool = False,
     call_line_ready: bool = True,
@@ -692,6 +718,15 @@ def _build_comms_tool_listing(
                 '`team_id` (from the inbound `[team_id="..."]` annotation) so '
                 "the right workspace bot token is used; pass `thread_ts` to "
                 "reply inside an existing boss DM thread.",
+            )
+        if assistant_has_ms_teams_bot:
+            lines.append(
+                "- `send_ms_teams_bot_message`: Reply to my boss only through "
+                "the org-installed Unify Microsoft Teams app. Only usable to "
+                "answer an inbound Teams message from my boss — pass the "
+                "`tenant_id` and `conversation_id` shown on that inbound "
+                "message. This is the Unify Teams app (Bot Framework), distinct "
+                "from `send_teams_message` (my boss's own Microsoft account).",
             )
         if assistant_has_teams:
             lines.append(
@@ -767,6 +802,24 @@ def _build_comms_tool_listing(
             "original message (for a top-level @mention it is that message's "
             "own id and starts the thread). Use when the inbound thread is "
             "`slack_channel_message`.",
+        )
+    if assistant_has_ms_teams_bot:
+        lines.append(
+            "- `send_ms_teams_bot_message`: Reply through the org-installed "
+            "Unify Microsoft Teams app. Use when the inbound thread is "
+            "`ms_teams_bot_message` (a 1:1 DM): pass the `tenant_id` and "
+            "`conversation_id` shown on the inbound message so the reply routes "
+            "back into that same Teams conversation. This is the Unify Teams "
+            "app (Bot Framework), distinct from `send_teams_message` (a user's "
+            "delegated Microsoft account).",
+        )
+        lines.append(
+            "- `send_ms_teams_bot_channel_message`: Reply into a group chat or "
+            "Teams channel through the Unify Teams app. Use when the inbound "
+            "thread is `ms_teams_bot_channel_message` (a shared conversation) "
+            "rather than a 1:1 DM: pass the `tenant_id` and `conversation_id` "
+            "shown on the inbound message so the reply routes back into that "
+            "same conversation.",
         )
     if assistant_has_teams:
         lines.append(
@@ -1091,8 +1144,11 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "is priority-ordered: I default to the first entry, using its nudge "
             "copy framed as clicking that step's row in the Onboarding checklist, "
             "and only pick a lower one when the current channel and conversation "
-            "make it clearly more natural; if none is listed (onboarding complete), "
-            "I congratulate the user and stand down.",
+            "make it clearly more natural. For `integration_connected`, prefer "
+            "the next Integrations-section step (typically `integration-read`) "
+            "before Communication or other phases; for `workspace_connected`, "
+            "prefer the next Workspace-section demo before other phases; if none "
+            "is listed (onboarding complete), I congratulate the user and stand down.",
             "  3. Deliver the acknowledgement on whichever channel is live. When a "
             "voice call is active you MUST speak it by calling "
             '`guide_voice_agent(message="...")` with the '
@@ -1412,14 +1468,15 @@ def _build_coordinator_onboarding_progress_block(
             "Each step line includes its ``step_id`` for "
             "``set_onboarding_task_state(step_id, completed)`` when I need to "
             "mark non-Communication work complete or undo a manual completion.",
-            "Workspace demo steps (``workspace-mailbox``, ``workspace-drive``, "
-            "``workspace-calendar``) are completed this way, explicitly: they never "
-            "auto-complete, so the checklist does not detect the work on its own. I "
-            "do the demo task — read the relevant area and deliver one short summary "
-            "as a single ``unify_message`` — and then call "
-            "``set_onboarding_task_state(step_id, completed=True)``; the demo is not "
-            "finished until I make that call. Any reply, tidy-up, or flag I offer "
-            "afterwards is an optional follow-up and never gates completion.",
+            "Manual-completion onboarding steps (workspace demos, integration "
+            "demos, learn-from-correction, my-computer-demo, discord-connect) "
+            "never auto-complete. I do the deliverable work, send the required "
+            "``unify_message`` (or attachment where specified), then call "
+            "``set_onboarding_task_state(step_id, completed=True)``; the step is "
+            "not finished until I make that call. Any optional follow-up I offer "
+            "afterwards never gates completion. When I dispatch ``act`` for one "
+            "of these demos, the subtask delivers the work only — I still own "
+            "checklist completion on the ActorResult turn.",
             "While the user is on an onboarding checklist step or asking where to "
             "click in the onboarding UI, I answer from this block and the "
             "onboarding UI reference — I do not dispatch ``act`` just to orient "
@@ -1692,7 +1749,7 @@ CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggr
 - Just sent a message and already answered the user's latest ask → `wait`
 - Just made a call → `wait` (the call is in progress)
 - Just started an action (via `act`) → `wait` (do NOT poll status)
-- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn.
+- Completed an action (text) → `wait` (do not announce completion unless asked) — UNLESS a pending tagged onboarding deliverable is armed; then forward the result as the tagged message in this turn. UNLESS the completed act served a manual-completion onboarding demo step and the deliverable was sent — then call `set_onboarding_task_state(step_id, completed=True)` in the same turn as relaying the result, before `wait`.
 - Completed an action (voice call) → call `guide_voice_agent(message="...")` to relay results, then `wait`
 - Unsure what to *say* but the user sent a new unify_message → still reply briefly with what I know; only `wait` when there is genuinely nothing new to address.
 
@@ -2128,6 +2185,7 @@ def _build_available_outbound_tool_names(
     assistant_has_discord: bool,
     assistant_has_slack: bool,
     assistant_has_teams: bool,
+    assistant_has_ms_teams_bot: bool,
     is_coordinator: bool,
     on_voice_call: bool,
     outbound_voice_line_ready: bool,
@@ -2169,6 +2227,14 @@ def _build_available_outbound_tool_names(
         available_tool_names.insert(idx, "send_slack_message")
         if not is_coordinator:
             available_tool_names.insert(idx + 1, "send_slack_channel_message")
+    if assistant_has_ms_teams_bot:
+        idx = available_tool_names.index("send_unify_message")
+        available_tool_names.insert(idx, "send_ms_teams_bot_message")
+        if not is_coordinator:
+            available_tool_names.insert(
+                idx + 1,
+                "send_ms_teams_bot_channel_message",
+            )
     if assistant_has_teams:
         idx = available_tool_names.index("send_unify_message")
         available_tool_names.insert(idx, "send_teams_message")
@@ -2317,6 +2383,7 @@ def build_system_prompt(
     assistant_has_discord: bool = False,
     assistant_has_slack: bool = False,
     assistant_has_teams: bool = False,
+    assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
     has_linked_user_desktop: bool = False,
     user_filesys_consented: bool = False,
@@ -2387,6 +2454,10 @@ def build_system_prompt(
         Whether the assistant has Discord configured.
     assistant_has_teams : bool
         Whether the assistant has Microsoft Teams configured.
+    assistant_has_ms_teams_bot : bool
+        Whether the assistant's org has a bound Unify Microsoft Teams bot app
+        install (Bot Framework channel), gating ``send_ms_teams_bot_message``.
+        Distinct from ``assistant_has_teams`` (delegated MS365 Graph).
     has_linked_user_desktop : bool
         Whether the active user has a desktop linked to this assistant. When True,
         the assistant can drive that machine via ``act`` (when no screen share is
@@ -2461,6 +2532,9 @@ def build_system_prompt(
     slack_guidelines = _build_slack_guidelines(
         assistant_has_slack and not is_coordinator,
     )
+    ms_teams_bot_guidelines = _build_ms_teams_bot_guidelines(
+        assistant_has_ms_teams_bot and not is_coordinator,
+    )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     # Reference-quiz comms tools withheld until the user clicks the channel's
     # trigger row (this session) or the step durably completes. Kept consistent
@@ -2480,6 +2554,7 @@ def build_system_prompt(
         assistant_has_discord=assistant_has_discord,
         assistant_has_slack=assistant_has_slack,
         assistant_has_teams=assistant_has_teams,
+        assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         is_coordinator=is_coordinator,
         on_voice_call=on_voice_call,
         outbound_voice_line_ready=outbound_voice_line_ready,
@@ -2493,6 +2568,7 @@ def build_system_prompt(
         assistant_has_discord,
         assistant_has_slack,
         assistant_has_teams,
+        assistant_has_ms_teams_bot,
         is_coordinator,
         on_voice_call,
         call_line_ready=outbound_voice_line_ready,
@@ -2708,6 +2784,7 @@ Messages from the current turn have **NEW** tag prepended:
         assistant_has_whatsapp=assistant_has_whatsapp,
         assistant_has_discord=assistant_has_discord,
         assistant_has_teams=assistant_has_teams,
+        assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
         assistant_has_slack=assistant_has_slack,
     )
 
@@ -2790,6 +2867,7 @@ Messages from the current turn have **NEW** tag prepended:
         + (f"\n{missing_email_notice}" if missing_email_notice else "")
         + (f"\n{whatsapp_change_notice}" if whatsapp_change_notice else "")
         + (f"\n{slack_guidelines}" if slack_guidelines else "")
+        + (f"\n{ms_teams_bot_guidelines}" if ms_teams_bot_guidelines else "")
         + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
 

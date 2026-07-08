@@ -535,6 +535,152 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     )
 
 
+TEAMMATE_ASSISTANT_RESPONSE_POLICY = (
+    "Teammate in a shared team chat. Use normal judgement when deciding "
+    "whether their messages need a reply."
+)
+
+
+def _fetch_org_assistants() -> List[Dict[str, Any]]:
+    """Return all org assistants visible to this runtime's key.
+
+    Uses ``GET /assistant?list_all_org=true``. Returns an empty list for
+    personal keys, unavailable APIs, or any error — teammate provisioning is
+    strictly best-effort.
+    """
+    from ..session_details import SESSION_DETAILS
+    from ..settings import SETTINGS
+
+    base_url = SETTINGS.ORCHESTRA_URL
+    api_key = SESSION_DETAILS.unify_key
+
+    if not base_url or not api_key:
+        return []
+
+    try:
+        from unisdk.utils import http
+
+        resp = http.get(
+            f"{base_url.rstrip('/')}/assistant",
+            headers={"Authorization": f"Bearer {api_key}"},
+            params={"list_all_org": "true"},
+            timeout=30,
+        )
+        if 200 <= resp.status_code < 300:
+            data = resp.json()
+            return data if isinstance(data, list) else []
+        return []
+    except Exception:
+        return []
+
+
+def select_team_assistant_peers(
+    assistants: List[Dict[str, Any]],
+    team_ids: List[int],
+    self_agent_id: int | None,
+) -> List[Dict[str, Any]]:
+    """Filter an org assistant list down to this assistant's team peers.
+
+    Peers are non-coordinator assistants sharing at least one team with this
+    assistant, excluding the assistant itself. Coordinators are excluded from
+    team chat entirely, so they are not provisioned as teammate contacts.
+    """
+    my_teams = {int(team_id) for team_id in team_ids}
+    if not my_teams:
+        return []
+
+    peers = []
+    for assistant in assistants:
+        agent_id = assistant.get("agent_id")
+        if agent_id is None or (
+            self_agent_id is not None and int(agent_id) == int(self_agent_id)
+        ):
+            continue
+        if assistant.get("is_coordinator"):
+            continue
+        peer_teams = {int(team_id) for team_id in assistant.get("team_ids") or []}
+        if my_teams & peer_teams:
+            peers.append(assistant)
+    return peers
+
+
+def provision_team_assistant_contacts(self) -> None:
+    """Ensure teammate-assistant contacts exist with is_system=True.
+
+    Mirrors ``provision_org_member_contacts`` for the AI side of the roster:
+    every non-coordinator assistant sharing a team with this assistant gets a
+    contact row carrying its ``agent_id``, so team-chat fan-out messages from
+    that assistant resolve to a contact even when it has no provisioned email.
+    """
+    from ..session_details import SESSION_DETAILS
+
+    if not SESSION_DETAILS.is_initialized:
+        return
+
+    peers = select_team_assistant_peers(
+        _fetch_org_assistants(),
+        SESSION_DETAILS.team_ids,
+        SESSION_DETAILS.assistant.agent_id,
+    )
+    if not peers:
+        return
+
+    _ensure_columns_exist(self, {"agent_id": None})
+
+    for peer in peers:
+        agent_id = str(peer["agent_id"])
+        email = peer.get("email") or None
+
+        try:
+            # Prefer the stable agent_id identity; fall back to email so an
+            # existing email-provisioned row is upgraded rather than duplicated.
+            existing = unisdk.get_logs(
+                context=self._ctx,
+                filter=f"agent_id == '{agent_id}'",
+                limit=1,
+            )
+            if not existing and email:
+                existing = unisdk.get_logs(
+                    context=self._ctx,
+                    filter=f"email_address == '{email}'",
+                    limit=1,
+                )
+
+            if existing:
+                log = existing[0]
+                entries = log.entries
+                needs_is_system = not entries.get("is_system")
+                needs_agent_id = entries.get("agent_id") != agent_id
+                needs_email = email and entries.get("email_address") != email
+
+                if needs_is_system or needs_agent_id or needs_email:
+                    update_kwargs: Dict[str, Any] = {
+                        "contact_id": int(entries["contact_id"]),
+                        "_log_id": log.id,
+                    }
+                    if needs_is_system:
+                        update_kwargs["is_system"] = True
+                    if needs_agent_id:
+                        update_kwargs["agent_id"] = agent_id
+                    if needs_email:
+                        update_kwargs["email_address"] = email
+                    self.update_contact(**update_kwargs)
+            else:
+                self._create_contact(
+                    first_name=peer.get("first_name"),
+                    surname=peer.get("surname"),
+                    email_address=email,
+                    job_title=peer.get("job_title"),
+                    is_system=True,
+                    should_respond=True,
+                    response_policy=TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+                    agent_id=agent_id,
+                )
+        except Exception:
+            # Best-effort: continue with other peers
+            continue
+
+
 def _fetch_org_members() -> List[Dict[str, Any]]:
     """
     Return list of org members for the current organization.

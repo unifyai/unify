@@ -78,6 +78,12 @@ async def test_task_lookup_by_name_returns_description(initialized_cm_codeact):
     scheduler = ManagerRegistry.get_task_scheduler()
     assert scheduler is not None, "TaskScheduler is not available"
     scheduler.create_task(name=task_name, description=task_desc)
+    task_id = find_task_id_by_exact_name(name=task_name)
+    verify_task_in_db(
+        cm,
+        task_id,
+        expected_fields={"name": task_name, "description": task_desc},
+    )
 
     # Now query it.
     result2 = await cm.step_until_wait(
@@ -112,9 +118,11 @@ async def test_task_lookup_by_name_returns_description(initialized_cm_codeact):
 
     lower = final.lower()
     assert (
+        "could not" not in lower and "unable" not in lower
+    ), f"Actor reported lookup failure instead of returning the task description: {final}"
+    assert (
         f"task-query-{uniq}".lower() in lower
-    ), f"Expected to find ref token in output, got: {final}"
-    assert "send alice" in lower and "meeting" in lower
+    ), f"Expected unguessable ref token from task lookup, got: {final}"
     assert_no_errors(result2)
 
 
