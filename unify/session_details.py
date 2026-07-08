@@ -278,6 +278,7 @@ class AssistantDetails:
     discord_bot_id: str = ""
     slack_bot_user_id: str = ""
     slack_team_id: str = ""
+    has_ms_teams_bot: bool = False
     is_coordinator: bool = False
     # Default LLM as a unillm 'model@provider' endpoint plus a reasoning-effort
     # level. Empty = platform default (UNIFY_MODEL and per-call-site efforts).
@@ -523,6 +524,7 @@ class SessionDetails:
         assistant_discord_bot_id: str = "",
         assistant_slack_bot_user_id: str = "",
         assistant_slack_team_id: str = "",
+        assistant_has_ms_teams_bot: bool = False,
         assistant_contact_id: int = 0,
         assistant_self_contact_id: int = DEFAULT_SELF_CONTACT_ID,
         user_id: str = "",
@@ -564,6 +566,7 @@ class SessionDetails:
         self.assistant.discord_bot_id = _runtime_str(assistant_discord_bot_id)
         self.assistant.slack_bot_user_id = _runtime_str(assistant_slack_bot_user_id)
         self.assistant.slack_team_id = _runtime_str(assistant_slack_team_id)
+        self.assistant.has_ms_teams_bot = bool(assistant_has_ms_teams_bot)
         self.assistant.is_coordinator = is_coordinator
         self.assistant.contact_id = assistant_contact_id
         self.self_contact_id = assistant_self_contact_id
@@ -636,6 +639,9 @@ class SessionDetails:
         )
         os.environ["ASSISTANT_SLACK_TEAM_ID"] = _runtime_str(
             self.assistant.slack_team_id,
+        )
+        os.environ["ASSISTANT_HAS_MS_TEAMS_BOT"] = str(
+            self.assistant.has_ms_teams_bot,
         )
         os.environ["ASSISTANT_DESKTOP_MODE"] = _runtime_str(
             self.assistant.desktop_mode,
@@ -729,6 +735,8 @@ class SessionDetails:
             self.assistant.slack_bot_user_id = val
         if val := os.environ.get("ASSISTANT_SLACK_TEAM_ID"):
             self.assistant.slack_team_id = val
+        if val := os.environ.get("ASSISTANT_HAS_MS_TEAMS_BOT"):
+            self.assistant.has_ms_teams_bot = val.strip().lower() == "true"
         if val := os.environ.get("ASSISTANT_CONTACT_ID"):
             try:
                 self.assistant.contact_id = int(val)

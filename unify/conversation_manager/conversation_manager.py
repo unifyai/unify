@@ -2755,8 +2755,15 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "assistant_slack_team_id",
             "",
         )
+        # Default to the current value (not False) so a capability adopted at
+        # runtime from an inbound bot activity — or forced on via the
+        # ASSISTANT_HAS_MS_TEAMS_BOT env var at startup — survives assistant
+        # updates whose payload omits the key (Orchestra does not yet emit it).
         self.assistant_has_ms_teams_bot = bool(
-            payload.get("assistant_has_ms_teams_bot", False),
+            payload.get(
+                "assistant_has_ms_teams_bot",
+                self.assistant_has_ms_teams_bot,
+            ),
         )
         self.user_first_name = payload["user_first_name"]
         self.user_surname = payload["user_surname"]
@@ -2803,6 +2810,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             assistant_discord_bot_id=self.assistant_discord_bot_id,
             assistant_slack_bot_user_id=self.assistant_slack_bot_user_id,
             assistant_slack_team_id=self.assistant_slack_team_id,
+            assistant_has_ms_teams_bot=self.assistant_has_ms_teams_bot,
             user_id=self.user_id,
             user_first_name=self.user_first_name,
             user_surname=self.user_surname,

@@ -141,6 +141,7 @@ def create_conversation_manager(
         SESSION_DETAILS.assistant.email_provider,
         SESSION_DETAILS.assistant.slack_bot_user_id,
         SESSION_DETAILS.assistant.slack_team_id,
+        assistant_has_ms_teams_bot=SESSION_DETAILS.assistant.has_ms_teams_bot,
         assistant_job_title=SESSION_DETAILS.assistant.job_title,
         project_name=project_name,
         stop=stop_event,

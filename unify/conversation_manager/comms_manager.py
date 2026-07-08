@@ -964,7 +964,7 @@ class CommsManager:
                     ),
                     "assistant_has_ms_teams_bot": event.get(
                         "assistant_has_ms_teams_bot",
-                        False,
+                        SESSION_DETAILS.assistant.has_ms_teams_bot,
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
@@ -2655,7 +2655,7 @@ class CommsManager:
                     ),
                     "assistant_has_ms_teams_bot": event.get(
                         "assistant_has_ms_teams_bot",
-                        False,
+                        SESSION_DETAILS.assistant.has_ms_teams_bot,
                     ),
                     "user_first_name": event["user_first_name"],
                     "user_surname": event["user_surname"],
