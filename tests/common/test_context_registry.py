@@ -44,6 +44,7 @@ class RegistryExampleManager:
             TableContext(name="Transcripts", description="Conversation messages."),
             TableContext(name="Exchanges", description="Conversation exchanges."),
             TableContext(name="Images", description="Stored images."),
+            TableContext(name="SearchCache", description="Non-shared runtime cache."),
         ]
 
 
@@ -195,6 +196,72 @@ def test_read_roots_returns_personal_then_sorted_teams():
 
     assert task_roots == ["user123/42", "Teams/3", "Teams/7"]
     assert contact_roots == ["user123/42", "Teams/3", "Teams/7"]
+
+
+def _make_team_owned(owner_team_id: int = 5, member_team_ids=(9,)) -> None:
+    SESSION_DETAILS.assistant.agent_id = 42
+    SESSION_DETAILS.owner_team_id = owner_team_id
+    SESSION_DETAILS.team_ids = [owner_team_id, *member_team_ids]
+    base = f"Teams/{owner_team_id}/Assistants/42"
+    ContextRegistry.set_base_context(base)
+    CONTEXT_READ.set(base)
+    CONTEXT_WRITE.set(base)
+
+
+def test_team_owned_shared_tables_home_at_owner_team_root():
+    _make_team_owned()
+
+    with patch("unify.common.context_registry._create_context_with_retry"):
+        home = ContextRegistry.write_root(
+            RegistryExampleManager,
+            "Contacts",
+            destination=None,
+        )
+        personal_alias = ContextRegistry.write_root(
+            RegistryExampleManager,
+            "Contacts",
+            destination="personal",
+        )
+        get_ctx = ContextRegistry.get_context(RegistryExampleManager, "Contacts")
+
+    assert home == "Teams/5"
+    # "personal" is forgiving for team-owned assistants: it maps to home.
+    assert personal_alias == "Teams/5"
+    assert get_ctx == "Teams/5/Contacts"
+
+
+def test_team_owned_non_shared_tables_live_under_assistant_subtree():
+    _make_team_owned()
+
+    with patch("unify.common.context_registry._create_context_with_retry"):
+        # "Secrets" is shared-scoped; use a genuinely non-shared table name.
+        get_ctx = ContextRegistry.get_context(RegistryExampleManager, "SearchCache")
+
+    assert get_ctx == "Teams/5/Assistants/42/SearchCache"
+
+
+def test_team_owned_read_roots_have_no_personal_root():
+    _make_team_owned(owner_team_id=5, member_team_ids=(9, 3))
+
+    with patch("unify.common.context_registry._create_context_with_retry"):
+        contact_roots = ContextRegistry.read_roots(RegistryExampleManager, "Contacts")
+
+    # Owning team first, then other member teams; no personal root anywhere.
+    assert contact_roots == ["Teams/5", "Teams/3", "Teams/9"]
+
+
+def test_team_owned_implicit_destinations_include_owner_team():
+    _make_team_owned(owner_team_id=5, member_team_ids=())
+    SESSION_DETAILS.team_ids = []
+
+    assert ContextRegistry.implicit_shared_destinations() == ["team:5"]
+
+
+def test_team_owned_owner_metadata_marks_base_as_team_owned():
+    _make_team_owned()
+
+    assert ContextRegistry._owner_for_root("Personal") == ("team", 5)
+    assert ContextRegistry._owner_for_root("Teams/9") == ("team", 9)
 
 
 def test_files_data_and_blacklist_are_shared_scoped():

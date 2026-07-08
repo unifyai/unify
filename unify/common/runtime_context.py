@@ -10,9 +10,13 @@ from unify.session_details import SESSION_DETAILS
 def resolve_runtime_context_root(*, test: bool | None = None) -> str:
     """Return the authoritative Unify context root for this session.
 
-    In production the root comes from ``SESSION_DETAILS`` (populated by startup).
-    In tests pytest establishes a per-test root via ``unisdk.set_context`` before
-    fixtures run; that active context is the session identity for the test.
+    In production the root comes from ``SESSION_DETAILS`` (populated by
+    startup): user-owned assistants live at ``{userId}/{agentId}`` while
+    team-owned assistants have no personal root at all — their per-assistant
+    internals live under ``Teams/{ownerTeamId}/Assistants/{agentId}``.
+    In tests pytest establishes a per-test root via ``unisdk.set_context``
+    before fixtures run; that active context is the session identity for the
+    test.
     """
     if test is None:
         from unify.settings import SETTINGS
@@ -29,6 +33,11 @@ def resolve_runtime_context_root(*, test: bool | None = None) -> str:
         except Exception:
             pass
 
+    if SESSION_DETAILS.team_owned:
+        return (
+            f"Teams/{SESSION_DETAILS.owner_team_id}"
+            f"/Assistants/{SESSION_DETAILS.assistant_context}"
+        )
     return f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
 
 

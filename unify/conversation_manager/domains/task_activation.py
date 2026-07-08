@@ -405,14 +405,14 @@ def _voice_fast_brain_available(cm: "ConversationManager") -> bool:
     )
 
 
-def _append_initial_call_briefing(cm: "ConversationManager", content: str) -> None:
-    """Append silent task context to the next call's unspoken briefing."""
+def _append_initial_call_notification(cm: "ConversationManager", content: str) -> None:
+    """Append silent task context to the next call-start notification payload."""
 
-    existing = getattr(cm.call_manager, "pending_briefing", "") or ""
+    existing = getattr(cm.call_manager, "pending_opener", "") or ""
     if existing:
-        cm.call_manager.pending_briefing = f"{existing}\n\n{content}"
+        cm.call_manager.pending_opener = f"{existing}\n\n{content}"
     else:
-        cm.call_manager.pending_briefing = content
+        cm.call_manager.pending_opener = content
 
 
 async def _queue_fast_brain_task_context(
@@ -434,7 +434,7 @@ async def _queue_fast_brain_task_context(
     )
     socket_server = getattr(cm.call_manager, "_socket_server", None)
     if socket_server is None:
-        _append_initial_call_briefing(cm, content)
+        _append_initial_call_notification(cm, content)
         return
     await socket_server.queue_for_clients(
         "app:call:notification",

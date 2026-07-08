@@ -2788,6 +2788,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
+        self.owner_team_id: int | None = payload.get("owner_team_id")
         is_coordinator = bool(payload.get("is_coordinator", False))
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
@@ -2822,6 +2823,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             org_name=self.org_name,
             team_ids=self.team_ids,
             team_summaries=team_summaries,
+            owner_team_id=self.owner_team_id,
             voice_provider=self.voice_provider,
             voice_id=self.voice_id,
             default_model=self.default_model,
