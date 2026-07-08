@@ -265,6 +265,36 @@ class _LowLevelActionsMixin:
             ],
         )
 
+    async def move(self, x: int, y: int, steps: int | None = None) -> dict:
+        """
+        Move the mouse to (x, y) with a natural, curved (bezier) motion.
+
+        Unlike ``click``/``scroll`` (which snap the cursor for speed), this
+        emits many small interpolated move events along an eased bezier path,
+        mimicking a human hand.  Useful for anti-bot pacing before an
+        interaction, or idle "reading" cursor drift.  No-op keyboard/page
+        change — it only moves the pointer.
+
+        Parameters
+        ----------
+        x : int
+            Target horizontal pixel coordinate.
+        y : int
+            Target vertical pixel coordinate.
+        steps : int, optional
+            Override the interpolation step count.  Defaults to a
+            distance-scaled value on the backend.
+
+        Returns
+        -------
+        dict
+            Execution result with ``status`` and ``screenshot``.
+        """
+        action: dict = {"variant": "mouse:move", "x": x, "y": y}
+        if steps is not None:
+            action["steps"] = steps
+        return await self.execute_actions([action])
+
     async def type_text(self, content: str) -> dict:
         """
         Type text into the currently focused element.
@@ -625,6 +655,7 @@ class _LowLevelActionsMixin:
         - ``{"variant": "mouse:right_click", "x": int, "y": int}``
         - ``{"variant": "mouse:drag", "from": {"x": int, "y": int}, "to": {"x": int, "y": int}}``
         - ``{"variant": "mouse:scroll", "x": int, "y": int, "deltaX": int, "deltaY": int}``
+        - ``{"variant": "mouse:move", "x": int, "y": int, "steps": int (optional)}``
         - ``{"variant": "keyboard:type", "content": str}``
         - ``{"variant": "keyboard:enter"}``
         - ``{"variant": "keyboard:tab"}``
