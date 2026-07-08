@@ -192,9 +192,9 @@ class FunctionStoreEnvironment(BaseEnvironment):
 
         lines = [f"### `{self.namespace}` — Injected Functions\n"]
         lines.append(
-            "These functions are directly callable in the sandbox "
-            f"via `await {self.namespace}.<name>(...)`. "
-            "Do **not** search the FunctionManager for them.\n",
+            "These functions are prompt-injected, directly callable in the sandbox "
+            f"via `await {self.namespace}.<name>(...)`, and excluded from "
+            "FunctionManager search.\n",
         )
 
         for row in self._func_metadata:

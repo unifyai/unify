@@ -1027,6 +1027,10 @@ class ToolSurfaceRegistry:
 
         lines = ["### State manager primitives (`primitives.*`)\n"]
         lines.append(
+            "These callables are prompt-injected and excluded from FunctionManager "
+            "search. Call them by exact name via `execute_function`.\n",
+        )
+        lines.append(
             "Each manager owns a specific domain of the assistant's durable state. "
             "Choose the right manager for your task:\n",
         )
