@@ -715,6 +715,22 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
         ),
     )
     monkeypatch.setattr(
+        "unisdk.get_logs_federated",
+        lambda **kwargs: {
+            "logs": (
+                [dict(primitive_row)]
+                if any(
+                    spec["context"] == "Functions/Primitives"
+                    for spec in kwargs["contexts"]
+                )
+                else []
+            ),
+            "count": 1,
+            "counts": {},
+        },
+    )
+    monkeypatch.setattr(fm_module, "list_private_fields", lambda *a, **k: [])
+    monkeypatch.setattr(
         fm_module,
         "federated_ranked_search",
         lambda *_args, **_kwargs: [primitive_row],
@@ -724,7 +740,6 @@ def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> No
     fm._primitives_ctx = "Functions/Primitives"
     fm._scoped_filter = lambda expr: expr
     fm._scoped_primitive_filter = lambda: "is_primitive == True"
-    fm._get_logs_with_retry = lambda context, **kwargs: [primitive_row]
 
     assert (
         "primitives.integrations.hubspot.search_contacts"

@@ -62,6 +62,7 @@ from unify.common.federated_search import (
     reduce_grouped_rows,
     reduce_rows,
 )
+from unify.common.embed_utils import list_private_fields
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.join_utils import rewrite_join_paths
 from unify.data_manager.ops.ingest_ops import run_ingest
@@ -713,33 +714,6 @@ class DataManager(BaseDataManager):
                 return_ids_only=return_ids_only,
             )
 
-        errors: list[Exception] = []
-
-        def fetcher(spec, row_filter, _sorting, fetch_limit):
-            context_rows: list[dict[str, Any]] = []
-            try:
-                context_offset = 0
-                while len(context_rows) < fetch_limit:
-                    page_limit = min(1000, fetch_limit - len(context_rows))
-                    page = filter_impl(
-                        spec.context,
-                        filter=row_filter,
-                        columns=columns,
-                        exclude_columns=exclude_columns,
-                        limit=page_limit,
-                        offset=context_offset,
-                        order_by=order_by,
-                        descending=descending,
-                        return_ids_only=False,
-                    )
-                    context_rows.extend(page)
-                    if len(page) < page_limit:
-                        break
-                    context_offset += page_limit
-            except Exception as exc:
-                errors.append(exc)
-            return context_rows
-
         sorting = None
         if order_by:
             sorting = [
@@ -748,21 +722,32 @@ class DataManager(BaseDataManager):
                     direction="descending" if descending else "ascending",
                 ),
             ]
-        rows = federated_filter(
+
+        def _excluded(resolved: str) -> Optional[List[str]]:
+            # Mirror filter_impl: auto-hide private fields unless the caller
+            # picked columns or supplied an explicit exclusion list.
+            if exclude_columns is not None:
+                return exclude_columns
+            if columns is None:
+                return list_private_fields(resolved)
+            return None
+
+        return federated_filter(
             [
-                FederatedSearchContext(context=resolved, source=resolved)
+                FederatedSearchContext(
+                    context=resolved,
+                    source=resolved,
+                    allowed_fields=columns,
+                    excluded_fields=_excluded(resolved),
+                )
                 for resolved in resolved_contexts
             ],
-            filter=filter,
+            filter=normalize_filter_expr(filter),
             sorting=sorting,
             offset=offset,
             limit=limit,
-            fetcher=fetcher,
             annotate=False,
         )
-        if not rows and errors:
-            raise errors[-1]
-        return rows
 
     @functools.wraps(BaseDataManager.search, updated=())
     def search(

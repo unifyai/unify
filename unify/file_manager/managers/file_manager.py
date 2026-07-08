@@ -57,6 +57,7 @@ from unify.common.federated_search import (
     federated_ranked_search,
     federated_reduce,
 )
+from unify.common.embed_utils import list_private_fields
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.tool_outcome import ToolErrorException
 from unify.common.model_to_fields import model_to_fields
@@ -1551,43 +1552,23 @@ class FileManager(BaseFileManager):
                 offset=offset,
             )
 
-        errors: list[Exception] = []
-
-        def fetcher(spec, row_filter, _sorting, fetch_limit):
-            context_rows: list[dict[str, Any]] = []
-            try:
-                context_offset = 0
-                while len(context_rows) < fetch_limit:
-                    page_limit = min(1000, fetch_limit - len(context_rows))
-                    page = self._data_manager.filter(
-                        context=spec.context,
-                        filter=row_filter,
-                        columns=columns,
-                        limit=page_limit,
-                        offset=context_offset,
-                    )
-                    context_rows.extend(page)
-                    if len(page) < page_limit:
-                        break
-                    context_offset += page_limit
-            except Exception as exc:
-                errors.append(exc)
-            return context_rows
-
-        rows = federated_filter(
+        return federated_filter(
             [
-                FederatedSearchContext(context=ctx, source=ctx)
+                FederatedSearchContext(
+                    context=ctx,
+                    source=ctx,
+                    allowed_fields=columns,
+                    excluded_fields=(
+                        list_private_fields(ctx) if columns is None else None
+                    ),
+                )
                 for ctx in self._read_file_records_contexts()
             ],
-            filter=filter,
+            filter=normalize_filter_expr(filter),
             offset=offset,
             limit=limit,
-            fetcher=fetcher,
             annotate=False,
         )
-        if not rows and errors:
-            raise errors[-1]
-        return rows
 
     @functools.wraps(BaseFileManager.search_files, updated=())
     @read_only

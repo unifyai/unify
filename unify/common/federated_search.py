@@ -40,7 +40,21 @@ class FederatedSearchContext:
     source: str
     row_filter: Optional[str] = None
     allowed_fields: Optional[Sequence[str]] = None
+    excluded_fields: Optional[Sequence[str]] = None
     project: Optional[str] = None
+
+    def to_request_spec(self) -> dict:
+        """Serialize into a ``POST /logs/federated`` context spec."""
+        spec: dict = {"context": self.context, "source": self.source}
+        if self.row_filter:
+            spec["filter"] = self.row_filter
+        if self.allowed_fields:
+            spec["from_fields"] = list(self.allowed_fields)
+        if self.excluded_fields:
+            spec["exclude_fields"] = list(self.excluded_fields)
+        if self.project:
+            spec["project_name"] = self.project
+        return spec
 
 
 @dataclass(frozen=True)
@@ -76,7 +90,6 @@ MetricFetcher = Callable[
     ],
     Any,
 ]
-RowFetcher = Callable[[FederatedSearchContext, Optional[str]], list[dict]]
 
 
 def is_missing_context_error(exc: Exception) -> bool:
@@ -139,70 +152,44 @@ def default_ranked_fetcher(
     )
 
 
-def _backend_sorting(sorting: Sequence[SortSpec]) -> dict[str, str] | None:
-    backend = {
-        spec.field: spec.direction
+def _sorting_payload(sorting: Sequence[SortSpec]) -> list[dict]:
+    return [
+        {
+            "field": spec.field,
+            "direction": spec.direction,
+            "missing": spec.missing,
+        }
         for spec in sorting
         if not spec.field.startswith("_federated_")
-    }
-    return backend or None
+    ]
 
 
-def default_filter_fetcher(
-    spec: FederatedSearchContext,
+def _server_federated_read(
+    contexts: Sequence[FederatedSearchContext],
+    *,
     filter: Optional[str],
     sorting: Sequence[SortSpec],
-    limit: Optional[int],
-) -> list[dict]:
-    """Fetch filtered rows from one context for a federated filtered read.
+    offset: int,
+    limit: int,
+    unique_id_field: Optional[str],
+    annotate: bool,
+) -> dict:
+    """Run one federated read on the backend and return its raw response.
 
-    Missing contexts (404) yield an empty batch so fan-out reads tolerate
-    roots where the table has not been provisioned yet.
-
-    The backend always sorts NULLs last. When any pushed-down sort key asks
-    for ``missing="first"``, the per-context window under backend ordering is
-    no longer a superset of the global window, so the fetch ignores ``limit``
-    and pages through every matching row, leaving the exact ordering to the
-    client-side merge.
+    The server executes every context through the ordinary single-context
+    read pipeline (per-context field types, partition pruning) and performs
+    the exact global merge, so a single round trip replaces the previous
+    per-context paged fan-out. Missing contexts contribute nothing.
     """
-    backend = _backend_sorting(sorting)
-    exact_window = all(
-        spec_item.missing == "last"
-        for spec_item in sorting
-        if not spec_item.field.startswith("_federated_")
+    return unisdk.get_logs_federated(
+        contexts=[spec.to_request_spec() for spec in contexts],
+        filter=filter,
+        sorting=_sorting_payload(sorting),
+        offset=offset,
+        limit=limit,
+        unique_id_field=unique_id_field,
+        annotate=annotate,
     )
-    combined_filter = _combine_filters(filter, spec.row_filter)
-
-    rows: list[dict] = []
-    offset = 0
-    while True:
-        if limit is not None and exact_window:
-            page_limit = min(_PAGE_SIZE, limit - len(rows))
-            if page_limit <= 0:
-                break
-        else:
-            page_limit = _PAGE_SIZE
-        kwargs: dict[str, Any] = {
-            "context": spec.context,
-            "project": spec.project,
-            "filter": combined_filter,
-            "sorting": backend,
-            "limit": page_limit,
-            "offset": offset,
-        }
-        if spec.allowed_fields:
-            kwargs["from_fields"] = list(spec.allowed_fields)
-        try:
-            page = [row.entries for row in unisdk.get_logs(**kwargs)]
-        except Exception as exc:
-            if is_missing_context_error(exc):
-                break
-            raise
-        rows.extend(page)
-        if len(page) < page_limit:
-            break
-        offset += page_limit
-    return rows
 
 
 def _compare_present_values(left: object, right: object) -> int:
@@ -354,26 +341,42 @@ def federated_filter(
     sorting: Optional[Sequence[SortSpec]] = None,
     offset: int = 0,
     limit: int = 100,
-    fetcher: FilterFetcher = default_filter_fetcher,
+    fetcher: Optional[FilterFetcher] = None,
     unique_id_field: Optional[str] = None,
     annotate: bool = True,
 ) -> list[dict]:
     """Run an exact federated filtered read across multiple contexts.
 
-    The helper fans out to every context with ``offset + limit`` as the local
-    fetch size, then merges into one globally ordered window and applies the
-    final slice once — as though all rows lived in a single context. Pass
-    ``sorting`` for single-table-style global ordering; when omitted, rows
-    preserve source order and each context's local fetch order, which is
-    likewise exact under windowed fetching.
+    The result is one globally ordered window, exactly as though all rows
+    lived in a single context. Pass ``sorting`` for single-table-style global
+    ordering; when omitted, rows preserve source order and each context's
+    local fetch order.
+
+    Without a ``fetcher`` the read is delegated wholly to the backend's
+    federated endpoint in one round trip. A ``fetcher`` forces the
+    client-side path — for rows that do not come from the logs API (local
+    stores, impl-specific reads) — fanning out with ``offset + limit`` as
+    the local fetch size and merging here.
     """
     if offset < 0:
         raise ValueError("offset must be >= 0")
     if limit <= 0 or not contexts:
         return []
 
-    window = offset + limit
     effective_sorting = tuple(sorting or ())
+    if fetcher is None:
+        response = _server_federated_read(
+            contexts,
+            filter=filter,
+            sorting=effective_sorting,
+            offset=offset,
+            limit=limit,
+            unique_id_field=unique_id_field,
+            annotate=annotate,
+        )
+        return response["logs"]
+
+    window = offset + limit
     batches = [
         (spec, fetcher(spec, filter, effective_sorting, window)) for spec in contexts
     ]
@@ -499,12 +502,29 @@ def default_metric_fetcher(
         return _empty()
 
 
-def default_row_fetcher(
-    spec: FederatedSearchContext,
+def _fetch_merged_rows(
+    contexts: Sequence[FederatedSearchContext],
     filter: Optional[str],
 ) -> list[dict]:
-    """Fetch every matching row from one context for client-side reductions."""
-    return default_filter_fetcher(spec, filter, (), None)
+    """Fetch every matching merged row for client-side reductions."""
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        response = _server_federated_read(
+            contexts,
+            filter=filter,
+            sorting=(),
+            offset=offset,
+            limit=_PAGE_SIZE,
+            unique_id_field=None,
+            annotate=False,
+        )
+        page = response["logs"]
+        rows.extend(page)
+        if len(page) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
+    return rows
 
 
 def reduce_rows(
@@ -607,15 +627,15 @@ def federated_reduce(
     filter: Optional[str] = None,
     group_by: Optional[Union[str, list[str]]] = None,
     metric_fetcher: MetricFetcher = default_metric_fetcher,
-    row_fetcher: RowFetcher = default_row_fetcher,
 ) -> Any:
     """Compute one reduction metric across multiple contexts.
 
     A single context delegates wholly to the server. With multiple contexts,
     decomposable ungrouped metrics (count, sum, min, max, mean) are pushed
     down per context and combined exactly; grouped or non-decomposable
-    metrics (median, mode, var, std) fetch the merged rows and reduce
-    client-side, matching single-context semantics.
+    metrics (median, mode, var, std) fetch the merged rows through the
+    federated endpoint and reduce client-side, matching single-context
+    semantics.
     """
     metric_norm = metric.strip().lower()
     if metric_norm not in SUPPORTED_REDUCTION_METRICS:
@@ -630,9 +650,7 @@ def federated_reduce(
         return metric_fetcher(contexts[0], metric_norm, columns, filter, group_by)
 
     if group_by is not None or metric_norm not in _DECOMPOSABLE_METRICS:
-        rows: list[dict] = []
-        for spec in contexts:
-            rows.extend(row_fetcher(spec, filter))
+        rows = _fetch_merged_rows(contexts, filter)
         if group_by is not None:
             return reduce_grouped_rows(
                 rows,
@@ -677,13 +695,24 @@ def federated_count(
     *,
     key: str,
     filter: Optional[str] = None,
-    metric_fetcher: MetricFetcher = default_metric_fetcher,
 ) -> int:
-    """Count rows (by non-null ``key``) summed across every context."""
+    """Count rows (by non-null ``key``) summed across every context.
+
+    Delegates to the backend's federated endpoint as a count-only read
+    (``limit=0``), which computes every per-context total in one round trip.
+    """
     if not contexts:
         return 0
-    values = [metric_fetcher(spec, "count", key, filter, None) for spec in contexts]
-    return int(_combine_metric("count", values))
+    response = _server_federated_read(
+        contexts,
+        filter=_combine_filters(filter, f"exists({key})"),
+        sorting=(),
+        offset=0,
+        limit=0,
+        unique_id_field=None,
+        annotate=False,
+    )
+    return int(response["count"])
 
 
 __all__ = [
@@ -692,14 +721,11 @@ __all__ = [
     "FilterFetcher",
     "MetricFetcher",
     "RankedFetcher",
-    "RowFetcher",
     "SCORE_FIELD",
     "SOURCE_FIELD",
     "SortSpec",
-    "default_filter_fetcher",
     "default_metric_fetcher",
     "default_ranked_fetcher",
-    "default_row_fetcher",
     "federated_count",
     "federated_filter",
     "federated_ranked_search",
