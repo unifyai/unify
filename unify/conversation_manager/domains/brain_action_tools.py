@@ -498,6 +498,46 @@ class ConversationManagerBrainActionTools:
         )
 
     @slow_brain_direct_comms
+    async def send_ms_teams_bot_message_to_boss(
+        self,
+        *,
+        content: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        """Reply to my boss only through the org-installed Unify Teams app.
+
+        This Coordinator direct communication tool is restricted to the boss
+        contact (``contact_id==1`` in the normal runtime). It cannot be used
+        to DM anyone else or post in group chats or Teams channels. If my boss
+        asks me to draft or send Teams messages on their behalf, route that
+        work through ``act`` instead.
+
+        The org-installed Unify Teams app (Bot Framework) replies into a
+        conversation it was already addressed in, so this tool can only answer
+        an inbound Teams message from my boss — pass the ``tenant_id`` and
+        ``conversation_id`` surfaced on that inbound message. It is distinct
+        from ``send_teams_message`` (my boss's own delegated Microsoft
+        account).
+
+        Parameters
+        ----------
+        content : str
+            Message body to send to my boss.
+        tenant_id : str
+            Microsoft AAD tenant id from the inbound boss Teams message.
+        conversation_id : str
+            Bot Framework conversation id to reply into, from the inbound
+            boss Teams message.
+        """
+        return await self._comms.send_ms_teams_bot_message(
+            contact_id=self._boss_contact_id(),
+            content=content,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+        )
+
+    @slow_brain_direct_comms
     @wraps(CommsPrimitives.send_ms_teams_bot_channel_message)
     async def send_ms_teams_bot_channel_message(
         self,
@@ -2652,10 +2692,15 @@ class ConversationManagerBrainActionTools:
             if not is_coordinator:
                 tools["send_slack_channel_message"] = self.send_slack_channel_message
         if self._cm.assistant_has_ms_teams_bot:
-            tools["send_ms_teams_bot_message"] = self.send_ms_teams_bot_message
-            tools["send_ms_teams_bot_channel_message"] = (
-                self.send_ms_teams_bot_channel_message
+            tools["send_ms_teams_bot_message"] = (
+                self.send_ms_teams_bot_message_to_boss
+                if is_coordinator
+                else self.send_ms_teams_bot_message
             )
+            if not is_coordinator:
+                tools["send_ms_teams_bot_channel_message"] = (
+                    self.send_ms_teams_bot_channel_message
+                )
         if self._cm.assistant_has_teams:
             tools["send_teams_message"] = (
                 self.send_teams_message_to_boss
