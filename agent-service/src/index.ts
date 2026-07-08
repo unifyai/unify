@@ -4,7 +4,7 @@ import http from 'http';
 import expressWs from 'express-ws';
 import WebSocket from 'ws';
 import util from 'util';
-import { startBrowserAgent, BrowserAgent, BrowserConnector, AgentError, BrowserOptions, AgentMemory, Observation } from 'magnitude-core';
+import { startBrowserAgent, BrowserAgent, BrowserConnector, AgentError, BrowserOptions, AgentMemory, Observation, formatLastBrowserLifecycleHint } from 'magnitude-core';
 import { z, ZodTypeAny, ZodAny, ZodType } from 'zod';
 import { partitionHtml, serializeToMarkdown, PartitionOptions, MarkdownSerializerOptions } from 'magnitude-extract';
 import dotenv from 'dotenv';
@@ -742,6 +742,7 @@ const startBrowser = async (
   headless: boolean,
   urlMappings?: Record<string, string>,
   storageStateName?: string,
+  sessionMeta?: { sessionId?: string; sessionLabel?: string },
 ): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
@@ -754,6 +755,8 @@ const startBrowser = async (
       ),
       narrate: true,
       urlMappings,
+      sessionId: sessionMeta?.sessionId,
+      sessionLabel: sessionMeta?.sessionLabel,
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -765,7 +768,10 @@ const startBrowser = async (
   }
 }
 
-const startBrowserOnVm = async (urlMappings?: Record<string, string>): Promise<BrowserAgent> => {
+const startBrowserOnVm = async (
+  urlMappings?: Record<string, string>,
+  sessionMeta?: { sessionId?: string; sessionLabel?: string },
+): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
       url: "https://www.google.com/",
@@ -784,6 +790,8 @@ const startBrowserOnVm = async (urlMappings?: Record<string, string>): Promise<B
       },
       narrate: true,
       urlMappings,
+      sessionId: sessionMeta?.sessionId,
+      sessionLabel: sessionMeta?.sessionLabel,
       llm: getLlmConfig()
     });
     agent.context.setDefaultNavigationTimeout(90000);
@@ -1232,12 +1240,13 @@ app.post('/start', async (req: Request, res: Response) => {
     if (mode === "desktop") {
       agent = await startDesktop();
     } else if (mode === "web-vm") {
-      agent = await startBrowserOnVm(mappings);
+      agent = await startBrowserOnVm(mappings, { sessionId, sessionLabel: label });
     } else {
       agent = await startBrowser(
         headless ?? false,
         mappings,
         typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
+        { sessionId, sessionLabel: label },
       );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);
@@ -3611,7 +3620,14 @@ function handleAgentError(err: unknown, res: Response, defaultErrorType = 'unkno
       adaptable: agentErr.options.adaptable
     });
   } else {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    let errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage.includes('closed')) {
+      const lifecycleHint = formatLastBrowserLifecycleHint();
+      if (lifecycleHint) {
+        console.error(`[browser-lifecycle] ${lifecycleHint}`);
+        errorMessage = `${errorMessage} | ${lifecycleHint}`;
+      }
+    }
     console.error(`Unknown Error: ${errorMessage}`);
     res.status(500).json({
       error: defaultErrorType,
