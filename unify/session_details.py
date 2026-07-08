@@ -293,6 +293,10 @@ class AssistantDetails:
     user_desktops: dict[str, UserDesktopLink] = field(default_factory=dict)
     team_ids: list[int] = field(default_factory=list)
     team_summaries: list[TeamSummary] = field(default_factory=list)
+    # Owning team for team-owned assistants (None = user-owned). When set,
+    # the assistant has no personal root: shared tables live at the owning
+    # team's root and runtime internals under Teams/{id}/Assistants/{agent}.
+    owner_team_id: int | None = None
 
     @property
     def name(self) -> str:
@@ -451,6 +455,20 @@ class SessionDetails:
         self.assistant.team_summaries = normalize_team_summaries(value)
 
     @property
+    def owner_team_id(self) -> int | None:
+        """Shortcut to assistant.owner_team_id for convenient access."""
+        return self.assistant.owner_team_id
+
+    @owner_team_id.setter
+    def owner_team_id(self, value: int | None) -> None:
+        self.assistant.owner_team_id = value
+
+    @property
+    def team_owned(self) -> bool:
+        """Whether this assistant is owned by a team (no personal root)."""
+        return self.assistant.owner_team_id is not None
+
+    @property
     def is_coordinator(self) -> bool:
         """Shortcut to assistant.is_coordinator for role-gated runtime behavior."""
         return self.assistant.is_coordinator
@@ -538,6 +556,7 @@ class SessionDetails:
         org_name: str = "",
         team_ids: list[int] | None = None,
         team_summaries: list[TeamSummary | dict] | None = None,
+        owner_team_id: int | None = None,
         voice_provider: str = "",
         voice_id: str = "",
         default_model: str = "",
@@ -586,6 +605,7 @@ class SessionDetails:
         self.org.name = _runtime_str(org_name)
         self.team_ids = team_ids or []
         self.team_summaries = team_summaries or []
+        self.owner_team_id = owner_team_id
         self.voice.provider = _runtime_str(voice_provider)
         self.voice.id = _runtime_str(voice_id)
         self.assistant.default_model = _runtime_str(default_model)
@@ -671,6 +691,11 @@ class SessionDetails:
         os.environ["ORG_NAME"] = _runtime_str(self.org.name)
         self.export_team_ids_to_env()
         self.export_team_summaries_to_env()
+        os.environ["OWNER_TEAM_ID"] = (
+            str(self.assistant.owner_team_id)
+            if self.assistant.owner_team_id is not None
+            else ""
+        )
         os.environ["VOICE_PROVIDER"] = _runtime_str(self.voice.provider)
         os.environ["VOICE_ID"] = _runtime_str(self.voice.id)
         os.environ["VOICE_MODE"] = _runtime_str(self.voice.mode)
@@ -792,6 +817,11 @@ class SessionDetails:
             try:
                 self.team_summaries = _decode_team_summaries(val)
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                pass
+        if val := os.environ.get("OWNER_TEAM_ID"):
+            try:
+                self.assistant.owner_team_id = int(val)
+            except (ValueError, TypeError):
                 pass
         if val := os.environ.get("VOICE_PROVIDER"):
             self.voice.provider = val

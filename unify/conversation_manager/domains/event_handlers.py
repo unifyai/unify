@@ -21,7 +21,6 @@ from unify.conversation_manager.domains.comms_utils import (
 )
 from unify.conversation_manager.domains.coordinator_onboarding import (
     _handle_coordinator_onboarding_event,
-    schedule_coordinator_chat_intro_delivery,
 )
 from unify.conversation_manager.domains.coordinator_delegate import (
     _handle_coordinator_delegate_event,
@@ -235,15 +234,13 @@ def _adopt_slack_bot_user_id(cm: "ConversationManager", event) -> None:
     """Enable Slack send capability from an inbound Slack event.
 
     Slack's ``bot_user_id`` is workteam-scoped (it lives on the
-    ``slack_installs`` row), not on the assistant record. The bootstrap
-    payload resolves it from the workspace install so outbound-first
-    sessions (e.g. a Console trigger) expose the Slack tools without a
-    prior inbound event. This fallback covers the case where the
-    bootstrap value is absent (no resolvable install at wake time) by
-    adopting the workspace bot id from the inbound event, so this
-    session's subsequent brain run exposes the Slack tools. The brain
-    gates ``send_slack_message`` / ``send_slack_channel_message`` (and
-    the Slack reply guidelines) on that flag.
+    ``slack_installs`` row), not on the assistant record, so the
+    per-assistant ``assistant_slack_bot_user_id`` is never populated at
+    session bootstrap. The brain gates the ``send_slack_message`` /
+    ``send_slack_channel_message`` tools (and the Slack reply guidelines)
+    on that flag, so without it the assistant can never reply on Slack.
+    Adopt the workspace bot id from the inbound event so this session's
+    subsequent brain run exposes the Slack tools.
     """
     inbound_bot_user_id = getattr(event, "bot_user_id", "") or ""
     if inbound_bot_user_id and not getattr(cm, "assistant_slack_bot_user_id", ""):
@@ -412,25 +409,18 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     )
     sender_name = _get_sender_name(contact)
 
-    # Inject stashed opener/briefing/pre-armed gate from make_whatsapp_call if
-    # a pending permission grant triggered this inbound WhatsApp call.
+    # Inject stashed opener from make_whatsapp_call if a pending permission
+    # grant triggered this inbound WhatsApp call.
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
-        stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
-        if stashed and stashed.get("opener"):
-            cm.call_manager.pending_opener = stashed["opener"]
-            cm.call_manager.pending_briefing = stashed.get("briefing", "")
-            cm.call_manager.pending_hang_up_gate = stashed.get("hang_up_gate", "")
+        stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+        if stashed_opener:
+            cm.call_manager.pending_opener = stashed_opener
 
     if isinstance(event, WhatsAppCallSent) and contact_id is not None:
         if not cm.call_manager.pending_opener:
-            stashed = cm._pending_whatsapp_call_openers.pop(contact_id, None)
-            if stashed and stashed.get("opener"):
-                cm.call_manager.pending_opener = stashed["opener"]
-                cm.call_manager.pending_briefing = stashed.get("briefing", "")
-                cm.call_manager.pending_hang_up_gate = stashed.get(
-                    "hang_up_gate",
-                    "",
-                )
+            stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
+            if stashed_opener:
+                cm.call_manager.pending_opener = stashed_opener
             else:
                 from unify.conversation_manager.domains import comms_utils
 
@@ -839,7 +829,7 @@ async def _(
             notification_event.to_json(),
         )
 
-    # No LLM run here — outbound openers are pre-computed via make_call(opener=...).
+    # No LLM run here — outbound opener is pre-computed via make_call(opener=...).
     # The slow brain will be woken later by:
     # - InboundPhoneUtterance (user says something)
     # - ActorResult (action completes)
@@ -1097,14 +1087,8 @@ async def _(
         from unify.conversation_manager.domains.call_manager import make_room_name
 
         opener = None
-        call_briefing = ""
-        call_hang_up_gate = ""
         if isinstance(pending_openers, dict):
-            stashed = pending_openers.pop(contact_id, None)
-            if stashed:
-                opener = stashed.get("opener")
-                call_briefing = stashed.get("briefing", "")
-                call_hang_up_gate = stashed.get("hang_up_gate", "")
+            opener = pending_openers.pop(contact_id, None)
         if opener is None and pool_number and whatsapp_number:
             try:
                 intent = await comms_utils.get_pending_whatsapp_call_intent(
@@ -1126,8 +1110,6 @@ async def _(
             return
 
         cm.call_manager.pending_opener = opener
-        cm.call_manager.pending_briefing = call_briefing
-        cm.call_manager.pending_hang_up_gate = call_hang_up_gate
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1159,8 +1141,6 @@ async def _(
 
         cm.call_manager._whatsapp_call_joining = False
         cm.call_manager.pending_opener = ""
-        cm.call_manager.pending_briefing = ""
-        cm.call_manager.pending_hang_up_gate = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
@@ -1464,19 +1444,6 @@ async def _(
         classification=event.classification,
         intended_speech=event.intended_speech,
     )
-    active_briefing = (
-        getattr(cm.call_manager, "active_call_briefing", "") or ""
-    ).strip()
-    if active_briefing:
-        note += (
-            "\n[This call carries a briefing the Voice Agent holds and fully "
-            f"handles on its own: {active_briefing}\n"
-            "Do NOT re-deliver briefed content via guide_voice_agent — call "
-            "wait() while the briefed interaction plays out. Act only when the "
-            "turn needs something outside the briefing, or the interaction has "
-            "concluded and follow-through is yours (completing steps, ending "
-            "the call, follow-up messages).]"
-        )
     cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
@@ -1528,15 +1495,13 @@ async def _(
         local_message_id=message_id,
     )
 
-    # ``pending_opener`` is exclusively the verbatim opener queued by the
-    # call-start tools — an injected turn must never masquerade as one. If no
-    # voice socket is up yet the injected turn is simply not forwarded (it is
-    # already recorded above and re-derives on the next slow-brain turn).
     if cm.call_manager and cm.call_manager._socket_server:
         await cm.call_manager._socket_server.queue_for_clients(
             "app:call:notification",
             event.to_json(),
         )
+    else:
+        cm.call_manager.pending_opener = event.content
 
     if event.schedule_proactive:
         await cm.schedule_proactive_speech()
@@ -1572,39 +1537,6 @@ async def _(
 
     if event.should_speak:
         await cm.schedule_proactive_speech()
-
-
-@EventHandler.register(FastBrainHangUp)
-async def _(
-    event: FastBrainHangUp,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    """Tear down the voice session after the fast brain closed the call.
-
-    Only reachable while the hang-up gate was armed by the slow brain: the
-    voice agent spoke its farewell, confirmed clean playout (no barge-in), and
-    published this event. The farewell utterance itself already landed in the
-    transcript via the normal outbound-utterance path.
-    """
-    from unify.conversation_manager.domains.brain_action_tools import (
-        ConversationManagerBrainActionTools,
-    )
-
-    cm.call_manager.hang_up_gate_reason = None
-    sender_name = _get_sender_name(event.contact)
-    cm.notifications_bar.push_notif(
-        "Comms",
-        (
-            f"I ended the call with {sender_name} at its natural close "
-            f"(sanctioned earlier: {event.gate_reason or 'no reason recorded'}; "
-            f"trigger: {event.trigger or 'user_turn'})."
-        ),
-        event.timestamp,
-    )
-    tools = ConversationManagerBrainActionTools(cm)
-    await tools._perform_hang_up_teardown()
 
 
 @EventHandler.register(VoiceInterrupt)
@@ -1692,9 +1624,6 @@ async def _(
                 active_session,
             )
             return
-
-    # The hang-up gate is per-session permission; it never outlives the call.
-    cm.call_manager.hang_up_gate_reason = None
 
     # Persist session identifiers in exchange metadata and stash the
     # exchange_id so the async RecordingReady handler can find it.
@@ -2298,17 +2227,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.UNIFY_MESSAGE
             message_content = event.content
             attachments = event.attachments
-            # Carried through push_message and the reply context (the same
-            # pipeline slot MS Teams channel messages use), so the brain sees
-            # which room the message belongs to and can reply there.
-            team_id = str(event.team_id) if getattr(event, "team_id", None) else None
-            if team_id:
-                team_label = event.team_name or f"team {team_id}"
-                notif_content = (
-                    f"Team chat message from {sender_name} in '{team_label}'"
-                )
-            else:
-                notif_content = f"Unify message from {sender_name}"
+            notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
             cm._session_logger.info(
@@ -3246,12 +3165,53 @@ def _recent_conversation_snippet(cm: "ConversationManager", n: int = 4) -> str |
 
 
 async def _ensure_desktop_session(cm: "ConversationManager") -> None:
-    """Await the coalesced desktop agent-service session ensure."""
-    from unify.conversation_manager.domains.desktop_session import (
-        ensure_desktop_session,
-    )
+    """Create a desktop session in agent-service if one doesn't already exist.
 
-    await ensure_desktop_session(cm)
+    Sessions are lazy (created on first ``get_session`` call), so this must be
+    called explicitly to guarantee the ``/screenshot`` endpoint has an active
+    session to fall back to.  ``get_session`` is idempotent — calling it when a
+    session already exists returns the cached instance.
+
+    Retries with exponential backoff because the VM's Caddy reverse proxy may
+    still be starting up or obtaining its TLS certificate from Let's Encrypt
+    even after the Communication service reports the VM as "ready".
+    """
+    from unify.function_manager.primitives.runtime import ComputerPrimitives
+    from unify.manager_registry import ManagerRegistry
+
+    cp = ManagerRegistry.get_instance(ComputerPrimitives)
+    if cp is None:
+        return
+
+    max_attempts = 12
+    base_delay = 5.0
+    max_delay = 30.0
+    delay = base_delay
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            session = await cp.backend.get_session("desktop")
+            cm._session_logger.info(
+                "desktop_session",
+                f"Desktop session ready: {session._session_id}",
+            )
+            return
+        except Exception as e:
+            if attempt == max_attempts:
+                cm._session_logger.warning(
+                    "desktop_session",
+                    f"Failed to create desktop session after {max_attempts} attempts: "
+                    f"{type(e).__name__}: {e}",
+                )
+                return
+            cm._session_logger.debug(
+                "desktop_session",
+                f"Attempt {attempt}/{max_attempts} failed ({type(e).__name__}), "
+                f"retrying in {delay:.0f}s",
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, max_delay)
+            cp.backend.clear_session("desktop")
 
 
 # --------------------------------------------------------------------------- #
@@ -3327,31 +3287,6 @@ async def _(
     await cm.request_llm_run(delay=0)
 
 
-OPEN_SLOW_BRAIN_TURN_NOTIFICATION = (
-    "Open slow-brain turn — your previous turn finished without calling "
-    "`wait`. You have another thinking turn now. Continue any outstanding "
-    "work (reply to the user, send onboarding deliverables, follow up on "
-    "in-flight actions). Recurring turns keep opening until you explicitly "
-    "call `wait()` or `wait(delay=…)`. Do not call `wait` while the user is "
-    "still waiting on you in chat."
-)
-
-
-@EventHandler.register((OpenSlowBrainTurn,))
-async def _(
-    event: OpenSlowBrainTurn,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    cm.notifications_bar.push_notif(
-        "System",
-        OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
-        event.timestamp,
-    )
-    await cm.request_llm_run(delay=0)
-
-
 # Notification text shown to the slow brain when initialization completes.
 #
 # Wording is deliberately strong about preferring `wait` over a follow-up
@@ -3411,17 +3346,7 @@ async def _(
         )
 
     await _consume_startup_wake_reasons(cm)
-
-    from unify.settings import SETTINGS
-
-    scheduled_chat_intro = False
-    if cm.is_coordinator and SETTINGS.UNITY_CONSOLE_UI:
-        cm._coordinator_state_checked_at = 0.0
-        await cm._refresh_coordinator_onboarding_state(force=True)
-        scheduled_chat_intro = schedule_coordinator_chat_intro_delivery(cm)
-
-    if not scheduled_chat_intro:
-        await cm.request_llm_run(delay=0)
+    await cm.request_llm_run(delay=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -3579,11 +3504,7 @@ async def _(
     await cm.schedule_proactive_speech()
 
     if isinstance(event, AssistantScreenShareStarted):
-        from unify.conversation_manager.domains.desktop_session import (
-            schedule_ensure_desktop_session,
-        )
-
-        schedule_ensure_desktop_session(cm)
+        asyncio.ensure_future(_ensure_desktop_session(cm))
 
     # Broadcast remote-control state change to all active CodeActActor loops
     # via the ComputerPrimitives singleton interject queue registry.
@@ -3671,38 +3592,6 @@ async def _(event: LogMessageResponse, cm: "ConversationManager", *args, **kwarg
         and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
     ):
         cm.call_manager.teams_meet_exchange_id = event.exchange_id
-
-
-@EventHandler.register((UnifyMessageReactionChanged, WhatsAppReactionChanged))
-async def _(event, cm: "ConversationManager", *args, **kwargs):
-    action = await managers_utils.log_reaction(cm, event)
-    if action is None:
-        return
-
-    contact_id = event.contact.get("contact_id") if event.contact else None
-    contact = (
-        cm.contact_index.get_contact(contact_id=contact_id)
-        if contact_id is not None
-        else None
-    )
-    if contact is None:
-        contact = event.contact or {}
-    sender_name = _get_sender_name(contact)
-    emoji = getattr(event, "emoji", None)
-    if isinstance(event, UnifyMessageReactionChanged):
-        medium_label = "Unify message"
-    else:
-        medium_label = "WhatsApp message"
-    if action == "removed":
-        notif = f"{sender_name} removed a reaction from your {medium_label.lower()}"
-    elif emoji:
-        notif = f"{sender_name} reacted {emoji} to your {medium_label.lower()}"
-    else:
-        notif = f"{sender_name} reacted to your {medium_label.lower()}"
-    cm.notifications_bar.push_notif("comms", notif, event.timestamp)
-
-    if action in ("added", "changed"):
-        await cm.request_llm_run(triggering_contact_id=contact_id)
 
 
 @EventHandler.register(PreHireMessage)
