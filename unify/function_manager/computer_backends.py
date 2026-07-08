@@ -1308,9 +1308,10 @@ class MockComputerBackend(ComputerBackend):
         mode: str,
         label: str | None = None,
         storage_state_name: str | None = None,
+        headless: bool | None = None,
     ) -> "ComputerSession":
         """Return a new mock session for the given mode."""
-        _ = storage_state_name  # accepted for signature compatibility
+        _ = (storage_state_name, headless)  # accepted for signature compatibility
         if mode == "desktop":
             raise RuntimeError("Desktop mode is singleton")
         return _MockSession(mode, self)
@@ -1782,6 +1783,7 @@ class MagnitudeBackend(ComputerBackend):
         mode: str,
         label: str | None = None,
         storage_state_name: str | None = None,
+        headless: bool | None = None,
     ) -> ComputerSession:
         """Create a session asynchronously.
 
@@ -1794,6 +1796,12 @@ class MagnitudeBackend(ComputerBackend):
         saved authentication state (see ``save_browser_state``).
         Currently only honoured by the agent-service for
         ``mode == "web"``.
+
+        ``headless`` overrides the per-mode default (see
+        ``_MODE_START_PARAMS``). Passing ``headless=False`` for ``web`` mode
+        makes the browser render on the agent-service's X display (``:99`` on
+        the pods) so it can be watched over VNC, while still honouring
+        ``storage_state_name`` (unlike ``web-vm``). ``None`` keeps the default.
         """
         import time as _cs_time
 
@@ -1802,6 +1810,8 @@ class MagnitudeBackend(ComputerBackend):
         params = dict(self._MODE_START_PARAMS[mode])
         if label is not None:
             params["label"] = label
+        if headless is not None:
+            params["headless"] = headless
         if self._url_mappings:
             params["urlMappings"] = self._url_mappings
         if storage_state_name:
@@ -1860,6 +1870,7 @@ class MagnitudeBackend(ComputerBackend):
         mode: str,
         label: str | None = None,
         storage_state_name: str | None = None,
+        headless: bool | None = None,
     ) -> ComputerSession:
         """Spawn an additional parallel session (web/web-vm only).
 
@@ -1868,6 +1879,10 @@ class MagnitudeBackend(ComputerBackend):
 
         ``storage_state_name`` (web only): boot the new session with a
         previously-saved storage state so it starts already-authenticated.
+
+        ``headless`` overrides the per-mode default; ``headless=False`` on a
+        ``web`` session makes it visible on the agent-service X display (for
+        watching over VNC) while still loading ``storage_state_name``.
         """
         if mode == "desktop":
             raise RuntimeError(
@@ -1877,6 +1892,7 @@ class MagnitudeBackend(ComputerBackend):
             mode,
             label=label,
             storage_state_name=storage_state_name,
+            headless=headless,
         )
         self._extra_sessions.append(session)
         return session

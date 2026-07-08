@@ -467,6 +467,7 @@ class _WebSessionFactory:
         visible: bool = True,
         *,
         storage_state_name: str | None = None,
+        headless: bool | None = None,
     ) -> WebSessionHandle:
         """Create a new independent browser session.
 
@@ -492,6 +493,12 @@ class _WebSessionFactory:
             session starts in an authenticated state. Only honoured for
             ``visible=False`` (i.e. ``mode='web'``); the web-vm path on
             the managed VM has its own auth flow.
+        headless : bool, optional
+            Override the per-mode headless default. ``visible=False`` normally
+            launches a headless ``web`` session; passing ``headless=False``
+            keeps it a ``web`` session (so ``storage_state_name`` still loads)
+            but renders it on the agent-service's X display so it can be
+            watched over VNC. ``None`` (default) keeps the per-mode default.
 
         Returns
         -------
@@ -508,6 +515,7 @@ class _WebSessionFactory:
             mode,
             label=label,
             storage_state_name=storage_state_name,
+            headless=headless,
         )
         handle = WebSessionHandle(session, self._owner, session_id=sid)
         self._handles.append(handle)
