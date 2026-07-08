@@ -205,6 +205,15 @@ class Contact(AuthoredRow):
         description="System contact (assistant, user, or org member). Cannot be deleted.",
     )
 
+    custom_key: Optional[str] = Field(
+        default=None,
+        description="Stable source key for deployment-defined contacts.",
+    )
+    custom_hash: Optional[str] = Field(
+        default=None,
+        description="Content hash for deployment-defined contacts.",
+    )
+
     @model_validator(mode="before")
     @classmethod
     def _inject_sentinel(cls, data: dict) -> dict:
