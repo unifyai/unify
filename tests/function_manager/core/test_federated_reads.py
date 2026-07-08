@@ -21,31 +21,37 @@ def _manager_stub(*, include_primitives: bool = True) -> FunctionManager:
     return fm
 
 
-def test_filter_functions_uses_federated_filter_window_and_context_filters():
+def test_filter_functions_delegates_federated_read_to_server(monkeypatch):
     fm = _manager_stub()
     fm._filter_scope = "language == 'python'"
     fm._exclude_primitive_ids = frozenset({99})
     builtins = builtins_project()
     calls = []
 
-    def get_logs(context, *, filter=None, offset=0, limit=None, project=None):
-        calls.append((context, project, filter, offset, limit))
-        rows = {
-            ("Functions/Compositional", None): [
-                {"name": "comp-1", "implementation": "def comp_1(): pass"},
-                {"name": "comp-2", "implementation": "def comp_2(): pass"},
+    def fake_get_logs_federated(**kwargs):
+        calls.append(kwargs)
+        return {
+            "logs": [
+                {
+                    "name": "comp-2",
+                    "implementation": "def comp_2(): pass",
+                    "_federated_source": "compositional",
+                },
+                {
+                    "name": "prim-1",
+                    "implementation": None,
+                    "_federated_source": "primitives",
+                },
             ],
-            ("Functions/Primitives", builtins): [
-                {"name": "prim-1", "implementation": None},
-                {"name": "prim-2", "implementation": None},
-            ],
-            ("Functions/Primitives", None): [
-                {"name": "provider-1", "implementation": None},
-            ],
-        }[(context, project)]
-        return rows[:limit]
+            "count": 5,
+            "counts": {"compositional": 2, "primitives": 3},
+        }
 
-    fm._get_logs_with_retry = get_logs
+    monkeypatch.setattr("unisdk.get_logs_federated", fake_get_logs_federated)
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_private_fields",
+        lambda *_args, **_kwargs: ["_embedding"],
+    )
 
     rows = fm.filter_functions(
         filter="'tool' in docstring",
@@ -64,46 +70,55 @@ def test_filter_functions_uses_federated_filter_window_and_context_filters():
     scoped_primitive_filter = (
         "(primitive_class == 'Primitives') and (function_id != 99)"
     )
-    assert calls == [
-        (
-            "Functions/Compositional",
-            None,
-            "('tool' in docstring) and (language == 'python')",
-            0,
-            3,
-        ),
-        (
-            "Functions/Primitives",
-            builtins,
-            f"('tool' in docstring) and ({scoped_primitive_filter})",
-            0,
-            3,
-        ),
-        (
-            "Functions/Primitives",
-            None,
-            "('tool' in docstring) and "
-            f'(({scoped_primitive_filter}) and metadata["source"] == "provider_backed")',
-            0,
-            3,
-        ),
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["filter"] == "'tool' in docstring"
+    assert call["offset"] == 1
+    assert call["limit"] == 2
+    assert call["contexts"] == [
+        {
+            "context": "Functions/Compositional",
+            "source": "compositional",
+            "filter": "language == 'python'",
+            "exclude_fields": ["_embedding"],
+        },
+        {
+            "context": "Functions/Primitives",
+            "source": "primitives",
+            "filter": scoped_primitive_filter,
+            "exclude_fields": ["_embedding"],
+            "project_name": builtins,
+        },
+        {
+            "context": "Functions/Primitives",
+            "source": "primitives",
+            "filter": f"({scoped_primitive_filter}) "
+            'and metadata["source"] == "provider_backed"',
+            "exclude_fields": ["_embedding"],
+        },
     ]
 
 
-def test_filter_functions_skips_primitive_contexts_when_disabled():
+def test_filter_functions_skips_primitive_contexts_when_disabled(monkeypatch):
     fm = _manager_stub(include_primitives=False)
     calls = []
 
-    def get_logs(context, *, filter=None, offset=0, limit=None, project=None):
-        calls.append(context)
-        return [{"name": "comp-1"}]
+    def fake_get_logs_federated(**kwargs):
+        calls.append(kwargs)
+        return {"logs": [{"name": "comp-1"}], "count": 1, "counts": {}}
 
-    fm._get_logs_with_retry = get_logs
+    monkeypatch.setattr("unisdk.get_logs_federated", fake_get_logs_federated)
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_private_fields",
+        lambda *_args, **_kwargs: [],
+    )
 
     rows = fm.filter_functions(limit=5)
 
     assert [row["name"] for row in rows] == ["comp-1"]
-    assert calls == ["Functions/Compositional"]
+    assert [spec["context"] for spec in calls[0]["contexts"]] == [
+        "Functions/Compositional",
+    ]
 
 
 def test_search_functions_uses_federated_ranked_search_contexts(monkeypatch):

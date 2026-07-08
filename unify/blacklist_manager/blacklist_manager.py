@@ -12,7 +12,6 @@ from ..common.federated_search import (
     CONTEXT_FIELD,
     SOURCE_FIELD,
     FederatedSearchContext,
-    default_filter_fetcher,
     federated_filter,
 )
 from ..common.filter_utils import normalize_filter_expr
@@ -151,15 +150,6 @@ class BlackListManager(BaseBlackListManager):
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        errors: list[Exception] = []
-
-        def fetcher(spec, row_filter, sorting, fetch_limit):
-            try:
-                return default_filter_fetcher(spec, row_filter, sorting, fetch_limit)
-            except Exception as exc:
-                errors.append(exc)
-                return []
-
         annotated_rows = federated_filter(
             [
                 FederatedSearchContext(
@@ -172,10 +162,7 @@ class BlackListManager(BaseBlackListManager):
             filter=normalize_filter_expr(filter),
             offset=offset,
             limit=limit,
-            fetcher=fetcher,
         )
-        if not annotated_rows and errors:
-            raise errors[-1]
 
         rows: list[dict[str, Any]] = []
         for annotated in annotated_rows:
