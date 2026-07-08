@@ -358,42 +358,49 @@ def _register_functions(pkg: dict) -> int:
 
 
 def _register_guidance(pkg: dict) -> int:
-    """Add a package's guidance markdown entries to GuidanceManager.
+    """Add a package's ``guidance.jsonl`` entries to GuidanceManager.
 
-    Per-title check + insert.  Doesn't update an existing entry's content
-    even if the markdown on disk has changed — that's a deploy-time
-    concern (``_sync_guidance`` handles drift via SeedMetaStore).
-    Returns the number of new entries added.
+    Per-key insert/update (no orphan-delete pass) so we don't disturb
+    guidance registered by the deployment's own ``guidance_dirs``.
+    Returns the number of functions actually added or updated.
     """
     guidance_dir = pkg.get("guidance_dir")
     if guidance_dir is None:
         return 0
 
-    try:
-        from unity_deploy.assistant_deployments.integrations.loader import (
-            _load_guidance,
-        )
-    except Exception:
-        return 0
-
+    from unify.guidance_manager.custom_guidance import collect_custom_guidance
     from unify.manager_registry import ManagerRegistry
 
-    entries = _load_guidance(guidance_dir)
-    if not entries:
+    source_guidance = collect_custom_guidance(path=guidance_dir)
+    if not source_guidance:
         return 0
 
     gm = ManagerRegistry.get_guidance_manager()
-    added = 0
-    for entry in entries:
+    db_guidance = gm._get_custom_guidance_from_db()
+
+    changed = 0
+    for custom_key, source_data in source_guidance.items():
         try:
-            existing = gm.filter(filter=f"title == {entry.title!r}", limit=1)
-            if existing:
-                continue
-            gm.add_guidance(title=entry.title, content=entry.content)
-            added += 1
+            payload = {
+                k: v
+                for k, v in source_data.items()
+                if k not in {"function_names", "destination"}
+            }
+            if custom_key in db_guidance:
+                if db_guidance[custom_key].get("custom_hash") != payload.get(
+                    "custom_hash",
+                ):
+                    gm._update_custom_guidance(
+                        guidance_id=db_guidance[custom_key]["guidance_id"],
+                        data=payload,
+                    )
+                    changed += 1
+            else:
+                gm._insert_custom_guidance(payload)
+                changed += 1
         except Exception:
-            logger.exception("Failed to register guidance %r", entry.title)
-    return added
+            logger.exception("Failed to register guidance %s", custom_key)
+    return changed
 
 
 # ---------------------------------------------------------------------------
