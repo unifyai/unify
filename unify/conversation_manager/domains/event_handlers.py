@@ -2605,6 +2605,8 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             routing_metadata=routing_metadata,
             guild_id=guild_id,
             bot_id=bot_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":
