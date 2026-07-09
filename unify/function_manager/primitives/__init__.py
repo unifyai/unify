@@ -38,6 +38,12 @@ from unify.function_manager.primitives.runtime import (
     _AsyncPrimitiveWrapper,
     _create_async_wrapper,
 )
+from unify.function_manager.primitives.humanize import (
+    HumanInput,
+    HumanizeConfig,
+    kinetic_deltas,
+    settle,
+)
 
 __all__ = [
     # Scope
@@ -63,4 +69,9 @@ __all__ = [
     "get_primitive_callable",
     "_AsyncPrimitiveWrapper",
     "_create_async_wrapper",
+    # Humanized input (eased scroll / cursor drift / key-scroll)
+    "HumanInput",
+    "HumanizeConfig",
+    "kinetic_deltas",
+    "settle",
 ]

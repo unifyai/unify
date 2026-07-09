@@ -265,6 +265,56 @@ class _LowLevelActionsMixin:
             ],
         )
 
+    async def scroll_humanlike(
+        self,
+        x: int,
+        y: int,
+        notches: list[int],
+        gap_min_ms: float | None = None,
+        gap_max_ms: float | None = None,
+    ) -> dict:
+        """
+        Scroll over (x, y) as a sequence of eased wheel ``notches``.
+
+        The scroll analogue of :meth:`move`: the whole eased gesture is
+        dispatched in a **single** backend call and the wheel ticks are emitted
+        *inside the browser* with millisecond-precise local timing (rather than
+        as one round-trip per notch), paying the post-scroll stability wait once.
+
+        ``notches`` are the per-tick vertical deltas (sign = direction) — compute
+        them with :func:`unify.function_manager.primitives.humanize.kinetic_deltas`
+        so the ease-in-out shape is owned in one place. Position (x, y) over a
+        neutral gutter so a hovered ``<video>``/embed can't swallow the wheel.
+
+        Web-only (no desktop handler), mirroring :meth:`move`.
+
+        Parameters
+        ----------
+        x, y : int
+            Pixel coordinate to hover the cursor over for the whole gesture.
+        notches : list[int]
+            Per-tick ``deltaY`` values (positive = down, negative = up).
+        gap_min_ms, gap_max_ms : float, optional
+            Bounds for the randomized delay between notches (backend defaults
+            apply when omitted).
+
+        Returns
+        -------
+        dict
+            Execution result with ``status`` and ``screenshot``.
+        """
+        action: dict = {
+            "variant": "mouse:scroll_humanlike",
+            "x": x,
+            "y": y,
+            "notches": [int(n) for n in notches],
+        }
+        if gap_min_ms is not None:
+            action["gapMinMs"] = gap_min_ms
+        if gap_max_ms is not None:
+            action["gapMaxMs"] = gap_max_ms
+        return await self.execute_actions([action])
+
     async def move(self, x: int, y: int, steps: int | None = None) -> dict:
         """
         Move the mouse to (x, y) with a natural, curved (bezier) motion.
