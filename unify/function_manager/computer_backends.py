@@ -265,6 +265,56 @@ class _LowLevelActionsMixin:
             ],
         )
 
+    async def scroll_humanlike(
+        self,
+        x: int,
+        y: int,
+        notches: list[int],
+        gap_min_ms: float | None = None,
+        gap_max_ms: float | None = None,
+    ) -> dict:
+        """
+        Scroll over (x, y) as a sequence of eased wheel ``notches``.
+
+        The scroll analogue of :meth:`move`: the whole eased gesture is
+        dispatched in a **single** backend call and the wheel ticks are emitted
+        *inside the browser* with millisecond-precise local timing (rather than
+        as one round-trip per notch), paying the post-scroll stability wait once.
+
+        ``notches`` are the per-tick vertical deltas (sign = direction) — compute
+        them with :func:`unify.function_manager.primitives.humanize.kinetic_deltas`
+        so the ease-in-out shape is owned in one place. Position (x, y) over a
+        neutral gutter so a hovered ``<video>``/embed can't swallow the wheel.
+
+        Web-only (no desktop handler), mirroring :meth:`move`.
+
+        Parameters
+        ----------
+        x, y : int
+            Pixel coordinate to hover the cursor over for the whole gesture.
+        notches : list[int]
+            Per-tick ``deltaY`` values (positive = down, negative = up).
+        gap_min_ms, gap_max_ms : float, optional
+            Bounds for the randomized delay between notches (backend defaults
+            apply when omitted).
+
+        Returns
+        -------
+        dict
+            Execution result with ``status`` and ``screenshot``.
+        """
+        action: dict = {
+            "variant": "mouse:scroll_humanlike",
+            "x": x,
+            "y": y,
+            "notches": [int(n) for n in notches],
+        }
+        if gap_min_ms is not None:
+            action["gapMinMs"] = gap_min_ms
+        if gap_max_ms is not None:
+            action["gapMaxMs"] = gap_max_ms
+        return await self.execute_actions([action])
+
     async def move(self, x: int, y: int, steps: int | None = None) -> dict:
         """
         Move the mouse to (x, y) with a natural, curved (bezier) motion.
@@ -1309,9 +1359,11 @@ class MockComputerBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> "ComputerSession":
         """Return a new mock session for the given mode."""
-        _ = (storage_state_name, headless)  # accepted for signature compatibility
+        # accepted for signature compatibility
+        _ = (storage_state_name, headless, stealth)
         if mode == "desktop":
             raise RuntimeError("Desktop mode is singleton")
         return _MockSession(mode, self)
@@ -1784,6 +1836,7 @@ class MagnitudeBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> ComputerSession:
         """Create a session asynchronously.
 
@@ -1802,6 +1855,11 @@ class MagnitudeBackend(ComputerBackend):
         makes the browser render on the agent-service's X display (``:99`` on
         the pods) so it can be watched over VNC, while still honouring
         ``storage_state_name`` (unlike ``web-vm``). ``None`` keeps the default.
+
+        ``stealth`` opts the session into anti-automation hardening in
+        magnitude-core's BrowserProvider (realistic UA/locale, dropping the
+        ``--enable-automation`` switch, patching ``navigator.webdriver`` etc.).
+        Forwarded to ``/start``; an older agent-service simply ignores it.
         """
         import time as _cs_time
 
@@ -1812,6 +1870,8 @@ class MagnitudeBackend(ComputerBackend):
             params["label"] = label
         if headless is not None:
             params["headless"] = headless
+        if stealth is not None:
+            params["stealth"] = stealth
         if self._url_mappings:
             params["urlMappings"] = self._url_mappings
         if storage_state_name:
@@ -1871,6 +1931,7 @@ class MagnitudeBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> ComputerSession:
         """Spawn an additional parallel session (web/web-vm only).
 
@@ -1893,6 +1954,7 @@ class MagnitudeBackend(ComputerBackend):
             label=label,
             storage_state_name=storage_state_name,
             headless=headless,
+            stealth=stealth,
         )
         self._extra_sessions.append(session)
         return session
