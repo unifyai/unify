@@ -106,6 +106,23 @@ async def _notify_desktop_session_ready(cm: "ConversationManager") -> None:
     await cm.flush_llm_requests()
 
 
+def schedule_desktop_session_ready_notify(cm: "ConversationManager") -> None:
+    """Wake a follow-up slow-brain turn after the current tool turn finishes.
+
+    The slow brain is single-shot: it cannot branch on ``prepare_desktop``'s
+    return value in the same turn. When the desktop session is already cached,
+    schedule the same ready notification used by the warming path so a later
+    turn can ring or start the demo. Deferred so ``flush_llm_requests`` does
+    not re-enter ``_run_llm`` from inside the current tool; the debouncer
+    queues behind the running turn.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    asyncio.ensure_future(_notify_desktop_session_ready(cm))
+
+
 async def _run_ensure_desktop_session(cm: "ConversationManager") -> None:
     """Create a desktop session in agent-service if one doesn't already exist.
 

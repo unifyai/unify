@@ -2238,14 +2238,15 @@ class ConversationManagerBrainActionTools:
         """Warm up the managed desktop VM ahead of a computer demo or act.
 
         Call this when a task will need the desktop soon — for example the My
-        Computer onboarding demo — then continue from the returned status in the
-        same turn:
+        Computer onboarding demo. The slow brain is single-shot, so branch on
+        status via the follow-up turn that the ready/warming paths open — not
+        by reading this return value in the same turn:
 
-        - ``ready``: the computer is usable now. Ring or start the demo
-          immediately; no further desktop-ready notification will arrive.
+        - ``ready``: the computer is already usable. A desktop-ready
+          notification opens a follow-up turn; ring or start the demo there.
         - ``warming``: boot/session setup is in progress. Typical wait is
-          30–60 seconds; I receive a notification when my computer is ready,
-          then I can ring or start the demo.
+          30–60 seconds; a desktop-ready notification opens a follow-up turn
+          when the session is usable, then ring or start the demo.
         - ``unavailable``: this assistant has no managed desktop runtime.
 
         Warming returns immediately while setup continues in the background.
@@ -2256,6 +2257,7 @@ class ConversationManagerBrainActionTools:
             desktop_agent_session_cached,
             desktop_session_ensure_in_flight,
             has_managed_desktop_runtime,
+            schedule_desktop_session_ready_notify,
             schedule_ensure_desktop_session,
         )
 
@@ -2266,11 +2268,12 @@ class ConversationManagerBrainActionTools:
             }
 
         if desktop_agent_session_cached():
+            schedule_desktop_session_ready_notify(self._cm)
             return {
                 "status": "ready",
                 "message": (
-                    "My computer is already ready — ring or start the demo now; "
-                    "no further ready notification will arrive."
+                    "My computer is already ready — a desktop-ready notification "
+                    "will open a follow-up turn to ring or start the demo."
                 ),
             }
 
