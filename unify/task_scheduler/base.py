@@ -271,8 +271,10 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Parameters
         ----------
         task_id : int
-            Identifier of the task to start. Must reference a single, non‑terminal,
-            non‑active instance.
+            Identifier of the task to start. Starts the lowest runnable
+            (non‑terminal, non‑active) instance for that id. Multiple instances
+            of the same ``task_id`` may run concurrently; serialization is left
+            to the entrypoint or caller when needed.
         trigger_attempt_token : str | None, default ``None``
             Optional trigger-attempt token used only for live triggered executions
             so the run can adopt the exact inbound provenance that caused it.
@@ -294,6 +296,10 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         execution requires an explicitly configured actor; otherwise execution
         fails loudly instead of silently using a simulated fallback.
 
+        Symbolic entrypoints receive opt-in kwargs such as ``task_id``,
+        ``instance_id``, and ``task_execution_context`` so they can apply their
+        own concurrency or skip logic when desired.
+
         Returns
         -------
         SteerableToolHandle
@@ -303,7 +309,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Raises
         ------
         RuntimeError
-            If this task is already active with no live handle.
+            If activation provenance targets an instance that is already active.
         ValueError
             When ``task_id`` cannot be found or is not runnable.
         """
