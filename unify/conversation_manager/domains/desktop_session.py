@@ -100,6 +100,10 @@ async def _notify_desktop_session_ready(cm: "ConversationManager") -> None:
         prompt_now(as_string=False),
     )
     await cm.request_llm_run(delay=0)
+    # Background ensure tasks are not EventHandlers, so nothing else flushes
+    # the queue after this notify — without this the My Computer ring turn
+    # can sit until an unrelated pub/sub event arrives.
+    await cm.flush_llm_requests()
 
 
 async def _run_ensure_desktop_session(cm: "ConversationManager") -> None:
