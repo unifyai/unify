@@ -1366,13 +1366,6 @@ app.post('/start', async (req: Request, res: Response) => {
     let displayHarness: DisplayHarness | undefined;
     if (mode === 'web-vm' || mode === 'desktop') {
       displayHarness = new DisplayHarness();
-      // Warm the Chromium window cache asynchronously so the first action
-      // does not bear the wmctrl discovery latency.
-      setTimeout(() => {
-        displayHarness!.findChromiumWindow()
-          .then(id => { if (id) console.log(`[start] Chromium window cached: ${id}`); })
-          .catch(() => { /* best effort */ });
-      }, 3000);
     }
 
     const observationModel = resolveAgentServiceModel();
@@ -1952,16 +1945,15 @@ async function probeNativeDisplayAtBoot(): Promise<void> {
  * Used for web-vm and desktop sessions where Playwright controls a Chromium
  * window that is itself running on a virtual X11 display. Native input
  * bypasses Playwright's CDP layer so that actions land on browser chrome,
- * desktop windows, and other UI at absolute display coordinates. Mouse actions
- * do not raise Chromium first — the topmost window at each coordinate receives
- * the click, matching manual pointer behavior.
+ * desktop windows, and other UI at absolute display coordinates. Mouse clicks
+ * go to the topmost window at each coordinate; keyboard events go to the
+ * current X11 focus target without raising Chromium first.
  *
  * The display number comes from ``DISPLAY`` (pool VMs use ``:1``; the local
  * desktop Docker image uses ``:99``).
  */
 class DisplayHarness {
   private readonly display: string;
-  private chromiumWindowId: string | null = null;
 
   constructor(display: string = resolveNativeDisplay()) {
     this.display = display;
@@ -1991,43 +1983,6 @@ class DisplayHarness {
     } finally {
       try { fs.unlinkSync(dest); } catch { /* best effort */ }
     }
-  }
-
-  /** Return the pixel dimensions of the virtual display via xdpyinfo. */
-  /**
-   * Find the X11 window ID of the first Chromium/Chrome window on the display.
-   * Returns null when wmctrl finds no matching window.
-   */
-  async findChromiumWindow(): Promise<string | null> {
-    try {
-      const result = await this.execDisplay('wmctrl -l');
-      for (const line of result.stdout.split('\n')) {
-        if (/chromium|chrome/i.test(line)) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length > 0) return parts[0];
-        }
-      }
-    } catch {
-      // wmctrl may not be installed or the display may have no windows yet
-    }
-    return null;
-  }
-
-  /** Focus the tracked Chromium window before delivering input events. */
-  async focusChromium(): Promise<void> {
-    if (!this.chromiumWindowId) {
-      this.chromiumWindowId = await this.findChromiumWindow();
-    }
-    if (this.chromiumWindowId) {
-      await this.execDisplay(`wmctrl -i -a ${this.chromiumWindowId}`).catch(() => {
-        // Window may have been replaced; clear the cache so we retry next time.
-        this.chromiumWindowId = null;
-      });
-    }
-  }
-
-  private invalidateWindowCache(): void {
-    this.chromiumWindowId = null;
   }
 
   async click(x: number, y: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<void> {
@@ -2066,7 +2021,6 @@ class DisplayHarness {
   }
 
   async type(text: string): Promise<void> {
-    await this.focusChromium();
     const tmpFile = path.join(os.tmpdir(), `unity-type-${randomUUID()}.txt`);
     try {
       await fs.promises.writeFile(tmpFile, text, 'utf-8');
@@ -2080,13 +2034,11 @@ class DisplayHarness {
   }
 
   async key(key: string): Promise<void> {
-    await this.focusChromium();
     const xKey = XDOTOOL_KEY_MAP[key] ?? key;
     await this.execDisplay(`xdotool key --clearmodifiers ${xKey}`);
   }
 
   async hotkey(keys: string[]): Promise<void> {
-    await this.focusChromium();
     const xKeys = keys.map(k => XDOTOOL_MODIFIER_MAP[k] ?? XDOTOOL_KEY_MAP[k] ?? k);
     await this.execDisplay(`xdotool key --clearmodifiers ${xKeys.join('+')}`);
   }
