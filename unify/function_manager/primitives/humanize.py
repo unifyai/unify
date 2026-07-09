@@ -149,8 +149,10 @@ class HumanInput:
             await mover(x, y)
         except Exception:  # noqa: BLE001
             self._move_supported = False
-            logger.debug("cursor drift unsupported; disabling for this session",
-                         exc_info=True)
+            logger.debug(
+                "cursor drift unsupported; disabling for this session",
+                exc_info=True,
+            )
 
     async def keyboard_scroll(self) -> bool:
         """Scroll via ``PageDown`` key(s). Returns True if it ran.
@@ -174,8 +176,10 @@ class HumanInput:
             return True
         except Exception:  # noqa: BLE001
             self._page_key_supported = False
-            logger.debug("keyboard scroll unsupported; disabling for this session",
-                         exc_info=True)
+            logger.debug(
+                "keyboard scroll unsupported; disabling for this session",
+                exc_info=True,
+            )
             return False
 
     async def scroll(self, *, prefer_keyboard: bool = False) -> None:
@@ -214,7 +218,7 @@ class HumanInput:
                 for tick in notches:
                     await self.session.scroll(x, y, 0, tick)
                     await asyncio.sleep(
-                        random.uniform(cfg.kinetic_gap_min, cfg.kinetic_gap_max)
+                        random.uniform(cfg.kinetic_gap_min, cfg.kinetic_gap_max),
                     )
             except Exception:  # noqa: BLE001
                 logger.debug("human scroll failed", exc_info=True)
@@ -245,8 +249,10 @@ class HumanInput:
             return True
         except Exception:  # noqa: BLE001
             self._native_scroll_supported = False
-            logger.debug("native scroll unsupported; using composed ticks",
-                         exc_info=True)
+            logger.debug(
+                "native scroll unsupported; using composed ticks",
+                exc_info=True,
+            )
             return False
 
 
