@@ -286,7 +286,8 @@ class AssistantDetails:
     default_reasoning_effort: str = ""
     contact_id: int = 0  # Contact ID in Contacts table
     self_contact_id: int = 0
-    desktop_mode: str = "ubuntu"  # "ubuntu" or "windows" - determines VM type
+    desktop_mode: str = "none"
+    managed_desktop_status: str | None = None
     desktop_url: str | None = None  # URL for managed VM desktop access
     # Per-user desktops keyed by owner_user_id. A shared assistant can be linked
     # to a different machine for each user who works with it.
@@ -304,8 +305,12 @@ class AssistantDetails:
 
     @property
     def has_managed_desktop(self) -> bool:
-        """True when a managed VM desktop is assigned and sync gates apply."""
-        return self.desktop_mode in ("ubuntu", "windows") and bool(self.desktop_url)
+        """True when managed Computer Use is entitled and a VM URL is assigned."""
+        return (
+            self.desktop_mode in ("ubuntu", "windows")
+            and self.managed_desktop_status == "active"
+            and bool(self.desktop_url)
+        )
 
     def user_desktop_for(self, user_id: str | None) -> UserDesktopLink | None:
         """Return the desktop the given user has linked to this assistant."""
@@ -562,7 +567,8 @@ class SessionDetails:
         default_model: str = "",
         default_reasoning_effort: str = "",
         binding_id: str = "",
-        desktop_mode: str = "ubuntu",
+        desktop_mode: str = "none",
+        managed_desktop_status: str | None = None,
         user_desktops: "list[UserDesktopLink | dict] | dict[str, UserDesktopLink | dict] | None" = None,
         is_coordinator: bool = False,
     ) -> None:
@@ -591,6 +597,7 @@ class SessionDetails:
         self.self_contact_id = assistant_self_contact_id
         self.assistant.binding_id = _runtime_str(binding_id)
         self.assistant.desktop_mode = _runtime_str(desktop_mode)
+        self.assistant.managed_desktop_status = managed_desktop_status
         self.assistant.user_desktops = (
             normalize_user_desktops(user_desktops) if user_desktops else {}
         )

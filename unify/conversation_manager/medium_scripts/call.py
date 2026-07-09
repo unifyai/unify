@@ -3695,6 +3695,12 @@ async def entrypoint(ctx: agents.JobContext):
     def _schedule_deferred_desktop_binding() -> None:
         if not _voice_call_channel_defers_desktop_binding(channel):
             return
+        from unify.conversation_manager.domains.desktop_session import (
+            has_managed_desktop_runtime,
+        )
+
+        if not has_managed_desktop_runtime():
+            return
         agent_id = SESSION_DETAILS.assistant.agent_id
         if agent_id is None:
             return
