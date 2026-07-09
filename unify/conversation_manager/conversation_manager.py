@@ -2782,7 +2782,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.default_model = payload.get("default_model", "")
         self.default_reasoning_effort = payload.get("default_reasoning_effort", "")
         self.binding_id = payload.get("binding_id", "")
-        self.desktop_mode = payload.get("desktop_mode", "ubuntu")
+        self.desktop_mode = payload.get("desktop_mode", "none")
+        self.managed_desktop_status = payload.get("managed_desktop_status")
         self.user_desktops = payload.get("user_desktops") or []
         self.org_id: int | None = payload.get("org_id")
         self.org_name: str = payload.get("org_name", "")
@@ -2830,6 +2831,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             default_reasoning_effort=self.default_reasoning_effort,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
+            managed_desktop_status=self.managed_desktop_status,
             user_desktops=self.user_desktops,
             is_coordinator=is_coordinator,
         )

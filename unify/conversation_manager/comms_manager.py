@@ -1898,6 +1898,7 @@ class CommsManager:
                     sender_display_name = event.get("sender_display_name", "")
                     attachments = event.get("attachments") or []
                     routing_metadata = event.get("routing_metadata") or {}
+                    sender_is_owner = bool(event.get("sender_is_owner"))
 
                     # A 1:1 chat is a DM; group chats and channels are shared
                     # conversations that route through the channel medium/tool
@@ -1912,12 +1913,30 @@ class CommsManager:
                         ack_now()
                         return
 
-                    # No email is present on the activity (roster lookup is
-                    # deferred), so match the AAD display name against known
-                    # contacts; a stable name re-matches on later messages. An
-                    # unmatched sender gets a respondable contact (the bot only
-                    # receives 1:1 / @mention activities, i.e. clear intent).
-                    contact = _match_contact_by_name(sender_display_name, contacts)
+                    # Teams activities carry no durable contact key (no email;
+                    # roster/Graph lookup is deferred), so a per-message display
+                    # name is all we have. When Orchestra resolved the sender to
+                    # the assistant's own owner, attribute the message to the
+                    # durable boss contact rather than matching/minting by name
+                    # — otherwise every inbound spawns a fresh contact and the
+                    # boss's own DMs never resolve to contact 1. Otherwise match
+                    # the AAD display name against known contacts (a stable name
+                    # re-matches on later messages), then fall back to a
+                    # respondable contact (the bot only receives 1:1 / @mention
+                    # activities, i.e. clear intent to converse).
+                    contact = None
+                    if sender_is_owner:
+                        contact = next(
+                            (
+                                c
+                                for c in contacts
+                                if c.get("contact_id")
+                                == SESSION_DETAILS.boss_contact_id
+                            ),
+                            None,
+                        )
+                    if contact is None:
+                        contact = _match_contact_by_name(sender_display_name, contacts)
                     if contact is None:
                         contact = _create_ms_teams_bot_contact(sender_display_name)
 

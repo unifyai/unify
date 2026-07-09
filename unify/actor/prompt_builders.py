@@ -767,11 +767,21 @@ def _build_filesystem_context() -> str:
     return textwrap.dedent(f"""
         ### Filesystem Context
 
+        This is the **local (pod) workspace** used by `execute_code` and by
+        attachment send/receive — not the managed VM desktop filesystem.
         Your working directory is `{resolved}`.  This directory **persists
         across every interaction** with the user — files you create today will
         still be here weeks or months from now.  **Always use full absolute
         paths** (starting with `{resolved}/`) when referencing any file or
-        directory.  Never use relative paths.
+        directory here.  Never use relative paths.
+
+        GUI files on the managed desktop live under `/Unity/...` (home
+        `HOME=/Unity`, Downloads `/Unity/Downloads`, synced tree
+        `/Unity/Local`).  Use those paths only via Computer Control on the VM
+        desktop — do not treat them as this pod workspace's cwd or open them
+        with ordinary local file IO.  See Computer Control →
+        Managed desktop filesystem.  Do not treat the desktop panel name
+        `unityuser` as `/home/unityuser` — that is not the desktop home.
 
         | Location | Purpose |
         |----------|---------|
@@ -796,11 +806,13 @@ def _build_filesystem_context() -> str:
           comparison, etc.) using full paths
           (e.g. `{resolved}/Screenshots/Assistant/2026-02-16T14-30-45.123456.jpg`).
         - **Stay inside the workspace**: Always use full absolute paths
-          rooted under `{resolved}/`.  Do not reference unrelated system
-          paths (e.g. `/tmp`, `/var`).  The one workspace-adjacent location
-          you may read is `{remote_mirror}/<user_id>/` — the staged mirror of
-          a linked user's home, created by `user_desktop.files.pull` (see the
-          table above).
+          rooted under `{resolved}/` for local code and attachments.  Do not
+          reference unrelated system paths (e.g. `/tmp`, `/var`).  The one
+          workspace-adjacent location you may read is
+          `{remote_mirror}/<user_id>/` — the staged mirror of a linked user's
+          home, created by `user_desktop.files.pull` (see the table above).
+          Managed-desktop GUI paths under `/Unity/...` are documented in
+          Computer Control and are separate from this local workspace.
 
         **When to use the filesystem vs. primitives:**
         Most tasks will not require reading or writing local files.  The

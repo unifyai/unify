@@ -391,26 +391,24 @@ class SecretManager(BaseSecretManager):
             return
 
         base_url = SETTINGS.ORCHESTRA_URL
-        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-        if not base_url or not admin_key:
+        unify_key = SESSION_DETAILS.unify_key
+        if not base_url or not unify_key:
             return
 
         try:
             from unisdk.utils import http
 
+            # Assistant-scoped secrets read (own UNIFY_KEY, ownership-checked by
+            # Orchestra) instead of the fleet admin key.
             resp = http.get(
-                f"{base_url}/admin/assistant",
-                headers={"Authorization": f"Bearer {admin_key}"},
-                params={"agent_id": int(agent_id), "from_fields": "secrets"},
+                f"{base_url}/assistant/{int(agent_id)}/secrets",
+                headers={"Authorization": f"Bearer {unify_key}"},
                 timeout=15,
             )
             if resp.status_code != 200:
                 return
             payload = resp.json()
-            items = payload.get("info", [])
-            if not items:
-                return
-            secrets_dict: dict = items[0].get("secrets") or {}
+            secrets_dict: dict = payload.get("secrets") or {}
         except Exception:
             return
 
@@ -507,8 +505,8 @@ class SecretManager(BaseSecretManager):
             return
 
         base_url = SETTINGS.ORCHESTRA_URL
-        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-        if not base_url or not admin_key:
+        unify_key = SESSION_DETAILS.unify_key
+        if not base_url or not unify_key:
             return
 
         from unisdk.utils import http
@@ -516,8 +514,8 @@ class SecretManager(BaseSecretManager):
         from unify.provider_proxy.policy import get_policy_store
 
         resp = http.get(
-            f"{base_url}/admin/assistant/{int(agent_id)}/workspace-file-access",
-            headers={"Authorization": f"Bearer {admin_key}"},
+            f"{base_url}/assistant/{int(agent_id)}/workspace-file-access",
+            headers={"Authorization": f"Bearer {unify_key}"},
             timeout=15,
         )
         if resp.status_code != 200:

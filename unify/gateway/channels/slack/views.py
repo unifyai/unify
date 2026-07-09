@@ -30,6 +30,10 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.settings import SETTINGS
 
 logger = logging.getLogger("unify.gateway.channels.slack.views")
@@ -136,6 +140,7 @@ async def upsert_install(request: Request):
     Idempotent: re-installing the same workspace updates the stored
     token and scopes (Slack rotates bot tokens on reinstall).
     """
+    require_gateway_admin(request)
     data = await request.json()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -172,6 +177,7 @@ async def send_slack_message(request: Request):
     thread_ts = data.get("thread_ts")
     user_id = data.get("user_id")
     channel_id = data.get("channel_id")
+    await require_assistant_ownership(request, data.get("assistant_id"))
 
     if not channel_id and not user_id:
         raise HTTPException(
@@ -361,8 +367,9 @@ async def slack_user_by_email(request: Request):
 
 
 @auth_router.get("/status")
-async def status():
+async def status(request: Request):
     """List workspace installs known to Orchestra."""
+    require_gateway_admin(request)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.ORCHESTRA_URL}/admin/slack/installs",

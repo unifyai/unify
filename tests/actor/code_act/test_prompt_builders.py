@@ -519,6 +519,54 @@ def test_computer_environment_prompt_context_from_registry():
     assert "get_content" in context
     # Docstrings should include parameter documentation
     assert "Parameters" in context
+    # Managed desktop layout anchors (full contract in dedicated test)
+    assert "HOME=/Unity" in context
+    assert "/Unity/Downloads" in context
+
+
+@pytest.mark.timeout(30)
+def test_computer_environment_managed_desktop_filesystem_paths():
+    """Computer prompt teaches VM home/Downloads layout, not /home/unityuser."""
+    from unify.function_manager.primitives import ComputerPrimitives
+    from unify.actor.environments.computer import ComputerEnvironment
+
+    context = ComputerEnvironment(
+        ComputerPrimitives(computer_mode="mock"),
+    ).get_prompt_context()
+
+    assert "#### Managed desktop filesystem" in context
+    assert "HOME=/Unity" in context
+    assert "/Unity/Downloads" in context
+    assert "/Unity/Local" in context
+    assert "Unity > Downloads" in context
+    assert "not `/home/unityuser`" in context
+    assert "/home/unityuser/Unity/Downloads" in context
+    assert "on this VM desktop only" in context
+    # Section sits before the your-vs-user desktop split
+    assert context.index("#### Managed desktop filesystem") < context.index(
+        "### Your Desktop vs. a User's Desktop",
+    )
+
+
+@pytest.mark.timeout(30)
+def test_filesystem_context_distinguishes_pod_workspace_from_managed_desktop():
+    """Filesystem Context is the pod Local workspace, distinct from /Unity."""
+    from unify.actor.prompt_builders import _build_filesystem_context
+    from unify.file_manager.settings import get_local_root
+
+    section = _build_filesystem_context()
+    local_root = get_local_root()
+
+    assert "### Filesystem Context" in section
+    assert "local (pod) workspace" in section
+    assert local_root in section
+    assert "/Unity/Downloads" in section
+    assert "/Unity/Local" in section
+    assert "Managed desktop filesystem" in section
+    assert "do not treat them as this pod workspace" in section
+    assert "unityuser" in section
+    assert "/home/unityuser" in section
+    assert "not the desktop home" in section
 
 
 # ────────────────────────────────────────────────────────────────────────────

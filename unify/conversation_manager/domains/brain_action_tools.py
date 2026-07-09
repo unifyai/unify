@@ -2234,53 +2234,6 @@ class ConversationManagerBrainActionTools:
         """
         return await self._cm._patch_coordinator_onboarding_active(active=True)
 
-    async def prepare_desktop(self) -> dict[str, Any]:
-        """Warm up the managed desktop VM ahead of a computer demo or act.
-
-        Call this when a task will need the desktop soon — for example the My
-        Computer onboarding demo — then continue the conversation. Typical boot
-        takes 30–60 seconds; I receive a notification when my computer is ready
-        and can ring the user or start the demo then.
-
-        Returns immediately while the warm-up runs in the background. Safe to
-        call again while warming — concurrent triggers coalesce onto one boot.
-        """
-        from unify.conversation_manager.domains.desktop_session import (
-            desktop_agent_session_cached,
-            desktop_session_ensure_in_flight,
-            has_managed_desktop_runtime,
-            schedule_ensure_desktop_session,
-        )
-
-        if not has_managed_desktop_runtime():
-            return {
-                "status": "unavailable",
-                "message": "This assistant has no managed desktop runtime.",
-            }
-
-        if desktop_agent_session_cached():
-            return {
-                "status": "ready",
-                "message": "My computer is already ready.",
-            }
-
-        if self._cm.vm_ready:
-            warming_message = (
-                "VM is up; finishing session setup. I'll get a notification "
-                "when my computer is ready."
-            )
-        else:
-            warming_message = (
-                "Desktop warming up — I'll get a notification when my computer "
-                "is ready."
-            )
-
-        if desktop_session_ensure_in_flight():
-            return {"status": "warming", "message": warming_message}
-
-        schedule_ensure_desktop_session(self._cm)
-        return {"status": "warming", "message": warming_message}
-
     async def set_onboarding_task_state(
         self,
         step_id: str,
@@ -2714,12 +2667,6 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
-        from unify.conversation_manager.domains.desktop_session import (
-            has_managed_desktop_runtime,
-        )
-
-        if has_managed_desktop_runtime():
-            tools["prepare_desktop"] = self.prepare_desktop
         if SETTINGS.DEMO_MODE:
             tools["set_boss_details"] = self.set_boss_details
         elif self._cm.initialized:

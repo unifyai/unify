@@ -32,6 +32,10 @@ from fastapi import APIRouter, HTTPException, Request
 
 from unify.gateway.channels.discord import bot_manager
 from unify.gateway.channels.discord.gateway import DISCORD_API_BASE
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.settings import SETTINGS
 
 logger = logging.getLogger("unify.gateway.channels.discord.views")
@@ -99,6 +103,7 @@ async def send_discord_message(request: Request):
     media_url = data.get("media_url")
     channel_id = data.get("channel_id")
     to = data.get("to")
+    await require_assistant_ownership(request, assistant_id)
 
     if channel_id:
         pool_bot_id = data.get("bot_id")
@@ -182,6 +187,7 @@ async def register_bot(request: Request):
 
     Body: ``{"bot_id": str, "assistant_id": int, "bot_token": str}``
     """
+    require_gateway_admin(request)
     data = await request.json()
     bot_id = data["bot_id"]
     bot_token = data.get("bot_token")
@@ -203,8 +209,9 @@ async def register_bot(request: Request):
 
 
 @router.post("/sync")
-async def sync_pool():
+async def sync_pool(request: Request):
     """Re-sync bot pool state from Orchestra."""
+    require_gateway_admin(request)
     count = await bot_manager.sync_from_orchestra()
     return {"synced": count, "pool": bot_manager.get_all_status()}
 
@@ -220,6 +227,7 @@ async def deregister_bot(request: Request):
 
     Body: ``{"bot_id": "<discord bot user ID>"}``.
     """
+    require_gateway_admin(request)
     data = await request.json()
     bot_id = data["bot_id"]
     await bot_manager.disconnect_bot(bot_id)
@@ -232,8 +240,9 @@ async def deregister_bot(request: Request):
 
 
 @router.get("/status")
-async def bot_status():
+async def bot_status(request: Request):
     """Health check -- return connection status for all pool bots."""
+    require_gateway_admin(request)
     return bot_manager.get_all_status()
 
 

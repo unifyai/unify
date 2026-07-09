@@ -266,6 +266,7 @@ async def ms_teams_bot_messages_webhook(
             "is_channel": conversation_type != "personal",
             "attachments": _normalize_attachments(activity.get("attachments") or []),
             "routing_metadata": data.get("routing_metadata") or {},
+            "sender_is_owner": bool(data.get("sender_is_owner")),
             "contacts": contacts,
         },
     )

@@ -846,7 +846,12 @@ class SessionExecutor:
             else:
                 sb.global_state.pop("__notification_up_q__", None)
             try:
-                return await sb.execute(code, timeout=self._timeout)
+                from unify.provider_proxy.session import (
+                    scrub_platform_secrets_from_environ,
+                )
+
+                with scrub_platform_secrets_from_environ():
+                    return await sb.execute(code, timeout=self._timeout)
             finally:
                 if previous_notification_q is notification_sentinel:
                     sb.global_state.pop("__notification_up_q__", None)
@@ -1258,12 +1263,18 @@ async def _execute_shell_stateless(
     else:
         raise ValueError(f"Unsupported shell language: {language}")
 
+    # Sanitize the child env: no raw provider tokens or platform superuser
+    # secrets (e.g. ORCHESTRA_ADMIN_KEY) reach the ephemeral shell. Without an
+    # explicit ``env=`` the subprocess would inherit the full pod environment.
+    from unify.provider_proxy.session import build_sandbox_env
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=build_sandbox_env(),
         )
         stdout_b, stderr_b = await proc.communicate()
         return {
