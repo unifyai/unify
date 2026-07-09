@@ -73,6 +73,18 @@ class RepeatPattern(BaseModel):
             "by the scheduler."
         ),
     )
+    jitter_seconds: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Maximum random delay, in seconds, added to each occurrence's "
+            "dispatch time. None/0 fires exactly on the computed slot. A "
+            "positive value de-correlates a recurring job from the wall clock "
+            "(e.g. a browser scrape that shouldn't run at a predictable time). "
+            "The jitter is applied to the dispatch time only; the canonical "
+            "anchor is preserved across re-arms so occurrences never drift."
+        ),
+    )
 
     @field_validator("weekdays")
     def _weekdays_only_for_weekly(cls, v, info):
@@ -211,6 +223,31 @@ def next_repeated_start_at(
     if not candidates:
         return None
     return min(candidates)
+
+
+def max_jitter_seconds(patterns) -> int:
+    """Largest ``jitter_seconds`` declared across ``patterns`` (0 when unset).
+
+    Accepts a list of :class:`RepeatPattern` or the equivalent dicts (the shape
+    seen before validation), so callers on either side of (de)serialization can
+    use it. A single job-level value is intentional: multiple patterns on one
+    task describe alternative slots of the *same* job, so they share one jitter
+    budget rather than compounding.
+    """
+
+    if not patterns:
+        return 0
+    best = 0
+    for pattern in patterns:
+        if isinstance(pattern, dict):
+            value = pattern.get("jitter_seconds")
+        else:
+            value = getattr(pattern, "jitter_seconds", None)
+        try:
+            best = max(best, int(value or 0))
+        except (TypeError, ValueError):
+            continue
+    return best
 
 
 def _next_pattern_occurrence(
