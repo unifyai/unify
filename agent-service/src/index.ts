@@ -706,6 +706,7 @@ const getLaunchOptions = (
   downloadsPath: string | null = null,
   tracesDir: string | null = null,
   storageStateName: string | null = null,
+  stealth: boolean = false,
 ) => {
   // ``storageStateName`` is forwarded to magnitude-core's BrowserProvider,
   // which loads ~/.magnitude/browser_states/<safeName>.json (cookies +
@@ -728,6 +729,12 @@ const getLaunchOptions = (
   };
   if (storageStateName) {
     opts.storageStateName = storageStateName;
+  }
+  // Opt-in anti-automation hardening (magnitude-core BrowserProvider applies
+  // it; see web/stealth.ts). Off unless the caller asks or MAGNITUDE_STEALTH
+  // is set in the process env.
+  if (stealth) {
+    opts.stealth = true;
   }
   return opts;
 };
@@ -763,6 +770,7 @@ const startBrowser = async (
   urlMappings?: Record<string, string>,
   storageStateName?: string,
   sessionMeta?: { sessionId?: string; sessionLabel?: string },
+  stealth: boolean = false,
 ): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
@@ -772,6 +780,7 @@ const startBrowser = async (
         defaultBrowserPaths.downloadsPath,
         defaultBrowserPaths.tracesDir,
         storageStateName ?? null,
+        stealth,
       ),
       narrate: true,
       urlMappings,
@@ -1217,7 +1226,7 @@ app.post('/start', async (req: Request, res: Response) => {
   // (cookies + localStorage + sessionStorage) before any page renders so
   // the new session boots already-authenticated. Currently only honoured
   // for ``mode === 'web'``.
-  const { headless, mode, label, urlMappings, storageStateName } = req.body;
+  const { headless, mode, label, urlMappings, storageStateName, stealth } = req.body;
   if (!mode || !['desktop', 'web', 'web-vm'].includes(mode)) {
     return res.status(400).json({
       error: 'bad_request',
@@ -1267,6 +1276,7 @@ app.post('/start', async (req: Request, res: Response) => {
         mappings,
         typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
         { sessionId, sessionLabel: label },
+        stealth === true,
       );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);
