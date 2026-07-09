@@ -16,9 +16,13 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from unify.gateway.common.auth import (
     admin_auth_dependency,
+    admin_or_user_auth_dependency,
     auth_admin_key,
+    auth_admin_or_user_key,
     authenticate_user_api_key,
     extract_api_key,
+    require_assistant_ownership,
+    require_gateway_admin,
 )
 
 
@@ -152,6 +156,184 @@ class TestAuthenticateUserApiKey:
 # ---------------------------------------------------------------------------
 # extract_api_key
 # ---------------------------------------------------------------------------
+
+
+def _blank_request() -> SimpleNamespace:
+    """Request stand-in with a writable, initially-empty ``state``."""
+    return SimpleNamespace(state=SimpleNamespace())
+
+
+# ---------------------------------------------------------------------------
+# auth_admin_or_user_key
+# ---------------------------------------------------------------------------
+
+
+class TestAuthAdminOrUserKey:
+    @pytest.mark.asyncio
+    async def test_admin_key_passes_and_marks_admin(
+        self,
+        _admin_settings: None,
+    ) -> None:
+        request = _blank_request()
+        await auth_admin_or_user_key(
+            request=request,
+            credentials=_bearer("test-admin-key"),
+        )
+        assert request.state.gateway_is_admin is True
+        assert not hasattr(request.state, "gateway_api_key")
+
+    @pytest.mark.asyncio
+    async def test_valid_user_key_passes_and_sets_state(
+        self,
+        _admin_settings: None,
+    ) -> None:
+        request = _blank_request()
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"user_id": "u-1"}
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=_async_client_returning(resp),
+        ):
+            await auth_admin_or_user_key(
+                request=request,
+                credentials=_bearer("sk-user"),
+            )
+        assert request.state.gateway_is_admin is False
+        assert request.state.gateway_api_key == "sk-user"  # pragma: allowlist secret
+        assert request.state.gateway_user == {"user_id": "u-1"}
+
+    @pytest.mark.asyncio
+    async def test_invalid_key_raises_401(self, _admin_settings: None) -> None:
+        request = _blank_request()
+        resp = MagicMock(status_code=401)
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=_async_client_returning(resp),
+        ):
+            with pytest.raises(HTTPException) as ctx:
+                await auth_admin_or_user_key(
+                    request=request,
+                    credentials=_bearer("sk-bad"),
+                )
+        assert ctx.value.status_code == 401
+        assert not hasattr(request.state, "gateway_is_admin")
+
+
+def test_admin_or_user_auth_dependency_shape() -> None:
+    """Dependency list is one Depends() wrapping auth_admin_or_user_key."""
+    assert len(admin_or_user_auth_dependency) == 1
+    dep = admin_or_user_auth_dependency[0]
+    assert dep.dependency is auth_admin_or_user_key
+
+
+# ---------------------------------------------------------------------------
+# require_assistant_ownership
+# ---------------------------------------------------------------------------
+
+
+def _user_key_request(api_key: str = "sk-user") -> SimpleNamespace:
+    return SimpleNamespace(
+        state=SimpleNamespace(gateway_is_admin=False, gateway_api_key=api_key),
+    )
+
+
+class TestRequireAssistantOwnership:
+    @pytest.mark.asyncio
+    async def test_admin_caller_bypasses(self, _admin_settings: None) -> None:
+        request = SimpleNamespace(state=SimpleNamespace(gateway_is_admin=True))
+        # No httpx patching: any HTTP call would blow up the test.
+        await require_assistant_ownership(request, 123)
+
+    @pytest.mark.asyncio
+    async def test_mount_without_dual_dependency_bypasses(
+        self,
+        _admin_settings: None,
+    ) -> None:
+        """Admin-only mounts never run the dual dependency; they stay trusted."""
+        await require_assistant_ownership(_blank_request(), 123)
+
+    @pytest.mark.asyncio
+    async def test_owned_assistant_passes(self, _admin_settings: None) -> None:
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"info": [{"agent_id": "123"}]}
+        client = _async_client_returning(resp)
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=client,
+        ):
+            await require_assistant_ownership(_user_key_request(), 123)
+        _, kwargs = client.get.call_args
+        assert kwargs["headers"] == {"Authorization": "Bearer sk-user"}
+        assert kwargs["params"] == {"agent_id": "123"}
+
+    @pytest.mark.asyncio
+    async def test_not_owned_raises_403(self, _admin_settings: None) -> None:
+        """Orchestra scopes results to the key's owner: 404 means not owned."""
+        resp = MagicMock(status_code=404)
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=_async_client_returning(resp),
+        ):
+            with pytest.raises(HTTPException) as ctx:
+                await require_assistant_ownership(_user_key_request(), 123)
+        assert ctx.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_empty_scoped_listing_raises_403(
+        self,
+        _admin_settings: None,
+    ) -> None:
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"info": []}
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=_async_client_returning(resp),
+        ):
+            with pytest.raises(HTTPException) as ctx:
+                await require_assistant_ownership(_user_key_request(), 123)
+        assert ctx.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_missing_agent_id_raises_403(self, _admin_settings: None) -> None:
+        with pytest.raises(HTTPException) as ctx:
+            await require_assistant_ownership(_user_key_request(), None)
+        assert ctx.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_orchestra_transport_error_raises_403(
+        self,
+        _admin_settings: None,
+    ) -> None:
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.get.side_effect = RuntimeError("connection refused")
+        with patch(
+            "unify.gateway.common.auth.httpx.AsyncClient",
+            return_value=client,
+        ):
+            with pytest.raises(HTTPException) as ctx:
+                await require_assistant_ownership(_user_key_request(), 123)
+        assert ctx.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# require_gateway_admin
+# ---------------------------------------------------------------------------
+
+
+class TestRequireGatewayAdmin:
+    def test_admin_caller_passes(self) -> None:
+        request = SimpleNamespace(state=SimpleNamespace(gateway_is_admin=True))
+        require_gateway_admin(request)
+
+    def test_mount_without_dual_dependency_passes(self) -> None:
+        require_gateway_admin(_blank_request())
+
+    def test_user_key_caller_raises_403(self) -> None:
+        request = _user_key_request()
+        with pytest.raises(HTTPException) as ctx:
+            require_gateway_admin(request)
+        assert ctx.value.status_code == 403
 
 
 class TestExtractApiKey:

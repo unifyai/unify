@@ -19,6 +19,10 @@ from unify.gateway.adapters.common import (
     required_contact_id,
     validate_attachments,
 )
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.gateway.context import GatewayContext, get_gateway_context
 from unify.settings import SETTINGS
 
@@ -79,10 +83,12 @@ def _normalize_int_list(value: Any) -> list[int]:
 
 @router.post("/unify/attachment")
 async def unify_attachment_upload(
+    request: Request,
     file: UploadFile = File(...),
     assistant_id: str | None = Form(default=None),
     context: GatewayContext = Depends(get_gateway_context),
 ) -> dict[str, Any]:
+    await require_assistant_ownership(request, assistant_id)
     content = await file.read()
     filename = _safe_filename(file.filename or "attachment")
     content_type = file.content_type or "application/octet-stream"
@@ -113,6 +119,7 @@ async def unify_message_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     if not assistant_id_input:
@@ -207,6 +214,7 @@ async def unify_org_chat_webhook(
     Publishes the Console frame to the per-organization topic and fans out
     standard ``unify_message`` envelopes to each listed assistant runtime.
     """
+    require_gateway_admin(request)
     payload = await request_payload(request)
     kind = str(payload.get("kind") or "")
     organization_id = payload.get("organization_id")
@@ -308,6 +316,7 @@ async def unify_reaction_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     if not assistant_id_input:
@@ -350,6 +359,7 @@ async def api_message_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     api_message_id = str(payload.get("api_message_id") or "")
@@ -397,6 +407,7 @@ async def unify_meet_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     room_name = str(payload.get("room_name") or "")
     if not room_name:
@@ -440,6 +451,7 @@ async def unity_system_event_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     event_type = str(payload.get("event_type") or "")
@@ -487,6 +499,7 @@ async def unity_pre_hire_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     if not assistant_id_input:
@@ -530,6 +543,7 @@ async def assistant_wakeup_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id = str(payload.get("assistant_id") or "")
     if not assistant_id:
@@ -547,6 +561,7 @@ async def assistant_update_webhook(
     request: Request,
     context: GatewayContext = Depends(get_gateway_context),
 ) -> Response:
+    require_gateway_admin(request)
     payload = await request_payload(request)
     assistant_id_input = str(payload.get("assistant_id") or "")
     update_kind = str(payload.get("update_kind") or "general")

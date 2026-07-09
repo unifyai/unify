@@ -16,10 +16,10 @@ All calls are best-effort: any failure is swallowed and logged at WARN.
 The transcript log path and the brain primitive path must never break
 because of an orchestra HTTP hiccup.
 
-Endpoints:
-    POST /admin/assistant/{assistant_id}/touch-activity
-    POST /admin/assistant/{assistant_id}/opt-out-followups
-    POST /admin/assistant/{assistant_id}/opt-in-followups
+Endpoints (assistant-scoped; authenticated with the assistant's own UNIFY_KEY):
+    POST /assistant/{assistant_id}/touch-activity
+    POST /assistant/{assistant_id}/opt-out-followups
+    POST /assistant/{assistant_id}/opt-in-followups
 """
 
 from __future__ import annotations
@@ -37,7 +37,10 @@ def _base_url() -> Optional[str]:
 
 
 def _admin_key() -> Optional[str]:
-    return SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value() or None
+    # The assistant's own key (Orchestra enforces per-assistant ownership).
+    from unify.session_details import SESSION_DETAILS
+
+    return SESSION_DETAILS.unify_key or None
 
 
 def touch_assistant_activity(assistant_id: int | str | None) -> bool:
@@ -73,7 +76,7 @@ def touch_assistant_activity(assistant_id: int | str | None) -> bool:
     try:
         from unisdk.utils import http
 
-        url = f"{base_url.rstrip('/')}/admin/assistant/{agent_id_int}/touch-activity"
+        url = f"{base_url.rstrip('/')}/assistant/{agent_id_int}/touch-activity"
         headers = {"Authorization": f"Bearer {admin_key}"}
         resp = http.post(url, headers=headers, timeout=10)
         if 200 <= resp.status_code < 300:
@@ -128,7 +131,7 @@ def _post_followup_admin_action(
     try:
         from unisdk.utils import http
 
-        url = f"{base_url.rstrip('/')}/admin/assistant/{agent_id_int}/{action_path}"
+        url = f"{base_url.rstrip('/')}/assistant/{agent_id_int}/{action_path}"
         headers = {"Authorization": f"Bearer {admin_key}"}
         resp = http.post(url, headers=headers, timeout=10)
         if 200 <= resp.status_code < 300:

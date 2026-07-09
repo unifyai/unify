@@ -36,13 +36,15 @@ _TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
 _TASK_RUNS_CONTEXT_LEAF = "Runs"
 _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
-_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
-_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
-_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
+# Assistant-scoped task-machine routes (authenticated with the assistant's own
+# UNIFY_KEY; Orchestra enforces ownership). Not the /admin/* variants.
+_TASK_RUN_CREATE_OR_ADOPT_PATH = "/task-run/create-or-adopt"
+_TASK_RUN_LATEST_PATH = "/task-run/latest"
+_TASK_RUN_UPDATE_PATH = "/task-run/update"
 _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
-    "/admin/task-outbound-operation/create-or-adopt"
+    "/task-outbound-operation/create-or-adopt"
 )
-_TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/admin/task-outbound-operation/update"
+_TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/task-outbound-operation/update"
 _TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
 _ACTIVATION_QUERY_FIELDS = [
     "assistant_id",
@@ -922,19 +924,23 @@ def _orchestra_admin_post(
     path: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """POST one task-machine admin payload back to Orchestra."""
+    """POST one task-machine payload back to Orchestra as this assistant.
+
+    Authenticates with the assistant's own ``UNIFY_KEY``; Orchestra scopes the
+    operation to the assistant referenced in the payload (ownership-checked).
+    """
 
     orchestra_url = (SETTINGS.ORCHESTRA_URL or "").rstrip("/")
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-    if not orchestra_url or not admin_key:
+    unify_key = SESSION_DETAILS.unify_key
+    if not orchestra_url or not unify_key:
         logger.warning(
-            "Skipping task-run persistence because ORCHESTRA_URL or ORCHESTRA_ADMIN_KEY is missing.",
+            "Skipping task-run persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
         )
         return None
     response = requests.post(
         f"{orchestra_url}{path}",
         json=dict(payload),
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"Authorization": f"Bearer {unify_key}"},
         timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
