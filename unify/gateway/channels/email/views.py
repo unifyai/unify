@@ -41,6 +41,7 @@ from unify.gateway.channels.outlook.views import (
     get_outlook_attachment,
     send_outlook_email,
 )
+from unify.gateway.common.auth import require_assistant_ownership
 from unify.gateway.common.orchestra import lookup_assistant, lookup_assistant_by_id
 from unify.gateway.credentials import EnvCredentialStore
 from unify.settings import SETTINGS
@@ -127,10 +128,13 @@ async def send_email(request: Request):
 
     forwarded = await _clone_request(request, body_bytes)
     if _is_shared_coordinator_email(sender):
+        # The shared coordinator mailbox has no per-assistant owner to
+        # verify; access still requires a valid admin or user key.
         return await gmail_send_email(forwarded)
 
     credentials = EnvCredentialStore()
     assistant = await _resolve_send_assistant(data, sender, credentials)
+    await require_assistant_ownership(request, assistant.get("agent_id"))
 
     if _is_outlook_assistant(assistant):
         return await send_outlook_email(forwarded, assistant=assistant)
@@ -145,6 +149,7 @@ async def send_email(request: Request):
 
 @router.get("/attachment")
 async def get_attachment(
+    request: Request,
     receiver_email: str,
     message_id: str,
     attachment_id: str,
@@ -165,6 +170,7 @@ async def get_attachment(
 
     credentials = EnvCredentialStore()
     assistant = await lookup_assistant(receiver_email, credentials)
+    await require_assistant_ownership(request, assistant.get("agent_id"))
     if _is_outlook_assistant(assistant):
         return await get_outlook_attachment(
             user_email=receiver_email,

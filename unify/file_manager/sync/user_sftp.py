@@ -405,24 +405,22 @@ class UserHomeSFTP:
 
         assistant_id = SESSION_DETAILS.assistant.agent_id
         base_url = SETTINGS.ORCHESTRA_URL
-        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
-        if assistant_id is None or not base_url or not admin_key:
+        unify_key = SESSION_DETAILS.unify_key
+        if assistant_id is None or not base_url or not unify_key:
             return None
 
+        # Assistant-scoped read (own UNIFY_KEY, ownership-checked). Keys live in
+        # the runtime-only ``user_desktop_filesync_keys`` map keyed by owner.
         resp = http.get(
-            f"{base_url}/admin/assistant",
-            headers={"Authorization": f"Bearer {admin_key}"},
-            params={"agent_id": str(assistant_id)},
+            f"{base_url}/assistant/{int(assistant_id)}/desktop-filesync-key",
+            headers={"Authorization": f"Bearer {unify_key}"},
             timeout=30,
         )
         if resp.status_code != 200:
             LOGGER.error(
-                f"{ICONS['file_sync']} [UserSFTP] admin read failed: "
+                f"{ICONS['file_sync']} [UserSFTP] assistant read failed: "
                 f"{resp.status_code}",
             )
             return None
-        assistants = resp.json().get("info", [])
-        if not assistants:
-            return None
-        keys = assistants[0].get("user_desktop_filesync_keys") or {}
+        keys = resp.json().get("user_desktop_filesync_keys") or {}
         return keys.get(self._user_id)

@@ -13,7 +13,18 @@ from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
 load_dotenv()
-headers = {"Authorization": f"Bearer {SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()}"}
+
+
+def _assistant_headers() -> dict:
+    """Bearer headers authenticating a gateway call as this assistant.
+
+    Outbound channel calls to the hosted gateway carry the assistant's
+    own user API key; the gateway validates the key and verifies the
+    acting assistant belongs to the key's owner (the admin key remains
+    accepted for control-plane callers).
+    """
+    return {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
+
 
 # Lazily initialized publisher (avoids import-time GCP auth failures in tests)
 _publisher = None
@@ -177,11 +188,12 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/send-text",
-            headers=headers,
+            headers=_assistant_headers(),
             json={
                 "From": from_number,
                 "To": to_number,
                 "Body": content,
+                "assistant_id": SESSION_DETAILS.assistant.agent_id,
             },
         ) as response:
             try:
@@ -238,7 +250,7 @@ async def send_whatsapp_message(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/whatsapp/send",
-            headers=headers,
+            headers=_assistant_headers(),
             json=payload,
         ) as response:
             try:
@@ -264,7 +276,7 @@ async def get_whatsapp_window(to_number: str) -> bool | None:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(
                 f"{_gateway_comms_base_url()}/whatsapp/window",
-                headers=headers,
+                headers=_assistant_headers(),
                 params={"to": to_number, "assistant_id": agent_id},
             ) as response:
                 response.raise_for_status()
@@ -286,17 +298,19 @@ def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
     to other runtimes, so AI messages cannot cascade.
     """
     base_url = SETTINGS.ORCHESTRA_URL or ""
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value() or ""
+    unify_key = SESSION_DETAILS.unify_key or ""
     agent_id = SESSION_DETAILS.assistant.agent_id
-    if not base_url or not admin_key or agent_id is None:
+    if not base_url or not unify_key or agent_id is None:
         return {"success": False, "error": "orchestra config missing"}
     try:
         from unisdk.utils import http
 
+        # Assistant-scoped team post (own UNIFY_KEY; Orchestra verifies the
+        # assistant's team membership). assistant_id comes from the path.
         response = http.post(
-            f"{base_url.rstrip('/')}/admin/teams/{int(team_id)}/messages",
-            headers={"Authorization": f"Bearer {admin_key}"},
-            json={"assistant_id": int(agent_id), "content": content},
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/teams/{int(team_id)}/messages",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            json={"content": content},
             timeout=15,
         )
         if 200 <= response.status_code < 300:
@@ -557,8 +571,8 @@ async def complete_api_message(
         body["tags"] = tags
     async with aiohttp.ClientSession() as session:
         async with session.put(
-            f"{orchestra_url}/admin/messages/{api_message_id}/complete",
-            headers=headers,
+            f"{orchestra_url}/messages/{api_message_id}/complete",
+            headers=_assistant_headers(),
             json=body,
         ) as resp:
             try:
@@ -667,18 +681,27 @@ async def request_deferred_desktop_binding(assistant_id: int | str) -> None:
     if not base_url:
         return
     url = f"{base_url.rstrip('/')}/infra/runtime/{assistant_id}/request-desktop"
+    # Self-scoped: authenticate as this assistant; Comms verifies the key
+    # against the assistant's own session (no platform admin key needed).
+    self_headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
-                headers=headers,
+                headers=self_headers,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
+                body = await resp.text()
                 if resp.status >= 400:
-                    body = await resp.text()
                     LOGGER.warning(
                         f"{ICONS['comms_outbound']} request-desktop failed "
                         f"({resp.status}): {body[:200]}",
+                    )
+                    return
+                if '"addon_not_enabled"' in body:
+                    LOGGER.info(
+                        f"{ICONS['comms_outbound']} request-desktop skipped: "
+                        "Computer Use add-on not enabled",
                     )
     except Exception as e:
         LOGGER.warning(
@@ -731,7 +754,7 @@ async def upload_unify_attachment(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             upload_url,
-            headers=headers,
+            headers=_assistant_headers(),
             data=form_data,
         ) as response:
             try:
@@ -803,7 +826,7 @@ async def send_discord_message(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{SETTINGS.conversation.COMMS_URL}/discord/send",
-            headers=headers,
+            headers=_assistant_headers(),
             json=payload,
         ) as response:
             try:
@@ -868,7 +891,7 @@ async def send_slack_message(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{SETTINGS.conversation.COMMS_URL}/slack/send",
-            headers=headers,
+            headers=_assistant_headers(),
             json=payload,
         ) as response:
             try:
@@ -921,7 +944,7 @@ async def send_ms_teams_bot_message(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{SETTINGS.conversation.COMMS_URL}/ms-teams-bot/send",
-            headers=headers,
+            headers=_assistant_headers(),
             json=payload,
         ) as response:
             try:
@@ -952,7 +975,7 @@ async def resolve_slack_user_profile(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{SETTINGS.conversation.COMMS_URL}/slack/user-info",
-            headers=headers,
+            headers=_assistant_headers(),
             json={"team_id": team_id, "slack_user_id": slack_user_id},
         ) as response:
             try:
@@ -983,7 +1006,7 @@ async def resolve_slack_user_id_by_email(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{SETTINGS.conversation.COMMS_URL}/slack/user-by-email",
-            headers=headers,
+            headers=_assistant_headers(),
             json={"team_id": team_id, "email": email},
         ) as response:
             try:
@@ -1055,7 +1078,11 @@ async def send_teams_message(
     )
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
+            async with session.post(
+                url,
+                headers=_assistant_headers(),
+                json=payload,
+            ) as response:
                 try:
                     response.raise_for_status()
                 except Exception as e:
@@ -1125,7 +1152,11 @@ async def create_teams_chat(
     )
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
+            async with session.post(
+                url,
+                headers=_assistant_headers(),
+                json=payload,
+            ) as response:
                 try:
                     response.raise_for_status()
                 except Exception as e:
@@ -1204,7 +1235,11 @@ async def create_teams_channel(
     )
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
+            async with session.post(
+                url,
+                headers=_assistant_headers(),
+                json=payload,
+            ) as response:
                 try:
                     response.raise_for_status()
                 except Exception as e:
@@ -1290,7 +1325,11 @@ async def create_teams_meet(
     )
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
+            async with session.post(
+                url,
+                headers=_assistant_headers(),
+                json=payload,
+            ) as response:
                 try:
                     response.raise_for_status()
                 except Exception as e:
@@ -1378,7 +1417,7 @@ async def send_email_via_address(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/email/send",
-            headers=headers,
+            headers=_assistant_headers(),
             json=payload,
         ) as response:
             try:
@@ -1410,7 +1449,7 @@ async def start_call(to_number: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/send-call",
-            headers=headers,
+            headers=_assistant_headers(),
             json={
                 "From": from_number,
                 "To": to_number,
@@ -1457,7 +1496,7 @@ async def start_whatsapp_call(
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/whatsapp/send-call",
-            headers=headers,
+            headers=_assistant_headers(),
             json={
                 "to": to_number,
                 "assistant_id": agent_id,
@@ -1498,7 +1537,7 @@ async def end_phone_conference(conference_name: str) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/end-conference",
-            headers=headers,
+            headers=_assistant_headers(),
             json={"ConferenceName": conference_name},
         ) as response:
             try:
@@ -1532,7 +1571,7 @@ async def hang_up_call(call_sid: str) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_gateway_comms_base_url()}/phone/hang-up-call",
-            headers=headers,
+            headers=_assistant_headers(),
             json={"CallSid": call_sid},
         ) as response:
             try:
@@ -1545,6 +1584,15 @@ async def hang_up_call(call_sid: str) -> dict:
             return await response.json()
 
 
+def _whatsapp_pending_call_intent_url() -> str:
+    """Assistant-scoped pending-call-intent endpoint for this assistant."""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    return (
+        f"{SETTINGS.ORCHESTRA_URL}/assistant/{int(agent_id)}"
+        "/whatsapp/pending-call-intent"
+    )
+
+
 async def store_pending_whatsapp_call_intent(
     *,
     pool_number: str,
@@ -1553,8 +1601,8 @@ async def store_pending_whatsapp_call_intent(
 ) -> None:
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
-            headers=headers,
+            _whatsapp_pending_call_intent_url(),
+            headers=_assistant_headers(),
             json={
                 "pool_number": pool_number,
                 "contact_number": contact_number,
@@ -1571,8 +1619,8 @@ async def get_pending_whatsapp_call_intent(
 ) -> dict | None:
     async with aiohttp.ClientSession() as session:
         async with session.get(
-            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
-            headers=headers,
+            _whatsapp_pending_call_intent_url(),
+            headers=_assistant_headers(),
             params={
                 "pool_number": pool_number,
                 "contact_number": contact_number,
@@ -1591,8 +1639,8 @@ async def clear_pending_whatsapp_call_intent(
 ) -> None:
     async with aiohttp.ClientSession() as session:
         async with session.delete(
-            f"{SETTINGS.ORCHESTRA_URL}/admin/whatsapp/pending-call-intent",
-            headers=headers,
+            _whatsapp_pending_call_intent_url(),
+            headers=_assistant_headers(),
             params={
                 "pool_number": pool_number,
                 "contact_number": contact_number,
@@ -1636,7 +1684,11 @@ async def add_email_attachments(
                         "message_id": message_id,
                         "attachment_id": att_id,
                     }
-                    async with session.get(url, headers=headers, params=params) as resp:
+                    async with session.get(
+                        url,
+                        headers=_assistant_headers(),
+                        params=params,
+                    ) as resp:
                         data = await resp.read()
 
                 display_name = await asyncio.to_thread(

@@ -52,6 +52,10 @@ from unify.gateway.adapters.common import (
     get_assistant,
     publish_runtime_event,
 )
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.gateway.common.callbacks import twilio_callback_url
 from unify.gateway.common.livekit import ensure_phone_dispatch_rule, make_sip_uri
 from unify.gateway.common.twilio import build_twilio_wa_client
@@ -262,6 +266,7 @@ def _resolve_media_url(url: str, credentials: CredentialStore) -> str:
 @auth_router.post("/notify")
 async def notify(request: Request):
     """Send number-change template notifications to affected users."""
+    require_gateway_admin(request)
     credentials = EnvCredentialStore()
     data = await request.json()
     from_number = data["from_number"]
@@ -316,6 +321,7 @@ async def send(request: Request):
     user_name = data.get("user_name", "")
     agent_name = data.get("agent_name", "")
     media_url = data.get("media_url")
+    await require_assistant_ownership(request, assistant_id)
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -367,6 +373,7 @@ async def send(request: Request):
 
 @auth_router.get("/window")
 async def window(
+    request: Request,
     to: str = Query(..., description="Recipient WhatsApp number (E.164)."),
     assistant_id: int = Query(..., description="Sending assistant id."),
 ):
@@ -377,6 +384,7 @@ async def window(
     template placeholder rather than the verbatim body. Orchestra owns the
     authoritative window state; this just surfaces its routing answer.
     """
+    await require_assistant_ownership(request, assistant_id)
     route = await _resolve_route(assistant_id, to)
     return {"window_open": route["window_open"]}
 
@@ -1019,6 +1027,7 @@ async def send_call(request: Request):
     room_name = data["room_name"]
     allow_permission_probe = bool(data.get("allow_permission_probe"))
     pending_call_opener = str(data.get("pending_call_opener") or "")
+    await require_assistant_ownership(request, assistant_id)
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -1317,6 +1326,7 @@ async def _provision_gb_phone_number(credentials: CredentialStore) -> str:
 @auth_router.post("/create")
 async def create_whatsapp_sender(request: Request):
     """Provision (optionally) and register a new WhatsApp Sender."""
+    require_gateway_admin(request)
     credentials = EnvCredentialStore()
     data = await request.json()
     phone_number = data.get("phone_number")
@@ -1366,6 +1376,7 @@ async def create_whatsapp_sender(request: Request):
 @auth_router.delete("/delete")
 async def delete_whatsapp_sender(request: Request):
     """Delete a WhatsApp Sender from Twilio."""
+    require_gateway_admin(request)
     credentials = EnvCredentialStore()
     data = await request.json()
     sid = data["sid"]
@@ -1384,6 +1395,7 @@ async def delete_whatsapp_sender(request: Request):
 @auth_router.post("/assign")
 async def assign_whatsapp_sender(request: Request):
     """Assign a pool number to an assistant via Orchestra."""
+    require_gateway_admin(request)
     data = await request.json()
     assistant_id = data["assistant_id"]
 

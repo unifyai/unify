@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import (
     Any,
     Callable,
@@ -66,10 +66,8 @@ from .machine_state import (
     TaskRunProvenance,
     build_task_run_key,
     consume_live_task_run_provenance,
-    latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
     source_type_from_activation_reason,
-    update_task_run_record,
 )
 from .prompt_builders import (
     build_ask_prompt,
@@ -784,23 +782,23 @@ class TaskScheduler(BaseTaskScheduler):
                 f"activation_scheduled_for={provenance_scheduled_for}.",
             )
 
-    def _reconcile_offline_active_blockers(
+    def _same_instance_already_active(
         self,
         *,
         task_id: int,
         provenance: TaskRunProvenance | None,
     ) -> bool:
-        """Fail stale same-task active rows before a headless retry starts."""
+        """Return True when provenance targets an instance that is already active.
 
-        if (
-            provenance is None
-            or provenance.execution_mode != "offline"
-            or provenance.source_type not in {"scheduled", "triggered"}
-            or provenance.source_task_log_id is None
-        ):
+        Concurrent instances of the same ``task_id`` are allowed. The only
+        blocked case is restarting the exact source instance that is already
+        ``active`` (same ``source_task_log_id``).
+        """
+
+        if provenance is None or provenance.source_task_log_id is None:
             return False
 
-        active_rows: list[tuple[str, unisdk.Log]] = []
+        source_task_log_id = int(provenance.source_task_log_id)
         for context_name in self._read_task_contexts():
             store = self._store_for_task_context(context_name)
             rows = store.get_rows(
@@ -808,55 +806,9 @@ class TaskScheduler(BaseTaskScheduler):
                 return_ids_only=False,
             )
             for row in rows:
-                active_rows.append((context_name, row))
-
-        if not active_rows:
-            return True
-
-        stale_rows: list[tuple[str, unisdk.Log]] = []
-        for context_name, row in active_rows:
-            if int(row.id) == int(provenance.source_task_log_id):
-                return False
-            stale_rows.append((context_name, row))
-
-        if not stale_rows:
-            return True
-
-        now = datetime.now(timezone.utc).isoformat()
-        for context_name, row in stale_rows:
-            entries = dict(row.entries or {})
-            reconciliation_info = (
-                "Task instance marked failed by offline lifecycle reconciliation. "
-                f"The headless execution for source_task_log_id={row.id} left "
-                "the row active without a live scheduler handle; "
-                f"reconciled_at={now}; "
-                f"next_source_task_log_id={provenance.source_task_log_id}."
-            )
-            store = self._store_for_task_context(context_name)
-            store.update(
-                logs=row.id,
-                entries={
-                    "status": Status.failed,
-                    "info": reconciliation_info,
-                },
-            )
-            run_reference = latest_task_run_reference_for_source(
-                assistant_id=provenance.assistant_id,
-                task_id=task_id,
-                source_task_log_id=int(row.id),
-            )
-            update_task_run_record(
-                run_reference,
-                {
-                    "state": "failed",
-                    "completed_at": now,
-                    "error": reconciliation_info,
-                    "result_summary": None,
-                    "reconciled_at": now,
-                    "reconciliation_reason": "offline_active_row_reconciliation",
-                },
-            )
-        return True
+                if int(row.id) == source_task_log_id:
+                    return True
+        return False
 
     @functools.wraps(BaseTaskScheduler.ask, updated=())
     @log_manager_call(
@@ -1044,28 +996,29 @@ class TaskScheduler(BaseTaskScheduler):
             raise ValueError(f"No runnable task found with id={task_id}")
         task = sorted(candidate_tasks, key=lambda t: t.instance_id)[0]
 
-        this_task_orphan = any(t.status == Status.active for t in all_task_instances)
-        if this_task_orphan:
-            source_type = (
-                "triggered"
-                if trigger_attempt_token
-                else source_type_from_activation_reason(
-                    (_activated_by or ActivatedBy.explicit).value,
-                )
+        # Concurrent instances of the same task_id are allowed. Only block when
+        # activation provenance targets an instance that is already active.
+        source_type = (
+            "triggered"
+            if trigger_attempt_token
+            else source_type_from_activation_reason(
+                (_activated_by or ActivatedBy.explicit).value,
             )
-            provenance = peek_live_task_run_provenance(
-                assistant_id=SESSION_DETAILS.assistant.agent_id,
-                task_id=task_id,
-                source_type=source_type,
-                trigger_attempt_token=trigger_attempt_token,
+        )
+        pending_provenance = peek_live_task_run_provenance(
+            assistant_id=SESSION_DETAILS.assistant.agent_id,
+            task_id=task_id,
+            source_type=source_type,
+            trigger_attempt_token=trigger_attempt_token,
+        )
+        if self._same_instance_already_active(
+            task_id=task_id,
+            provenance=pending_provenance,
+        ):
+            raise RuntimeError(
+                f"Task {task_id} instance source_task_log_id="
+                f"{pending_provenance.source_task_log_id} is already active.",
             )
-            if not self._reconcile_offline_active_blockers(
-                task_id=task_id,
-                provenance=provenance,
-            ):
-                raise RuntimeError(
-                    f"Task {task_id} is already active with no live handle – reconcile state before retrying.",
-                )
 
         if _activated_by is not None:
             reason = _activated_by

@@ -237,7 +237,25 @@ class ComputerEnvironment(BaseEnvironment):
             "visible web) hit the topmost window at the given coordinates.  "
             "If the target window is behind another, bring it to the front "
             "first or use `act()` with a natural-language instruction that "
-            "includes focusing the correct window.",
+            "includes focusing the correct window.\n\n"
+            "#### Managed desktop filesystem\n\n"
+            "The managed VM desktop is a separate filesystem from the local "
+            "`execute_code` workspace.  Layout:\n"
+            "- Desktop login name: `unityuser`.  Home is **`HOME=/Unity`** -- "
+            "not `/home/unityuser` (that is not the desktop home).\n"
+            "- Browser / XDG Downloads: **`/Unity/Downloads`**.\n"
+            "- Synced workspace on the VM: **`/Unity/Local`** (bisync with the "
+            "local pod workspace under Filesystem Context).\n"
+            "- Other XDG dirs sit beside Downloads under `/Unity/` "
+            "(Desktop, Documents, Pictures, ...).\n\n"
+            "Path reading rules (on this VM desktop only):\n"
+            "- A file-dialog or Thunar breadcrumb like `Unity > Downloads` "
+            "means absolute **`/Unity/Downloads`** -- the home folder itself is "
+            "named `Unity`.  Do not expand that breadcrumb as "
+            "`~/Unity/Downloads` or `/home/unityuser/Unity/Downloads`.\n"
+            "- Do not invent `/home/unityuser/...` from the panel username.\n"
+            "- When reporting a saved or opened desktop path, use the absolute "
+            "`/Unity/...` path you actually used.",
         )
 
         parts.append(
