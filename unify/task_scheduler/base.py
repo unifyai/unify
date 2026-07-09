@@ -311,7 +311,8 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         RuntimeError
             If activation provenance targets an instance that is already active.
         ValueError
-            When ``task_id`` cannot be found or is not runnable.
+            When ``task_id`` cannot be found, is not runnable, or is disabled
+            (``enabled=False``). Disabled tasks must be re-enabled before execute.
         """
 
     @abstractmethod

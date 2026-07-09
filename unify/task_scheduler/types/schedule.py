@@ -10,6 +10,16 @@ class Schedule(BaseModel):
         default=None,
         description="The scheduled start time for the task in ISO-8601 format.",
     )
+    jitter_applied_seconds: Optional[float] = Field(
+        default=None,
+        description=(
+            "Bookkeeping: random jitter (in seconds) already baked into "
+            "``start_at`` for this occurrence. The re-arm subtracts it to "
+            "recover the canonical, un-jittered anchor before computing the "
+            "next occurrence, so a jittered dispatch time never causes drift. "
+            "Absent/None means ``start_at`` is the exact canonical slot."
+        ),
+    )
 
 
 def sched_start_at(sched: "Schedule | dict | None") -> Optional[str]:
