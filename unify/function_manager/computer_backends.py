@@ -1359,9 +1359,11 @@ class MockComputerBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> "ComputerSession":
         """Return a new mock session for the given mode."""
-        _ = (storage_state_name, headless)  # accepted for signature compatibility
+        # accepted for signature compatibility
+        _ = (storage_state_name, headless, stealth)
         if mode == "desktop":
             raise RuntimeError("Desktop mode is singleton")
         return _MockSession(mode, self)
@@ -1834,6 +1836,7 @@ class MagnitudeBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> ComputerSession:
         """Create a session asynchronously.
 
@@ -1852,6 +1855,11 @@ class MagnitudeBackend(ComputerBackend):
         makes the browser render on the agent-service's X display (``:99`` on
         the pods) so it can be watched over VNC, while still honouring
         ``storage_state_name`` (unlike ``web-vm``). ``None`` keeps the default.
+
+        ``stealth`` opts the session into anti-automation hardening in
+        magnitude-core's BrowserProvider (realistic UA/locale, dropping the
+        ``--enable-automation`` switch, patching ``navigator.webdriver`` etc.).
+        Forwarded to ``/start``; an older agent-service simply ignores it.
         """
         import time as _cs_time
 
@@ -1862,6 +1870,8 @@ class MagnitudeBackend(ComputerBackend):
             params["label"] = label
         if headless is not None:
             params["headless"] = headless
+        if stealth is not None:
+            params["stealth"] = stealth
         if self._url_mappings:
             params["urlMappings"] = self._url_mappings
         if storage_state_name:
@@ -1921,6 +1931,7 @@ class MagnitudeBackend(ComputerBackend):
         label: str | None = None,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> ComputerSession:
         """Spawn an additional parallel session (web/web-vm only).
 
@@ -1943,6 +1954,7 @@ class MagnitudeBackend(ComputerBackend):
             label=label,
             storage_state_name=storage_state_name,
             headless=headless,
+            stealth=stealth,
         )
         self._extra_sessions.append(session)
         return session
