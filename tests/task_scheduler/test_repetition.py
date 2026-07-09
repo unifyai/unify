@@ -223,9 +223,7 @@ def test_clone_task_instance_rearms_recurring_scheduled_task():
 def test_max_jitter_seconds_reads_patterns_and_dicts():
     assert max_jitter_seconds(None) == 0
     assert max_jitter_seconds([]) == 0
-    assert (
-        max_jitter_seconds([RepeatPattern(frequency=Frequency.DAILY)]) == 0
-    )
+    assert max_jitter_seconds([RepeatPattern(frequency=Frequency.DAILY)]) == 0
     patterns = [
         RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=600),
         RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800),
