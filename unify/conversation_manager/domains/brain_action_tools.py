@@ -2238,12 +2238,19 @@ class ConversationManagerBrainActionTools:
         """Warm up the managed desktop VM ahead of a computer demo or act.
 
         Call this when a task will need the desktop soon — for example the My
-        Computer onboarding demo — then continue the conversation. Typical boot
-        takes 30–60 seconds; I receive a notification when my computer is ready
-        and can ring the user or start the demo then.
+        Computer onboarding demo — then continue from the returned status in the
+        same turn:
 
-        Returns immediately while the warm-up runs in the background. Safe to
-        call again while warming — concurrent triggers coalesce onto one boot.
+        - ``ready``: the computer is usable now. Ring or start the demo
+          immediately; no further desktop-ready notification will arrive.
+        - ``warming``: boot/session setup is in progress. Typical wait is
+          30–60 seconds; I receive a notification when my computer is ready,
+          then I can ring or start the demo.
+        - ``unavailable``: this assistant has no managed desktop runtime.
+
+        Warming returns immediately while setup continues in the background.
+        Safe to call again while warming — concurrent triggers coalesce onto
+        one boot.
         """
         from unify.conversation_manager.domains.desktop_session import (
             desktop_agent_session_cached,
@@ -2261,7 +2268,10 @@ class ConversationManagerBrainActionTools:
         if desktop_agent_session_cached():
             return {
                 "status": "ready",
-                "message": "My computer is already ready.",
+                "message": (
+                    "My computer is already ready — ring or start the demo now; "
+                    "no further ready notification will arrive."
+                ),
             }
 
         if self._cm.vm_ready:
