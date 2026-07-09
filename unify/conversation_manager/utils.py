@@ -2,12 +2,9 @@ import requests
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON
+from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
-# admin headers and URLs
-admin_headers = {
-    "Authorization": f"Bearer {SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()}",
-}
 unity_comms_url = SETTINGS.conversation.COMMS_URL
 
 
@@ -43,7 +40,9 @@ def dispatch_livekit_agent(
     try:
         response = requests.post(
             f"{unity_comms_url}/phone/dispatch-livekit-agent",
-            headers=admin_headers,
+            # Authenticate as this assistant; the gateway accepts either a
+            # valid user API key or the platform admin key here.
+            headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
             json={
                 "livekit_agent_name": room_name,
                 "room_name": room_name,

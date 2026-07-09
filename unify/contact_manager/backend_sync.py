@@ -4,10 +4,9 @@ Backend sync utilities for ContactManager.
 Provides fire-and-forget sync of system contact fields (timezone, bio/about)
 to the orchestra backend User and Assistant profiles.
 
-Endpoints:
-- GET /organizations/members (list org members)
-- POST /admin/assistant/update-user (user timezone/bio)
-- PATCH /admin/assistant/{assistant_id} (assistant timezone/about)
+Endpoints (assistant-scoped; authenticated with the assistant's own UNIFY_KEY):
+- POST /assistant/update-user (user timezone/bio)
+- PATCH /assistant/{assistant_id}/runtime-profile (assistant timezone/about)
 """
 
 from __future__ import annotations
@@ -26,8 +25,10 @@ def _get_base_url() -> str | None:
 
 
 def _get_admin_key() -> str | None:
-    """Return admin key or None if not configured."""
-    return SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+    """Return the assistant's own UNIFY_KEY (Orchestra enforces ownership)."""
+    from unify.session_details import SESSION_DETAILS
+
+    return SESSION_DETAILS.unify_key or None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ def sync_user_timezone(assistant_id: int, target_email: str, timezone: str) -> b
     try:
         from unisdk.utils import http
 
-        url = f"{base_url}/admin/assistant/update-user"
+        url = f"{base_url}/assistant/update-user"
         headers = {"Authorization": f"Bearer {admin_key}"}
         payload = {
             "assistant_id": int(assistant_id),
@@ -83,7 +84,7 @@ def sync_user_bio(assistant_id: int, target_email: str, bio: str) -> bool:
     try:
         from unisdk.utils import http
 
-        url = f"{base_url}/admin/assistant/update-user"
+        url = f"{base_url}/assistant/update-user"
         headers = {"Authorization": f"Bearer {admin_key}"}
         payload = {
             "assistant_id": int(assistant_id),
@@ -121,7 +122,7 @@ def sync_assistant_timezone(assistant_id: int, timezone: str) -> bool:
     try:
         from unisdk.utils import http
 
-        url = f"{base_url}/admin/assistant/{int(assistant_id)}"
+        url = f"{base_url}/assistant/{int(assistant_id)}/runtime-profile"
         headers = {"Authorization": f"Bearer {admin_key}"}
         payload = {"timezone": timezone}
         resp = http.patch(url, headers=headers, json=payload, timeout=30)
@@ -153,7 +154,7 @@ def sync_assistant_about(assistant_id: int, about: str) -> bool:
     try:
         from unisdk.utils import http
 
-        url = f"{base_url}/admin/assistant/{int(assistant_id)}"
+        url = f"{base_url}/assistant/{int(assistant_id)}/runtime-profile"
         headers = {"Authorization": f"Bearer {admin_key}"}
         payload = {"about": about}
         resp = http.patch(url, headers=headers, json=payload, timeout=30)
@@ -188,7 +189,7 @@ def sync_assistant_job_title(assistant_id: int, job_title: str) -> bool:
     try:
         from unisdk.utils import http
 
-        url = f"{base_url}/admin/assistant/{int(assistant_id)}"
+        url = f"{base_url}/assistant/{int(assistant_id)}/runtime-profile"
         headers = {"Authorization": f"Bearer {admin_key}"}
         payload = {"job_title": normalized}
         resp = http.patch(url, headers=headers, json=payload, timeout=30)

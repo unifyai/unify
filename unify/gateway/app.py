@@ -63,7 +63,10 @@ from unify.gateway.channels.whatsapp import (
 from unify.gateway.channels.whatsapp import (
     unauth_router as whatsapp_unauth_router,
 )
-from unify.gateway.common.auth import admin_auth_dependency
+from unify.gateway.common.auth import (
+    admin_auth_dependency,
+    admin_or_user_auth_dependency,
+)
 from unify.gateway.context import GatewayContext, create_default_gateway_context
 from unify.gateway.adapters import (
     google_router,
@@ -221,40 +224,11 @@ def create_app(
     )
     app.state.gateway_context = gateway_context
 
-    # Built-in admin-authed channels.
+    # Built-in admin-authed channels (control-plane only; never called
+    # by assistant pods).
     app.include_router(
         social_router,
         prefix="/social",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        phone_auth_router,
-        prefix="/phone",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        gmail_router,
-        prefix="/gmail",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        outlook_router,
-        prefix="/outlook",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        email_router,
-        prefix="/email",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        whatsapp_auth_router,
-        prefix="/whatsapp",
-        dependencies=admin_auth_dependency,
-    )
-    app.include_router(
-        teams_router,
-        prefix="/teams",
         dependencies=admin_auth_dependency,
     )
     app.include_router(
@@ -267,24 +241,65 @@ def create_app(
         prefix="/drive",
         dependencies=admin_auth_dependency,
     )
+    # ``/gmail`` and ``/outlook`` stay admin-only too: pod email traffic
+    # goes through ``/email``, whose dispatcher forwards to the provider
+    # handlers in-process (bypassing router auth), and these routers
+    # carry provisioning surfaces (user delete, watch management) that
+    # must not open up to user keys.
+    app.include_router(
+        gmail_router,
+        prefix="/gmail",
+        dependencies=admin_auth_dependency,
+    )
+    app.include_router(
+        outlook_router,
+        prefix="/outlook",
+        dependencies=admin_auth_dependency,
+    )
+
+    # Built-in channels callable by assistant pods with their own user
+    # API key (or by control-plane callers with the admin key). Handlers
+    # on these routers enforce per-assistant ownership for user-key
+    # callers via ``require_assistant_ownership`` and keep provisioning
+    # endpoints admin-only via ``require_gateway_admin``.
+    app.include_router(
+        phone_auth_router,
+        prefix="/phone",
+        dependencies=admin_or_user_auth_dependency,
+    )
+    app.include_router(
+        email_router,
+        prefix="/email",
+        dependencies=admin_or_user_auth_dependency,
+    )
+    app.include_router(
+        whatsapp_auth_router,
+        prefix="/whatsapp",
+        dependencies=admin_or_user_auth_dependency,
+    )
+    app.include_router(
+        teams_router,
+        prefix="/teams",
+        dependencies=admin_or_user_auth_dependency,
+    )
     app.include_router(
         discord_router,
         prefix="/discord",
-        dependencies=admin_auth_dependency,
+        dependencies=admin_or_user_auth_dependency,
     )
     app.include_router(
         slack_auth_router,
         prefix="/slack",
-        dependencies=admin_auth_dependency,
+        dependencies=admin_or_user_auth_dependency,
     )
     app.include_router(
         ms_teams_bot_auth_router,
         prefix="/ms-teams-bot",
-        dependencies=admin_auth_dependency,
+        dependencies=admin_or_user_auth_dependency,
     )
     app.include_router(
         internal_router,
-        dependencies=admin_auth_dependency,
+        dependencies=admin_or_user_auth_dependency,
         tags=["internal-adapters"],
     )
 

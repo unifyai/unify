@@ -58,6 +58,10 @@ from livekit.protocol.sip import (
 from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.voice_response import VoiceResponse
 
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.gateway.common.callbacks import twilio_callback_url
 from unify.gateway.common.livekit import (
     create_room_and_dispatch_agent,
@@ -268,6 +272,7 @@ async def send_call(request: Request):
             status_code=400,
             detail="assistant_id (or a canonical room_name) is required",
         )
+    await require_assistant_ownership(request, assistant_id)
 
     sip_uri = make_sip_uri(twilio_number, credentials)
     await ensure_phone_dispatch_rule(twilio_number, room_name, credentials)
@@ -295,12 +300,17 @@ async def send_call(request: Request):
 
 @auth_router.post("/send-text")
 async def send_text(request: Request):
-    """Send an SMS via Twilio."""
+    """Send an SMS via Twilio.
+
+    ``assistant_id`` identifies the acting assistant; user-key callers
+    must own it (admin callers may omit it, matching legacy payloads).
+    """
     credentials = EnvCredentialStore()
     data = await request.json()
     to = data.get("To")
     sender = data.get("From")
     body = data.get("Body")
+    await require_assistant_ownership(request, data.get("assistant_id"))
 
     twilio_client = build_twilio_client(credentials)
     twilio_client.messages.create(to=to, from_=sender, body=body)
@@ -323,6 +333,7 @@ async def create_phone_number(request: Request):
     3. Add it to the "Unity" Twilio Messaging Service.
     4. Create a matching LiveKit inbound SIP trunk.
     """
+    require_gateway_admin(request)
     credentials = EnvCredentialStore()
     data = await _json_object_or_empty(request)
 
@@ -411,6 +422,7 @@ async def delete_phone_number(request: Request):
     number was already deleted in a prior attempt, so retries
     converge on a consistent state.
     """
+    require_gateway_admin(request)
     credentials = EnvCredentialStore()
     data = await _json_object_or_empty(request)
     phone_number = data.get("PhoneNumber") or data.get("phone_number")

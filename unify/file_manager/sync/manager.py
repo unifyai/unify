@@ -200,7 +200,7 @@ class SyncManager:
 
         assistant_id = SESSION_DETAILS.assistant.agent_id
         base_url = SETTINGS.ORCHESTRA_URL
-        admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+        unify_key = SESSION_DETAILS.unify_key
 
         if assistant_id is None:
             LOGGER.debug(f"{ICONS['file_sync']} [FileSync] No assistant_id configured")
@@ -210,15 +210,16 @@ class SyncManager:
             LOGGER.debug(f"{ICONS['file_sync']} [FileSync] No ORCHESTRA_URL configured")
             return None
 
-        if not admin_key:
+        if not unify_key:
             LOGGER.debug(
-                f"{ICONS['file_sync']} [FileSync] No ORCHESTRA_ADMIN_KEY configured",
+                f"{ICONS['file_sync']} [FileSync] No UNIFY_KEY configured",
             )
             return None
 
-        url = f"{base_url}/admin/assistant"
-        headers = {"Authorization": f"Bearer {admin_key}"}
-        params = {"agent_id": str(assistant_id)}
+        # Assistant-scoped filesync-key read (own UNIFY_KEY, ownership-checked).
+        url = f"{base_url}/assistant/{int(assistant_id)}/desktop-filesync-key"
+        headers = {"Authorization": f"Bearer {unify_key}"}
+        params: dict = {}
 
         LOGGER.debug(
             f"{ICONS['file_sync']} [FileSync] Retrieving SSH key for assistant {assistant_id}",
@@ -238,15 +239,7 @@ class SyncManager:
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    assistants = data.get("info", [])
-
-                    if not assistants:
-                        LOGGER.debug(
-                            f"{ICONS['file_sync']} [FileSync] Assistant {assistant_id} not found",
-                        )
-                        return None
-
-                    key = assistants[0].get("desktop_filesync_sshkey")
+                    key = data.get("desktop_filesync_sshkey")
 
                     if key:
                         LOGGER.debug(

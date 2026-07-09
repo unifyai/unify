@@ -55,7 +55,7 @@ from unify.task_scheduler.machine_state import (
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.activated_by import ActivatedBy
 
-TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
+TASK_RUN_UPDATE_PATH = "/task-run/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
 SCHEDULER_MANAGED_SOURCE_TYPES = {"scheduled", "triggered"}
@@ -134,10 +134,14 @@ def _load_config_from_env() -> OfflineTaskConfig:
 
 
 def _orchestra_admin_headers() -> dict[str, str]:
-    """Return admin auth headers for Orchestra task-run APIs."""
+    """Return auth headers for Orchestra task-run APIs.
 
-    admin_key = _require_env("ORCHESTRA_ADMIN_KEY")
-    return {"Authorization": f"Bearer {admin_key}"}
+    Offline runner Jobs carry the assistant's own ``UNIFY_KEY`` (injected by
+    task activation); Orchestra scopes the run update to that assistant.
+    """
+
+    unify_key = _require_env("UNIFY_KEY")
+    return {"Authorization": f"Bearer {unify_key}"}
 
 
 def _task_run_update_payload(

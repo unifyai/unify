@@ -27,6 +27,10 @@ import time
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from unify.gateway.common.auth import (
+    require_assistant_ownership,
+    require_gateway_admin,
+)
 from unify.settings import SETTINGS
 
 logger = logging.getLogger("unify.gateway.channels.ms_teams_bot.views")
@@ -184,6 +188,7 @@ async def _resolve_service_url(install: dict, conversation_id: str) -> str:
 @auth_router.post("/pending-install")
 async def ensure_pending_install(request: Request):
     """Record a pending (unbound) Teams install; returns its bind nonce."""
+    require_gateway_admin(request)
     data = await request.json()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -200,6 +205,7 @@ async def ensure_pending_install(request: Request):
 @auth_router.post("/bind")
 async def bind_install(request: Request):
     """Bind a pending install to a Unify owner (org XOR user)."""
+    require_gateway_admin(request)
     data = await request.json()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -216,6 +222,7 @@ async def bind_install(request: Request):
 @auth_router.post("/install")
 async def upsert_install(request: Request):
     """Register or refresh an already-owned Teams install in Orchestra."""
+    require_gateway_admin(request)
     data = await request.json()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -260,6 +267,7 @@ async def send_ms_teams_bot_message(request: Request):
 
     if not body:
         raise HTTPException(status_code=400, detail="'body' is required")
+    await require_assistant_ownership(request, assistant_id)
 
     install = await _resolve_install(tenant_id)
     service_url = await _resolve_service_url(install, conversation_id)
@@ -338,8 +346,9 @@ async def send_ms_teams_bot_message(request: Request):
 
 
 @auth_router.get("/status")
-async def status():
+async def status(request: Request):
     """List MS Teams bot installs known to Orchestra."""
+    require_gateway_admin(request)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.ORCHESTRA_URL}/admin/ms-teams-bot/installs",

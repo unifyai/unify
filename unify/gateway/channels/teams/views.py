@@ -43,6 +43,7 @@ from msgraph.generated.models.chat_type import ChatType
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
 
+from unify.gateway.common.auth import require_assistant_ownership
 from unify.gateway.common.graph import (
     get_admin_graph_client,
     get_graph_client,
@@ -71,6 +72,27 @@ _SUB_CONCURRENCY = 20
 def _teams_webhook_secret(credentials: CredentialStore) -> str:
     """Resolve TEAMS_WEBHOOK_SECRET with the legacy default preserved."""
     return credentials.get_optional("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
+
+
+async def _require_sender_ownership(request: Request, sender_email: str) -> None:
+    """Verify a user-key caller owns the assistant behind ``sender_email``.
+
+    Every Teams endpoint identifies the acting assistant by an email
+    address; user-key callers must prove ownership of the matching
+    assistant before any Graph operation runs. Admin callers bypass the
+    check inside :func:`require_assistant_ownership`. Fails closed
+    (403) when the email resolves to no assistant.
+    """
+    if getattr(request.state, "gateway_is_admin", True):
+        return
+    try:
+        assistant = await lookup_assistant(sender_email, EnvCredentialStore())
+    except Exception:
+        raise HTTPException(
+            status_code=403,
+            detail="Assistant not owned by caller.",
+        )
+    await require_assistant_ownership(request, assistant.get("agent_id"))
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +383,7 @@ async def send_teams_chat(request: Request):
             status_code=400,
             detail="Missing required fields: from, chat_id, body",
         )
+    await _require_sender_ownership(request, sender)
 
     try:
         graph = await get_graph_client(sender)
@@ -410,6 +433,7 @@ async def create_teams_chat(request: Request):
             status_code=400,
             detail="oneOnOne chats cannot have a topic",
         )
+    await _require_sender_ownership(request, sender)
 
     try:
         graph = await get_graph_client(sender)
@@ -455,8 +479,9 @@ async def create_teams_chat(request: Request):
 
 
 @router.get("/chats")
-async def list_teams_chats(user_email: str):
+async def list_teams_chats(request: Request, user_email: str):
     """List all chats for a user."""
+    await _require_sender_ownership(request, user_email)
     try:
         graph = await get_graph_client(user_email)
         chats = await graph.me.chats.get()
@@ -506,6 +531,7 @@ async def watch_teams(request: Request):
 
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
+    await _require_sender_ownership(request, user_email)
 
     try:
         try:
@@ -560,6 +586,7 @@ async def delete_teams_watch(request: Request):
 
     if not primary_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
+    await _require_sender_ownership(request, primary_email)
 
     try:
         try:
@@ -609,11 +636,13 @@ async def delete_teams_watch(request: Request):
 
 @router.get("/messages/{chat_id}")
 async def get_teams_chat_messages(
+    request: Request,
     chat_id: str,
     user_email: str,
     top: int = 50,
 ):
     """Get messages from a specific Teams chat."""
+    await _require_sender_ownership(request, user_email)
     try:
         graph = await get_graph_client(user_email)
         messages = await graph.me.chats.by_chat_id(chat_id).messages.get()
@@ -659,8 +688,9 @@ async def get_teams_chat_messages(
 
 
 @router.get("/teams")
-async def list_joined_teams(user_email: str):
+async def list_joined_teams(request: Request, user_email: str):
     """List all teams the user is a member of."""
+    await _require_sender_ownership(request, user_email)
     try:
         graph = await get_graph_client(user_email)
         teams = await graph.me.joined_teams.get()
@@ -682,8 +712,9 @@ async def list_joined_teams(user_email: str):
 
 
 @router.get("/teams/{team_id}/channels")
-async def list_team_channels(team_id: str, user_email: str):
+async def list_team_channels(request: Request, team_id: str, user_email: str):
     """List all channels in a team."""
+    await _require_sender_ownership(request, user_email)
     try:
         graph = await get_graph_client(user_email)
         channels = await graph.teams.by_team_id(team_id).channels.get()
@@ -748,6 +779,7 @@ async def create_teams_channel(request: Request):
             status_code=400,
             detail=f"{membership_type_raw} channels require at least one owner",
         )
+    await _require_sender_ownership(request, sender)
 
     try:
         graph = await get_graph_client(sender)
@@ -819,6 +851,7 @@ async def send_teams_channel_message(
             status_code=400,
             detail="Missing required fields: from, body",
         )
+    await _require_sender_ownership(request, sender)
 
     try:
         graph = await get_graph_client(sender)
@@ -847,12 +880,14 @@ async def send_teams_channel_message(
 
 @router.get("/channel/{team_id}/{channel_id}/messages")
 async def get_teams_channel_messages(
+    request: Request,
     team_id: str,
     channel_id: str,
     user_email: str,
     top: int = 50,
 ):
     """Get messages from a Teams channel."""
+    await _require_sender_ownership(request, user_email)
     try:
         graph = await get_graph_client(user_email)
         messages = (
@@ -923,6 +958,7 @@ async def create_teams_meeting(request: Request):
         )
 
     assistant = await lookup_assistant(assistant_email, credentials)
+    await require_assistant_ownership(request, assistant.get("agent_id"))
     access_token = (assistant.get("secrets") or {}).get("MICROSOFT_ACCESS_TOKEN") or ""
     if not access_token:
         raise HTTPException(
