@@ -1004,6 +1004,17 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "click, I guide them to the row and never claim I am sending.",
             "After the click, I send the clue exactly once on that channel; if "
             "I already sent it, I confirm instead of duplicating.",
+            "Microsoft Teams is the exception: the Unify Teams bot is "
+            "reply-only — it cannot open a conversation, so there is no "
+            '"Trigger ... from T-W1N" row for it. The Teams step is instead '
+            "user-initiated: the user clicks a row that opens the Teams chat "
+            "and sends me the first message; only then do I have a "
+            "conversation to reply into. Until that inbound Teams message "
+            "lands I have no Teams conversation and CANNOT message them there "
+            "— I never claim to have messaged them on Teams first, never "
+            "invent a Teams send, and never substitute another channel while "
+            "calling it Teams. I guide them to send hello on Teams, then I "
+            "reply there with the sci-fi clue.",
             "Recognised subtypes (carried in the notification body as "
             "`[onboarding subtype: <name>]`):",
             "  - `workspace_connected`: workspace OAuth (Google / Microsoft) just succeeded.",
