@@ -491,6 +491,7 @@ class _WebSessionFactory:
         *,
         storage_state_name: str | None = None,
         headless: bool | None = None,
+        stealth: bool | None = None,
     ) -> WebSessionHandle:
         """Create a new independent browser session.
 
@@ -522,6 +523,14 @@ class _WebSessionFactory:
             keeps it a ``web`` session (so ``storage_state_name`` still loads)
             but renders it on the agent-service's X display so it can be
             watched over VNC. ``None`` (default) keeps the per-mode default.
+        stealth : bool, optional
+            Opt into anti-automation hardening for this session (realistic
+            user-agent / locale, dropping the ``--enable-automation`` switch,
+            and patching JS tells like ``navigator.webdriver``). ``None``
+            (default) leaves it to the agent-service's ``MAGNITUDE_STEALTH``
+            env default (usually off). Applied by magnitude-core's
+            BrowserProvider; ignored by a deployed agent-service that predates
+            the flag.
 
         Returns
         -------
@@ -539,6 +548,7 @@ class _WebSessionFactory:
             label=label,
             storage_state_name=storage_state_name,
             headless=headless,
+            stealth=stealth,
         )
         handle = WebSessionHandle(session, self._owner, session_id=sid)
         self._handles.append(handle)
