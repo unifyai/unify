@@ -9,6 +9,7 @@ from unify.task_scheduler.types.repetition import (
     Frequency,
     RepeatPattern,
     Weekday,
+    max_jitter_seconds,
     normalize_repeat_patterns,
     next_repeated_start_at,
 )
@@ -217,6 +218,58 @@ def test_clone_task_instance_rearms_recurring_scheduled_task():
     assert latest.status == Status.scheduled
     assert latest.schedule_start_at == initial_start + timedelta(days=1)
     assert latest.entrypoint is None
+
+
+def test_max_jitter_seconds_reads_patterns_and_dicts():
+    assert max_jitter_seconds(None) == 0
+    assert max_jitter_seconds([]) == 0
+    assert (
+        max_jitter_seconds([RepeatPattern(frequency=Frequency.DAILY)]) == 0
+    )
+    patterns = [
+        RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=600),
+        RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800),
+    ]
+    assert max_jitter_seconds(patterns) == 1800
+    # Pre-validation dict shape is accepted too.
+    assert max_jitter_seconds([{"frequency": "daily", "jitter_seconds": 900}]) == 900
+
+
+@_handle_project
+def test_clone_task_instance_applies_jitter_without_drift():
+    scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
+    scheduler._create_task(
+        name="Daily jittered scrape",
+        description="Scrape the feed with dispatch jitter.",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800)],
+    )
+
+    # First re-arm: canonical is initial + 1 day, dispatch is jittered forward.
+    scheduler._clone_task_instance(scheduler._get_task_or_raise(0))
+    inst1 = max(
+        scheduler._filter_tasks(filter="task_id == 0"),
+        key=lambda t: t.instance_id,
+    )
+    canonical_1 = initial_start + timedelta(days=1)
+    applied_1 = inst1.schedule.jitter_applied_seconds
+    assert applied_1 is not None and 0.0 <= applied_1 <= 1800.0
+    assert inst1.schedule_start_at == canonical_1 + timedelta(seconds=applied_1)
+
+    # Second re-arm anchors on the CANONICAL slot, not the jittered dispatch —
+    # so the canonical does not drift by the previous jitter offset.
+    scheduler._clone_task_instance(inst1)
+    inst2 = max(
+        scheduler._filter_tasks(filter="task_id == 0"),
+        key=lambda t: t.instance_id,
+    )
+    applied_2 = inst2.schedule.jitter_applied_seconds or 0.0
+    canonical_2 = inst2.schedule_start_at - timedelta(seconds=applied_2)
+    assert canonical_2 == initial_start + timedelta(days=2)
 
 
 @_handle_project
