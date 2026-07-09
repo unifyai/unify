@@ -340,6 +340,9 @@ def create_app(
 
         twilio = configured("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN")
         twilio_wa = configured("TWILIO_WA_ACCOUNT_SID", "TWILIO_WA_AUTH_TOKEN")
+        managed_desktop = configured("GCP_PROJECT_ID") and configured(
+            "ORCHESTRA_ADMIN_KEY",
+        )
         return {
             # Assistant phone (Twilio number provisioning + SMS/voice webhooks).
             "phone": twilio,
@@ -350,6 +353,7 @@ def create_app(
             # User-side phone / WhatsApp verification codes (Twilio social verify).
             "social_verify_phone": twilio,
             "social_verify_whatsapp": twilio_wa,
+            "managed_desktop": managed_desktop,
         }
 
     return app

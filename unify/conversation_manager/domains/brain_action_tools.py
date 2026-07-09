@@ -2264,7 +2264,11 @@ class ConversationManagerBrainActionTools:
         if not has_managed_desktop_runtime():
             return {
                 "status": "unavailable",
-                "message": "This assistant has no managed desktop runtime.",
+                "reason": "computer_use_not_enabled",
+                "message": (
+                    "Computer Use is not enabled for this assistant. "
+                    "Enable it in Console ($50/mo Ubuntu, $75/mo Windows)."
+                ),
             }
 
         if desktop_agent_session_cached():

@@ -677,11 +677,17 @@ async def request_deferred_desktop_binding(assistant_id: int | str) -> None:
                 headers=self_headers,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
+                body = await resp.text()
                 if resp.status >= 400:
-                    body = await resp.text()
                     LOGGER.warning(
                         f"{ICONS['comms_outbound']} request-desktop failed "
                         f"({resp.status}): {body[:200]}",
+                    )
+                    return
+                if '"addon_not_enabled"' in body:
+                    LOGGER.info(
+                        f"{ICONS['comms_outbound']} request-desktop skipped: "
+                        "Computer Use add-on not enabled",
                     )
     except Exception as e:
         LOGGER.warning(

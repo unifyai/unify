@@ -15,10 +15,14 @@ _MANAGED_DESKTOP_MODES = frozenset({"ubuntu", "windows"})
 
 
 def has_managed_desktop_runtime() -> bool:
-    """Return whether this assistant is configured for a managed VM desktop."""
+    """Return whether this assistant is entitled to a managed VM desktop."""
     from unify.session_details import SESSION_DETAILS
 
-    return SESSION_DETAILS.assistant.desktop_mode in _MANAGED_DESKTOP_MODES
+    assistant = SESSION_DETAILS.assistant
+    return (
+        assistant.desktop_mode in _MANAGED_DESKTOP_MODES
+        and assistant.managed_desktop_status == "active"
+    )
 
 
 def desktop_agent_session_cached() -> bool:
