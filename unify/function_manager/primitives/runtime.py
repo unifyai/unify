@@ -34,6 +34,10 @@ from unify.integrations.function_metadata import is_provider_backed_function
 if TYPE_CHECKING:
     from unify.comms.primitives import CommsPrimitives
     from unify.function_manager.computer_backends import ComputerBackend
+    from unify.function_manager.primitives.humanize import (
+        HumanInput,
+        HumanizeConfig,
+    )
     from unify.contact_manager.contact_manager import ContactManager
     from unify.transcript_manager.transcript_manager import TranscriptManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
@@ -72,6 +76,7 @@ _COMPUTER_METHODS = (
     "right_click",
     "drag",
     "scroll",
+    "scroll_humanlike",
     "move",
     "type_text",
     "press_enter",
@@ -89,12 +94,13 @@ _COMPUTER_METHODS = (
     "execute_actions",
 )
 
-# ``move`` (bezier cursor motion) and ``solve_captcha`` are web-only actions;
-# the desktop backend has no registered handler for them.
+# ``move`` (bezier cursor motion), ``scroll_humanlike`` (eased wheel gesture)
+# and ``solve_captcha`` are web-only actions; the desktop backend has no
+# registered handler for them.
 _DESKTOP_METHODS = tuple(
     name
     for name in _COMPUTER_METHODS
-    if name not in ("get_content", "solve_captcha", "move")
+    if name not in ("get_content", "solve_captcha", "move", "scroll_humanlike")
 )
 _WEB_SESSION_METHODS = _COMPUTER_METHODS
 
@@ -437,6 +443,23 @@ class WebSessionHandle:
     def visible(self) -> bool:
         """Whether this session renders on the VM desktop (``web-vm`` mode)."""
         return self._session._mode == "web-vm"
+
+    def humanizer(self, cfg: "Optional[HumanizeConfig]" = None) -> "HumanInput":
+        """Human-like scroll/cursor motor skills bound to this session.
+
+        Returns a cached :class:`~unify.function_manager.primitives.humanize.HumanInput`
+        so its capability self-disable state (older agent-service without
+        ``move``/``press_key``) persists across a read loop. Pass ``cfg`` once to
+        tune pacing; later calls ignore it and return the same instance.
+        See :mod:`unify.function_manager.primitives.humanize`.
+        """
+        from unify.function_manager.primitives.humanize import HumanInput
+
+        existing = getattr(self, "_humanizer", None)
+        if existing is None:
+            existing = HumanInput(self, cfg)
+            self._humanizer = existing
+        return existing
 
     @property
     def active(self) -> bool:
