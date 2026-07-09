@@ -105,12 +105,28 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
 
     def _abspath(self, p: str) -> Path:
         # Support both absolute and root-relative inputs.
-        # Absolute paths are allowed anywhere on the local filesystem.
+        # Absolute paths are allowed anywhere on the local filesystem so that
+        # staged mirrors (e.g. ~/Unity/Remote/<user_id>/...) remain readable.
+        # Workspace identities from _relativize use a leading slash
+        # (``/Docs/a.txt``); when that host path does not exist, interpret the
+        # path as root-relative under this adapter's workspace.
         q = Path(p)
         if not q.is_absolute():
-            q = (self._root / p.lstrip("/")).resolve()
-            return q
-        return q.resolve()
+            return (self._root / p.lstrip("/")).resolve()
+        resolved = q.expanduser().resolve()
+        try:
+            resolved.relative_to(self._root)
+            return resolved
+        except ValueError:
+            pass
+        if not resolved.exists():
+            candidate = (self._root / str(p).lstrip("/")).resolve()
+            try:
+                candidate.relative_to(self._root)
+                return candidate
+            except ValueError:
+                pass
+        return resolved
 
     def _relativize(self, p: Path) -> str:
         """Stable path identity for a resolved file.
@@ -306,6 +322,75 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
                 except Exception:
                     continue
         return added
+
+    def write_file(
+        self,
+        dest_rel: str,
+        source_path: str | Path,
+        *,
+        overwrite: bool = True,
+        sync: bool = False,
+    ) -> str:
+        """Write/overwrite a file at an exact path under the Local root.
+
+        Parameters
+        ----------
+        dest_rel : str
+            Destination path relative to the adapter root (``/Templates/a.txt``
+            or ``Templates/a.txt``).
+        source_path : str | Path
+            Absolute or expandable path to the source file bytes.
+        overwrite : bool, default True
+            When False, raise if the destination already exists.
+        sync : bool, default False
+            If True and VM sync is active, notify the sync manager.
+
+        Returns
+        -------
+        str
+            Root-relative destination path with a leading slash.
+        """
+        src = Path(source_path).expanduser().resolve()
+        if not src.exists() or not src.is_file():
+            raise FileNotFoundError(str(src))
+
+        cleaned = str(dest_rel or "").strip().replace("\\", "/")
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.lstrip("/")
+        if not cleaned or ".." in Path(cleaned).parts:
+            raise ValueError(f"Invalid destination path: {dest_rel!r}")
+
+        dest = (self._root / cleaned).resolve()
+        try:
+            dest.relative_to(self._root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Destination escapes Local root: {dest_rel!r}",
+            ) from exc
+
+        if dest.exists() and not overwrite:
+            raise FileExistsError(str(dest))
+        if dest.exists() and dest.is_dir():
+            raise IsADirectoryError(str(dest))
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+        relative_path = self._relativize(dest)
+
+        if sync and self._sync_manager is not None and self._sync_manager._started:
+            abs_path = str(dest)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._sync_manager.on_file_write(abs_path))
+            except RuntimeError:
+                LOGGER.debug(
+                    f"{ICONS['file_sync']} [LocalFS] No event loop for sync, "
+                    "will sync on next poll",
+                )
+
+        return relative_path
 
     def register_existing_file(
         self,
