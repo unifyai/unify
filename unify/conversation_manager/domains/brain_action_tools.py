@@ -2234,70 +2234,6 @@ class ConversationManagerBrainActionTools:
         """
         return await self._cm._patch_coordinator_onboarding_active(active=True)
 
-    async def prepare_desktop(self) -> dict[str, Any]:
-        """Warm up the managed desktop VM ahead of a computer demo or act.
-
-        Call this when a task will need the desktop soon — for example the My
-        Computer onboarding demo. The slow brain is single-shot, so branch on
-        status via the follow-up turn that the ready/warming paths open — not
-        by reading this return value in the same turn:
-
-        - ``ready``: the computer is already usable. A desktop-ready
-          notification opens a follow-up turn; ring or start the demo there.
-        - ``warming``: boot/session setup is in progress. Typical wait is
-          30–60 seconds; a desktop-ready notification opens a follow-up turn
-          when the session is usable, then ring or start the demo.
-        - ``unavailable``: this assistant has no managed desktop runtime.
-
-        Warming returns immediately while setup continues in the background.
-        Safe to call again while warming — concurrent triggers coalesce onto
-        one boot.
-        """
-        from unify.conversation_manager.domains.desktop_session import (
-            desktop_agent_session_cached,
-            desktop_session_ensure_in_flight,
-            has_managed_desktop_runtime,
-            schedule_desktop_session_ready_notify,
-            schedule_ensure_desktop_session,
-        )
-
-        if not has_managed_desktop_runtime():
-            return {
-                "status": "unavailable",
-                "reason": "computer_use_not_enabled",
-                "message": (
-                    "Computer Use is not enabled for this assistant. "
-                    "Enable it in Console ($50/mo Ubuntu, $75/mo Windows)."
-                ),
-            }
-
-        if desktop_agent_session_cached():
-            schedule_desktop_session_ready_notify(self._cm)
-            return {
-                "status": "ready",
-                "message": (
-                    "My computer is already ready — a desktop-ready notification "
-                    "will open a follow-up turn to ring or start the demo."
-                ),
-            }
-
-        if self._cm.vm_ready:
-            warming_message = (
-                "VM is up; finishing session setup. I'll get a notification "
-                "when my computer is ready."
-            )
-        else:
-            warming_message = (
-                "Desktop warming up — I'll get a notification when my computer "
-                "is ready."
-            )
-
-        if desktop_session_ensure_in_flight():
-            return {"status": "warming", "message": warming_message}
-
-        schedule_ensure_desktop_session(self._cm)
-        return {"status": "warming", "message": warming_message}
-
     async def set_onboarding_task_state(
         self,
         step_id: str,
@@ -2731,12 +2667,6 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
-        from unify.conversation_manager.domains.desktop_session import (
-            has_managed_desktop_runtime,
-        )
-
-        if has_managed_desktop_runtime():
-            tools["prepare_desktop"] = self.prepare_desktop
         if SETTINGS.DEMO_MODE:
             tools["set_boss_details"] = self.set_boss_details
         elif self._cm.initialized:
