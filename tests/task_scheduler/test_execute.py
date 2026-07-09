@@ -585,14 +585,16 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
+async def test_offline_scheduled_execution_allows_concurrent_same_task_instances(
     monkeypatch,
 ):
+    """A later offline instance may run while an earlier instance is still active."""
+
     from unify.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
     task_id = scheduler._create_task(
-        name="Offline stale active blocker",
+        name="Offline concurrent same-task instances",
         description="Run the current scheduled instance.",
         status=Status.scheduled,
         schedule=Schedule(
@@ -641,30 +643,6 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
     monkeypatch.setattr(
         "unify.task_scheduler.active_task.update_task_run_record",
         lambda run_reference, updates: None,
-    )
-    reconciled_run_updates = []
-    expected_task_id = task_id
-
-    def _latest_run_for_source(*, assistant_id, task_id, source_task_log_id):
-        assert assistant_id == "42"
-        assert task_id == expected_task_id
-        assert source_task_log_id == first_source_log_id
-        return TaskRunReference(
-            assistant_id="42",
-            run_key=f"offline:scheduled:42:{expected_task_id}:instance-0",
-        )
-
-    monkeypatch.setattr(
-        task_scheduler_module,
-        "latest_task_run_reference_for_source",
-        _latest_run_for_source,
-    )
-    monkeypatch.setattr(
-        task_scheduler_module,
-        "update_task_run_record",
-        lambda run_reference, updates: reconciled_run_updates.append(
-            (run_reference, updates),
-        ),
     )
 
     current = [
@@ -715,19 +693,9 @@ async def test_offline_scheduled_execution_reconciles_stale_active_blocker(
         key=lambda task: task.instance_id,
     )
     assert first_source_log_id != second_source_log_id
-    assert rows[0].status == Status.failed
-    assert "offline lifecycle reconciliation" in (rows[0].info or "")
+    assert rows[0].status == Status.active
     assert rows[1].status == Status.completed
     assert rows[2].status == Status.scheduled
-    assert len(reconciled_run_updates) == 1
-    run_reference, updates = reconciled_run_updates[0]
-    assert run_reference == TaskRunReference(
-        assistant_id="42",
-        run_key=f"offline:scheduled:42:{expected_task_id}:instance-0",
-    )
-    assert updates["state"] == "failed"
-    assert updates["reconciliation_reason"] == "offline_active_row_reconciliation"
-    assert "offline lifecycle reconciliation" in updates["error"]
 
 
 @pytest.mark.asyncio
@@ -1182,7 +1150,7 @@ async def test_tasks_table_has_activated_by_column():
 
 
 # ---------------------------------------------------------------------------
-# Concurrency: multiple tasks may be active simultaneously
+# Concurrency: multiple task instances may be active simultaneously
 # ---------------------------------------------------------------------------
 
 
@@ -1224,14 +1192,56 @@ async def test_execute_allows_second_task_while_first_live_handle_active():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm_call
+@_handle_project
+async def test_execute_allows_concurrent_instances_of_same_task():
+    """A later recurring instance may start while an earlier instance is still active."""
+
+    actor = SimulatedActor(steps=None, duration=None)
+    ts = TaskScheduler(actor=actor)
+    past = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    ).isoformat()
+    task_id = ts._create_task(
+        name="Overlapping recurring task",
+        description="Overlapping recurring task",
+        status=Status.scheduled,
+        schedule=Schedule(start_at=past),
+        repeat=[RepeatPattern(frequency=Frequency.HOURLY)],
+    )["details"]["task_id"]
+
+    handle_0 = await ts.execute(task_id=task_id)
+    handle_1 = None
+    try:
+        rows_after_first = sorted(
+            ts._filter_tasks(filter=f"task_id == {task_id}"),
+            key=lambda t: t.instance_id,
+        )
+        assert rows_after_first[0].status == Status.active
+        assert any(r.status == Status.scheduled for r in rows_after_first[1:])
+
+        handle_1 = await ts.execute(task_id=task_id)
+
+        rows = sorted(
+            ts._filter_tasks(filter=f"task_id == {task_id}"),
+            key=lambda t: t.instance_id,
+        )
+        active_instances = {r.instance_id for r in rows if r.status == Status.active}
+        assert 0 in active_instances
+        assert 1 in active_instances
+    finally:
+        await handle_0.stop(cancel=False)
+        await handle_0.result()
+        if handle_1 is not None:
+            await handle_1.stop(cancel=False)
+            await handle_1.result()
+
+
+@pytest.mark.asyncio
 @_handle_project
 async def test_offline_execute_allows_second_task_while_other_task_active(monkeypatch):
-    """An offline task completes normally while a different task holds an active row.
+    """An offline task completes normally while a different task holds an active row."""
 
-    Verifies the cross-task gate is removed from the offline execution path:
-    the second task's row reaches Status.completed, and the first task's active
-    row is never reconciled to Status.failed (no cross-task reconciliation).
-    """
     from unify.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
@@ -1266,7 +1276,6 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
     source_log_id_b = _source_log_id(scheduler, task_id_b, 0)
     task_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")[0]
 
-    # Offline infrastructure boundary stubs (mirrors the existing reconcile test).
     class _Handle:
         async def result(self):
             return "done"
@@ -1330,65 +1339,68 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         current_task_execution_delegate.reset(token)
         await delegate.close()
 
-    # Task B completed normally.
     rows_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")
     assert any(
         r.status == Status.completed for r in rows_b
     ), "Task B should have completed"
 
-    # Task A's active row must be untouched – cross-task reconciliation must not occur.
     rows_a = scheduler._filter_tasks(filter=f"task_id == {task_id_a}")
     assert any(
         r.status == Status.active for r in rows_a
-    ), "Task A's active row must remain; executing task B must not reconcile it"
+    ), "Task A's active row must remain; executing task B must not touch it"
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_execute_same_task_orphan_without_live_handle_still_raises(monkeypatch):
-    """Starting a task that already has a stale active row (no offline provenance) raises.
+async def test_execute_blocks_restart_of_already_active_source_instance(monkeypatch):
+    """Activation provenance for an already-active instance must not restart it."""
 
-    The parallelization fix narrowed the orphan gate to per-task scope, but the
-    guard itself is preserved: a task whose own row is active with no live handle
-    and no offline provenance must still raise RuntimeError rather than silently
-    starting a second concurrent run of the same task.
-    """
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
 
-    scheduler = TaskScheduler()
+    actor = SimulatedActor(steps=None, duration=None)
+    scheduler = TaskScheduler(actor=actor)
+    past = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    ).isoformat()
     task_id = scheduler._create_task(
-        name="Orphan guard task",
-        description="Guard against double-start of the same task.",
+        name="Same-instance restart guard",
+        description="Same-instance restart guard",
         status=Status.scheduled,
-        schedule=Schedule(
-            start_at=(
-                datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
-            ).isoformat(),
-        ),
+        schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
-
-    # Clone so a runnable instance (instance 1) exists alongside the orphaned one.
     first = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
     scheduler._clone_task_instance(first)
-
-    # Mark instance 0 active to simulate a stale/orphaned run with no live handle.
+    source_log_id = _source_log_id(scheduler, task_id, 0)
     scheduler._update_task_status_instance(
         task_id=task_id,
         instance_id=0,
         new_status=Status.active,
         activated_by=ActivatedBy.schedule,
     )
+    remember_live_task_run_provenance(
+        TaskRunProvenance(
+            assistant_id="42",
+            task_id=task_id,
+            source_type="scheduled",
+            execution_mode="live",
+            source_task_log_id=source_log_id,
+            activation_revision="rev-same-instance",
+            scheduled_for=past,
+            task_name="Same-instance restart guard",
+            task_description="Same-instance restart guard",
+        ),
+    )
 
-    # No offline provenance stored → reconcile returns False → RuntimeError.
-    with pytest.raises(RuntimeError, match="already active with no live handle"):
-        await scheduler.execute(task_id=task_id)
+    with pytest.raises(RuntimeError, match="already active"):
+        await scheduler.execute(
+            task_id=task_id,
+            _activated_by=ActivatedBy.schedule,
+        )
 
-    # Instance 0 must still be active; the gate raised before any mutation.
     rows = sorted(
         scheduler._filter_tasks(filter=f"task_id == {task_id}"),
         key=lambda t: t.instance_id,
     )
-    assert (
-        rows[0].status == Status.active
-    ), "Instance 0 must remain active after the guard raised"
+    assert rows[0].status == Status.active
+    assert rows[1].status == Status.scheduled
