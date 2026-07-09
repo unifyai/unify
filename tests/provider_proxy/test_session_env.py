@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
+
 from unify.provider_proxy import session as sess
-from unify.provider_proxy.session import ProxySession, build_sandbox_env
+from unify.provider_proxy.session import (
+    ProxySession,
+    build_sandbox_env,
+    scrub_platform_secrets_from_environ,
+)
 from unify.secret_manager.secret_manager import SecretManager
 
 
@@ -18,6 +24,29 @@ def test_build_sandbox_env_strips_tokens_and_adds_proxy(monkeypatch):
     assert env["PATH"] == "/usr/bin"
     assert env["MICROSOFT_GRAPH_BASE"].endswith("/microsoft/v1.0")
     assert env["WORKSPACE_PROXY_TOKEN"] == "N"
+
+
+def test_build_sandbox_env_strips_platform_secrets(monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "super-secret")
+    monkeypatch.setenv("SHARED_UNIFY_KEY", "shared-secret")
+    monkeypatch.setattr(sess, "current_session", lambda: None)
+
+    env = build_sandbox_env()
+
+    assert "ORCHESTRA_ADMIN_KEY" not in env
+    assert "SHARED_UNIFY_KEY" not in env
+
+
+def test_scrub_platform_secrets_from_environ_restores(monkeypatch):
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "super-secret")
+    monkeypatch.setenv("SHARED_UNIFY_KEY", "shared-secret")
+
+    with scrub_platform_secrets_from_environ():
+        assert "ORCHESTRA_ADMIN_KEY" not in os.environ
+        assert "SHARED_UNIFY_KEY" not in os.environ
+
+    assert os.environ["ORCHESTRA_ADMIN_KEY"] == "super-secret"
+    assert os.environ["SHARED_UNIFY_KEY"] == "shared-secret"
 
 
 def test_build_sandbox_env_without_session_still_strips_tokens(monkeypatch):
