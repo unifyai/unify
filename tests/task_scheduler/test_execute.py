@@ -1065,6 +1065,33 @@ async def test_execute_without_delegate_or_actor_fails_before_mutation():
 
 @pytest.mark.asyncio
 @_handle_project
+async def test_execute_rejects_disabled_task():
+    """Manual execute must fail loudly until a disabled task is re-enabled."""
+
+    actor = SimulatedActor(steps=None, duration=None)
+    ts = TaskScheduler(actor=actor)
+    task_id = ts._create_task(
+        name="Disabled execute",
+        description="Disabled execute",
+        enabled=False,
+    )["details"]["task_id"]
+    initial_status = ts._get_task_or_raise(task_id).status
+
+    with pytest.raises(ValueError, match="disabled and cannot be executed"):
+        await ts.execute(task_id=task_id)
+
+    row = ts._get_task_or_raise(task_id)
+    assert row.status == initial_status
+    assert row.enabled is False
+
+    ts._update_task(task_id=task_id, enabled=True)
+    handle = await ts.execute(task_id=task_id)
+    assert handle is not None
+    await handle.stop()
+
+
+@pytest.mark.asyncio
+@_handle_project
 async def test_direct_description_driven_recurring_execution_passes_entrypoint_review():
     calls = []
     actor = SimulatedActor(steps=0)
@@ -1145,8 +1172,10 @@ async def test_tasks_table_has_activated_by_column():
     cols = ts._list_columns()
     if isinstance(cols, dict):
         assert "activated_by" in cols
+        assert "enabled" in cols
     else:
         assert "activated_by" in cols
+        assert "enabled" in cols
 
 
 # ---------------------------------------------------------------------------

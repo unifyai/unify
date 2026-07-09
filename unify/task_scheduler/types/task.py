@@ -94,6 +94,14 @@ class TaskBase(AuthoredRow):
             "whether execution is symbolic or agentic."
         ),
     )
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether this task may fire. When false, scheduled start times and trigger "
+            "criteria do not activate the task, and manual execute is rejected until the "
+            "task is re-enabled."
+        ),
+    )
     activated_by: Optional[ActivatedBy] = Field(
         default=None,
         description=(
