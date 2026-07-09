@@ -1810,6 +1810,15 @@ class CommsPrimitives:
         credentials. The send pins the conversation to this assistant so later
         replies route back to it.
 
+        Reply-only: the Teams bot **cannot open a conversation**. It can only
+        answer inside a chat/thread the user has already messaged it in, so a
+        ``conversation_id`` only exists once an inbound Teams activity has
+        arrived. If you have not received an inbound Teams message from this
+        person yet, you have no ``conversation_id`` and this tool cannot be
+        used — do not invent one, do not fall back to another channel while
+        claiming it was Teams, and never state or imply you messaged them on
+        Teams first. Wait for their first Teams message, then reply here.
+
         Parameters
         ----------
         contact_id : int | str
