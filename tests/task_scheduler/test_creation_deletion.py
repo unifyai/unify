@@ -41,6 +41,7 @@ def test_create_task():
     assert row.instance_id == 0
     assert row.response_policy is None
     assert row.entrypoint == 101
+    assert row.enabled is True
     assert row.activated_by is None
 
 
