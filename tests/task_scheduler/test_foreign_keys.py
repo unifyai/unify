@@ -293,3 +293,36 @@ def test_offline_task_can_be_agentic_on_update():
     task = ts._get_task_or_raise(task_id)
     assert task.offline is True
     assert task.entrypoint is None
+
+
+@_handle_project
+def test_create_task_can_start_disabled():
+    """Tasks may be created with enabled=False and stay disabled until toggled."""
+
+    ts = TaskScheduler()
+    result = ts._create_task(
+        name="Paused task",
+        description="Created disabled so it will not fire",
+        enabled=False,
+    )
+    task = ts._get_task_or_raise(result["details"]["task_id"])
+    assert task.enabled is False
+
+
+@_handle_project
+def test_update_task_toggles_enabled():
+    """enabled can be flipped via update without changing other fields."""
+
+    ts = TaskScheduler()
+    result = ts._create_task(
+        name="Toggleable task",
+        description="Starts enabled and can be paused",
+    )
+    task_id = result["details"]["task_id"]
+    assert ts._get_task_or_raise(task_id).enabled is True
+
+    ts._update_task(task_id=task_id, enabled=False)
+    assert ts._get_task_or_raise(task_id).enabled is False
+
+    ts._update_task(task_id=task_id, enabled=True)
+    assert ts._get_task_or_raise(task_id).enabled is True

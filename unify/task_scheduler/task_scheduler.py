@@ -6,9 +6,10 @@ import asyncio
 import functools
 import logging
 import os
+import random
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import (
     Any,
     Callable,
@@ -83,6 +84,7 @@ from .types.repetition import (
     Frequency,
     RepeatPattern,
     Weekday,
+    max_jitter_seconds,
     next_repeated_start_at,
     normalize_repeat_patterns,
 )
@@ -1081,6 +1083,11 @@ class TaskScheduler(BaseTaskScheduler):
             task=task,
             provenance=task_run_provenance,
         )
+        if not task.enabled:
+            raise ValueError(
+                f"Task {task_id} is disabled and cannot be executed. "
+                "Re-enable it before executing.",
+            )
 
         entrypoint_kwargs = None
         if task.entrypoint is not None:
@@ -1193,15 +1200,33 @@ class TaskScheduler(BaseTaskScheduler):
             mode="json",
         )
         if task.repeat is not None and task.schedule_start_at is not None:
+            # Recover the canonical (un-jittered) anchor before computing the
+            # next slot: the stored start_at may include a random jitter offset
+            # (see below), and feeding that back in would let interval cadences
+            # drift. Subtracting the recorded offset keeps re-arms anchored.
+            applied_prev = 0.0
+            if task.schedule is not None:
+                applied_prev = task.schedule.jitter_applied_seconds or 0.0
+            canonical_prev = task.schedule_start_at - timedelta(seconds=applied_prev)
             next_start_at = next_repeated_start_at(
-                previous_start=task.schedule_start_at,
+                previous_start=canonical_prev,
                 patterns=task.repeat,
                 current_occurrence_index=task.instance_id,
             )
             if next_start_at is None:
                 return
             clone_payload["status"] = Status.scheduled
-            clone_payload["schedule"] = {"start_at": next_start_at.isoformat()}
+            schedule: dict[str, Any] = {"start_at": next_start_at.isoformat()}
+            # Add per-occurrence jitter to the dispatch time only. The canonical
+            # slot (next_start_at) is preserved via jitter_applied_seconds so the
+            # following re-arm can subtract it again — no cumulative drift.
+            jitter = max_jitter_seconds(task.repeat)
+            if jitter > 0:
+                applied = random.uniform(0.0, float(jitter))
+                jittered = next_start_at + timedelta(seconds=applied)
+                schedule["start_at"] = jittered.isoformat()
+                schedule["jitter_applied_seconds"] = applied
+            clone_payload["schedule"] = schedule
         with self._use_task_destination(task.destination):
             self._store.log(entries=clone_payload, new=True)
         if self._num_tasks_cached is not None:
@@ -1329,6 +1354,7 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy: Optional[str] = None,
         entrypoint: Optional[int] = None,
         offline: bool = False,
+        enabled: bool = True,
         destination: str | None = None,
         _root_applied: bool = False,
     ) -> ToolOutcome:
@@ -1336,8 +1362,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         Supports optional scheduling (start time, deadline, recurrence),
         event-based triggers, execution mode (agentic vs symbolic via
-        ``entrypoint``), and background offline execution.  Returns a
-        ``ToolOutcome`` containing the newly assigned ``task_id``.
+        ``entrypoint``), background offline execution, and an enabled flag.
+        Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
         """
 
         if not _root_applied:
@@ -1357,6 +1383,7 @@ class TaskScheduler(BaseTaskScheduler):
                     response_policy=response_policy,
                     entrypoint=entrypoint,
                     offline=offline,
+                    enabled=enabled,
                     destination=effective_destination,
                     _root_applied=True,
                 )
@@ -1440,6 +1467,7 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
+            enabled=enabled,
         ).to_post_json()
 
         log = self._store.log(entries=task_details, new=True)
@@ -1515,6 +1543,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "response_policy",
                 "entrypoint",
                 "offline",
+                "enabled",
             ):
                 if key in spec:
                     payload[key] = spec[key]
@@ -1671,6 +1700,7 @@ class TaskScheduler(BaseTaskScheduler):
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
         offline: Any = _UNSET,
+        enabled: Any = _UNSET,
         destination: str | None = None,
         _root_applied: bool = False,
     ) -> Dict[str, Any]:
@@ -1678,8 +1708,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         Accepts any subset of a task's mutable attributes (name, description,
         schedule, deadline, repeat, priority, trigger, entrypoint, offline
-        flag).  Only the fields that are explicitly provided are changed;
-        omitted fields keep their current values.
+        flag, enabled flag).  Only the fields that are explicitly provided are
+        changed; omitted fields keep their current values.
         """
 
         if not _root_applied:
@@ -1703,6 +1733,7 @@ class TaskScheduler(BaseTaskScheduler):
                     trigger=trigger,
                     entrypoint=entrypoint,
                     offline=offline,
+                    enabled=enabled,
                     destination=resolved_destination,
                     _root_applied=True,
                 )
@@ -1711,6 +1742,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         trigger_provided = trigger is not _UNSET
         offline_provided = offline is not _UNSET
+        enabled_provided = enabled is not _UNSET
         task = self._get_task_or_raise(task_id)
 
         if (
@@ -1724,6 +1756,7 @@ class TaskScheduler(BaseTaskScheduler):
             and not trigger_provided
             and entrypoint is _UNSET
             and not offline_provided
+            and not enabled_provided
         ):
             raise ValueError("At least one field must be provided for an update.")
 
@@ -1858,6 +1891,18 @@ class TaskScheduler(BaseTaskScheduler):
             else:
                 offline = bool(offline)
             entries["offline"] = offline
+        if enabled_provided:
+            if isinstance(enabled, str):
+                normalized_enabled = enabled.strip().lower()
+                if normalized_enabled in {"true", "1"}:
+                    enabled = True
+                elif normalized_enabled in {"false", "0"}:
+                    enabled = False
+                else:
+                    raise ValueError("enabled must be a boolean value")
+            else:
+                enabled = bool(enabled)
+            entries["enabled"] = enabled
 
         log_ids = self._store.get_rows(
             filter=f"task_id == {task_id}",
