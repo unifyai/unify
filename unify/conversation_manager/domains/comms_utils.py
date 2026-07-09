@@ -667,11 +667,14 @@ async def request_deferred_desktop_binding(assistant_id: int | str) -> None:
     if not base_url:
         return
     url = f"{base_url.rstrip('/')}/infra/runtime/{assistant_id}/request-desktop"
+    # Self-scoped: authenticate as this assistant; Comms verifies the key
+    # against the assistant's own session (no platform admin key needed).
+    self_headers = {"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
-                headers=headers,
+                headers=self_headers,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status >= 400:

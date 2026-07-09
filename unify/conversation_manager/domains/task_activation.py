@@ -747,13 +747,16 @@ def _dispatch_offline_trigger_candidate(
     """Ask Communication to execute one offline trigger candidate headlessly."""
 
     from unify.settings import SETTINGS
+    from unify.session_details import SESSION_DETAILS
 
     comms_url = (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
-    admin_key = SETTINGS.ORCHESTRA_ADMIN_KEY.get_secret_value()
+    # Self-scoped: dispatch as this assistant using its own UNIFY_KEY; Comms
+    # verifies it against the assistant's session (no platform admin key).
+    unify_key = SESSION_DETAILS.unify_key
     if not comms_url:
         raise RuntimeError("UNITY_COMMS_URL is not configured")
-    if not admin_key:
-        raise RuntimeError("ORCHESTRA_ADMIN_KEY is not configured")
+    if not unify_key:
+        raise RuntimeError("UNIFY_KEY is not configured")
     assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")
     response = requests.post(
         f"{comms_url}/infra/task-activation/offline-dispatch",
@@ -776,7 +779,7 @@ def _dispatch_offline_trigger_candidate(
                 contact_id=contact_id,
             ),
         },
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"Authorization": f"Bearer {unify_key}"},
         timeout=15,
     )
     response.raise_for_status()
