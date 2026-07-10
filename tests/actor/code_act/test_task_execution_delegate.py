@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -302,6 +303,54 @@ def repairable_task():
         assert await handle.result() == "repaired task completed"
         assert len(repair_calls) == 1
         assert repair_calls[0]["entrypoint_id"] == function_id
+    finally:
+        await actor.close()
+        ManagerRegistry.clear()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_repair_symbolic_entrypoint_snapshot_uses_callable_contract(monkeypatch):
+    """Repair must request metadata with _return_callable=True (FM contract)."""
+
+    ManagerRegistry.clear()
+    function_manager = FunctionManager()
+    actor = CodeActActor(function_manager=function_manager)
+
+    try:
+        function_manager.add_functions(
+            implementations=[
+                """
+def snapshot_task():
+    return "ok"
+""".strip(),
+            ],
+        )
+        function_id = function_manager.list_functions()["snapshot_task"]["function_id"]
+
+        class _FakeHandle:
+            async def result(self):
+                return "repaired"
+
+        monkeypatch.setattr(
+            "unify.actor.code_act_actor.start_async_tool_loop",
+            lambda **kwargs: _FakeHandle(),
+        )
+        monkeypatch.setattr(
+            "unify.actor.code_act_actor.new_llm_client",
+            lambda model: MagicMock(
+                set_system_message=MagicMock(),
+            ),
+        )
+
+        summary = await actor._repair_symbolic_entrypoint(
+            entrypoint_id=function_id,
+            request="Run snapshot task.",
+            entrypoint_kwargs={},
+            failure=RuntimeError("boom"),
+            repair_context=None,
+        )
+        assert summary == "repaired"
     finally:
         await actor.close()
         ManagerRegistry.clear()

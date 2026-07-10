@@ -4316,9 +4316,17 @@ class CodeActActor(BaseCodeActActor):
                 "Cannot repair symbolic entrypoint without FunctionManager.",
             )
 
-        function_snapshot = fm.filter_functions(
+        snapshot_namespace: dict[str, Any] = {}
+        snapshot_result = fm.filter_functions(
             filter=f"function_id == {int(entrypoint_id)}",
+            _return_callable=True,
+            _namespace=snapshot_namespace,
             _also_return_metadata=True,
+        )
+        function_snapshot = (
+            snapshot_result.get("metadata", [])
+            if isinstance(snapshot_result, dict)
+            else snapshot_result
         )
         tools = methods_to_tool_dict(
             fm.search_functions,
