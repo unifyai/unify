@@ -1,0 +1,190 @@
+name: Publish self-host images
+
+# Publishes:
+#   ghcr.io/unifyai/unity-selfhost:{staging,main}
+#   ghcr.io/unifyai/unity-desktop-selfhost:{staging,main}
+#
+# Runs in unifyai/unify because those GHCR packages are linked here
+# (GITHUB_TOKEN packages:write works). Overlay comes from unify-deploy.
+on:
+  push:
+    branches: [staging, main]
+    paths:
+    - 'unify/**'
+    - 'agent-service/**'
+    - 'scripts/**'
+    - 'deploy/**'
+    - 'pyproject.toml'
+    - 'uv.lock'
+    - '.github/workflows/ghcr-selfhost.yml'
+  workflow_dispatch:
+  repository_dispatch:
+    types: [publish-selfhost-images]
+
+concurrency:
+  group: ghcr-selfhost-${{ github.workflow }}-${{ github.event.client_payload.unity_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  UNITY_IMAGE: unifyai/unity-selfhost
+  DESKTOP_IMAGE: unifyai/unity-desktop-selfhost
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      channel_tag: ${{ steps.refs.outputs.channel_tag }}
+      image_tag: ${{ steps.refs.outputs.image_tag }}
+      checkout_ref: ${{ steps.refs.outputs.checkout_ref }}
+    steps:
+    - id: refs
+      env:
+        REF_NAME: ${{ github.ref_name }}
+        EVENT_NAME: ${{ github.event_name }}
+        DISPATCH_REF: ${{ github.event.client_payload.unity_ref }}
+        DISPATCH_SHA: ${{ github.event.client_payload.unity_sha }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        channel_tag="staging"
+        checkout_ref="$SHA"
+        if [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+          if [[ "${DISPATCH_REF:-}" == "main" ]]; then
+            channel_tag="main"
+          fi
+          checkout_ref="${DISPATCH_SHA:-${DISPATCH_REF:-staging}}"
+        elif [[ "$REF_NAME" == "main" ]]; then
+          channel_tag="main"
+        fi
+        image_tag="$checkout_ref"
+        if [[ ${#image_tag} -ne 40 ]]; then
+          image_tag="$SHA"
+        fi
+        {
+          echo "channel_tag=$channel_tag"
+          echo "image_tag=$image_tag"
+          echo "checkout_ref=$checkout_ref"
+        } >> "$GITHUB_OUTPUT"
+        echo "channel_tag=$channel_tag image_tag=$image_tag checkout_ref=$checkout_ref"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - platform: linux/amd64
+          runner: ubuntu-latest
+          arch_tag: amd64
+        - platform: linux/arm64
+          runner: ubuntu-24.04-arm
+          arch_tag: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.resolve.outputs.checkout_ref }}
+
+    - name: Overlay deploy/selfhost from unify-deploy
+      env:
+        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        CHANNEL: ${{ needs.resolve.outputs.channel_tag }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${GH_TOKEN}" ]]; then
+          echo "::error::CLONE_TOKEN secret is not configured on unity."
+          exit 1
+        fi
+        overlay="${RUNNER_TEMP}/unify-deploy-selfhost"
+        rm -rf "$overlay"
+        git clone --depth 1 --branch "${CHANNEL}" \
+          "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unify-deploy.git" "$overlay"
+        rm -rf deploy/selfhost
+        mkdir -p deploy/selfhost
+        cp -R "$overlay/deploy/selfhost/." deploy/selfhost/
+        printf '%s\n' "$(git -C "$overlay" rev-parse HEAD)" > deploy/selfhost/.unity-deploy-sha
+        echo "Overlay from unify-deploy@$(git -C "$overlay" rev-parse --short HEAD)"
+
+    - name: Resolve dependency SHAs (cache bust)
+      env:
+        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        CHANNEL: ${{ needs.resolve.outputs.channel_tag }}
+      run: |
+        set -euo pipefail
+        UNISDK_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unisdk.git" "refs/heads/${CHANNEL}" | cut -f1)"
+        UNILLM_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/unillm.git" "refs/heads/${CHANNEL}" | cut -f1)"
+        MAGNITUDE_SHA="$(git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/unifyai/magnitude.git" "refs/heads/unity-modifications" | cut -f1)"
+        echo "DEP_REPOS_SHA=${UNISDK_SHA}-${UNILLM_SHA}" >> "$GITHUB_ENV"
+        echo "MAGNITUDE_SHA=${MAGNITUDE_SHA}" >> "$GITHUB_ENV"
+        echo "Dependency SHAs: unisdk=${UNISDK_SHA:0:8} unillm=${UNILLM_SHA:0:8} magnitude=${MAGNITUDE_SHA:0:8}"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push unity-selfhost (${{ matrix.arch_tag }})
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deploy/Dockerfile
+        platforms: ${{ matrix.platform }}
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.UNITY_IMAGE }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch_tag }}
+        build-args: |
+          GITHUB_TOKEN=${{ secrets.CLONE_TOKEN }}
+          BRANCH=${{ needs.resolve.outputs.channel_tag }}
+          DEP_REPOS_SHA=${{ env.DEP_REPOS_SHA }}
+          MAGNITUDE_SHA=${{ env.MAGNITUDE_SHA }}
+        cache-from: type=gha,scope=unity-selfhost-${{ matrix.arch_tag }}
+        cache-to: type=gha,mode=max,scope=unity-selfhost-${{ matrix.arch_tag }}
+
+    - name: Build and push unity-desktop-selfhost (${{ matrix.arch_tag }})
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: deploy/selfhost/Dockerfile.desktop
+        platforms: ${{ matrix.platform }}
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.DESKTOP_IMAGE }}:${{ needs.resolve.outputs.image_tag }}-${{ matrix.arch_tag }}
+        cache-from: type=gha,scope=unity-desktop-selfhost-${{ matrix.arch_tag }}
+        cache-to: type=gha,mode=max,scope=unity-desktop-selfhost-${{ matrix.arch_tag }}
+
+  merge:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create multi-arch manifests
+      env:
+        CHANNEL: ${{ needs.resolve.outputs.channel_tag }}
+        IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
+      run: |
+        set -euo pipefail
+        docker buildx imagetools create \
+          -t "ghcr.io/unifyai/unity-selfhost:${CHANNEL}" \
+          -t "ghcr.io/unifyai/unity-selfhost:${IMAGE_TAG}" \
+          "ghcr.io/unifyai/unity-selfhost:${IMAGE_TAG}-amd64" \
+          "ghcr.io/unifyai/unity-selfhost:${IMAGE_TAG}-arm64"
+
+        docker buildx imagetools create \
+          -t "ghcr.io/unifyai/unity-desktop-selfhost:${CHANNEL}" \
+          -t "ghcr.io/unifyai/unity-desktop-selfhost:${IMAGE_TAG}" \
+          "ghcr.io/unifyai/unity-desktop-selfhost:${IMAGE_TAG}-amd64" \
+          "ghcr.io/unifyai/unity-desktop-selfhost:${IMAGE_TAG}-arm64"
