@@ -1,10 +1,9 @@
 """Coordinator onboarding narration handlers.
 
-Symmetric with ``inactivity`` for ``InactivityFollowup``: parses the
-``unity_system_event`` payload that orchestra publishes whenever a
-real user action lands during Coordinator onboarding (workspace
-OAuth, integration connect, or session start from the picker) and
-surfaces the request to the brain as a notification so it
+Parses the ``unity_system_event`` payload that orchestra publishes
+whenever a real user action lands during Coordinator onboarding
+(workspace OAuth, integration connect, or session start from the
+picker) and surfaces the request to the brain as a notification so it
 composes a short acknowledgement turn.
 
 We deliberately keep the handler dumb: the brain decides the wording
@@ -331,8 +330,7 @@ def _coordinator_onboarding_event_from_payload(
 ) -> CoordinatorOnboardingEvent | None:
     """Build a :class:`CoordinatorOnboardingEvent` from a comms payload.
 
-    Mirrors :func:`_inactivity_followup_event_from_payload`: the
-    adapter publishes ``unity_system_event`` with
+    The adapter publishes ``unity_system_event`` with
     ``event_type == "coordinator_onboarding_event"`` and an
     ``extra_event_fields`` dict carrying ``subtype`` + optional
     ``details``. Either landing here. The helper is intentionally

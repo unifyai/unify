@@ -1,19 +1,14 @@
-"""Unit tests for the inactivity-followup unity-side wiring.
+"""Unit tests for inactivity follow-up opt-out wiring (no brain wake).
+
+Orchestra now emails soft check-ins from twin@ directly. Unity only
+keeps activity-touch + opt-out / opt-in helpers and the matching
+comms primitives so the boss can still ask to stop follow-ups from
+console chat.
 
 Covers:
-    1. Event factories
-        - _inactivity_followup_event_from_payload accepts any dict, copies reason
-        - _inactivity_followup_event_from_wake_reason gates on type=inactivity_followup
-    2. Handler side effects
-        - pushes a notification to cm.notifications_bar
-        - logs to the session logger
-    3. EventHandler registration
-    4. activity_sync.touch_assistant_activity
-        - returns False on missing config
-        - posts to the right URL with admin auth on success
-        - swallows exceptions
-    5. activity_sync opt-out / opt-in helpers
-    6. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
+    1. activity_sync.touch_assistant_activity
+    2. activity_sync opt-out / opt-in helpers
+    3. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
 """
 
 from __future__ import annotations
@@ -23,16 +18,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from unify.comms.primitives import CommsPrimitives
-from unify.conversation_manager.domains.event_handlers import EventHandler
-from unify.conversation_manager.domains.inactivity import (
-    _DEFAULT_REASON,
-    _handle_inactivity_followup_event,
-    _inactivity_followup_event_from_payload,
-    _inactivity_followup_event_from_wake_reason,
-    _inactivity_notification_text,
-)
-from unify.conversation_manager.domains.notifications import NotificationBar
-from unify.conversation_manager.events import InactivityFollowup
 from unify.transcript_manager.activity_sync import (
     opt_in_to_inactivity_followups_via_orchestra,
     opt_out_of_inactivity_followups_via_orchestra,
@@ -40,120 +25,7 @@ from unify.transcript_manager.activity_sync import (
 )
 
 # ===========================================================================
-# 1. Event factories
-# ===========================================================================
-
-
-class TestInactivityEventFactories:
-    def test_payload_factory_returns_event_with_default_reason(self):
-        event = _inactivity_followup_event_from_payload({})
-        assert isinstance(event, InactivityFollowup)
-        assert event.reason == _DEFAULT_REASON
-
-    def test_payload_factory_uses_explicit_reason_when_given(self):
-        event = _inactivity_followup_event_from_payload({}, reason="custom reason")
-        assert event is not None
-        assert event.reason == "custom reason"
-
-    def test_payload_factory_returns_none_for_non_dict(self):
-        assert _inactivity_followup_event_from_payload(None) is None  # type: ignore[arg-type]
-        assert _inactivity_followup_event_from_payload("not a dict") is None  # type: ignore[arg-type]
-
-    def test_wake_reason_factory_accepts_inactivity_type(self):
-        event = _inactivity_followup_event_from_wake_reason(
-            {"type": "inactivity_followup"},
-        )
-        assert isinstance(event, InactivityFollowup)
-        assert event.reason == _DEFAULT_REASON
-
-    def test_wake_reason_factory_rejects_other_types(self):
-        assert (
-            _inactivity_followup_event_from_wake_reason(
-                {"type": "task_due", "task_id": 1},
-            )
-            is None
-        )
-        assert _inactivity_followup_event_from_wake_reason("not a dict") is None
-        assert _inactivity_followup_event_from_wake_reason(None) is None
-
-
-# ===========================================================================
-# 2. Handler side effects
-# ===========================================================================
-
-
-class TestInactivityHandler:
-    @pytest.mark.anyio
-    async def test_handler_pushes_notification_and_logs(self):
-        cm = MagicMock()
-        cm.notifications_bar = NotificationBar()
-        cm._session_logger = MagicMock()
-
-        event = InactivityFollowup(reason="Time to follow up.")
-        result = await _handle_inactivity_followup_event(event, cm)
-
-        assert result is True
-        assert len(cm.notifications_bar.notifications) == 1
-        notif = cm.notifications_bar.notifications[0]
-        assert notif.type == "Inactivity"
-        # Reason text must be in the notification body
-        assert "Time to follow up." in notif.content
-        cm._session_logger.info.assert_called_once()
-
-    def test_notification_text_includes_variant_guidance(self):
-        text = _inactivity_notification_text(InactivityFollowup(reason="hi"))
-        assert "hi" in text
-        # Brain should know to inspect transcript history to choose variant
-        assert "transcript" in text.lower()
-
-    def test_notification_text_includes_optout_primitives(self):
-        text = _inactivity_notification_text(InactivityFollowup(reason="hi"))
-        # Brain must know it can honour an explicit opt-out via primitives,
-        # and the old deletion-oriented primitives must be gone.
-        assert "stop_inactivity_followups" in text
-        assert "resume_inactivity_followups" in text
-        assert "terminate_self" not in text
-        assert "cancel_self_termination" not in text
-        # Opt-out never deletes anything.
-        assert "deleted" in text.lower()
-
-    def test_notification_text_directs_email_send(self):
-        """Inactivity follow-ups are email-only for V0."""
-        text = _inactivity_notification_text(InactivityFollowup(reason="hi"))
-        text_lower = text.lower()
-        assert "send_email" in text
-        assert "email" in text_lower
-        # No primary-channel branching: brain must NOT be told to pick WhatsApp
-        # over email based on availability.
-        assert "whatsapp if available" not in text_lower
-        assert "preferred channel" not in text_lower
-
-    def test_notification_text_keeps_whatsapp_as_callback(self):
-        """If the assistant has its own WhatsApp number, it goes in the body
-        as a callback option only — never as the sending channel."""
-        text = _inactivity_notification_text(InactivityFollowup(reason="hi"))
-        text_lower = text.lower()
-        assert "whatsapp" in text_lower
-        assert "callback" in text_lower
-        # Conditional phrasing ("if you have ...") must be present so the brain
-        # only includes the number when one is provisioned.
-        assert "if you have" in text_lower
-
-
-# ===========================================================================
-# 3. Registration
-# ===========================================================================
-
-
-class TestInactivityRegistration:
-    def test_inactivity_followup_is_registered(self):
-        assert (
-            InactivityFollowup in EventHandler._registry
-        ), "InactivityFollowup handler should be registered"
-
-
-# ===========================================================================
-# 4. activity_sync.touch_assistant_activity
+# 1. activity_sync.touch_assistant_activity
 # ===========================================================================
 
 
@@ -198,6 +70,7 @@ class TestTouchAssistantActivity:
             captured["headers"] = headers
             resp = MagicMock()
             resp.status_code = 200
+            resp.text = ""
             return resp
 
         fake_http = MagicMock()
@@ -216,9 +89,7 @@ class TestTouchAssistantActivity:
         ):
             assert touch_assistant_activity(42) is True
 
-        assert (
-            captured["url"] == "http://orchestra.test/admin/assistant/42/touch-activity"
-        )
+        assert captured["url"] == "http://orchestra.test/assistant/42/touch-activity"
         assert captured["headers"] == {"Authorization": "Bearer test-admin-key"}
 
     def test_returns_false_on_non_2xx(self):
@@ -267,7 +138,7 @@ class TestTouchAssistantActivity:
 
 
 # ===========================================================================
-# 5. Opt-out / opt-in sync helpers
+# 2. Opt-out / opt-in sync helpers
 # ===========================================================================
 
 
@@ -304,10 +175,7 @@ class TestFollowupOptOutHelpers:
         ):
             assert opt_out_of_inactivity_followups_via_orchestra(42) is True
 
-        assert (
-            captured["url"]
-            == "http://orchestra.test/admin/assistant/42/opt-out-followups"
-        )
+        assert captured["url"] == "http://orchestra.test/assistant/42/opt-out-followups"
         assert captured["headers"] == {"Authorization": "Bearer test-admin-key"}
 
     def test_opt_in_posts_to_correct_url(self):
@@ -325,10 +193,7 @@ class TestFollowupOptOutHelpers:
         ):
             assert opt_in_to_inactivity_followups_via_orchestra(42) is True
 
-        assert (
-            captured["url"]
-            == "http://orchestra.test/admin/assistant/42/opt-in-followups"
-        )
+        assert captured["url"] == "http://orchestra.test/assistant/42/opt-in-followups"
 
     def test_opt_out_returns_false_on_missing_config(self):
         with (
@@ -381,7 +246,7 @@ class TestFollowupOptOutHelpers:
 
 
 # ===========================================================================
-# 6. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
+# 3. CommsPrimitives.stop_inactivity_followups / resume_inactivity_followups
 # ===========================================================================
 
 

@@ -25,9 +25,6 @@ from unify.conversation_manager.domains.coordinator_onboarding import (
 from unify.conversation_manager.domains.coordinator_delegate import (
     _handle_coordinator_delegate_event,
 )
-from unify.conversation_manager.domains.inactivity import (
-    _handle_inactivity_followup_event,
-)
 from unify.conversation_manager.domains.integration_sync import (
     _handle_integration_tools_sync_completed,
     _handle_integration_tools_sync_failed,
@@ -2909,17 +2906,6 @@ async def _(
         await cm.request_llm_run(delay=0)
 
 
-@EventHandler.register(InactivityFollowup)
-async def _(
-    event: InactivityFollowup,
-    cm: "ConversationManager",
-    *args,
-    **kwargs,
-):
-    if await _handle_inactivity_followup_event(event, cm):
-        await cm.request_llm_run(delay=0)
-
-
 @EventHandler.register(AssistantPresenceObserved)
 async def _(
     event: AssistantPresenceObserved,
@@ -2952,11 +2938,10 @@ async def _(
     *args,
     **kwargs,
 ):
-    # Same shape as the inactivity handler: drop the event into the
-    # notifications bar via the domain helper and trigger an
-    # immediate LLM run so the brain composes the acknowledgement
-    # while the user's action is still in the foreground (a delayed
-    # narration during onboarding reads as stale).
+    # Drop the event into the notifications bar via the domain helper
+    # and trigger an immediate LLM run so the brain composes the
+    # acknowledgement while the user's action is still in the
+    # foreground (a delayed narration during onboarding reads as stale).
     if await _handle_coordinator_onboarding_event(event, cm):
         request_id = await cm.request_llm_run(delay=0)
         cm.set_pending_onboarding_request_id(request_id)
