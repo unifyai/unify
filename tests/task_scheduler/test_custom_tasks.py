@@ -173,6 +173,7 @@ async def test_sync_custom_tasks_inserts_new_entries(
     assert "Daily check" in names
     assert "On inbound email" in names
     assert "Draft task" not in names
+    assert all(row.enabled is False for row in rows)
 
 
 @_handle_project

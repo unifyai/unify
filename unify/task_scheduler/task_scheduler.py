@@ -2437,6 +2437,7 @@ class TaskScheduler(BaseTaskScheduler):
                 response_policy=response_policy,
                 entrypoint=entrypoint,
                 offline=offline,
+                enabled=False,
                 destination=destination_arg,
                 _root_applied=True,
             )
