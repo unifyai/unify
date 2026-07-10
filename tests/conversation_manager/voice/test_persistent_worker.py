@@ -806,6 +806,35 @@ class TestEntrypointMetadata:
         assert _voice_call_channel_defers_desktop_binding("whatsapp_call")
         assert not _voice_call_channel_defers_desktop_binding("email")
 
+    def test_call_module_has_no_stale_desktop_session_import(self):
+        # The deferred-binding guard in ``call.py`` lazily imports its desktop
+        # entitlement check. When ``domains/desktop_session.py`` was deleted the
+        # lazy import was missed, so every voice call crashed at connect time
+        # with ModuleNotFoundError (invisible to CI because it is import-on-call).
+        # Guard against that whole class of dangling reference resurfacing.
+        import inspect
+
+        from unify.conversation_manager.medium_scripts import call as call_module
+
+        assert "domains.desktop_session" not in inspect.getsource(call_module)
+
+    def test_assistant_has_managed_desktop_gate(self):
+        # The deferred-binding guard relies on this entitlement accessor; keep it
+        # gating on desktop mode, active status, and an assigned VM URL.
+        from unify.session_details import AssistantDetails
+
+        assert AssistantDetails(
+            desktop_mode="ubuntu",
+            managed_desktop_status="active",
+            desktop_url="https://vm.example/api",
+        ).has_managed_desktop
+        assert not AssistantDetails().has_managed_desktop
+        assert not AssistantDetails(
+            desktop_mode="ubuntu",
+            managed_desktop_status="active",
+            desktop_url=None,
+        ).has_managed_desktop
+
 
 # ---------------------------------------------------------------------------
 # IPC socket initialisation from metadata

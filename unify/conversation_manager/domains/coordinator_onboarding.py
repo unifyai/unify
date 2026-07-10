@@ -419,7 +419,10 @@ def _coordinator_onboarding_notification_text(
             "no supplied clue or answer, and I keep the answer to myself. "
             "User-facing lines stay minimal (one sentence that we're testing "
             "the channel with a quick sci-fi quiz); I never list genres or "
-            "franchises."
+            "franchises. I write the full clue text out myself and pass it as "
+            "the outbound tool's message body (for the SMS/text tool that is "
+            "the required `content` argument) — I never call the send tool "
+            "with an empty body."
         )
         framing_note = f" Section framing: {framing}" if framing else ""
         interaction_note = (

@@ -317,11 +317,26 @@ async def single_shot_tool_decision(
         spec = normalised[fn_name]
         fn = spec.fn
 
-        # Execute (handle both sync and async callables)
-        if asyncio.iscoroutinefunction(fn) or inspect.iscoroutinefunction(fn):
-            result = await fn(**fn_args)
-        else:
-            result = fn(**fn_args)
+        # Execute (handle both sync and async callables). A malformed call
+        # (missing/extra/wrong-typed arguments) is an expected, recoverable
+        # event in an LLM tool loop, so surface it back to the model as an
+        # error result — the same shape used for rejected calls — instead of
+        # letting one bad call abort the whole concurrent batch.
+        try:
+            if asyncio.iscoroutinefunction(fn) or inspect.iscoroutinefunction(fn):
+                result = await fn(**fn_args)
+            else:
+                result = fn(**fn_args)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _ss_logger.warning(
+                "⏱️ [single_shot] tool %s raised %s: %s",
+                fn_name,
+                type(exc).__name__,
+                exc,
+            )
+            result = {"error": f"{type(exc).__name__}: {exc}"}
 
         return ToolExecution(
             name=fn_name,

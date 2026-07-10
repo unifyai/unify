@@ -307,7 +307,11 @@ class ConversationManagerBrainActionTools:
         Parameters
         ----------
         content : str
-            Message body to send to my boss.
+            The full message body to send to my boss. Required on every call:
+            I author the complete text myself and pass it here, and never
+            invoke this tool without it. When the body is something I make up
+            on the spot (e.g. an onboarding sci-fi quiz clue), I write it out
+            in full in this argument rather than leaving it empty.
         """
         return await self._comms.send_sms(
             contact_id=self._boss_contact_id(),

@@ -32,6 +32,7 @@ from unify.gateway.adapters.ms_teams_bot_auth import (
     BotFrameworkAuthError,
     verify_bot_framework_token,
 )
+from unify.gateway.channels.ms_teams_bot.views import _mint_connector_token
 from unify.gateway.context import GatewayContext, get_gateway_context
 from unify.settings import SETTINGS
 
@@ -103,19 +104,21 @@ def _normalize_attachments(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return attachments
 
 
-async def _ensure_pending_install(activity: dict[str, Any]) -> None:
+async def _ensure_pending_install(activity: dict[str, Any]) -> dict[str, Any] | None:
     """Record a pending (unbound) install when the bot is added to a tenant.
 
     Captures the ``serviceUrl`` (needed for every future outbound call) so
     the tenant-to-org bind handshake can complete later without another
-    inbound round-trip.
+    inbound round-trip. Returns Orchestra's install response (carrying
+    ``bind_nonce`` + a one-click ``connect_url``) so the caller can DM the
+    installer the connect link.
     """
     channel_data = activity.get("channelData") or {}
     tenant_id = (channel_data.get("tenant") or {}).get("id") or ""
     if not tenant_id:
-        return
+        return None
     installer = activity.get("from") or {}
-    await _post_orchestra(
+    return await _post_orchestra(
         "/admin/ms-teams-bot/pending-install",
         {
             "tenant_id": tenant_id,
@@ -124,6 +127,97 @@ async def _ensure_pending_install(activity: dict[str, Any]) -> None:
             "installer_aad_object_id": installer.get("aadObjectId") or "",
         },
     )
+
+
+def _install_welcome_card(connect_url: str) -> dict[str, Any]:
+    """Adaptive Card attachment: a one-tap "Connect to Unify" button."""
+    return {
+        "contentType": "application/vnd.microsoft.card.adaptive",
+        "content": {
+            "type": "AdaptiveCard",
+            "version": "1.4",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "size": "Medium",
+                    "weight": "Bolder",
+                    "text": "Thanks for adding Unify to Teams",
+                },
+                {
+                    "type": "TextBlock",
+                    "wrap": True,
+                    "text": (
+                        "One more step: connect this Teams tenant to your "
+                        "Unify account or organization. Tap Connect below and "
+                        "finish in Console — you only do this once."
+                    ),
+                },
+            ],
+            "actions": [
+                {
+                    "type": "Action.OpenUrl",
+                    "title": "Connect to Unify",
+                    "url": connect_url,
+                },
+            ],
+        },
+    }
+
+
+async def _send_install_welcome(
+    activity: dict[str, Any],
+    install: dict[str, Any] | None,
+) -> None:
+    """Proactively DM the installer a one-click connect link (best-effort).
+
+    Mints a Bot Connector token via the shared ``/send`` machinery and posts
+    an Adaptive Card into the install conversation. Any missing piece (an
+    already-bound install with no ``connect_url``, no ``service_url``, no
+    token, or a send failure) is logged and swallowed so it never breaks the
+    webhook.
+    """
+    if not install:
+        return
+    connect_url = install.get("connect_url") or ""
+    if not connect_url:
+        return
+    conversation = activity.get("conversation") or {}
+    conversation_id = conversation.get("id") or ""
+    service_url = (
+        activity.get("serviceUrl") or install.get("service_url") or ""
+    ).rstrip("/")
+    if not conversation_id or not service_url:
+        logger.warning(
+            "ms_teams_bot: welcome DM skipped — missing conversation_id or "
+            "service_url",
+        )
+        return
+    try:
+        token = await _mint_connector_token()
+    except Exception:
+        logger.exception("ms_teams_bot: connector token mint failed")
+        return
+    message = {"type": "message", "attachments": [_install_welcome_card(connect_url)]}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{service_url}/v3/conversations/{conversation_id}/activities",
+                json=message,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+            )
+    except Exception:
+        logger.exception("ms_teams_bot: welcome DM send transport error")
+        return
+    if resp.status_code >= 400:
+        logger.error(
+            "ms_teams_bot: welcome DM send failed: %s %s",
+            resp.status_code,
+            resp.text,
+        )
 
 
 async def resolve_ms_teams_bot_inbound(
@@ -201,6 +295,22 @@ async def ms_teams_bot_messages_webhook(
         members_added = activity.get("membersAdded") or []
         recipient_id = (activity.get("recipient") or {}).get("id") or ""
         if any(member.get("id") == recipient_id for member in members_added):
+            # Personal-scope add fires with a live 1:1 conversation reference,
+            # so record the install and DM the installer a one-click connect
+            # link (no code to copy).
+            install = await _ensure_pending_install(activity)
+            await _send_install_welcome(activity, install)
+        return {"status": 200}
+
+    # ``installationUpdate`` fires for app install/uninstall across scopes.
+    # ``add`` for an org-wide/admin-center install registers the tenant so the
+    # owner can bind it; we do NOT DM here because a personal add already emits
+    # the ``conversationUpdate`` above (avoids a double-DM) and an org install
+    # may have no personal 1:1 to message. ``remove``/``remove-upgrade`` are
+    # teardown signals the local mirror does not act on (no per-tenant token to
+    # revoke at Microsoft).
+    if activity_type == "installationUpdate":
+        if (activity.get("action") or "") == "add":
             await _ensure_pending_install(activity)
         return {"status": 200}
 
