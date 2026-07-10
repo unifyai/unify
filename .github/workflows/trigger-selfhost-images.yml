@@ -1,6 +1,6 @@
 name: Trigger self-host image publish
 
-# Dispatches unifyai/unity-deploy's Publish self-host images workflow when
+# Dispatches unifyai/unify-deploy's Publish self-host images workflow when
 # Unity sources that ship in those images change on staging/main.
 on:
   push:
@@ -26,7 +26,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-    - name: Trigger unifyai/unity-deploy Publish self-host images
+      - name: Trigger unifyai/unify-deploy Publish self-host images
       env:
         GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
         UNITY_REF: ${{ github.ref_name }}
@@ -34,19 +34,19 @@ jobs:
       run: |
         set -euo pipefail
         if [[ -z "${GH_TOKEN}" ]]; then
-          echo "::error::CLONE_TOKEN secret is not configured on unity."
-          echo "It must be a PAT that can dispatch workflows on unifyai/unity-deploy."
-          exit 1
-        fi
-        gh api repos/unifyai/unity-deploy/dispatches \
-          --method POST \
-          --input - <<EOF
-        {
-          "event_type": "publish-selfhost-images",
-          "client_payload": {
-            "unity_ref": "${UNITY_REF}",
-            "unity_sha": "${UNITY_SHA}"
+            echo "::error::CLONE_TOKEN secret is not configured on unity."
+            echo "It must be a PAT that can dispatch workflows on unifyai/unify-deploy."
+            exit 1
+          fi
+          gh api repos/unifyai/unify-deploy/dispatches \
+            --method POST \
+            --input - <<EOF
+          {
+            "event_type": "publish-selfhost-images",
+            "client_payload": {
+              "unity_ref": "${UNITY_REF}",
+              "unity_sha": "${UNITY_SHA}"
+            }
           }
-        }
-        EOF
-        echo "Dispatched publish-selfhost-images to unity-deploy (ref=${UNITY_REF} sha=${UNITY_SHA})"
+          EOF
+          echo "Dispatched publish-selfhost-images to unify-deploy (ref=${UNITY_REF} sha=${UNITY_SHA})"
