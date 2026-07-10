@@ -634,35 +634,32 @@ async def publish_assistant_desktop_ready(
     The Console subscribes to this thread to update the liveview iframe.
     """
     agent_id = SESSION_DETAILS.assistant.agent_id
+    event_data = {
+        "binding_id": binding_id,
+        "desktop_url": desktop_url,
+        "liveview_url": liveview_url,
+        "vm_type": vm_type,
+    }
+    message_data = {
+        "thread": "assistant_desktop_ready",
+        "event": event_data,
+    }
+
+    # Console always reads from the assistant's Pub/Sub topic, even in
+    # LOCAL_COMMS_MODE=local; the local outbox is a best-effort mirror.
     if _use_local_comms():
         try:
-            await _publish_local_outbox_async(
-                {
-                    "thread": "assistant_desktop_ready",
-                    "event": {
-                        "binding_id": binding_id,
-                        "desktop_url": desktop_url,
-                        "liveview_url": liveview_url,
-                        "vm_type": vm_type,
-                    },
-                },
-            )
+            await _publish_local_outbox_async(message_data)
         except Exception as e:
-            LOGGER.error(
-                f"{ICONS['comms_outbound']} Error publishing assistant_desktop_ready: {e}",
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
             )
-        return
 
     try:
         _publish_to_assistant_topic(
             agent_id=agent_id,
             thread="assistant_desktop_ready",
-            event={
-                "binding_id": binding_id,
-                "desktop_url": desktop_url,
-                "liveview_url": liveview_url,
-                "vm_type": vm_type,
-            },
+            event=event_data,
         )
         env_suffix = SETTINGS.ENV_SUFFIX if agent_id is not None else ""
         LOGGER.debug(

@@ -1,0 +1,52 @@
+name: Trigger self-host image publish
+
+# Dispatches unifyai/unify-deploy's Publish self-host images workflow when
+# Unity sources that ship in those images change on staging/main.
+on:
+  push:
+    branches: [staging, main]
+    paths:
+    - 'unify/**'
+    - 'agent-service/**'
+    - 'scripts/**'
+    - 'deploy/**'
+    - 'pyproject.toml'
+    - 'uv.lock'
+    - '.github/workflows/trigger-selfhost-images.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: trigger-selfhost-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Trigger unifyai/unify-deploy Publish self-host images
+      env:
+        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
+        UNITY_REF: ${{ github.ref_name }}
+        UNITY_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${GH_TOKEN}" ]]; then
+          echo "::error::CLONE_TOKEN secret is not configured on unity."
+          echo "It must be a PAT that can dispatch workflows on unifyai/unify-deploy."
+          exit 1
+        fi
+        gh api repos/unifyai/unify-deploy/dispatches \
+          --method POST \
+          --input - <<EOF
+        {
+          "event_type": "publish-selfhost-images",
+          "client_payload": {
+            "unity_ref": "${UNITY_REF}",
+            "unity_sha": "${UNITY_SHA}"
+          }
+        }
+        EOF
+        echo "Dispatched publish-selfhost-images to unify-deploy (ref=${UNITY_REF} sha=${UNITY_SHA})"

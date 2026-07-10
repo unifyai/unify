@@ -651,6 +651,54 @@ class TestLocalCommsBackends:
             assert publish_kwargs.get("thread") == "unify_message_outbound"
 
     @pytest.mark.asyncio
+    async def test_publish_assistant_desktop_ready_mirrors_to_local_outbox_and_pubsub(
+        self,
+    ):
+        """Local-comms mode mirrors desktop-ready into the local outbox but
+        still publishes to Pub/Sub so Console SSE can unlock liveview.
+        """
+        mock_publisher = MagicMock()
+        mock_publisher.topic_path.return_value = "projects/p/topics/unity-1"
+        mock_future = MagicMock()
+        mock_future.result.return_value = "desktop-ready-1"
+        mock_publisher.publish.return_value = mock_future
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
+                return_value=True,
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils._publish_local_outbox_async",
+                new=AsyncMock(return_value=True),
+            ) as mock_outbox,
+            patch(
+                "unify.conversation_manager.domains.comms_utils._get_publisher",
+                return_value=mock_publisher,
+            ),
+        ):
+            await comms_utils.publish_assistant_desktop_ready(
+                "binding-1",
+                "http://127.0.0.1:8090",
+                "http://127.0.0.1:8090/desktop/custom.html",
+                "ubuntu",
+            )
+
+            mock_outbox.assert_awaited_once()
+            outbox_payload = mock_outbox.await_args.args[0]
+            assert outbox_payload["thread"] == "assistant_desktop_ready"
+            assert outbox_payload["event"]["binding_id"] == "binding-1"
+            assert outbox_payload["event"]["desktop_url"] == "http://127.0.0.1:8090"
+            assert (
+                outbox_payload["event"]["liveview_url"]
+                == "http://127.0.0.1:8090/desktop/custom.html"
+            )
+            assert outbox_payload["event"]["vm_type"] == "ubuntu"
+            mock_publisher.publish.assert_called_once()
+            _, publish_kwargs = mock_publisher.publish.call_args
+            assert publish_kwargs.get("thread") == "assistant_desktop_ready"
+
+    @pytest.mark.asyncio
     async def test_send_unify_meet_ring_publishes_incoming_thread(self):
         """The Meet ring publishes a ``unify_meet_incoming`` frame carrying the
         call session id and reason so the Console can show the Answer window."""
