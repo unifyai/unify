@@ -446,7 +446,7 @@ def _task_due_event_from_wake_reason(reason: Any) -> TaskDue | None:
     """Convert one startup wake-reason payload into a typed `TaskDue` event.
 
     Cold-start wake reasons are a heterogeneous list of dicts (task_due,
-    inactivity_followup, …) keyed by a leading ``type`` discriminator.
+    coordinator_delegate, …) keyed by a leading ``type`` discriminator.
     Validate the discriminator here, then delegate the actual field
     extraction to :meth:`TaskDue.from_dict` so all `TaskDue` producers
     share one builder.
@@ -596,10 +596,6 @@ async def _handle_task_trigger_requested_event(
 async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
     """Replay startup wake reasons once managers are initialized."""
 
-    from unify.conversation_manager.domains.inactivity import (
-        _handle_inactivity_followup_event,
-        _inactivity_followup_event_from_wake_reason,
-    )
     from unify.conversation_manager.domains.coordinator_delegate import (
         _coordinator_delegate_event_from_wake_reason,
         _handle_coordinator_delegate_event,
@@ -622,11 +618,6 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         task_trigger_event = _task_trigger_event_from_wake_reason(wake_reason)
         if task_trigger_event is not None:
             await _handle_task_trigger_requested_event(task_trigger_event, cm)
-            continue
-
-        inactivity_event = _inactivity_followup_event_from_wake_reason(wake_reason)
-        if inactivity_event is not None:
-            await _handle_inactivity_followup_event(inactivity_event, cm)
             continue
 
         coordinator_delegate_event = _coordinator_delegate_event_from_wake_reason(

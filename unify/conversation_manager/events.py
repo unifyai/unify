@@ -1835,25 +1835,6 @@ class TaskTriggerRequested(Event):
 
 
 @dataclass
-class InactivityFollowup(Event):
-    """Orchestra signalled that the user has been silent across all of
-    their assistants for ``settings.inactivity_followup_days`` (orchestra
-    side) and this Coordinator should compose a re-engagement message to
-    the boss.
-
-    Communication publishes this either as a ``unity_system_event`` to a
-    hot pod's Pub/Sub topic or, on a cold start, as an entry in
-    ``StartupEvent.wake_reasons``. The event itself carries no extra
-    fields — the brain decides the variant (never-spoke vs spoke-before)
-    by inspecting transcript history when the handler runs.
-    """
-
-    topic: ClassVar[str | None] = "app:comms:inactivity_followup"
-
-    reason: str = ""
-
-
-@dataclass
 class AssistantPresenceObserved(Event):
     """Console observed the user viewing or interacting with this assistant.
 

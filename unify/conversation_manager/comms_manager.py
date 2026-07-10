@@ -61,9 +61,6 @@ from unify.conversation_manager.domains.coordinator_onboarding import (
 from unify.conversation_manager.domains.coordinator_delegate import (
     _coordinator_delegate_event_from_payload,
 )
-from unify.conversation_manager.domains.inactivity import (
-    _inactivity_followup_event_from_payload,
-)
 from unify.conversation_manager.domains.integration_sync import (
     _integration_tools_sync_completed_from_payload,
     _integration_tools_sync_failed_from_payload,
@@ -1036,10 +1033,6 @@ class CommsManager:
                         reason=r,
                     ),
                     "task_trigger": lambda r: _task_trigger_event_from_payload(
-                        event,
-                        reason=r,
-                    ),
-                    "inactivity_followup": lambda r: _inactivity_followup_event_from_payload(
                         event,
                         reason=r,
                     ),
