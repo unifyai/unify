@@ -143,6 +143,7 @@ class CommsPrimitives:
     ) -> None:
         self._cm = conversation_manager
         self._event_broker = event_broker or get_event_broker()
+        self._sms_reply_note_sent_contacts: set[int] = set()
 
     async def _publish_comms_event(self, topic: str, event) -> None:
         if slow_brain_direct_outbound_active():
@@ -153,6 +154,46 @@ class CommsPrimitives:
         if self._cm is not None:
             return getattr(self._cm, "assistant_number", "") or ""
         return SESSION_DETAILS.assistant.number or ""
+
+    def _is_first_sms_to_contact(self, contact_id: int) -> bool:
+        """True when no SMS with *contact_id* is visible in loaded history.
+
+        Gates the short-code reply-to note so it is added only on the opening
+        SMS of a thread. The live session's ``global_thread`` is hydrated from
+        the durable transcript at startup, so this catches both same-session
+        and recently-persisted prior SMS. Offline/``act`` runs have no contact
+        index and always treat the send as first (worst case: a rare duplicate
+        note).
+        """
+        if contact_id in self._sms_reply_note_sent_contacts:
+            return False
+        if self._cm is None:
+            return True
+        prior = self._cm.contact_index.get_messages_for_contact(
+            contact_id,
+            medium=Medium.SMS_MESSAGE,
+        )
+        return not prior
+
+    def _apply_sms_reply_note(self, content: str, contact_id: int) -> str:
+        """Embed the assistant's inbound number on the first SMS of a thread.
+
+        In A2P-regulated destinations Twilio can override the outbound sender
+        with a short code or alphanumeric sender ID the recipient cannot reply
+        to, so the real inbound number is written into the body as a reliable
+        reply path. Added once per contact (per loaded history) and never when
+        the number is already present in the body.
+        """
+        number = self._assistant_number()
+        if not number or number in content:
+            return content
+        if not self._is_first_sms_to_contact(contact_id):
+            return content
+        self._sms_reply_note_sent_contacts.add(contact_id)
+        return (
+            f"{content}\n\n(If this reached you from a short code/sender ID "
+            f"due to local carrier rules, text me directly at {number}.)"
+        )
 
     def _assistant_email(self) -> str:
         if self._cm is not None:
@@ -800,6 +841,11 @@ class CommsPrimitives:
                     "contact_display_name": _get_contact_display_name(contact),
                 },
             )
+
+        content = self._apply_sms_reply_note(
+            content,
+            (contact or {}).get("contact_id") or contact_id,
+        )
 
         offline_reservation, offline_response = self._reserve_offline_operation(
             method_name="send_sms",
