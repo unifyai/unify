@@ -85,7 +85,9 @@ ToolPolicyFn = Callable[[int, Dict[str, Any]], tuple[str, Dict[str, Any]]]
 
 Receives ``(step_index, tools_dict)`` and returns ``(tool_choice_mode,
 filtered_tools_dict)`` where *tool_choice_mode* is ``"auto"`` or
-``"required"``.
+``"required"``.  An optional third dict ``{"eager": True}`` may be returned
+to request immediate follow-up LLM turns while the policy remains eager
+(see the async tool loop ``tool_policy`` docs).
 """
 
 _USE_DEFAULT: object = object()
@@ -138,6 +140,13 @@ def _default_tool_policy(
     satisfied the full (statically-filtered) tool set is returned with
     ``"auto"`` mode.
 
+    While gates remain open the policy also sets ``eager=True``, so the async
+    tool loop grants another LLM turn immediately after each partial discovery
+    call is scheduled (without waiting for that call's result).  That way a
+    model that only fires one of the two required discovery tools on the first
+    turn is prompted for the missing one right away, overlapping the in-flight
+    search.
+
     When only one of the two manager tool families is present, that single
     family acts as the sole gate.  When neither is present the policy is a
     no-op pass-through.
@@ -157,7 +166,7 @@ def _default_tool_policy(
         step: int,
         tools: Dict[str, Any],
         called_tools: list[str],
-    ) -> tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, Dict[str, Any]] | tuple[str, Dict[str, Any], dict]:
         filtered = filter_tools(tools)
 
         fm_satisfied = (not has_fm_tools) or any(
@@ -189,7 +198,9 @@ def _default_tool_policy(
                 },
             )
 
-        return ("required", gated) if gated else ("auto", filtered)
+        if gated:
+            return "required", gated, {"eager": True}
+        return "auto", filtered
 
     return _policy
 
