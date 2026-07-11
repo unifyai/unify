@@ -1163,22 +1163,6 @@ class ProactiveSpeechControl(Event):
 
 
 @dataclass
-class FastBrainMoodClassified(Event):
-    """Avatar mood classified from the current fast-brain voice transcript."""
-
-    topic: ClassVar[str | None] = "app:comms:fast_brain_mood"
-
-    contact: dict
-    channel: str
-    mood: str
-    avatar_mood: str
-    trigger_role: str
-    trigger_utterance_id: str
-    turn_index: int
-    model: str = ""
-
-
-@dataclass
 class EmailReceived(Event):
     """An email was received from a contact.
 
