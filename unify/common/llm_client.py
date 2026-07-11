@@ -66,6 +66,61 @@ def resolve_default_model() -> tuple[str, str | None]:
     return SETTINGS.UNIFY_MODEL, None
 
 
+def resolve_slow_brain_model() -> tuple[str, str | None]:
+    """Resolve the ConversationManager slow-brain LLM as (model, effort).
+
+    Priority:
+    1. Per-assistant default (Orchestra / SESSION_DETAILS), including effort
+    2. ``UNITY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
+    3. The global shared model (``resolve_default_model`` / ``UNIFY_MODEL``)
+
+    A returned effort of None means per-call-site effort levels apply.
+    """
+    session_model = SESSION_DETAILS.assistant.default_model
+    if session_model:
+        return (
+            session_model,
+            SESSION_DETAILS.assistant.default_reasoning_effort or None,
+        )
+    slow_model = SETTINGS.conversation.SLOW_BRAIN_MODEL.strip()
+    if slow_model:
+        effort = SETTINGS.conversation.SLOW_BRAIN_REASONING_EFFORT.strip() or None
+        return slow_model, effort
+    return resolve_default_model()
+
+
+def _build_llm_client(
+    model: str,
+    *,
+    async_client: bool,
+    stateful: bool,
+    origin: str | None,
+    default_effort: str | None,
+    kwargs: dict[str, Any],
+) -> "unillm.AsyncUnify | unillm.Unify":
+    config = {
+        "reasoning_effort": "high",
+        "service_tier": "priority",
+        "stateful": stateful,
+        "origin": origin,
+    }
+    config.update(kwargs)
+    if default_effort is not None:
+        config["reasoning_effort"] = default_effort
+
+    if async_client:
+        client = unillm.AsyncUnify(model, **config)
+    else:
+        client = unillm.Unify(model, **config)
+
+    if origin:
+        pending_log = PendingThinkingLog(origin)
+        client.set_on_log_file_pending(pending_log.on_pending_path)
+        client._pending_thinking_log = pending_log
+
+    return client
+
+
 def new_llm_client(
     model: str | None = None,
     *,
@@ -91,27 +146,43 @@ def new_llm_client(
     if model is None:
         model, default_effort = resolve_default_model()
 
-    config = {
-        "reasoning_effort": "high",
-        "service_tier": "priority",
-        "stateful": stateful,
-        "origin": origin,
-    }
-    config.update(kwargs)
-    if default_effort is not None:
-        config["reasoning_effort"] = default_effort
+    return _build_llm_client(
+        model,
+        async_client=async_client,
+        stateful=stateful,
+        origin=origin,
+        default_effort=default_effort,
+        kwargs=kwargs,
+    )
 
-    if async_client:
-        client = unillm.AsyncUnify(model, **config)
-    else:
-        client = unillm.Unify(model, **config)
 
-    if origin:
-        pending_log = PendingThinkingLog(origin)
-        client.set_on_log_file_pending(pending_log.on_pending_path)
-        client._pending_thinking_log = pending_log
+def new_slow_brain_llm_client(
+    model: str | None = None,
+    *,
+    async_client: bool = True,
+    stateful: bool = False,
+    origin: str | None = None,
+    **kwargs: Any,
+) -> "unillm.AsyncUnify | unillm.Unify":
+    """Create an LLM client for ConversationManager slow-brain call sites.
 
-    return client
+    When ``model`` is omitted, resolves via :func:`resolve_slow_brain_model`
+    (assistant default → slow-brain setting → global shared ``UNIFY_MODEL``).
+    Defaults to high reasoning effort; an assistant- or setting-level effort
+    override pins the client effort the same way as :func:`new_llm_client`.
+    """
+    default_effort: str | None = None
+    if model is None:
+        model, default_effort = resolve_slow_brain_model()
+
+    return _build_llm_client(
+        model,
+        async_client=async_client,
+        stateful=stateful,
+        origin=origin,
+        default_effort=default_effort,
+        kwargs=kwargs,
+    )
 
 
 def new_vision_llm_client(

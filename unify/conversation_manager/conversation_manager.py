@@ -37,7 +37,7 @@ from unify.conversation_manager.events import *
 from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
-from unify.common.llm_client import new_llm_client, new_vision_llm_client
+from unify.common.llm_client import new_slow_brain_llm_client, new_vision_llm_client
 from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
@@ -417,9 +417,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._recording_exchange_ids: dict[str, int] = {}
 
         # proactive speech
-        self.proactive_speech = ProactiveSpeech(
-            model=SETTINGS.conversation.PROACTIVE_SPEECH_MODEL,
-        )
+        proactive_model = SETTINGS.conversation.PROACTIVE_SPEECH_MODEL.strip() or None
+        self.proactive_speech = ProactiveSpeech(model=proactive_model)
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
         self._proactive_speech_enabled: bool = True
@@ -2260,15 +2259,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
             )
         else:
-            client = new_llm_client(
+            client = new_slow_brain_llm_client(
                 origin="ConversationManager",
-                # Slow brain pins "high" explicitly so an assistant-level effort
-                # override is the only thing that can raise it. On DeepSeek v4
-                # "max" buys marginal gains on the hardest tasks at extra
-                # latency; on MiniMax M3 all non-none effort levels enable the
-                # same adaptive thinking mode. When the assistant carries a
-                # default-model effort override, it takes priority over this
-                # value inside new_llm_client().
+                # Slow brain pins "high" explicitly so an assistant-level or
+                # SLOW_BRAIN_REASONING_EFFORT override is the only thing that
+                # can change it. When the assistant carries a default-model
+                # effort override, it takes priority inside
+                # new_slow_brain_llm_client().
                 reasoning_effort="high",
             )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
