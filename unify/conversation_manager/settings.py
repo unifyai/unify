@@ -21,6 +21,9 @@ class ConversationSettings(BaseSettings):
         CONTACT_ID: Default contact ID for simulated ConversationManager.
         FAST_BRAIN_MODEL: LLM model for the voice fast brain (TTS mode).
             Override via UNITY_CONVERSATION_FAST_BRAIN_MODEL.
+        FAST_BRAIN_REASONING_EFFORT: Reasoning effort for voice fast-brain
+            call sites (LiveKit voice, turn selection, opening greeting).
+            Override via UNITY_CONVERSATION_FAST_BRAIN_REASONING_EFFORT.
         SLOW_BRAIN_MODEL: Shared ConversationManager slow-brain model. Empty
             falls back to the global shared model (UNIFY_MODEL / assistant
             default resolution). Override via
@@ -57,6 +60,7 @@ class ConversationSettings(BaseSettings):
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
+    FAST_BRAIN_REASONING_EFFORT: str = "low"
     SLOW_BRAIN_MODEL: str = "gpt-5.6-terra@openai"
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
