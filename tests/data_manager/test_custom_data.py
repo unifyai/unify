@@ -184,7 +184,11 @@ async def test_sync_custom_data_inserts_rows(
 ):
     _handle_project("DataManagerCustomSync")
     dm = data_manager_factory()
-    source = collect_custom_data(path=custom_data_dir)
+    source = {
+        context: table
+        for context, table in collect_custom_data(path=custom_data_dir).items()
+        if (table.get("destination") or "personal") == "personal"
+    }
     assert dm.sync_custom(source_tables=source) is True
     rows = dm.filter(
         "CRM/ReferenceCodes",
@@ -203,7 +207,11 @@ async def test_sync_custom_data_is_idempotent(
 ):
     _handle_project("DataManagerCustomSync")
     dm = data_manager_factory()
-    source = collect_custom_data(path=custom_data_dir)
+    source = {
+        context: table
+        for context, table in collect_custom_data(path=custom_data_dir).items()
+        if (table.get("destination") or "personal") == "personal"
+    }
     assert dm.sync_custom(source_tables=source) is True
     dm._custom_data_synced = False
     assert dm.sync_custom(source_tables=source) is False

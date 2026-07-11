@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-
+import unisdk
 import unify.common.semantic_search as semantic_search
 from unify.common.semantic_search import (
     COMBINED_COSINE_KEY,
