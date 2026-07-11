@@ -41,10 +41,6 @@ class ConversationSettings(BaseSettings):
             creation for inbound messages. Default False for fast inbound path.
             When False, no BlackListManager or ContactManager initialization
             occurs during message handling.
-        SPEECH_URGENCY_PREEMPT_ENABLED: Enable the concurrent fast-brain urgency
-            evaluator for voice mode. When a user speaks while the slow brain is
-            mid-run, a sidecar LLM call classifies the utterance as urgent
-            (preempt) or not (let the queue proceed). Default True.
         INGRESS_TRANSPORT: Selector for the inbound transport
             (``unify.gateway.IngressTransport`` implementation) that
             CommsManager consumes. ``""`` (default) and ``"legacy"`` both
@@ -76,7 +72,6 @@ class ConversationSettings(BaseSettings):
     JOB_NAME: str = ""
     CONTACT_ID: str = "1"
     BLACKLIST_CHECKS_ENABLED: bool = False
-    SPEECH_URGENCY_PREEMPT_ENABLED: bool = True
     ASSISTANT_SESSION_GROUP: str = "infra.unify.ai"
     ASSISTANT_SESSION_VERSION: str = "v1alpha1"
     ASSISTANT_SESSION_PLURAL: str = "assistantsessions"

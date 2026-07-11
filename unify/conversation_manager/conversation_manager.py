@@ -1178,9 +1178,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         turn_id: int | None = None,
     ):
         """Route a completed voice user turn to the active ask handle or slow brain."""
-        prev_utterance = getattr(self, "_last_inbound_utterance", None)
-        self._last_inbound_utterance = content
-
         if self.active_ask_handle and not self.active_ask_handle.done():
             await self.active_ask_handle.interject(content)
             return
@@ -1192,77 +1189,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             turn_id=turn_id,
         )
 
-        if (
-            SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
-            and self.debouncer.running_task
-            and not self.debouncer.running_task.done()
-        ):
-            stale_task = self.debouncer.running_task
-            asyncio.create_task(
-                self._evaluate_speech_urgency(
-                    content,
-                    stale_task,
-                    prev_utterance,
-                ),
-            )
-
-    async def _evaluate_speech_urgency(
-        self,
-        utterance: str,
-        stale_task: asyncio.Task,
-        previous_utterance: str | None = None,
-    ) -> None:
-        """Concurrent sidecar: evaluate whether *utterance* should preempt the slow brain."""
-        from unify.conversation_manager.domains.speech_urgency import (
-            SpeechUrgencyEvaluator,
-        )
-
-        trace_meta = self.debouncer.running_task_trace_meta
-        origin_event = trace_meta.get("origin_event_name", "unknown")
-        elapsed = self.loop.time() - self.debouncer.running_task_started_at
-
-        actions_parts = []
-        for info in self.in_flight_actions.values():
-            action_type = info.get("action_type", "unknown")
-            query = info.get("query", "")
-            actions_parts.append(f"{action_type}: {query!r}")
-        actions_summary = "; ".join(actions_parts) if actions_parts else "none"
-
-        evaluator = SpeechUrgencyEvaluator(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        )
-        decision = await evaluator.evaluate(
-            utterance=utterance,
-            origin_event=origin_event,
-            elapsed_seconds=elapsed,
-            actions_summary=actions_summary,
-            previous_utterance=previous_utterance,
-        )
-
-        self._session_logger.debug(
-            "speech_urgency",
-            (
-                f"Urgency eval: urgent={decision.urgent} "
-                f"utterance={utterance!r} origin={origin_event} "
-                f"elapsed={elapsed:.1f}s reasoning={decision.reasoning!r}"
-            ),
-        )
-
-        if not decision.urgent:
-            return
-
-        # Only cancel if the same stale task is still the running task.
-        # If it completed (or a new task started) the utterance is already
-        # being processed — cancelling would be counterproductive.
-        if self.debouncer.running_task is stale_task and not stale_task.done():
-            self._session_logger.debug(
-                "speech_urgency",
-                "Preempting stale slow-brain run — pending task will promote",
-            )
-            stale_task.cancel()
-
-    # this is non-blocking, it will quickly submit the
-    # coro and return
     async def run_llm(
         self,
         delay: float = 0,

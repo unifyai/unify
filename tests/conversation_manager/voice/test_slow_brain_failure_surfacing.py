@@ -352,11 +352,10 @@ class TestSlowBrainFailureSurfacingNonTriggers:
 
     @pytest.mark.asyncio
     async def test_cancellation_propagates_without_filler(self):
-        """Task cancellation (e.g. preempting stale turns) is not a failure.
+        """Task cancellation is not a failure.
 
-        The speech-urgency evaluator deliberately cancels in-flight slow-brain
-        tasks when a fresher user utterance arrives. That is a *feature*, not
-        a provider outage, and must not produce an apology notification.
+        Cancelling an in-flight slow-brain task (e.g. via ``cancel_run_by_turn``)
+        is not a provider outage and must not produce an apology notification.
         """
         import asyncio
 
