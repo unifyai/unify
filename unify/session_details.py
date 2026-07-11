@@ -284,6 +284,10 @@ class AssistantDetails:
     # level. Empty = platform default (UNIFY_MODEL and per-call-site efforts).
     default_model: str = ""
     default_reasoning_effort: str = ""
+    # ConversationManager slow-brain LLM. Empty = SLOW_BRAIN_MODEL setting
+    # (independent of default_model / UNIFY_MODEL).
+    slow_brain_model: str = ""
+    slow_brain_reasoning_effort: str = ""
     contact_id: int = 0  # Contact ID in Contacts table
     self_contact_id: int = 0
     desktop_mode: str = "none"
@@ -566,6 +570,8 @@ class SessionDetails:
         voice_id: str = "",
         default_model: str = "",
         default_reasoning_effort: str = "",
+        slow_brain_model: str = "",
+        slow_brain_reasoning_effort: str = "",
         binding_id: str = "",
         desktop_mode: str = "none",
         managed_desktop_status: str | None = None,
@@ -618,6 +624,10 @@ class SessionDetails:
         self.assistant.default_model = _runtime_str(default_model)
         self.assistant.default_reasoning_effort = _runtime_str(
             default_reasoning_effort,
+        )
+        self.assistant.slow_brain_model = _runtime_str(slow_brain_model)
+        self.assistant.slow_brain_reasoning_effort = _runtime_str(
+            slow_brain_reasoning_effort,
         )
         self._initialized = True
 
@@ -685,6 +695,12 @@ class SessionDetails:
         )
         os.environ["ASSISTANT_DEFAULT_REASONING_EFFORT"] = _runtime_str(
             self.assistant.default_reasoning_effort,
+        )
+        os.environ["ASSISTANT_SLOW_BRAIN_MODEL"] = _runtime_str(
+            self.assistant.slow_brain_model,
+        )
+        os.environ["ASSISTANT_SLOW_BRAIN_REASONING_EFFORT"] = _runtime_str(
+            self.assistant.slow_brain_reasoning_effort,
         )
         self.export_contact_ids_to_env()
         os.environ["USER_ID"] = _runtime_str(self.user.id)
@@ -791,6 +807,10 @@ class SessionDetails:
             self.assistant.default_model = val
         if val := os.environ.get("ASSISTANT_DEFAULT_REASONING_EFFORT"):
             self.assistant.default_reasoning_effort = val
+        if val := os.environ.get("ASSISTANT_SLOW_BRAIN_MODEL"):
+            self.assistant.slow_brain_model = val
+        if val := os.environ.get("ASSISTANT_SLOW_BRAIN_REASONING_EFFORT"):
+            self.assistant.slow_brain_reasoning_effort = val
         if val := os.environ.get("USER_ID"):
             self.user.id = val
         if val := os.environ.get("USER_FIRST_NAME"):

@@ -16,10 +16,12 @@ from unify.settings import SETTINGS
 
 
 @pytest.fixture(autouse=True)
-def _reset_session_default_model():
+def _reset_session_models():
     yield
     SESSION_DETAILS.assistant.default_model = ""
     SESSION_DETAILS.assistant.default_reasoning_effort = ""
+    SESSION_DETAILS.assistant.slow_brain_model = ""
+    SESSION_DETAILS.assistant.slow_brain_reasoning_effort = ""
 
 
 def test_resolve_default_model_falls_back_to_settings() -> None:
@@ -41,10 +43,20 @@ def test_resolve_slow_brain_model_uses_configured_slow_brain() -> None:
     )
 
 
-def test_resolve_slow_brain_model_prefers_session_default() -> None:
+def test_resolve_slow_brain_model_prefers_session_slow_brain() -> None:
+    SESSION_DETAILS.assistant.slow_brain_model = "claude-fable-5@anthropic"
+    SESSION_DETAILS.assistant.slow_brain_reasoning_effort = "medium"
+    assert resolve_slow_brain_model() == ("claude-fable-5@anthropic", "medium")
+
+
+def test_resolve_slow_brain_model_ignores_actor_default() -> None:
+    """Actor default_model must not override the slow brain."""
     SESSION_DETAILS.assistant.default_model = "claude-fable-5@anthropic"
     SESSION_DETAILS.assistant.default_reasoning_effort = "medium"
-    assert resolve_slow_brain_model() == ("claude-fable-5@anthropic", "medium")
+    assert resolve_slow_brain_model() == (
+        SETTINGS.conversation.SLOW_BRAIN_MODEL,
+        SETTINGS.conversation.SLOW_BRAIN_REASONING_EFFORT,
+    )
 
 
 def test_resolve_slow_brain_model_falls_back_to_global_when_unset(
@@ -62,6 +74,20 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
         mock_async.assert_called_once_with(
             "gpt-5.6-terra@openai",
             reasoning_effort="high",
+            service_tier="priority",
+            stateful=False,
+            origin="ConversationManager",
+        )
+
+
+def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
+    SESSION_DETAILS.assistant.slow_brain_model = "gpt-5.6-luna@openai"
+    SESSION_DETAILS.assistant.slow_brain_reasoning_effort = "low"
+    with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
+        new_slow_brain_llm_client(origin="ConversationManager")
+        mock_async.assert_called_once_with(
+            "gpt-5.6-luna@openai",
+            reasoning_effort="low",
             service_tier="priority",
             stateful=False,
             origin="ConversationManager",

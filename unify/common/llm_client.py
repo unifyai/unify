@@ -70,23 +70,24 @@ def resolve_slow_brain_model() -> tuple[str, str | None]:
     """Resolve the ConversationManager slow-brain LLM as (model, effort).
 
     Priority:
-    1. Per-assistant default (Orchestra / SESSION_DETAILS), including effort
+    1. Per-assistant slow brain (Orchestra / SESSION_DETAILS), including effort
     2. ``UNITY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
-    3. The global shared model (``resolve_default_model`` / ``UNIFY_MODEL``)
+    3. The global shared model (``UNIFY_MODEL``)
 
-    A returned effort of None means per-call-site effort levels apply.
+    Independent of the actor ``default_model``. A returned effort of None means
+    per-call-site effort levels apply.
     """
-    session_model = SESSION_DETAILS.assistant.default_model
+    session_model = SESSION_DETAILS.assistant.slow_brain_model
     if session_model:
         return (
             session_model,
-            SESSION_DETAILS.assistant.default_reasoning_effort or None,
+            SESSION_DETAILS.assistant.slow_brain_reasoning_effort or None,
         )
     slow_model = SETTINGS.conversation.SLOW_BRAIN_MODEL.strip()
     if slow_model:
         effort = SETTINGS.conversation.SLOW_BRAIN_REASONING_EFFORT.strip() or None
         return slow_model, effort
-    return resolve_default_model()
+    return SETTINGS.UNIFY_MODEL, None
 
 
 def _build_llm_client(
@@ -167,7 +168,7 @@ def new_slow_brain_llm_client(
     """Create an LLM client for ConversationManager slow-brain call sites.
 
     When ``model`` is omitted, resolves via :func:`resolve_slow_brain_model`
-    (assistant default → slow-brain setting → global shared ``UNIFY_MODEL``).
+    (assistant slow brain → slow-brain setting → global ``UNIFY_MODEL``).
     Defaults to high reasoning effort; an assistant- or setting-level effort
     override pins the client effort the same way as :func:`new_llm_client`.
     """
