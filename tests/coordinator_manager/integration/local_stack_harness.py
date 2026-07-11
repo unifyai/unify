@@ -83,10 +83,10 @@ def resolve_sibling_repo(name: str) -> Path:
 
 
 def _resolve_stack_script() -> tuple[Path, Path]:
-    # The self-host stack orchestration lives in the private unity-deploy repo
+    # The self-host stack orchestration lives in the private unify-deploy repo
     # (selfhost/stack.sh), which drives the sibling unify/console/orchestra
     # checkouts. Returns (cwd, stack.sh path).
-    deploy_repo = resolve_sibling_repo("unity-deploy")
+    deploy_repo = resolve_sibling_repo("unify-deploy")
     stack_script = deploy_repo / "selfhost" / "stack.sh"
     if not stack_script.is_file():
         raise FileNotFoundError(f"stack.sh not found at {stack_script}")
@@ -211,12 +211,17 @@ def _stack_subprocess_env() -> dict[str, str]:
     env["HOME"] = real_home
     env.setdefault("ORCHESTRA_REPO_PATH", str(resolve_sibling_repo("orchestra")))
     env.setdefault(
-        "COMMUNICATION_REPO_PATH",
-        str(resolve_sibling_repo("communication")),
+        "UNIFY_DEPLOY_REPO_PATH",
+        str(resolve_sibling_repo("unify-deploy")),
     )
-    env.setdefault("UNITY_REPO_PATH", str(resolve_sibling_repo("unity")))
+    # Legacy alias still read by some stack helpers.
+    env.setdefault(
+        "UNITY_DEPLOY_REPO_PATH",
+        env["UNIFY_DEPLOY_REPO_PATH"],
+    )
     env.setdefault("CONSOLE_REPO_PATH", str(resolve_sibling_repo("console")))
     env.setdefault("UNIFY_REPO_PATH", str(resolve_sibling_repo("unify")))
+    env.setdefault("UNITY_REPO_PATH", env["UNIFY_REPO_PATH"])
     env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
     env.setdefault("ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS", "0")
     return env
