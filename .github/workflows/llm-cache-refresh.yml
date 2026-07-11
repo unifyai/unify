@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       test_path:
-        description: "Narrow test path to refresh/evaluate"
+        description: "Path(s) to refresh/evaluate (space-separated); '.' for full suite"
         required: true
         type: string
       parallel_run_args:
@@ -22,10 +22,15 @@ on:
         - write-misses
         - uncached-eval
       timeout_minutes:
-        description: "Session timeout"
+        description: "Per-matrix-job session timeout"
         required: false
         type: number
         default: 120
+      max_parallel:
+        description: "Max concurrent matrix refresh jobs"
+        required: false
+        type: number
+        default: 20
       confirm_llm_spend:
         description: "Type LLM_SPEND_OK to acknowledge this may call paid LLM APIs"
         required: true
@@ -44,48 +49,17 @@ on:
 permissions:
   contents: read
 
+# One refresh campaign per branch. Inside a campaign, the matrix parallelizes.
 concurrency:
   group: llm-cache-refresh-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-  refresh:
-    name: Refresh LLM cache
-    runs-on: ubuntu-latest-8-cores
-    environment: unity-llm-cache-refresh
-    timeout-minutes: 130
-    env:
-      UNIFY_TESTS_RAND_PROJ: "false"
-      UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
-      UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
-      UNILLM_CACHE: ${{ inputs.cache_mode == 'uncached-eval' && 'false' || 'true' }}
-      ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
-      ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
-      # Brain (unillm) routes through OpenRouter; without this, slow-brain turns 401.
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
-      # Together BYOK on the OpenRouter workspace that owns OPENROUTER_CI_API_KEY.
-      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-      # Orchestra embeddings / Builtins seeding also go through OpenRouter.
-      ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_LOCATION: ${{ vars.GCP_LOCATION }}
-      ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
-      ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
-      ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
-      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-      UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
-      # Builtins is admin-key-only. CI-local Orchestra inherits this; seed uses the
-      # same value. Local-only throwaway key (matches tests.yml).
-      ORCHESTRA_ADMIN_KEY: local-admin-key
-      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
+  validate:
+    name: Validate spend controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-
     - name: Validate spend controls
       shell: bash
       run: |
@@ -120,6 +94,108 @@ jobs:
           fail "this workflow owns UNILLM_CACHE through cache_mode"
         fi
 
+  discover:
+    name: Discover matrix
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 5
+    outputs:
+      test_dirs: ${{ steps.set-matrix.outputs.test_dirs }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - id: set-matrix
+      shell: bash
+      run: |
+        TEST_PATH="${{ inputs.test_path }}"
+        declare -a RAW_PATHS=()
+        declare -a PATHS=()
+
+        if [[ "$TEST_PATH" == "." ]]; then
+          while IFS= read -r path; do
+            PATHS+=("$path")
+          done < <(python3 .github/scripts/discover_test_paths.py)
+        else
+          read -ra RAW_PATHS <<< "$TEST_PATH"
+          while IFS= read -r path; do
+            PATHS+=("$path")
+          done < <(python3 .github/scripts/discover_test_paths.py "${RAW_PATHS[@]}")
+        fi
+
+        # flows force UNILLM_CACHE=false in conftest — they burn spend without writing cache.
+        FILTERED=()
+        for _p in "${PATHS[@]}"; do
+          if [[ "$_p" == *tests/flows* ]]; then
+            echo "Skipping live-only path (no cache writes): $_p" >&2
+            continue
+          fi
+          FILTERED+=("$_p")
+        done
+        PATHS=("${FILTERED[@]}")
+
+        if (( ${#PATHS[@]} == 0 )); then
+          echo "Error: no refreshable test paths after filtering" >&2
+          exit 1
+        fi
+
+        echo "Matrix entries (${#PATHS[@]}):" >&2
+        printf '  %s\n' "${PATHS[@]}" >&2
+
+        python3 - <<'PY' "${PATHS[@]}"
+        import json, os, sys
+        paths = sys.argv[1:]
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"test_dirs={json.dumps(paths)}\n")
+        PY
+
+  refresh:
+    name: refresh (${{ matrix.test_path }})
+    runs-on: ubuntu-latest-8-cores
+    needs: [validate, discover]
+    environment: unity-llm-cache-refresh
+    timeout-minutes: 130
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        test_path: ${{ fromJSON(needs.discover.outputs.test_dirs) }}
+    env:
+      UNIFY_TESTS_RAND_PROJ: "false"
+      UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
+      UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
+      UNILLM_CACHE: ${{ inputs.cache_mode == 'uncached-eval' && 'false' || 'true' }}
+      ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
+      ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
+      UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_LOCATION: ${{ vars.GCP_LOCATION }}
+      ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
+      ORCHESTRA_GCP_ASSISTANT_MEDIA_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
+      ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
+      TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+      UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+      ORCHESTRA_ADMIN_KEY: local-admin-key
+      PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Normalize test path for artifacts
+      id: normalize-path
+      shell: bash
+      run: |
+        RAW_PATH='${{ matrix.test_path }}'
+        normalized=$(echo "$RAW_PATH" | tr '/ *' '___' | tr -cd '[:alnum:]_-' | cut -c1-80)
+        echo "test_path_normalized=$normalized" >> "$GITHUB_OUTPUT"
+
     - name: Clone orchestra repo for local deployment
       uses: actions/checkout@v4
       with:
@@ -129,7 +205,7 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN }}
         fetch-depth: 1
 
-    - name: Clone unify repo
+    - name: Clone unisdk repo
       uses: actions/checkout@v4
       with:
         repository: unifyai/unisdk
@@ -201,7 +277,7 @@ jobs:
       run: |
         set +e
         TIMEOUT=$(( ${{ inputs.timeout_minutes }} * 60 ))
-        TEST_PATH="${{ inputs.test_path }}"
+        TEST_PATH="${{ matrix.test_path }}"
         EXTRA_ARGS="${{ inputs.parallel_run_args }}"
 
         Xvfb :99 -screen 0 1920x1080x24 &
@@ -209,35 +285,18 @@ jobs:
         export DISPLAY=:99
         trap "kill $XVFB_PID 2>/dev/null" EXIT
 
-        echo "Running protected LLM workflow with UNILLM_CACHE=$UNILLM_CACHE"
+        echo "Running protected LLM shard with UNILLM_CACHE=$UNILLM_CACHE path=$TEST_PATH"
+        # shellcheck disable=SC2086
         tests/parallel_run.sh --timeout "$TIMEOUT" $TEST_PATH $EXTRA_ARGS
         TEST_EXIT_CODE=$?
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE
 
-    - name: Consolidate cache writes
-      if: always() && inputs.cache_mode == 'write-misses'
-      run: |
-        mkdir -p cache-artifacts/current
-        if [ -f .cache_write.ndjson ]; then
-          cp .cache_write.ndjson cache-artifacts/current/.cache_write.ndjson
-        fi
-        python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
-        # actions/cache/save fails if the path is absent (e.g. no LLM writes yet).
-        touch .cache.ndjson
-
-    - name: Store consolidated cache
-      if: always() && inputs.cache_mode == 'write-misses'
-      uses: actions/cache/save@v4
-      with:
-        path: .cache.ndjson
-        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-
     - name: Upload cache diff
-      if: always()
+      if: always() && inputs.cache_mode == 'write-misses'
       uses: actions/upload-artifact@v4
       with:
-        name: protected-cache-diff-${{ github.run_id }}
+        name: cache-diff-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: .cache_write.ndjson
         if-no-files-found: ignore
         include-hidden-files: true
@@ -252,7 +311,47 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: protected-llm-test-logs-${{ github.run_id }}
+        name: protected-llm-logs-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: logs/
         if-no-files-found: ignore
         retention-days: 7
+
+  consolidate:
+    name: Consolidate and store cache
+    runs-on: ubuntu-latest
+    needs: [validate, discover, refresh]
+    if: always() && needs.validate.result == 'success' && inputs.cache_mode == 'write-misses'
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Restore existing consolidated cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cache-ndjson-${{ runner.os }}-
+
+    - name: Download cache diffs from matrix shards
+      uses: actions/download-artifact@v4
+      with:
+        pattern: cache-diff-${{ github.run_id }}-*
+        path: cache-artifacts
+        merge-multiple: false
+
+    - name: Consolidate .cache.ndjson
+      run: |
+        python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
+        # actions/cache/save fails if the path is absent.
+        touch .cache.ndjson
+        echo "Consolidated entry count: $(grep -c . .cache.ndjson || true)"
+        ls -lh .cache.ndjson
+
+    - name: Store consolidated cache
+      uses: actions/cache/save@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
