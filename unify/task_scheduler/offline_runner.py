@@ -439,6 +439,12 @@ class _OfflineTaskExecutionDelegate:
         )
 
         self._actor = _build_offline_actor()
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "OfflineTaskExecutionDelegate.start_task_run got unexpected "
+                f"keyword arguments: {unexpected}",
+            )
         handle = await self._actor.act(
             task_description,
             guidelines="\n\n".join(
@@ -456,7 +462,6 @@ class _OfflineTaskExecutionDelegate:
             persist=False,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
-            **kwargs,
         )
         return _OfflineTaskHandle(self._config, handle)
 

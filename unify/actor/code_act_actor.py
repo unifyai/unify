@@ -413,6 +413,17 @@ class _CodeActTaskExecutionDelegate:
 
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
+        entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
+        entrypoint_repair_attempts = int(
+            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "TaskExecutionDelegate.start_task_run got unexpected "
+                f"keyword arguments: {unexpected}",
+            )
         return await self._actor.act(
             task_description,
             guidelines=task_guidelines,
@@ -420,9 +431,11 @@ class _CodeActTaskExecutionDelegate:
             _clarification_up_q=clarification_up_q,
             _clarification_down_q=clarification_down_q,
             entrypoint=entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=entrypoint_repair_attempts,
+            entrypoint_repair_context=entrypoint_repair_context,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
-            **kwargs,
         )
 
 
@@ -4398,11 +4411,12 @@ class CodeActActor(BaseCodeActActor):
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
+        entrypoint_repair_attempts: int = 0,
+        entrypoint_repair_context: Optional[dict[str, Any]] = None,
         persist: Optional[bool] = None,
         can_compose: Optional[bool] = None,
         can_store: Optional[bool] = None,
         llm_profile: Optional[str] = None,
-        **kwargs,
     ) -> SteerableToolHandle:
         if not self._main_event_loop:
             self._main_event_loop = asyncio.get_running_loop()
@@ -4416,10 +4430,7 @@ class CodeActActor(BaseCodeActActor):
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] entered")
 
-        entrypoint_repair_attempts = int(
-            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
-        )
-        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        entrypoint_repair_attempts = int(entrypoint_repair_attempts or 0)
 
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)

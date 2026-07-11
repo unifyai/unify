@@ -160,7 +160,7 @@ async def test_codeact_task_delegate_reuses_actor_slot_for_entrypoint_tasks():
 
 
 @pytest.mark.asyncio
-async def test_task_execution_delegates_accept_shared_protocol_kwargs():
+async def test_task_execution_delegates_forward_named_protocol_kwargs():
     class _FakeHandle:
         async def result(self):
             return "ok"
@@ -189,7 +189,8 @@ async def test_task_execution_delegates_accept_shared_protocol_kwargs():
             images=[],
             guidelines="Follow task-specific execution guidelines.",
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            future_option=True,
+            entrypoint_repair_attempts=1,
+            entrypoint_repair_context={"reason": "certification"},
         )
 
         assert await handle.result() == "ok"
@@ -201,7 +202,20 @@ async def test_task_execution_delegates_accept_shared_protocol_kwargs():
         assert call["kwargs"]["entrypoint_kwargs"] == {
             "scheduled_run_timestamp": "2026-04-10T09:00:00Z",
         }
-        assert call["kwargs"]["future_option"] is True
+        assert call["kwargs"]["entrypoint_repair_attempts"] == 1
+        assert call["kwargs"]["entrypoint_repair_context"] == {
+            "reason": "certification",
+        }
+
+        with pytest.raises(TypeError, match="unexpected keyword arguments"):
+            await delegate.start_task_run(
+                task_description="Reject undeclared protocol kwargs.",
+                entrypoint=None,
+                parent_chat_context=None,
+                clarification_up_q=None,
+                clarification_down_q=None,
+                future_option=True,
+            )
 
 
 @pytest.mark.asyncio
