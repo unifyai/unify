@@ -42,7 +42,10 @@ def managed_local_stack(local_stack_urls) -> ManagedLocalStack:
 
     started_by_session = False
     try:
-        reset_and_start_local_stack(local_stack_urls)
+        try:
+            reset_and_start_local_stack(local_stack_urls)
+        except FileNotFoundError as exc:
+            pytest.skip(f"Local stack auto-start unavailable: {exc}")
         started_by_session = True
         unify_key, admin_key = resolve_local_stack_credentials()
         if not unify_key:
@@ -99,8 +102,7 @@ def require_local_stack(managed_local_stack, local_stack_urls) -> LocalStackUrls
             )
         pytest.skip(
             "Local stack is not running. Start it with "
-            "`ORCHESTRA_REPO_PATH=... COMMUNICATION_REPO_PATH=... "
-            "UNITY_REPO_PATH=... unity-deploy/selfhost/stack.sh up` "
+            "`bash ~/unify-deploy/selfhost/stack.sh up` "
             "or unset LOCAL_STACK_NO_AUTO to auto-manage.",
         )
 

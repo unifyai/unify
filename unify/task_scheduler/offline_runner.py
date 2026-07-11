@@ -338,6 +338,7 @@ def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
         task_name=config.task_name or None,
         task_description=config.task_description or config.request or None,
         attempt_token=_trigger_attempt_token(config),
+        destination=config.destination,
     )
 
 
@@ -412,6 +413,9 @@ class _OfflineTaskExecutionDelegate:
             or 0,
         )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        destination = kwargs.pop("destination", None)
+        if destination is None:
+            destination = self._config.destination
         if self._config.scheduled_for:
             entrypoint_kwargs.setdefault(
                 "scheduled_run_timestamp",
@@ -435,6 +439,7 @@ class _OfflineTaskExecutionDelegate:
                 "activation_revision": self._config.activation_revision,
                 "execution_style": execution_style,
                 "delivery_mode": "offline",
+                "destination": destination,
             },
         )
 
@@ -462,6 +467,7 @@ class _OfflineTaskExecutionDelegate:
             persist=False,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
+            destination=destination,
         )
         return _OfflineTaskHandle(self._config, handle)
 
@@ -490,10 +496,33 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
         await delegate.close()
 
 
+def _ensure_offline_client_bundle() -> None:
+    """Fetch/register the assistant client bundle for offline @custom_function imports.
+
+    Live assistants get this from the ConversationManager startup hook. Offline
+    jobs skip that hook, so the runner (and entrypoint.sh) must bootstrap the
+    GCS client tree before entrypoint bodies import
+    ``unity_deploy.assistant_deployments.clients.<client>.*``.
+    """
+
+    try:
+        from unity_deploy.client_bundle.bootstrap import (
+            ensure_offline_client_bundle,
+        )
+    except ImportError:
+        LOGGER.warning(
+            "unity_deploy.client_bundle.bootstrap unavailable; "
+            "skipping offline client-bundle registration",
+        )
+        return
+    ensure_offline_client_bundle()
+
+
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task with assistant session context."""
 
     SESSION_DETAILS.populate_from_env()
+    _ensure_offline_client_bundle()
     unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
     if not _is_scheduler_managed(config):
         raise RuntimeError(

@@ -1169,9 +1169,10 @@ class TestHookInstallation:
         """install_limit_check_hook should skip if no API key."""
         from unify.spending_limits import install_limit_check_hook
 
-        with patch("unify.spending_limits._get_api_key", return_value=None):
-            with patch("unillm.set_limit_check_hook") as mock_set_hook:
-                install_limit_check_hook()
+        with patch("unify.spending_limits._charges_billing", return_value=True):
+            with patch("unify.spending_limits._get_api_key", return_value=None):
+                with patch("unillm.set_limit_check_hook") as mock_set_hook:
+                    install_limit_check_hook()
 
         mock_set_hook.assert_not_called()
 
@@ -1179,11 +1180,23 @@ class TestHookInstallation:
         """install_limit_check_hook should register hook with API key."""
         from unify.spending_limits import install_limit_check_hook
 
-        with patch("unify.spending_limits._get_api_key", return_value="test-key"):
-            with patch("unillm.set_limit_check_hook") as mock_set_hook:
-                install_limit_check_hook()
+        with patch("unify.spending_limits._charges_billing", return_value=True):
+            with patch("unify.spending_limits._get_api_key", return_value="test-key"):
+                with patch("unillm.set_limit_check_hook") as mock_set_hook:
+                    install_limit_check_hook()
 
         mock_set_hook.assert_called_once()
+
+    def test_install_hook_skipped_when_billing_disabled(self):
+        """Platform billing gates are off outside hosted production."""
+        from unify.spending_limits import install_limit_check_hook
+
+        with patch("unify.spending_limits._charges_billing", return_value=False):
+            with patch("unify.spending_limits._get_api_key", return_value="test-key"):
+                with patch("unillm.set_limit_check_hook") as mock_set_hook:
+                    install_limit_check_hook()
+
+        mock_set_hook.assert_not_called()
 
     def test_uninstall_hook(self):
         """uninstall_limit_check_hook should clear the hook."""
@@ -1490,6 +1503,16 @@ async def e2e_config(request):
     accumulation.
     """
     import uuid
+    from unittest.mock import patch
+
+    # E2E spending tests exercise the production billing gate path even when
+    # the local/CI DEPLOY_ENV would otherwise skip hook installation.
+    billing_patch = patch(
+        "unify.spending_limits._charges_billing",
+        return_value=True,
+    )
+    billing_patch.start()
+    request.addfinalizer(billing_patch.stop)
 
     config = E2ETestConfig.from_env()
     headers = {"Authorization": f"Bearer {config.api_key}"}

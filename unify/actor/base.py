@@ -281,6 +281,7 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
         entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
+        destination: Optional[str] = None,
         persist: Optional[bool] = None,
         can_compose: Optional[bool] = None,
         can_store: Optional[bool] = None,
@@ -295,6 +296,10 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
                 failure.
             entrypoint_repair_context: Optional structured context passed into
                 the symbolic-entrypoint repair loop.
+            destination: Optional FunctionManager Compositional root for symbolic
+                entrypoint resolution (``None`` / ``"personal"`` or ``"team:<id>"``).
+                Required for correct ``function_id`` lookup when the same id exists
+                in more than one catalog.
             llm_profile: Optional curated model profile for this actor run.
                 Leave unset for the default profile, which uses the actor's
                 configured model (normally ``gpt-5.6-sol@openai`` at high

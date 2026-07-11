@@ -252,7 +252,10 @@ class TestContactIds:
         assistant_fields = {field.name for field in fields(AssistantDetails)}
         user_fields = {field.name for field in fields(UserDetails)}
 
-        assert "contact_id" not in assistant_fields
+        # AssistantDetails owns an explicit Contacts-table contact_id plus
+        # self_contact_id; UserDetails must not expose a bare contact_id.
+        assert "contact_id" in assistant_fields
+        assert "self_contact_id" in assistant_fields
         assert "contact_id" not in user_fields
 
     def test_export_and_populate_from_env_round_trips(self, monkeypatch):
@@ -306,6 +309,7 @@ class TestAssistantManagedDesktop:
     def test_desktop_mode_with_url_is_managed(self):
         assistant = AssistantDetails(
             desktop_mode="ubuntu",
+            managed_desktop_status="active",
             desktop_url="https://unity-pool-1.vm.unify.ai",
         )
         assert assistant.has_managed_desktop is True

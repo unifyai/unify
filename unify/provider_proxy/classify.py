@@ -538,8 +538,8 @@ class GoogleDriveRest:
 def _google_normalize_segs(segs: list[str]) -> GoogleDriveRest | None:
     if segs[:2] == ["drive", "v3"]:
         return GoogleDriveRest(segs[2:])
-    if segs[:4] == ["upload", "drive", "v3"]:
-        return GoogleDriveRest(segs[4:], upload=True)
+    if segs[:3] == ["upload", "drive", "v3"]:
+        return GoogleDriveRest(segs[3:], upload=True)
     return None
 
 
