@@ -138,6 +138,13 @@ _IN_FLIGHT_ACTIONS_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Completed-action (and any other) <steering_tools> blocks list CM-only
+# ask_/stop_/pause_/interject_* names that are not in the Actor's scope.
+_STEERING_TOOLS_PATTERN = re.compile(
+    r"<steering_tools>.*?</steering_tools>\s*",
+    re.DOTALL,
+)
+
 
 def _strip_onboarding_completion_tool_lines(text: str) -> str:
     """Remove CM-only checklist completion instructions from Actor parent context."""
@@ -146,12 +153,21 @@ def _strip_onboarding_completion_tool_lines(text: str) -> str:
     )
 
 
+def _strip_cm_only_tool_surface(text: str) -> str:
+    """Remove CM brain tool listings that must not leak into Actor parent context."""
+    text = _IN_FLIGHT_ACTIONS_PATTERN.sub("", text)
+    text = _STEERING_TOOLS_PATTERN.sub("", text)
+    return _strip_onboarding_completion_tool_lines(text)
+
+
 def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     """Filter CM state snapshot before passing to Actor as parent context.
 
     The CM state snapshot contains <in_flight_actions> with <steering_tools>
     listing CM-level tools (stop_, pause_, interject_, ask_) for each action.
-    These are CM brain tools that exist only in the CM's tool surface.
+    <completed_actions> keeps the same <steering_tools> surface for post-hoc
+    ask_* tools. These are CM brain tools that exist only in the CM's tool
+    surface.
 
     If passed verbatim to the Actor, the Actor LLM may interpret these tool
     names as callable functions and generate code like:
@@ -162,14 +178,15 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
     stripped — checklist completion is owned by the parent CM brain, not act
     subtasks.
 
-    This function strips the <in_flight_actions> section while preserving
-    other useful context (notifications, active_conversations).
+    This function strips the <in_flight_actions> section and any remaining
+    <steering_tools> blocks while preserving other useful context
+    (notifications, active_conversations, completed action results/history).
 
     Args:
         state_snapshot: The CM state snapshot dict with "content" key.
 
     Returns:
-        A filtered copy of the snapshot with in_flight_actions removed.
+        A filtered copy of the snapshot with CM-only tool listings removed.
     """
     if not state_snapshot:
         return state_snapshot
@@ -184,16 +201,17 @@ def _filter_cm_state_for_actor(state_snapshot: dict) -> dict:
         filtered_parts = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
-                filtered_text = _IN_FLIGHT_ACTIONS_PATTERN.sub("", part["text"])
-                filtered_text = _strip_onboarding_completion_tool_lines(filtered_text)
-                filtered_parts.append({**part, "text": filtered_text})
+                filtered_parts.append(
+                    {**part, "text": _strip_cm_only_tool_surface(part["text"])},
+                )
             else:
                 filtered_parts.append(part)
         return {**state_snapshot, "content": filtered_parts}
 
-    filtered_content = _IN_FLIGHT_ACTIONS_PATTERN.sub("", content)
-    filtered_content = _strip_onboarding_completion_tool_lines(filtered_content)
-    return {**state_snapshot, "content": filtered_content}
+    return {
+        **state_snapshot,
+        "content": _strip_cm_only_tool_surface(content),
+    }
 
 
 class _DesktopActionHandle:
