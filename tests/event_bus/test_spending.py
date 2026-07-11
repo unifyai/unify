@@ -1514,6 +1514,13 @@ async def e2e_config(request):
     billing_patch.start()
     request.addfinalizer(billing_patch.stop)
 
+    # Session-scoped unify.init() may have already run with billing disabled
+    # (SELF_HOST=1), leaving the UniLLM hook unset. Re-install under the patch
+    # so e2e tests exercise the production gate path.
+    from unify.spending_limits import install_limit_check_hook
+
+    install_limit_check_hook()
+
     config = E2ETestConfig.from_env()
     headers = {"Authorization": f"Bearer {config.api_key}"}
     admin_headers = {"Authorization": f"Bearer {config.admin_key}"}
@@ -1654,8 +1661,12 @@ class TestE2ESpendingLimits:
         """Verify that Unity initializes and installs the limit check hook."""
         import unify
         from unillm import is_limit_check_enabled
+        from unify.spending_limits import install_limit_check_hook
 
         unify.init()
+        # init() is idempotent; re-install under the e2e billing patch when an
+        # earlier session init skipped the hook.
+        install_limit_check_hook()
         assert (
             is_limit_check_enabled()
         ), "Limit check hook should be installed after unify.init()"

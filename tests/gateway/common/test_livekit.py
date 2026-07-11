@@ -208,7 +208,11 @@ async def test_ensure_phone_dispatch_rule_replaces_stale_rule(
             _livekit_credentials,
         )
 
-    api.sip.delete_sip_dispatch_rule.assert_awaited_once_with("SR_stale")
+    from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
+
+    api.sip.delete_sip_dispatch_rule.assert_awaited_once_with(
+        DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id="SR_stale"),
+    )
     api.sip.create_sip_dispatch_rule.assert_called_once()
 
 

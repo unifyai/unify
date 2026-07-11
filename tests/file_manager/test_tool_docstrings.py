@@ -88,7 +88,8 @@ def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
     )
     env = os.environ.copy()
     env["_TEST_CONTEXT"] = test_context
-    env["ORCHESTRA_URL"] = "https://api.unify.ai/v0"
+    # Keep the parent process Orchestra URL/key so the child talks to the same
+    # local CI Orchestra instead of hardcoding hosted prod (which 401s).
     proc = subprocess.run(
         [sys.executable, "-c", code],
         stdout=subprocess.PIPE,

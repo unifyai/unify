@@ -3104,7 +3104,7 @@ class FunctionManager(BaseFunctionManager):
             limit=limit,
         )
 
-        connected_backend_by_app: dict[str, str] = {}
+        connected_backend_by_app: dict[str, str | None] = {}
         for connection in active_connections:
             raw_conn_app = connection.get("canonical_app_slug")
             conn_app = (
@@ -3114,8 +3114,15 @@ class FunctionManager(BaseFunctionManager):
             )
             if not isinstance(conn_app, str) or not conn_app:
                 continue
-            backend = str(connection.get("backend_id") or "provider")
+            raw_backend = connection.get("backend_id")
+            backend = str(raw_backend) if raw_backend else None
             existing = connected_backend_by_app.get(conn_app)
+            if backend is None:
+                # Connection is live but does not declare a backend; keep the
+                # app active without constraining tool backend_id matching.
+                if conn_app not in connected_backend_by_app:
+                    connected_backend_by_app[conn_app] = None
+                continue
             if existing and existing != backend:
                 from unify.integrations.provider_resolution import (
                     PREFERRED_BACKEND_ORDER,

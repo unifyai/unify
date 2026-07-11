@@ -11,7 +11,10 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from ..common.llm_client import new_llm_client
-from ..common.authorship import stamp_authoring_assistant_id
+from ..common.authorship import (
+    stamp_authoring_assistant_id,
+    strip_authoring_assistant_id,
+)
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.context_dump import make_messages_safe_for_context_dump
 import unisdk
@@ -1552,7 +1555,7 @@ class ImageManager(BaseImageManager):
             unisdk.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
-                entries=payload,
+                entries=strip_authoring_assistant_id(payload),
                 overwrite=True,
             )
         else:
