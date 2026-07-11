@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ValidationError
 
 from .types.status import Status
+from .types.trigger import Trigger
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,23 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[CustomTaskSourceEntry]:
                 line_no,
             )
             continue
+        if entry.trigger is not None:
+            try:
+                entry = entry.model_copy(
+                    update={
+                        "trigger": Trigger.model_validate(entry.trigger).model_dump(
+                            mode="json",
+                        ),
+                    },
+                )
+            except ValidationError as exc:
+                logger.warning(
+                    "Skipping tasks.jsonl line %s:%d: invalid trigger: %s",
+                    jsonl_path,
+                    line_no,
+                    exc,
+                )
+                continue
         if not entry.auto_sync:
             logger.debug("Skipping %s: auto_sync=False", entry.key)
             continue
