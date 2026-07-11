@@ -65,7 +65,7 @@ async def test_classifier_uses_structured_output_and_user_message(monkeypatch):
         fake_new_llm_client,
     )
 
-    classifier = FastBrainMoodClassifier("gpt-5.5-mini@openai")
+    classifier = FastBrainMoodClassifier("gpt-5.4-mini@openai")
     result = await classifier.evaluate(
         transcript="User: hello\nAssistant: hi there",
         trigger_role="assistant",
@@ -75,7 +75,7 @@ async def test_classifier_uses_structured_output_and_user_message(monkeypatch):
     assert result is not None
     assert result.mood == FastBrainMood.BORED
     assert result.avatar_mood == "bored"
-    assert captured["model"] == "gpt-5.5-mini@openai"
+    assert captured["model"] == "gpt-5.4-mini@openai"
     assert captured["origin"] == "FastBrain.mood_classification"
     mock_client.set_response_format.assert_called_once_with(FastBrainMoodClassification)
     assert any(msg["role"] == "user" for msg in captured["messages"])
@@ -90,7 +90,7 @@ def test_mood_event_payload_excludes_transcript():
         trigger_role="user",
         trigger_utterance_id="utt-123",
         turn_index=7,
-        model="gpt-5.5-mini@openai",
+        model="gpt-5.4-mini@openai",
     )
 
     payload = json.loads(event.to_json())["payload"]
