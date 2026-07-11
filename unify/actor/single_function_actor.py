@@ -761,13 +761,15 @@ class SingleFunctionActor(BaseActor):
                 kwargs = parsed.call_kwargs
 
             # Models sometimes nest the schema field again
-            # ({"call_kwargs": {"a": 1}} instead of {"a": 1}). Unwrap that.
-            while (
-                isinstance(kwargs, dict)
-                and set(kwargs) == {"call_kwargs"}
-                and isinstance(kwargs["call_kwargs"], dict)
-            ):
-                kwargs = kwargs["call_kwargs"]
+            # ({"call_kwargs": {"a": 1}} instead of {"a": 1}), or emit a
+            # stray top-level call_kwargs key alongside real params.
+            while isinstance(kwargs, dict) and "call_kwargs" in kwargs:
+                nested = kwargs.get("call_kwargs")
+                if not isinstance(nested, dict):
+                    kwargs = {k: v for k, v in kwargs.items() if k != "call_kwargs"}
+                    break
+                extras = {k: v for k, v in kwargs.items() if k != "call_kwargs"}
+                kwargs = {**nested, **extras} if extras else nested
             return kwargs
         except Exception as e:
             logger.error(
