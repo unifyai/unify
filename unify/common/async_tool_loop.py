@@ -996,10 +996,19 @@ def start_async_tool_loop(
     include_class_in_dynamic_tool_names: bool = False,
     tool_policy: Optional[
         Union[
-            Callable[[int, Dict[str, Callable]], Tuple[str, Dict[str, Callable]]],
+            Callable[
+                [int, Dict[str, Callable]],
+                Union[
+                    Tuple[str, Dict[str, Callable]],
+                    Tuple[str, Dict[str, Callable], Dict[str, Any]],
+                ],
+            ],
             Callable[
                 [int, Dict[str, Callable], list[str]],
-                Tuple[str, Dict[str, Callable]],
+                Union[
+                    Tuple[str, Dict[str, Callable]],
+                    Tuple[str, Dict[str, Callable], Dict[str, Any]],
+                ],
             ],
         ]
     ] = None,

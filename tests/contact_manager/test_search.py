@@ -69,19 +69,19 @@ def test_all_columns_default():
         first_name="Helen",
         bio="Reads a lot",
         email_address="helen@example.com",
-        occupation="Designer",
+        custom_fields={"occupation": "Designer"},
     )
     cm._create_contact(
         first_name="Ian",
         bio="Responds best to emails",
         email_address="ian@example.com",
-        occupation="Email specialist",
+        custom_fields={"occupation": "Email specialist"},
     )
     cm._create_contact(
         first_name="Judy",
         bio="Text first please",
         phone_number="1234567890",
-        occupation="Engineer",
+        custom_fields={"occupation": "Engineer"},
     )
 
     # Build a composite expression spanning multiple fields including the custom column
@@ -112,19 +112,19 @@ def test_mean_cosine_ranking():
     cm._create_contact(
         first_name="Alex",
         rolling_summary="We had a phone call last week about training",
-        occupation="Professional footballer playing striker",
+        custom_fields={"occupation": "Professional footballer playing striker"},
     )
     # B: matches only the occupation reference
     cm._create_contact(
         first_name="Blake",
         rolling_summary="Haven't spoken yet",
-        occupation="Retired footballer and youth coach",
+        custom_fields={"occupation": "Retired footballer and youth coach"},
     )
     # C: matches only the rolling_summary reference
     cm._create_contact(
         first_name="Casey",
         rolling_summary="Had a phone call last week regarding taxes",
-        occupation="Senior accountant focused on audits",
+        custom_fields={"occupation": "Senior accountant focused on audits"},
     )
 
     # Provide multiple references including the custom column and the composite expr

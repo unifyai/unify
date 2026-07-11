@@ -1288,7 +1288,7 @@ class TranscriptManager(BaseTranscriptManager):
         Returns
         -------
         str
-            Text answer from the vision model.
+            Text answer from the LLM.
 
         Notes
         -----

@@ -532,7 +532,7 @@ async def select_fast_brain_turn(
         client = new_llm_client(
             SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="FastBrain.turn",
-            reasoning_effort="low",
+            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
         )
         client.set_response_format(response_model)
         raw = await client.generate(messages=messages)

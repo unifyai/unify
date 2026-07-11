@@ -302,7 +302,7 @@ Schema evolution and custom columns
 • If the user asks to store a new attribute that does not map to built-ins, create a custom column first:
   `{create_custom_fname}(column_name='occupation', column_type='str')`
   Then apply the update:
-  `{update_fname}(contact_id=42, occupation='Designer')`
+  `{update_fname}(contact_id=42, custom_fields={{'occupation': 'Designer'}})`
 • Required columns ({_permanent_columns()}) cannot be deleted. Remove optional columns with `{delete_custom_fname}(column_name=...)` only when explicitly asked.
 
 Merge and delete

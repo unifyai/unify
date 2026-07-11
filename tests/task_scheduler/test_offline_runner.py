@@ -40,9 +40,14 @@ def test_offline_runner_rejects_non_scheduler_source_type(monkeypatch):
     monkeypatch.setattr(
         offline_runner,
         "_update_task_run",
-        lambda assistant_id, run_key, payload: updates.append(
-            (assistant_id, run_key, payload),
+        lambda assistant_id, run_key, **kwargs: updates.append(
+            (assistant_id, run_key, kwargs.get("updates") or kwargs.get("payload")),
         ),
+    )
+    monkeypatch.setattr(
+        offline_runner,
+        "_mark_source_task_failed",
+        lambda *args, **kwargs: None,
     )
 
     exit_code = offline_runner.main()
@@ -118,6 +123,61 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
         "handle.result",
     ]
     assert current_task_execution_delegate.get() is None
+
+
+def test_offline_runner_explicit_uses_activated_by_explicit(monkeypatch):
+    """REST-triggered offline runs keep explicit provenance (no trigger token)."""
+
+    from unify.common.task_execution_context import current_task_execution_delegate
+    from unify.task_scheduler import offline_runner
+    from unify.task_scheduler.types.activated_by import ActivatedBy
+
+    _seed_env(monkeypatch, source_type="explicit")
+    monkeypatch.setenv(
+        "UNITY_OFFLINE_TASK_RUN_KEY",
+        "offline:explicit:42:101:rev:abc123",
+    )
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_REF", "req-rest-1")
+    captured = {}
+
+    class _FakeHandle:
+        async def result(self):
+            return "explicit offline result"
+
+    class _FakeScheduler:
+        async def execute(
+            self,
+            *,
+            task_id,
+            trigger_attempt_token,
+            _activated_by,
+        ):
+            captured["task_id"] = task_id
+            captured["trigger_attempt_token"] = trigger_attempt_token
+            captured["activated_by"] = _activated_by
+            assert current_task_execution_delegate.get() is not None
+            return _FakeHandle()
+
+    _stub_runtime_initialization(monkeypatch, offline_runner)
+    monkeypatch.setattr(offline_runner, "TaskScheduler", lambda: _FakeScheduler())
+    monkeypatch.setattr(
+        offline_runner,
+        "_update_task_run",
+        lambda *args, **kwargs: None,
+    )
+
+    exit_code = offline_runner.main()
+
+    assert exit_code == 0
+    assert captured["task_id"] == 101
+    assert captured["trigger_attempt_token"] is None
+    assert captured["activated_by"] == ActivatedBy.explicit
+    provenance = offline_runner._build_offline_provenance(
+        offline_runner._load_config_from_env(),
+    )
+    assert provenance.source_type == "explicit"
+    assert provenance.attempt_token is None
+    assert provenance.source_ref == "req-rest-1"
 
 
 def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):

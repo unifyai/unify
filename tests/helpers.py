@@ -671,7 +671,12 @@ def get_or_create_contact(
 
     # Try to create
     try:
-        result = cm._create_contact(email_address=email_address, **fields)
+        from unify.contact_manager.ops import partition_create_kwargs
+
+        result = cm._create_contact(
+            email_address=email_address,
+            **partition_create_kwargs(fields),
+        )
         return result["details"]["contact_id"]
     except (ValueError, Exception) as e:
         # Unique constraint violation - another process won the race

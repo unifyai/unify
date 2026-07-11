@@ -1,8 +1,8 @@
 """Entry point for Unity's headless offline task lane.
 
 This module runs inside the short-lived Unity job created by Communication when
-a scheduled or triggered task should execute without waking the full live
-assistant runtime. It exists to answer one simple question:
+a scheduled, triggered, or explicitly REST-triggered task should execute without
+waking the full live assistant runtime. It exists to answer one simple question:
 
 "How do we run one task in the background, with the assistant's identity and
 normal actor primitives available, but without booting the whole
@@ -58,7 +58,7 @@ from unify.task_scheduler.types.activated_by import ActivatedBy
 TASK_RUN_UPDATE_PATH = "/task-run/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
-SCHEDULER_MANAGED_SOURCE_TYPES = {"scheduled", "triggered"}
+SCHEDULER_MANAGED_SOURCE_TYPES = {"scheduled", "triggered", "explicit"}
 
 
 @dataclass(frozen=True)
@@ -291,11 +291,18 @@ def _activated_by_for_source_type(source_type: str) -> ActivatedBy:
 
     if source_type == "triggered":
         return ActivatedBy.trigger
+    if source_type == "explicit":
+        return ActivatedBy.explicit
     return ActivatedBy.schedule
 
 
 def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
-    """Return the pending-provenance claim token for one triggered run."""
+    """Return the pending-provenance claim token for one triggered run.
+
+    Explicit REST offline runs intentionally omit this token so
+    ``TaskScheduler.execute`` keeps ``source_type=explicit`` instead of
+    forcing ``triggered``.
+    """
 
     if config.source_type == "triggered":
         return config.run_key
@@ -432,6 +439,12 @@ class _OfflineTaskExecutionDelegate:
         )
 
         self._actor = _build_offline_actor()
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "OfflineTaskExecutionDelegate.start_task_run got unexpected "
+                f"keyword arguments: {unexpected}",
+            )
         handle = await self._actor.act(
             task_description,
             guidelines="\n\n".join(
@@ -449,7 +462,6 @@ class _OfflineTaskExecutionDelegate:
             persist=False,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
-            **kwargs,
         )
         return _OfflineTaskHandle(self._config, handle)
 
@@ -485,8 +497,8 @@ async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
     if not _is_scheduler_managed(config):
         raise RuntimeError(
-            "Offline task runner only supports scheduler-managed scheduled "
-            "and triggered task runs.",
+            "Offline task runner only supports scheduler-managed scheduled, "
+            "triggered, and explicit task runs.",
         )
     return await _execute_scheduler_managed_task(config)
 

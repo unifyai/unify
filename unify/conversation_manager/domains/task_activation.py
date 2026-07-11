@@ -27,6 +27,7 @@ from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.machine_state import (
     TaskActivationSnapshot,
     TaskRunProvenance,
+    get_task_activation,
     list_trigger_activations,
     remember_live_task_run_provenance,
     validate_task_due_activation,
@@ -60,16 +61,29 @@ class _ConversationTaskExecutionDelegate:
     ) -> "SteerableToolHandle":
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
+        entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
+        entrypoint_repair_attempts = int(
+            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "ConversationManagerTaskExecutionDelegate.start_task_run got "
+                f"unexpected keyword arguments: {unexpected}",
+            )
         return await self._actor.act(
             task_description,
             guidelines=task_guidelines,
             entrypoint=entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=entrypoint_repair_attempts,
+            entrypoint_repair_context=entrypoint_repair_context,
             _parent_chat_context=parent_chat_context,
             _clarification_up_q=clarification_up_q,
             _clarification_down_q=clarification_down_q,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
-            **kwargs,
         )
 
 
@@ -446,7 +460,7 @@ def _task_due_event_from_wake_reason(reason: Any) -> TaskDue | None:
     """Convert one startup wake-reason payload into a typed `TaskDue` event.
 
     Cold-start wake reasons are a heterogeneous list of dicts (task_due,
-    inactivity_followup, …) keyed by a leading ``type`` discriminator.
+    coordinator_delegate, …) keyed by a leading ``type`` discriminator.
     Validate the discriminator here, then delegate the actual field
     extraction to :meth:`TaskDue.from_dict` so all `TaskDue` producers
     share one builder.
@@ -544,9 +558,27 @@ async def _handle_task_trigger_requested_event(
     event: TaskTriggerRequested,
     cm: "ConversationManager",
 ) -> bool:
-    """Start one REST-triggered task and surface execution status."""
+    """Start one REST-triggered task and surface execution status.
+
+    Offline tasks are dispatched headlessly (no live actor). Live tasks keep
+    the existing in-process ``TaskScheduler.execute`` path.
+    """
 
     assistant_id = _current_task_assistant_id()
+    activation = None
+    if assistant_id:
+        activation = get_task_activation(
+            assistant_id=assistant_id,
+            task_id=event.task_id,
+            destination=event.destination,
+        )
+    if activation is not None and activation.execution_mode == "offline":
+        return await _handle_offline_rest_task_trigger(
+            event,
+            cm,
+            activation=activation,
+        )
+
     if assistant_id:
         remember_live_task_run_provenance(
             TaskRunProvenance(
@@ -593,13 +625,159 @@ async def _handle_task_trigger_requested_event(
     return False
 
 
+async def _handle_offline_rest_task_trigger(
+    event: TaskTriggerRequested,
+    cm: "ConversationManager",
+    *,
+    activation: TaskActivationSnapshot,
+) -> bool:
+    """Dispatch one REST-triggered offline task without requiring a live actor."""
+
+    from unify.settings import SETTINGS
+
+    use_local_dispatch = bool(SETTINGS.task.LOCAL_SCHEDULER_ENABLED)
+    try:
+        if use_local_dispatch:
+            result = await _dispatch_offline_explicit_candidate_local(
+                cm=cm,
+                candidate=activation,
+                source_ref=event.source_ref or "",
+            )
+        else:
+            result = await asyncio.to_thread(
+                _dispatch_offline_explicit_candidate,
+                candidate=activation,
+                source_ref=event.source_ref or "",
+            )
+    except Exception as exc:
+        error_message = (
+            f"REST-triggered offline task '{_task_trigger_label(event)}' failed to "
+            f"dispatch: {type(exc).__name__}: {exc}"
+        )
+        cm._session_logger.error("task_trigger", error_message)
+        cm.notifications_bar.push_notif("Tasks", error_message, event.timestamp)
+        publish_system_error(
+            error_message,
+            error_type="rest_task_trigger_offline_dispatch_failed",
+        )
+        return False
+
+    status = result.get("status", "unknown")
+    cm.notifications_bar.push_notif(
+        "Tasks",
+        (
+            f"Offline task '{_task_trigger_label(event)}' dispatched "
+            f"({status}, task_id={event.task_id})."
+        ),
+        event.timestamp,
+    )
+    cm._session_logger.info(
+        "task_trigger",
+        (
+            f"Accepted REST offline task trigger for task {event.task_id} "
+            f"(status={status})"
+        ),
+    )
+    return False
+
+
+def _dispatch_offline_explicit_candidate(
+    *,
+    candidate: TaskActivationSnapshot,
+    source_ref: str,
+) -> dict[str, Any]:
+    """Ask Communication to execute one REST-triggered offline task headlessly."""
+
+    from unify.settings import SETTINGS
+    from unify.session_details import SESSION_DETAILS
+
+    comms_url = (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
+    unify_key = SESSION_DETAILS.unify_key
+    if not comms_url:
+        raise RuntimeError("UNITY_COMMS_URL is not configured")
+    if not unify_key:
+        raise RuntimeError("UNIFY_KEY is not configured")
+    assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")
+    payload: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "task_id": candidate.task_id,
+        "source_task_log_id": candidate.source_task_log_id,
+        "activation_revision": candidate.activation_revision,
+        "execution_mode": "offline",
+        "source_type": "explicit",
+        "source_ref": source_ref,
+        "source_medium": "api",
+        "task_name": candidate.task_name or None,
+        "task_description": candidate.task_description or None,
+    }
+    if candidate.destination:
+        payload["destination"] = candidate.destination
+    if candidate.entrypoint is not None:
+        payload["entrypoint"] = candidate.entrypoint
+    response = requests.post(
+        f"{comms_url}/infra/task-activation/offline-dispatch",
+        json=payload,
+        headers={"Authorization": f"Bearer {unify_key}"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _dispatch_offline_explicit_candidate_local(
+    *,
+    cm: "ConversationManager",
+    candidate: TaskActivationSnapshot,
+    source_ref: str,
+) -> dict[str, Any]:
+    """Execute one REST-triggered offline task via the local subprocess lane."""
+
+    materializer = getattr(cm, "_activation_materializer", None)
+    dispatcher = getattr(materializer, "_offline", None) if materializer else None
+    if dispatcher is None:
+        raise RuntimeError(
+            "Local activation scheduler is not initialised; "
+            "cannot dispatch offline explicit trigger locally.",
+        )
+    from unify.task_scheduler.local_scheduler.offline_dispatcher import (
+        _build_local_offline_runner_env,
+    )
+    import asyncio as _asyncio
+    import os as _os
+    import sys as _sys
+
+    env = _build_local_offline_runner_env(
+        candidate,
+        source_type="explicit",
+        source_ref=source_ref,
+        source_medium="api",
+    )
+    merged_env = {**_os.environ, **env}
+    merged_env.setdefault("PYTHONUNBUFFERED", "1")
+    process = await _asyncio.create_subprocess_exec(
+        _sys.executable,
+        "-m",
+        "unify.task_scheduler.offline_runner",
+        env=merged_env,
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+    )
+    watcher = _asyncio.create_task(
+        dispatcher._watch(process, candidate, "explicit"),
+    )
+    dispatcher._inflight.add(watcher)
+    watcher.add_done_callback(dispatcher._inflight.discard)
+    return {
+        "success": True,
+        "status": "spawned_local",
+        "execution_mode": "offline",
+        "source_type": "explicit",
+    }
+
+
 async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
     """Replay startup wake reasons once managers are initialized."""
 
-    from unify.conversation_manager.domains.inactivity import (
-        _handle_inactivity_followup_event,
-        _inactivity_followup_event_from_wake_reason,
-    )
     from unify.conversation_manager.domains.coordinator_delegate import (
         _coordinator_delegate_event_from_wake_reason,
         _handle_coordinator_delegate_event,
@@ -622,11 +800,6 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         task_trigger_event = _task_trigger_event_from_wake_reason(wake_reason)
         if task_trigger_event is not None:
             await _handle_task_trigger_requested_event(task_trigger_event, cm)
-            continue
-
-        inactivity_event = _inactivity_followup_event_from_wake_reason(wake_reason)
-        if inactivity_event is not None:
-            await _handle_inactivity_followup_event(inactivity_event, cm)
             continue
 
         coordinator_delegate_event = _coordinator_delegate_event_from_wake_reason(

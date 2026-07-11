@@ -37,7 +37,6 @@ class Debouncer:
         self.pending_task: asyncio.Task = None
         self._name = name
         self._pending_label: str = ""
-        self._pending_is_user_origin: bool = False
         # Trace meta of the queued (pending) run, so it can be matched/cancelled
         # by turn id while still pending (before it promotes to running).
         self._pending_trace_meta: dict = {}
@@ -53,21 +52,12 @@ class Debouncer:
         delay=0,
         label: str = "",
         trace_meta: dict | None = None,
-        is_user_origin: bool = False,
     ):
         args, kwargs = args or (), kwargs or {}
 
         had_pending = self.pending_task is not None and not self.pending_task.done()
         has_running = self.running_task is not None and not self.running_task.done()
         old_label = self._pending_label
-
-        if had_pending and self._pending_is_user_origin and not is_user_origin:
-            if self._name:
-                LOGGER.info(
-                    f"🚦 [{self._name}] {label} skipped — "
-                    f"pending user utterance ({old_label}) takes priority",
-                )
-            return
 
         await self._cancel_pending()
 
@@ -105,7 +95,7 @@ class Debouncer:
                     await asyncio.shield(self.running_task)
             except asyncio.CancelledError:
                 # CancelledError can come from two sources:
-                # 1. The running task was cancelled externally (e.g. speech urgency)
+                # 1. The running task was cancelled externally
                 # 2. This pending task was cancelled (debounced by a newer submit)
                 #
                 # In case 1, we should proceed to create a new running task.
@@ -135,12 +125,10 @@ class Debouncer:
             self.running_task.add_done_callback(log_task_exc)
             self.pending_task = None
             self._pending_label = ""
-            self._pending_is_user_origin = False
             self._pending_trace_meta = {}
 
         self.pending_task = asyncio.create_task(wait_for_running_task())
         self._pending_label = label
-        self._pending_is_user_origin = is_user_origin
         self._pending_trace_meta = trace_meta or {}
 
     async def _cancel_pending(self):
@@ -188,7 +176,6 @@ class Debouncer:
                 pass
             self.pending_task = None
             self._pending_label = ""
-            self._pending_is_user_origin = False
             self._pending_trace_meta = {}
             if self._name:
                 LOGGER.info(

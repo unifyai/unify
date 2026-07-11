@@ -54,8 +54,7 @@ def resolve_default_model() -> tuple[str, str | None]:
 
     The per-assistant default (from Orchestra, via SESSION_DETAILS) takes
     priority over the deployment-wide UNIFY_MODEL. A returned effort of None
-    means the assistant carries no effort override and per-call-site effort
-    levels apply.
+    means no effort override and per-call-site effort levels apply.
     """
     session_model = SESSION_DETAILS.assistant.default_model
     if session_model:
@@ -63,37 +62,45 @@ def resolve_default_model() -> tuple[str, str | None]:
             session_model,
             SESSION_DETAILS.assistant.default_reasoning_effort or None,
         )
+    effort = SETTINGS.UNIFY_REASONING_EFFORT.strip() or None
+    return SETTINGS.UNIFY_MODEL, effort
+
+
+def resolve_slow_brain_model() -> tuple[str, str | None]:
+    """Resolve the ConversationManager slow-brain LLM as (model, effort).
+
+    Priority:
+    1. Per-assistant slow brain (Orchestra / SESSION_DETAILS), including effort
+    2. ``UNITY_CONVERSATION_SLOW_BRAIN_MODEL`` when set (non-empty)
+    3. The global shared model (``UNIFY_MODEL``)
+
+    Independent of the actor ``default_model``. A returned effort of None means
+    per-call-site effort levels apply.
+    """
+    session_model = SESSION_DETAILS.assistant.slow_brain_model
+    if session_model:
+        return (
+            session_model,
+            SESSION_DETAILS.assistant.slow_brain_reasoning_effort or None,
+        )
+    slow_model = SETTINGS.conversation.SLOW_BRAIN_MODEL.strip()
+    if slow_model:
+        effort = SETTINGS.conversation.SLOW_BRAIN_REASONING_EFFORT.strip() or None
+        return slow_model, effort
     return SETTINGS.UNIFY_MODEL, None
 
 
-def new_llm_client(
-    model: str | None = None,
+def _build_llm_client(
+    model: str,
     *,
-    async_client: bool = True,
-    stateful: bool = False,
-    origin: str | None = None,
-    **kwargs: Any,
+    async_client: bool,
+    stateful: bool,
+    origin: str | None,
+    default_effort: str | None,
+    kwargs: dict[str, Any],
 ) -> "unillm.AsyncUnify | unillm.Unify":
-    """
-    Create a configured Unify client.
-
-    If model is not specified, uses the assistant's default model when one is
-    set (which also pins its reasoning effort, overriding the call site), and
-    otherwise UNIFY_MODEL from settings.
-    Defaults to max reasoning_effort and priority service_tier where applicable.
-    Callers that want a lighter setting (e.g. the ConversationManager slow brain
-    at "high", or fast-path helpers) pass ``reasoning_effort`` explicitly.
-    Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
-    Returns an AsyncUnify client by default, or a synchronous Unify client when
-    async_client=False.
-    """
-    default_effort: str | None = None
-    if model is None:
-        model, default_effort = resolve_default_model()
-
     config = {
-        "reasoning_effort": "max",
-        "service_tier": "priority",
+        "reasoning_effort": "high",
         "stateful": stateful,
         "origin": origin,
     }
@@ -114,38 +121,68 @@ def new_llm_client(
     return client
 
 
-def new_vision_llm_client(
+def new_llm_client(
+    model: str | None = None,
     *,
     async_client: bool = True,
     stateful: bool = False,
     origin: str | None = None,
     **kwargs: Any,
 ) -> "unillm.AsyncUnify | unillm.Unify":
-    """Create an LLM client for single-shot image and vision analysis.
-
-    Uses UNIFY_VISION_MODEL and UNIFY_VISION_REASONING_EFFORT from settings so
-    image Q&A stays on a vision-capable endpoint even when UNIFY_MODEL is
-    text-only (for example minimax-v3@minimax).
     """
-    config = {
-        "reasoning_effort": SETTINGS.UNIFY_VISION_REASONING_EFFORT,
-        "service_tier": "priority",
-        "stateful": stateful,
-        "origin": origin,
-    }
-    config.update(kwargs)
+    Create a configured Unify client.
 
-    if async_client:
-        client = unillm.AsyncUnify(SETTINGS.UNIFY_VISION_MODEL, **config)
-    else:
-        client = unillm.Unify(SETTINGS.UNIFY_VISION_MODEL, **config)
+    If model is not specified, uses the assistant's default model when one is
+    set (which also pins its reasoning effort, overriding the call site), and
+    otherwise UNIFY_MODEL from settings.
+    Defaults to high reasoning_effort where applicable. Callers that want a
+    different setting (e.g. fast-path helpers at "low", or max-effort actor
+    profiles) pass ``reasoning_effort`` explicitly.
+    Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
+    Returns an AsyncUnify client by default, or a synchronous Unify client when
+    async_client=False.
+    """
+    default_effort: str | None = None
+    if model is None:
+        model, default_effort = resolve_default_model()
 
-    if origin:
-        pending_log = PendingThinkingLog(origin)
-        client.set_on_log_file_pending(pending_log.on_pending_path)
-        client._pending_thinking_log = pending_log
+    return _build_llm_client(
+        model,
+        async_client=async_client,
+        stateful=stateful,
+        origin=origin,
+        default_effort=default_effort,
+        kwargs=kwargs,
+    )
 
-    return client
+
+def new_slow_brain_llm_client(
+    model: str | None = None,
+    *,
+    async_client: bool = True,
+    stateful: bool = False,
+    origin: str | None = None,
+    **kwargs: Any,
+) -> "unillm.AsyncUnify | unillm.Unify":
+    """Create an LLM client for ConversationManager slow-brain call sites.
+
+    When ``model`` is omitted, resolves via :func:`resolve_slow_brain_model`
+    (assistant slow brain → slow-brain setting → global ``UNIFY_MODEL``).
+    Defaults to high reasoning effort; an assistant- or setting-level effort
+    override pins the client effort the same way as :func:`new_llm_client`.
+    """
+    default_effort: str | None = None
+    if model is None:
+        model, default_effort = resolve_slow_brain_model()
+
+    return _build_llm_client(
+        model,
+        async_client=async_client,
+        stateful=stateful,
+        origin=origin,
+        default_effort=default_effort,
+        kwargs=kwargs,
+    )
 
 
 def _make_openai_strict_json_schema_compatible(node: Any) -> None:

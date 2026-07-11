@@ -103,14 +103,9 @@ DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
-VIDEO_AVATAR_CHANNELS = frozenset({"unify_meet", "google_meet", "teams_meet"})
 ELEVENLABS_TWIN_PRONUNCIATION_SOURCE = "t-w1n"
 ELEVENLABS_TWIN_PRONUNCIATION_TARGET = "Twin"
 IDLE_SMALLTALK_STATE_TIMEOUT_S = 0.2
-
-
-def has_video_avatar_channel(channel: str) -> bool:
-    return channel in VIDEO_AVATAR_CHANNELS
 
 
 def _drain_elevenlabs_twin_pronunciation_buffer(
@@ -1930,7 +1925,7 @@ async def entrypoint(ctx: agents.JobContext):
     # Uses UnifyLLM adapter for local caching (CI) and usage tracking
     llm_model = UnifyLLM(
         model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        reasoning_effort="low",
+        reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
     )
 
     assistant_name = SESSION_DETAILS.assistant.name
@@ -1998,9 +1993,6 @@ async def entrypoint(ctx: agents.JobContext):
     _recorded_opening_preloaded: dict[str, _PreloadedAudio] = {}
     generation_seq = 0
     user_state_seq = 0
-    mood_turn_index = 0
-    mood_classification_queue: asyncio.Queue[dict] = asyncio.Queue()
-    mood_classification_task: asyncio.Task | None = None
     _was_quiescent = True
     _pending_reply_timer: asyncio.TimerHandle | None = None
     _NOTIFY_COALESCE_S = 0.05
@@ -2310,8 +2302,6 @@ async def entrypoint(ctx: agents.JobContext):
             await utils.aio.cancel_and_wait(credit_gate_task)
         if hang_up_gate_watcher_task is not None:
             await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
-        if mood_classification_task is not None:
-            await utils.aio.cancel_and_wait(mood_classification_task)
         if audio_bridge is not None:
             await asyncio.to_thread(audio_bridge.stop)
         await screen_capture.close()
@@ -2524,97 +2514,6 @@ async def entrypoint(ctx: agents.JobContext):
                 ),
             )
 
-    def _fast_brain_text_transcript() -> str:
-        lines: list[str] = []
-        for item in session.history.items:
-            role = getattr(item, "role", None)
-            if role not in ("user", "assistant"):
-                continue
-            text = (getattr(item, "text_content", None) or "").strip()
-            if not text:
-                continue
-            speaker = "User" if role == "user" else "Assistant"
-            lines.append(f"{speaker}: {text}")
-        return "\n".join(lines)
-
-    def _mood_classification_enabled() -> bool:
-        return (
-            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED
-            and has_video_avatar_channel(channel)
-        )
-
-    async def _run_mood_classifications() -> None:
-        from unify.conversation_manager.domains.fast_brain_mood import (
-            FastBrainMoodClassifier,
-        )
-
-        classifier = FastBrainMoodClassifier(
-            SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
-        )
-        while True:
-            item = await mood_classification_queue.get()
-            try:
-                try:
-                    classification = await classifier.evaluate(
-                        transcript=item["transcript"],
-                        trigger_role=item["trigger_role"],
-                        trigger_text=item["trigger_text"],
-                    )
-                    if classification is None:
-                        continue
-
-                    mood = classification.mood.value
-                    avatar_mood = classification.avatar_mood
-                    await ctx.room.local_participant.publish_data(
-                        json.dumps(
-                            {
-                                "type": "mood_classification",
-                                "mood": mood,
-                                "avatarMood": avatar_mood,
-                                "turnIndex": item["turn_index"],
-                                "triggerRole": item["trigger_role"],
-                            },
-                        ).encode(),
-                        topic="agent_status",
-                        reliable=True,
-                    )
-                    event = FastBrainMoodClassified(
-                        contact=contact,
-                        channel=channel,
-                        mood=mood,
-                        avatar_mood=avatar_mood,
-                        trigger_role=item["trigger_role"],
-                        trigger_utterance_id=item["trigger_utterance_id"],
-                        turn_index=item["turn_index"],
-                        model=SETTINGS.conversation.FAST_BRAIN_MOOD_CLASSIFICATION_MODEL,
-                    )
-                    await event_broker.publish(event.topic, event.to_json())
-                except Exception as e:
-                    _log.error(f"Mood classification failed: {e}")
-            finally:
-                mood_classification_queue.task_done()
-
-    def _enqueue_mood_classification(
-        role: str,
-        text: str,
-        utterance_id: str,
-    ) -> None:
-        nonlocal mood_turn_index
-        if not _mood_classification_enabled():
-            return
-        if not text.strip():
-            return
-        mood_turn_index += 1
-        mood_classification_queue.put_nowait(
-            {
-                "transcript": _fast_brain_text_transcript(),
-                "trigger_role": role,
-                "trigger_text": text,
-                "trigger_utterance_id": utterance_id,
-                "turn_index": mood_turn_index,
-            },
-        )
-
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
         """Publish both user and assistant utterances from a single location."""
@@ -2734,7 +2633,6 @@ async def entrypoint(ctx: agents.JobContext):
             )
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
-        _enqueue_mood_classification(role, text, utterance_id)
 
     audio_bridge: MeetAudioBridge | None = None
     if channel in ("google_meet", "teams_meet"):
@@ -2783,11 +2681,6 @@ async def entrypoint(ctx: agents.JobContext):
         credit_gate_monitor.run(),
         name="fast_brain_credit_gate_monitor",
     )
-    if _mood_classification_enabled():
-        mood_classification_task = asyncio.create_task(
-            _run_mood_classifications(),
-            name="fast_brain_mood_classifier",
-        )
 
     async def _capture_screenshots_for_llm(chat_ctx) -> None:
         """Capture fresh screenshots and inject them into the LLM's chat_ctx.
@@ -3721,7 +3614,7 @@ async def entrypoint(ctx: agents.JobContext):
         greeting_client = new_llm_client(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="fast_brain_greeting",
-            reasoning_effort="low",
+            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
         )
         greeting_messages = build_opening_greeting_messages(
             system_prompt=system_prompt,
@@ -3864,11 +3757,6 @@ async def entrypoint(ctx: agents.JobContext):
             llm_log_path="",
         )
         await _publish_assistant_utterance(simulated_utterance)
-        _enqueue_mood_classification(
-            "assistant",
-            simulated_utterance,
-            content_trace_id("utt", f"assistant:{simulated_utterance}"),
-        )
     else:
         _log.info("Opening turn suppressed by call opening config")
         await _publish_ready_to_speak()

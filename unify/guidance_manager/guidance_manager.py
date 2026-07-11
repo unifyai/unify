@@ -572,7 +572,7 @@ class GuidanceManager(BaseGuidanceManager):
         Returns
         -------
         str
-            Text answer from the vision model. This does not persist visual
+            Text answer from the LLM. This does not persist visual
             context across turns.
         """
         handles = self._image_manager.get_images([int(image_id)])

@@ -37,7 +37,7 @@ from unify.conversation_manager.events import *
 from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
-from unify.common.llm_client import new_llm_client, new_vision_llm_client
+from unify.common.llm_client import new_slow_brain_llm_client
 from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
@@ -417,9 +417,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._recording_exchange_ids: dict[str, int] = {}
 
         # proactive speech
-        self.proactive_speech = ProactiveSpeech(
-            model=SETTINGS.conversation.PROACTIVE_SPEECH_MODEL,
-        )
+        self.proactive_speech = ProactiveSpeech()
         self._proactive_speech_task: asyncio.Task | None = None
         self._proactive_speech_gen: int = 0
         self._proactive_speech_enabled: bool = True
@@ -1180,9 +1178,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         turn_id: int | None = None,
     ):
         """Route a completed voice user turn to the active ask handle or slow brain."""
-        prev_utterance = getattr(self, "_last_inbound_utterance", None)
-        self._last_inbound_utterance = content
-
         if self.active_ask_handle and not self.active_ask_handle.done():
             await self.active_ask_handle.interject(content)
             return
@@ -1194,82 +1189,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             turn_id=turn_id,
         )
 
-        if (
-            SETTINGS.conversation.SPEECH_URGENCY_PREEMPT_ENABLED
-            and self.debouncer.running_task
-            and not self.debouncer.running_task.done()
-        ):
-            stale_task = self.debouncer.running_task
-            asyncio.create_task(
-                self._evaluate_speech_urgency(
-                    content,
-                    stale_task,
-                    prev_utterance,
-                ),
-            )
-
-    async def _evaluate_speech_urgency(
-        self,
-        utterance: str,
-        stale_task: asyncio.Task,
-        previous_utterance: str | None = None,
-    ) -> None:
-        """Concurrent sidecar: evaluate whether *utterance* should preempt the slow brain."""
-        from unify.conversation_manager.domains.speech_urgency import (
-            SpeechUrgencyEvaluator,
-        )
-
-        trace_meta = self.debouncer.running_task_trace_meta
-        origin_event = trace_meta.get("origin_event_name", "unknown")
-        elapsed = self.loop.time() - self.debouncer.running_task_started_at
-
-        actions_parts = []
-        for info in self.in_flight_actions.values():
-            action_type = info.get("action_type", "unknown")
-            query = info.get("query", "")
-            actions_parts.append(f"{action_type}: {query!r}")
-        actions_summary = "; ".join(actions_parts) if actions_parts else "none"
-
-        evaluator = SpeechUrgencyEvaluator(
-            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        )
-        decision = await evaluator.evaluate(
-            utterance=utterance,
-            origin_event=origin_event,
-            elapsed_seconds=elapsed,
-            actions_summary=actions_summary,
-            previous_utterance=previous_utterance,
-        )
-
-        self._session_logger.debug(
-            "speech_urgency",
-            (
-                f"Urgency eval: urgent={decision.urgent} "
-                f"utterance={utterance!r} origin={origin_event} "
-                f"elapsed={elapsed:.1f}s reasoning={decision.reasoning!r}"
-            ),
-        )
-
-        if not decision.urgent:
-            return
-
-        # Only cancel if the same stale task is still the running task.
-        # If it completed (or a new task started) the utterance is already
-        # being processed — cancelling would be counterproductive.
-        if self.debouncer.running_task is stale_task and not stale_task.done():
-            self._session_logger.debug(
-                "speech_urgency",
-                "Preempting stale slow-brain run — pending task will promote",
-            )
-            stale_task.cancel()
-
-    # this is non-blocking, it will quickly submit the
-    # coro and return
     async def run_llm(
         self,
         delay: float = 0,
         trace_meta: dict[str, str] | None = None,
-        is_user_origin: bool = False,
     ):
         await self.debouncer.submit(
             self._run_llm_with_failure_notification,
@@ -1277,7 +1200,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             delay=delay,
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
-            is_user_origin=is_user_origin,
         )
 
     # Grace window for the owner to answer a Unify Meet ring before the
@@ -1917,7 +1839,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         await self.run_llm(
             delay=delay,
             trace_meta=selected_meta,
-            is_user_origin=is_user_origin,
         )
 
     async def _open_slow_brain_follow_on_turn(
@@ -2254,22 +2175,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         _t0 = _rl_time.perf_counter()
         _client_step_t0 = _t0
-        if screenshots:
-            client = new_vision_llm_client(
-                origin="ConversationManager",
-                reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
-            )
-        else:
-            client = new_llm_client(
-                origin="ConversationManager",
-                # Slow brain stays at "high"; the system default is "max" (used by
-                # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
-                # hardest tasks at extra latency; on MiniMax M3 all non-none effort
-                # levels enable the same adaptive thinking mode. When the
-                # assistant carries a default-model effort override, it takes
-                # priority over this value inside new_llm_client().
-                reasoning_effort="high",
-            )
+        client = new_slow_brain_llm_client(
+            origin="ConversationManager",
+            # Slow brain pins "high" explicitly so an assistant-level or
+            # SLOW_BRAIN_REASONING_EFFORT override is the only thing that
+            # can change it. When the assistant carries a default-model
+            # effort override, it takes priority inside
+            # new_slow_brain_llm_client(). Screenshots use the same
+            # multimodal slow-brain client as text turns.
+            reasoning_effort="high",
+        )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
         if hasattr(client, "_pending_thinking_log"):
@@ -2781,6 +2696,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # meaningful value (reset to the platform default model).
         self.default_model = payload.get("default_model", "")
         self.default_reasoning_effort = payload.get("default_reasoning_effort", "")
+        self.slow_brain_model = payload.get("slow_brain_model", "")
+        self.slow_brain_reasoning_effort = payload.get(
+            "slow_brain_reasoning_effort",
+            "",
+        )
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "none")
         self.managed_desktop_status = payload.get("managed_desktop_status")
@@ -2829,6 +2749,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             voice_id=self.voice_id,
             default_model=self.default_model,
             default_reasoning_effort=self.default_reasoning_effort,
+            slow_brain_model=self.slow_brain_model,
+            slow_brain_reasoning_effort=self.slow_brain_reasoning_effort,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
             managed_desktop_status=self.managed_desktop_status,

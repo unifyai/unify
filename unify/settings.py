@@ -67,9 +67,10 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Core LLM Settings
     # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_MODEL: str = "minimax-v3@minimax"
-    UNIFY_VISION_MODEL: str = "gpt-5.5@openai"
-    UNIFY_VISION_REASONING_EFFORT: str = "low"
+    UNIFY_MODEL: str = "gpt-5.6-sol@openai"
+    # Reasoning effort paired with UNIFY_MODEL when no per-assistant default is
+    # set. Empty leaves per-call-site effort levels untouched.
+    UNIFY_REASONING_EFFORT: str = "high"
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials

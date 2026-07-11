@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from unify.common.llm_client import new_llm_client, new_vision_llm_client
+from unify.common.llm_client import new_llm_client
 
 DEFAULT_LLM_QUERY_SYSTEM = (
     "You are a focused semantic LLM subroutine inside a larger Python "
@@ -135,9 +135,9 @@ def get_llm_model_selection_context() -> str:
         - In stored functions, record the model-choice rationale in the docstring
           or a short code comment.
         - Pass screenshots, photos, or image paths through ``images=[...]`` when
-          the task needs vision reasoning. Omit ``model=`` to use the default
-          vision endpoint, or set ``model=`` to a vision-capable UniLLM endpoint
-          when you need a specific provider.
+          the task needs image understanding. Omit ``model=`` to use the same
+          default multimodal endpoint as text queries, or set ``model=`` to a
+          specific UniLLM endpoint when you need a particular provider.
         """,
     ).strip()
 
@@ -166,10 +166,10 @@ async def query_llm(
     handles bounded unstructured-data work that would be brittle if implemented
     as keyword matching or canned templates.
 
-    **Text and vision.** ``query_llm`` takes a string ``prompt``. For screenshots
+    **Text and images.** ``query_llm`` takes a string ``prompt``. For screenshots
     or other raster images, pass them through ``images=[...]`` (local path, PNG
     bytes, or ``data:image/...`` URL). Images are scaled to the same
-    model-aware observation space as ``display()`` before the vision call.
+    model-aware observation space as ``display()`` before the call.
     Do not embed base64 in the prompt text itself.
 
     Good uses
@@ -260,7 +260,7 @@ async def query_llm(
             response_format=EmailClassification,
         )
 
-    Vision reasoning over a local image path::
+    Image understanding over a local image path::
 
         answer = await query_llm(
             "What text is visible in this screenshot?",
@@ -271,13 +271,12 @@ async def query_llm(
     ----------------------------
     By default this uses ``new_llm_client(model, async_client=True,
     stateful=False, origin='CodeActActor.query_llm')`` and calls
-    ``generate(..., temperature=0.0)`` for stable judgments. When ``images``
-    is provided, the default switches to ``new_vision_llm_client(...)`` so
-    image reasoning uses the configured vision endpoint unless ``model=`` is
-    set explicitly. Override ``model`` only when the task has a real capability
-    or cost reason. Raise ``temperature`` only when creative synthesis is more
-    useful than stable classification. Pass advanced UniLLM generation options
-    through ``generate_kwargs``; keep ordinary actor-written code simple.
+    ``generate(..., temperature=0.0)`` for stable judgments. The same default
+    multimodal client is used when ``images`` is provided. Override ``model``
+    only when the task has a real capability or cost reason. Raise
+    ``temperature`` only when creative synthesis is more useful than stable
+    classification. Pass advanced UniLLM generation options through
+    ``generate_kwargs``; keep ordinary actor-written code simple.
 
     Anti-patterns
     -------------
@@ -323,10 +322,7 @@ async def query_llm(
         )
         from unify.common.observation_scaling import resolve_observation_model
 
-        if model is None:
-            client = new_vision_llm_client(**client_config)
-        else:
-            client = new_llm_client(model, **client_config)
+        client = new_llm_client(model, **client_config)
 
         client.set_system_message(system or DEFAULT_LLM_QUERY_SYSTEM)
         observation_model = model or resolve_observation_model()

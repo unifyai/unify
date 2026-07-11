@@ -505,8 +505,8 @@ class _ActorRunner:
             Use with caution to avoid excessive nesting.
         llm_profile : str, optional
             Optional curated model profile for this actor run. Leave unset for
-            the default profile, normally ``minimax-v3@minimax``.
-            Available premium profiles are ``gpt_5_5_low``,
+            the default profile, normally ``gpt-5.6-sol@openai`` at high
+            reasoning effort. Available premium profiles are ``gpt_5_5_low``,
             ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use ``gpt_5_5_high``
             when the sub-task itself needs maximum thinking effort. This
             parameter is explicit: sub-agents do not automatically inherit the

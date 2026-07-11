@@ -1163,22 +1163,6 @@ class ProactiveSpeechControl(Event):
 
 
 @dataclass
-class FastBrainMoodClassified(Event):
-    """Avatar mood classified from the current fast-brain voice transcript."""
-
-    topic: ClassVar[str | None] = "app:comms:fast_brain_mood"
-
-    contact: dict
-    channel: str
-    mood: str
-    avatar_mood: str
-    trigger_role: str
-    trigger_utterance_id: str
-    turn_index: int
-    model: str = ""
-
-
-@dataclass
 class EmailReceived(Event):
     """An email was received from a contact.
 
@@ -1376,6 +1360,9 @@ class _SessionConfigBase(Event):
     # reasoning-effort level. Empty = platform default (UNIFY_MODEL).
     default_model: str = ""
     default_reasoning_effort: str = ""
+    # ConversationManager slow-brain LLM. Empty = SLOW_BRAIN_MODEL setting.
+    slow_brain_model: str = ""
+    slow_brain_reasoning_effort: str = ""
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""
@@ -1832,25 +1819,6 @@ class TaskTriggerRequested(Event):
             task_summary=str(payload.get("task_summary") or ""),
             reason=resolved_reason,
         )
-
-
-@dataclass
-class InactivityFollowup(Event):
-    """Orchestra signalled that the user has been silent across all of
-    their assistants for ``settings.inactivity_followup_days`` (orchestra
-    side) and this Coordinator should compose a re-engagement message to
-    the boss.
-
-    Communication publishes this either as a ``unity_system_event`` to a
-    hot pod's Pub/Sub topic or, on a cold start, as an entry in
-    ``StartupEvent.wake_reasons``. The event itself carries no extra
-    fields — the brain decides the variant (never-spoke vs spoke-before)
-    by inspecting transcript history when the handler runs.
-    """
-
-    topic: ClassVar[str | None] = "app:comms:inactivity_followup"
-
-    reason: str = ""
 
 
 @dataclass

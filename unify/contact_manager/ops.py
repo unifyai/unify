@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import unisdk
 from pydantic import ValidationError
@@ -10,6 +10,92 @@ from ..common.log_utils import log as unity_log
 from ..common.tool_outcome import ToolOutcome
 from .types.contact import Contact
 from .custom_columns import sanitize_custom_columns
+
+# Named create/update params (plus plumbing). Everything else is custom_fields.
+_NAMED_CREATE_FIELDS = frozenset(
+    {
+        "first_name",
+        "surname",
+        "email_address",
+        "phone_number",
+        "whatsapp_number",
+        "discord_id",
+        "slack_user_id",
+        "bio",
+        "job_title",
+        "timezone",
+        "rolling_summary",
+        "should_respond",
+        "response_policy",
+        "is_system",
+        "custom_key",
+        "custom_hash",
+        "destination",
+        "context",
+        "data_store",
+        "_contact_id",
+    },
+)
+_NAMED_UPDATE_FIELDS = frozenset(
+    {
+        "contact_id",
+        "first_name",
+        "surname",
+        "email_address",
+        "phone_number",
+        "whatsapp_number",
+        "discord_id",
+        "slack_user_id",
+        "bio",
+        "job_title",
+        "timezone",
+        "rolling_summary",
+        "should_respond",
+        "response_policy",
+        "is_system",
+        "custom_key",
+        "custom_hash",
+        "destination",
+        "context",
+        "data_store",
+        "_log_id",
+        "_contact_id",
+    },
+)
+
+
+def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Split a splat dict into closed ``_create_contact`` kwargs + custom_fields."""
+    named: dict[str, Any] = {}
+    custom: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "contact_id":
+            named["_contact_id"] = value
+        elif key == "custom_fields" and isinstance(value, Mapping):
+            custom.update(value)
+        elif key in _NAMED_CREATE_FIELDS:
+            named[key] = value
+        else:
+            custom[key] = value
+    if custom:
+        named["custom_fields"] = custom
+    return named
+
+
+def partition_update_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Split a splat dict into closed ``update_contact`` kwargs + custom_fields."""
+    named: dict[str, Any] = {}
+    custom: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "custom_fields" and isinstance(value, Mapping):
+            custom.update(value)
+        elif key in _NAMED_UPDATE_FIELDS:
+            named[key] = value
+        else:
+            custom[key] = value
+    if custom:
+        named["custom_fields"] = custom
+    return named
 
 
 def _get_assistant_id() -> int | None:
@@ -154,39 +240,54 @@ def create_contact(
     surname: Optional[str] = None,
     email_address: Optional[str] = None,
     phone_number: Optional[str] = None,
+    whatsapp_number: Optional[str] = None,
+    discord_id: Optional[str] = None,
+    slack_user_id: Optional[str] = None,
     bio: Optional[str] = None,
     job_title: Optional[str] = None,
     timezone: Optional[str] = None,
     rolling_summary: Optional[str] = None,
     should_respond: bool = True,
     response_policy: Optional[str] = None,
+    is_system: bool = False,
+    custom_key: Optional[str] = None,
+    custom_hash: Optional[str] = None,
+    custom_fields: Optional[Dict[str, Any]] = None,
+    contact_id: Optional[int] = None,
     context: str | None = None,
     data_store: Any = None,
-    **kwargs: Any,
 ) -> ToolOutcome:
     context_name = context or self._ctx
     store = data_store or self._data_store
-    if "kwargs" in kwargs:
-        kwargs = {**kwargs, **kwargs.pop("kwargs")}
+    extras = dict(custom_fields or {})
+    if "kwargs" in extras and isinstance(extras["kwargs"], Mapping):
+        extras = {**extras, **extras.pop("kwargs")}
 
     contact_details = {
         "first_name": first_name,
         "surname": surname,
         "email_address": email_address,
         "phone_number": phone_number,
+        "whatsapp_number": whatsapp_number,
+        "discord_id": discord_id,
+        "slack_user_id": slack_user_id,
         "bio": bio,
         "job_title": job_title,
         "timezone": timezone,
         "rolling_summary": rolling_summary,
         "should_respond": should_respond,
         "response_policy": response_policy,
-        "is_system": False,
+        "is_system": is_system,
+        "custom_key": custom_key,
+        "custom_hash": custom_hash,
     }
+    if contact_id is not None:
+        contact_details["contact_id"] = contact_id
     if contact_details["response_policy"] is None:
         contact_details["response_policy"] = self.DEFAULT_RESPONSE_POLICY
 
-    if kwargs:
-        safe_custom = sanitize_custom_columns(kwargs)
+    if extras:
+        safe_custom = sanitize_custom_columns(extras)
         contact_details.update(safe_custom)
         try:
             for k in safe_custom.keys():
@@ -242,21 +343,27 @@ def update_contact(
     email_address: Optional[str] = None,
     phone_number: Optional[str] = None,
     whatsapp_number: Optional[str] = None,
+    discord_id: Optional[str] = None,
+    slack_user_id: Optional[str] = None,
     bio: Optional[str] = None,
     job_title: Optional[str] = None,
     timezone: Optional[str] = None,
     rolling_summary: Optional[str] = None,
     should_respond: Optional[bool] = None,
     response_policy: Optional[str] = None,
+    is_system: Optional[bool] = None,
+    custom_key: Optional[str] = None,
+    custom_hash: Optional[str] = None,
+    custom_fields: Optional[Dict[str, Any]] = None,
     _log_id: Optional[int] = None,
     context: str | None = None,
     data_store: Any = None,
-    **kwargs: Any,
 ) -> ToolOutcome:
     context_name = context or self._ctx
     store = data_store or self._data_store
-    if "kwargs" in kwargs:
-        kwargs = {**kwargs, **kwargs.pop("kwargs")}
+    extras = dict(custom_fields or {})
+    if "kwargs" in extras and isinstance(extras["kwargs"], Mapping):
+        extras = {**extras, **extras.pop("kwargs")}
 
     contact_details = {
         "first_name": first_name,
@@ -264,15 +371,20 @@ def update_contact(
         "email_address": email_address,
         "phone_number": phone_number,
         "whatsapp_number": whatsapp_number,
+        "discord_id": discord_id,
+        "slack_user_id": slack_user_id,
         "bio": bio,
         "job_title": job_title,
         "timezone": timezone,
         "rolling_summary": rolling_summary,
         "should_respond": should_respond,
         "response_policy": response_policy,
+        "is_system": is_system,
+        "custom_key": custom_key,
+        "custom_hash": custom_hash,
     }
-    if kwargs:
-        safe_custom = sanitize_custom_columns(kwargs)
+    if extras:
+        safe_custom = sanitize_custom_columns(extras)
         contact_details.update(safe_custom)
         try:
             for k in safe_custom.keys():
