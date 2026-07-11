@@ -6,7 +6,7 @@ from typing import Optional, Type, Any
 from pydantic import BaseModel
 import unillm
 
-from ..common.llm_client import new_llm_client
+from ..common.llm_client import new_slow_brain_llm_client
 from ..common.simulated import (
     SimulatedLineage,
     SimulatedLog,
@@ -48,7 +48,7 @@ class SimulatedConversationManagerHandle(
         self._simulation_guidance = simulation_guidance
 
         # A shared, stateful LLM for maintaining conversation context
-        self._llm = new_llm_client(
+        self._llm = new_slow_brain_llm_client(
             stateful=True,
             origin="SimulatedConversationManager",
         )

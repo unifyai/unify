@@ -21,11 +21,16 @@ class ConversationSettings(BaseSettings):
         CONTACT_ID: Default contact ID for simulated ConversationManager.
         FAST_BRAIN_MODEL: LLM model for the voice fast brain (TTS mode).
             Override via UNITY_CONVERSATION_FAST_BRAIN_MODEL.
-        PROACTIVE_SPEECH_MODEL: LLM model that decides when and what to say to
-            break a silence. Decoupled from the fast brain: this path is not
-            latency-critical (it sits behind a debounce and a chosen delay), so
-            it runs on the slow-brain model at "high" reasoning effort to
-            reliably honour the no-repeat constraint. Override via
+        SLOW_BRAIN_MODEL: Shared ConversationManager slow-brain model. Empty
+            falls back to the global shared model (UNIFY_MODEL / assistant
+            default resolution). Override via
+            UNITY_CONVERSATION_SLOW_BRAIN_MODEL.
+        SLOW_BRAIN_REASONING_EFFORT: Reasoning effort paired with
+            SLOW_BRAIN_MODEL when that setting is non-empty. Empty leaves
+            call-site effort intact. Override via
+            UNITY_CONVERSATION_SLOW_BRAIN_REASONING_EFFORT.
+        PROACTIVE_SPEECH_MODEL: Optional override for the silence-breaker LLM.
+            Empty (default) uses the shared slow-brain model. Override via
             UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
         FAST_BRAIN_CONTEXT_WINDOW: Maximum number of conversation items
             (utterances, notifications, etc.) the fast brain keeps in its
@@ -63,7 +68,9 @@ class ConversationSettings(BaseSettings):
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
-    PROACTIVE_SPEECH_MODEL: str = "minimax-v3@minimax"
+    SLOW_BRAIN_MODEL: str = "gpt-5.6-terra@openai"
+    SLOW_BRAIN_REASONING_EFFORT: str = "high"
+    PROACTIVE_SPEECH_MODEL: str = ""
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
     FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
