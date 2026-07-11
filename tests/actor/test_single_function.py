@@ -1559,6 +1559,9 @@ async def test_steerable_function_detected_and_forwarded():
     steerable_impl = '''
 async def steerable_workflow(goal: str):
     """A workflow that returns a steerable handle."""
+    from unify.common.async_tool_loop import start_async_tool_loop
+    from unify.common.llm_client import new_llm_client
+
     client = new_llm_client()
     client.set_system_message("You are helpful. Be very brief.")
 
@@ -1613,6 +1616,9 @@ async def test_steerable_function_result_forwarded():
     steerable_impl = '''
 async def steerable_brief_response(message: str):
     """A workflow that returns a steerable handle for brief responses."""
+    from unify.common.async_tool_loop import start_async_tool_loop
+    from unify.common.llm_client import new_llm_client
+
     client = new_llm_client()
     client.set_system_message("Respond with exactly one word only.")
 
@@ -1656,6 +1662,9 @@ async def test_steerable_function_stop_forwarded():
     steerable_impl = '''
 async def steerable_slow_task(duration: int):
     """A slow steerable workflow."""
+    from unify.common.async_tool_loop import start_async_tool_loop
+    from unify.common.llm_client import new_llm_client
+
     client = new_llm_client()
     client.set_system_message("Count slowly to the given number, one at a time.")
 
