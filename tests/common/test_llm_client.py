@@ -26,7 +26,10 @@ def _reset_session_models():
 
 def test_resolve_default_model_falls_back_to_settings() -> None:
     """Without a per-assistant default, the platform UNIFY_MODEL applies."""
-    assert resolve_default_model() == (SETTINGS.UNIFY_MODEL, None)
+    assert resolve_default_model() == (
+        SETTINGS.UNIFY_MODEL,
+        SETTINGS.UNIFY_REASONING_EFFORT or None,
+    )
 
 
 def test_resolve_default_model_prefers_session_default() -> None:
@@ -112,6 +115,7 @@ def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
 def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
     """A default model with no effort leaves per-call-site efforts intact."""
     SESSION_DETAILS.assistant.default_model = SETTINGS.UNIFY_MODEL
+    SESSION_DETAILS.assistant.default_reasoning_effort = ""
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
         new_llm_client(reasoning_effort="high")
         mock_async.assert_called_once_with(

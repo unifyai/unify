@@ -13,10 +13,12 @@ from unify.settings import ProductionSettings
 class TestLLMProviderValidation:
     """Tests for validate_llm_providers method."""
 
-    def test_default_model_is_minimax_m3(self):
+    def test_default_model_is_gpt_5_6_sol(self):
         """UNIFY_MODEL defaults to the primary production reasoning model."""
         field_info = ProductionSettings.model_fields["UNIFY_MODEL"]
-        assert field_info.default == "minimax-v3@minimax"
+        assert field_info.default == "gpt-5.6-sol@openai"
+        effort = ProductionSettings.model_fields["UNIFY_REASONING_EFFORT"]
+        assert effort.default == "high"
 
     def test_validation_fails_when_all_credentials_missing(self):
         """Validation raises RuntimeError when no credentials are set."""

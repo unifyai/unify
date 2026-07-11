@@ -46,7 +46,7 @@ def test_profile_docs_are_curated_and_include_relative_prices():
     assert "roughly 17x the MiniMax input-token rate" in docs
     assert "25x the MiniMax output-token rate" in docs
     assert "gpt-5.5@openai" in docs
-    assert "minimax-v3@minimax" in docs
+    assert "gpt-5.6-sol@openai" in docs
 
 
 def test_profile_context_is_scoped():

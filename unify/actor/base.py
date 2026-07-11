@@ -297,15 +297,14 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
                 the symbolic-entrypoint repair loop.
             llm_profile: Optional curated model profile for this actor run.
                 Leave unset for the default profile, which uses the actor's
-                configured model (normally ``minimax-v3@minimax``).
-                Available premium profiles are ``gpt_5_5_low``,
-                ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use
+                configured model (normally ``gpt-5.6-sol@openai`` at high
+                reasoning effort). Available premium profiles are
+                ``gpt_5_5_low``, ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use
                 ``gpt_5_5_high`` when the user explicitly asks for maximum
                 thinking effort or the task is highly ambiguous/high-stakes
                 enough to justify premium cost and latency. GPT-5.5 profiles
-                use ``gpt-5.5@openai`` and are substantially more expensive
-                than the MiniMax default: about 17x the input-token rate and
-                25x the output-token rate before accounting for any extra
-                reasoning/output tokens from higher effort.
+                use ``gpt-5.5@openai`` and are priced similarly to the Sol
+                default on a per-token basis; prefer them when the caller
+                wants the GPT-5.5 family specifically.
         """
         raise NotImplementedError
