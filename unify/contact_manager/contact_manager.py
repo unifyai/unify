@@ -976,14 +976,21 @@ class ContactManager(BaseContactManager):
         surname: Optional[str] = None,
         email_address: Optional[str] = None,
         phone_number: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
+        discord_id: Optional[str] = None,
+        slack_user_id: Optional[str] = None,
         bio: Optional[str] = None,
         job_title: Optional[str] = None,
         timezone: Optional[str] = None,
         rolling_summary: Optional[str] = None,
         should_respond: bool = True,
         response_policy: Optional[str] = None,
+        is_system: bool = False,
+        custom_key: Optional[str] = None,
+        custom_hash: Optional[str] = None,
+        custom_fields: Optional[Dict[str, Any]] = None,
         destination: Optional[str] = None,
-        **kwargs: Any,
+        _contact_id: Optional[int] = None,
     ) -> ToolOutcome:
         """
         Create and persist a new contact.
@@ -1002,6 +1009,12 @@ class ContactManager(BaseContactManager):
         phone_number : str | None
             Phone number. May start with ``+`` (only if explicitly provided by the user),
             otherwise digits only. Must be unique.
+        whatsapp_number : str | None
+            WhatsApp number. Digits only unless explicitly provided with leading ``+``.
+        discord_id : str | None
+            Discord snowflake id (digits only). Optional.
+        slack_user_id : str | None
+            Slack user id. Optional.
         bio : str | None
             Free‑form notes or description about the contact. Optional.
         job_title : str | None
@@ -1019,6 +1032,14 @@ class ContactManager(BaseContactManager):
         response_policy : str | None
             Optional policy text that qualifies how the assistant should respond to this
             contact. When omitted, a safe default policy is automatically applied.
+        is_system : bool, default False
+            Mark as a system contact (assistant/user/org member). Optional.
+        custom_key / custom_hash : str | None
+            Deployment-defined contact identity fields. Optional.
+        custom_fields : dict[str, Any] | None
+            Values for existing custom columns (snake_case keys that are not part of
+            the built‑in ``Contact`` schema). Create new columns first via
+            ``_create_custom_column``. Do not nest a key literally named ``"kwargs"``.
         destination : str | None, default None
             Where to file this contact. Pass ``"personal"`` (the default) for
             contacts that belong only to you — personal acquaintances, family,
@@ -1034,17 +1055,6 @@ class ContactManager(BaseContactManager):
             low and the contact would land in a shared team, call
             ``request_clarification`` instead of guessing toward the wider
             audience.
-        Additional keyword arguments
-        ----------------------------
-        Any additional top‑level keyword arguments are treated as values for existing
-        custom columns.
-        - Keys must be existing column names (snake_case) that are not part of the
-          built‑in ``Contact`` schema. Create new columns first via
-          ``_create_custom_column``.
-        - Values are stored as‑is. Choose appropriate types when creating the column
-          (e.g. ``str``, ``int``, ``bool``, ``list``, ``dict``).
-        - Do not include a key literally named ``"kwargs"``. Pass custom fields
-          as top‑level keys instead.
 
         Returns
         -------
@@ -1078,15 +1088,22 @@ class ContactManager(BaseContactManager):
             surname=surname,
             email_address=email_address,
             phone_number=phone_number,
+            whatsapp_number=whatsapp_number,
+            discord_id=discord_id,
+            slack_user_id=slack_user_id,
             bio=bio,
             job_title=job_title,
             timezone=timezone,
             rolling_summary=rolling_summary,
             should_respond=should_respond,
             response_policy=response_policy,
+            is_system=is_system,
+            custom_key=custom_key,
+            custom_hash=custom_hash,
+            custom_fields=custom_fields,
+            contact_id=_contact_id,
             context=context,
             data_store=self._data_store_for_context(context),
-            **kwargs,
         )
 
     def update_contact(
@@ -1098,15 +1115,20 @@ class ContactManager(BaseContactManager):
         email_address: Optional[str] = None,
         phone_number: Optional[str] = None,
         whatsapp_number: Optional[str] = None,
+        discord_id: Optional[str] = None,
+        slack_user_id: Optional[str] = None,
         bio: Optional[str] = None,
         job_title: Optional[str] = None,
         timezone: Optional[str] = None,
         rolling_summary: Optional[str] = None,
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
+        is_system: Optional[bool] = None,
+        custom_key: Optional[str] = None,
+        custom_hash: Optional[str] = None,
+        custom_fields: Optional[Dict[str, Any]] = None,
         destination: Optional[str] = None,
         _log_id: Optional[int] = None,
-        **kwargs: Any,
     ) -> ToolOutcome:
         """
         Update one or more fields of an existing contact.
@@ -1129,6 +1151,10 @@ class ContactManager(BaseContactManager):
             Must be unique.
         whatsapp_number : str | None
             New WhatsApp number. Digits only unless explicitly provided with leading ``+``.
+        discord_id : str | None
+            Discord snowflake id. Optional.
+        slack_user_id : str | None
+            Slack user id. Optional.
         bio : str | None
             Free‑form notes/description.
         job_title : str | None
@@ -1142,19 +1168,20 @@ class ContactManager(BaseContactManager):
             unchanged.
         response_policy : str | None
             Override the contact‑specific response policy. Omit to leave unchanged.
+        is_system : bool | None
+            System-contact flag. Omit to leave unchanged.
+        custom_key / custom_hash : str | None
+            Deployment-defined contact identity fields. Optional.
+        custom_fields : dict[str, Any] | None
+            Updates for existing custom columns. Keys must be existing column names
+            (snake_case) that are not part of the built‑in ``Contact`` schema. Any key
+            with a ``None`` value is ignored.
         destination : str | None, default None
             The team whose copy of this contact you are updating. Defaults to
             ``"personal"`` (your private copy). Passing ``"team:<id>"``
             updates the shared copy in that team and is visible to every
             member. See the *Accessible shared teams* block in your system
             prompt for the available teams and their descriptions.
-        Additional keyword arguments
-        ----------------------------
-        Any additional top‑level keyword arguments are treated as updates for existing
-        custom columns. Keys must be existing column names (snake_case) that are not part of
-        the built‑in ``Contact`` schema. Any key with a ``None`` value is ignored.
-        Do not include a key literally named ``"kwargs"``; pass custom fields directly at
-        the top level.
 
         Returns
         -------
@@ -1186,16 +1213,21 @@ class ContactManager(BaseContactManager):
             email_address=email_address,
             phone_number=phone_number,
             whatsapp_number=whatsapp_number,
+            discord_id=discord_id,
+            slack_user_id=slack_user_id,
             bio=bio,
             job_title=job_title,
             timezone=timezone,
             rolling_summary=rolling_summary,
             should_respond=should_respond,
             response_policy=response_policy,
+            is_system=is_system,
+            custom_key=custom_key,
+            custom_hash=custom_hash,
+            custom_fields=custom_fields,
             _log_id=_log_id,
             context=context,
             data_store=self._data_store_for_context(context),
-            **kwargs,
         )
 
     def _delete_contact(

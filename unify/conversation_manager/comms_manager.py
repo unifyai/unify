@@ -70,6 +70,7 @@ from unify.conversation_manager.events import *
 from unify.conversation_manager.metrics import pubsub_e2e_latency
 from unify.session_details import SESSION_DETAILS
 from unify.contact_manager.types.contact import UNASSIGNED
+from unify.contact_manager.ops import partition_create_kwargs
 from unify.conversation_manager.cm_types import MEDIUM_TO_CONTACT_FIELD, Medium
 
 load_dotenv()
@@ -425,7 +426,7 @@ def _get_or_create_unknown_contact(
                 "should_respond": False,
                 "response_policy": ContactManager.UNKNOWN_INBOUND_RESPONSE_POLICY,
             }
-            outcome = cm._create_contact(**create_kwargs)
+            outcome = cm._create_contact(**partition_create_kwargs(create_kwargs))
             new_contact_id = outcome["details"]["contact_id"]
 
             # Fetch the newly created contact
@@ -509,7 +510,7 @@ def _get_or_create_team_chat_sender_contact(
             }
             if sender_assistant_id is not None:
                 create_kwargs["agent_id"] = str(sender_assistant_id)
-            outcome = cm._create_contact(**create_kwargs)
+            outcome = cm._create_contact(**partition_create_kwargs(create_kwargs))
             new_contact_id = outcome["details"]["contact_id"]
             contact_info = cm.get_contact_info(new_contact_id)
             return contact_info.get(new_contact_id)

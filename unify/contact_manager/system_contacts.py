@@ -24,6 +24,7 @@ from ..session_details import (
     PLACEHOLDER_USER_FIRST_NAME,
     PLACEHOLDER_USER_SURNAME,
 )
+from .ops import partition_create_kwargs, partition_update_kwargs
 
 
 def _ensure_columns_exist(self, extra_fields: Dict[str, Any]) -> None:
@@ -298,7 +299,7 @@ def provision_assistant_contact(
                     update_kwargs["first_name"] = fetched_first_name
                 if needs_surname:
                     update_kwargs["surname"] = fetched_surname
-                self.update_contact(**update_kwargs)
+                self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 # Warm local cache when no change needed
                 self._data_store.put(entries)
@@ -315,7 +316,11 @@ def provision_assistant_contact(
     # Insert the assistant row. Race conditions are handled by Orchestra's
     # field-level uniqueness enforcement on email_address / phone_number.
     try:
-        outcome = self._create_contact(contact_id=resolved_contact_id, **base_fields)
+        outcome = self._create_contact(
+            **partition_create_kwargs(
+                {"contact_id": resolved_contact_id, **base_fields},
+            ),
+        )
         if int(outcome["details"]["contact_id"]) != resolved_contact_id:
             raise RuntimeError("Assistant self contact was created with the wrong id.")
         resolved_contact_id = int(outcome["details"]["contact_id"])
@@ -374,11 +379,15 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
         # No existing contact — create a minimal placeholder.
         try:
             outcome = self._create_contact(
-                contact_id=resolved_contact_id,
-                should_respond=True,
-                is_system=True,
-                response_policy=self.USER_MANAGER_RESPONSE_POLICY,
-                timezone="UTC",
+                **partition_create_kwargs(
+                    {
+                        "contact_id": resolved_contact_id,
+                        "should_respond": True,
+                        "is_system": True,
+                        "response_policy": self.USER_MANAGER_RESPONSE_POLICY,
+                        "timezone": "UTC",
+                    },
+                ),
             )
             if int(outcome["details"]["contact_id"]) != resolved_contact_id:
                 raise RuntimeError("Boss contact was created with the wrong id.")
@@ -493,7 +502,7 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                     update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
-                self.update_contact(**update_kwargs)
+                self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 # Warm local cache when no change needed
                 self._data_store.put(entries)
@@ -511,8 +520,12 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     # field-level uniqueness enforcement on email_address / phone_number.
     try:
         outcome = self._create_contact(
-            contact_id=resolved_contact_id,
-            **{k: v for k, v in base_fields.items() if v is not None},
+            **partition_create_kwargs(
+                {
+                    "contact_id": resolved_contact_id,
+                    **{k: v for k, v in base_fields.items() if v is not None},
+                },
+            ),
         )
         if int(outcome["details"]["contact_id"]) != resolved_contact_id:
             raise RuntimeError("Boss contact was created with the wrong id.")
@@ -664,17 +677,21 @@ def provision_team_assistant_contacts(self) -> None:
                         update_kwargs["agent_id"] = agent_id
                     if needs_email:
                         update_kwargs["email_address"] = email
-                    self.update_contact(**update_kwargs)
+                    self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 self._create_contact(
-                    first_name=peer.get("first_name"),
-                    surname=peer.get("surname"),
-                    email_address=email,
-                    job_title=peer.get("job_title"),
-                    is_system=True,
-                    should_respond=True,
-                    response_policy=TEAMMATE_ASSISTANT_RESPONSE_POLICY,
-                    agent_id=agent_id,
+                    **partition_create_kwargs(
+                        {
+                            "first_name": peer.get("first_name"),
+                            "surname": peer.get("surname"),
+                            "email_address": email,
+                            "job_title": peer.get("job_title"),
+                            "is_system": True,
+                            "should_respond": True,
+                            "response_policy": TEAMMATE_ASSISTANT_RESPONSE_POLICY,
+                            "agent_id": agent_id,
+                        },
+                    ),
                 )
         except Exception:
             # Best-effort: continue with other peers
@@ -814,7 +831,7 @@ def provision_org_member_contacts(self) -> None:
                         update_kwargs["whatsapp_number"] = fetched_whatsapp
                     if needs_user_id:
                         update_kwargs["user_id"] = fetched_user_id
-                    self.update_contact(**update_kwargs)
+                    self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 # Create new contact for org member
                 create_kwargs: Dict[str, Any] = dict(
@@ -831,7 +848,7 @@ def provision_org_member_contacts(self) -> None:
                 )
                 if member.get("user_id"):
                     create_kwargs["user_id"] = member["user_id"]
-                self._create_contact(**create_kwargs)
+                self._create_contact(**partition_create_kwargs(create_kwargs))
         except Exception:
             # Best-effort: continue with other members
             continue
