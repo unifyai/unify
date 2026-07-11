@@ -818,6 +818,13 @@ async def test_dynamic_app_tool_namespace_resolves_from_materialized_row(
     assert result["tool_id"] == "composio:hubspot:search_contacts"
     assert client.calls == [
         (
+            "list_connections",
+            (),
+            {
+                "owner_scope": "assistant",
+            },
+        ),
+        (
             "run_tool",
             ("composio:hubspot:search_contacts", {"query": "alice@example.com"}),
             {
@@ -854,6 +861,14 @@ async def test_first_wave_dynamic_namespace_executes_discord_tool(monkeypatch) -
     assert result["status"] == "ok"
     assert result["tool_id"] == "composio:discord:list_my_guilds"
     assert client.calls == [
+        (
+            "list_connections",
+            (),
+            {
+                "owner_scope": "assistant",
+                "assistant_id": 42,
+            },
+        ),
         (
             "run_tool",
             ("composio:discord:list_my_guilds", {"limit": 10}),
@@ -1050,6 +1065,14 @@ async def test_default_owner_scope_is_shared_across_helper_and_namespace_executi
         },
     )
     assert client.calls[1] == (
+        "list_connections",
+        (),
+        {
+            "owner_scope": "assistant",
+            "assistant_id": 42,
+        },
+    )
+    assert client.calls[2] == (
         "run_tool",
         ("composio:hubspot:search_contacts", {"query": "alice"}),
         {

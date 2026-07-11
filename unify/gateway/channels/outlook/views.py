@@ -112,7 +112,6 @@ async def delete_outlook_user(request: Request):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/send")
 async def send_outlook_email(request: Request, *, assistant: dict | None = None):
     """Send an email via Microsoft Graph.
 
@@ -124,6 +123,11 @@ async def send_outlook_email(request: Request, *, assistant: dict | None = None)
     two-step flow because Graph's ``reply`` endpoint doesn't accept
     attachments inline; everything else goes through ``send_mail``
     directly.
+
+    ``assistant`` is an internal override for the ``/email`` dispatcher
+    (already-resolved Orchestra record). It must not be a FastAPI route
+    parameter: a ``dict`` annotation would bind the JSON body and skip
+    Orchestra lookup.
     """
     credentials = EnvCredentialStore()
     data = await request.json()
@@ -212,6 +216,12 @@ async def send_outlook_email(request: Request, *, assistant: dict | None = None)
     except Exception as exc:
         logger.error("failed to send outlook email: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/send")
+async def outlook_send(request: Request):
+    """HTTP entrypoint for ``POST /outlook/send``."""
+    return await send_outlook_email(request)
 
 
 # ---------------------------------------------------------------------------
