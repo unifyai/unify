@@ -7,7 +7,10 @@ from typing import List, Dict, Optional, Type, Union, Any, Callable, Literal
 
 import unisdk
 from pydantic import BaseModel
-from ..common.authorship import stamp_authoring_assistant_id
+from ..common.authorship import (
+    stamp_authoring_assistant_id,
+    strip_authoring_assistant_id,
+)
 from ..common.colleague_cache import ColleagueNameCache
 from ..common.embed_utils import ensure_vector_column
 from ..common.log_utils import log as unity_log, _inject_private_fields
@@ -1750,7 +1753,7 @@ class TranscriptManager(BaseTranscriptManager):
             unisdk.update_logs(
                 context=target_context,
                 logs=[target_ids[0]],
-                entries=payload,
+                entries=strip_authoring_assistant_id(payload),
                 overwrite=True,
             )
         else:
