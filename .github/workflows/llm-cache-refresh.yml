@@ -62,6 +62,12 @@ jobs:
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
+      # Brain (unillm) routes through OpenRouter; without this, slow-brain turns 401.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
+      # Together BYOK on the OpenRouter workspace that owns OPENROUTER_CI_API_KEY.
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      # Orchestra embeddings / Builtins seeding also go through OpenRouter.
+      ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
       UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -71,6 +77,9 @@ jobs:
       ORCHESTRA_GCP_ASSISTANT_CALL_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
       TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
       UNIFY_KEY: ${{ secrets.UNIFY_KEY }}
+      # Builtins is admin-key-only. CI-local Orchestra inherits this; seed uses the
+      # same value. Local-only throwaway key (matches tests.yml).
+      ORCHESTRA_ADMIN_KEY: local-admin-key
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
     steps:
     - uses: actions/checkout@v4
