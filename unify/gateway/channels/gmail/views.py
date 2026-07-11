@@ -339,13 +339,17 @@ async def delete_email_user(request: Request):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/send")
 async def send_email(request: Request, *, assistant: dict | None = None):
     """Send an email via Gmail.
 
     Required body: ``from``, ``to`` (str or list), ``body``.
     Optional: ``subject``, ``cc``, ``bcc``, ``in_reply_to``, ``thread_id``,
     ``attachment={filename, content_base64}``.
+
+    ``assistant`` is an internal override for the ``/email`` dispatcher
+    (already-resolved Orchestra record). It must not be a FastAPI route
+    parameter: a ``dict`` annotation would bind the JSON body and skip
+    Orchestra lookup.
     """
     data = await request.json()
     sender = data.get("from")
@@ -437,6 +441,12 @@ async def send_email(request: Request, *, assistant: dict | None = None):
             detail="Gmail send failed; see gateway logs for traceback.",
         ) from exc
     return {"success": True, "id": sent.get("id")}
+
+
+@router.post("/send")
+async def gmail_send(request: Request):
+    """HTTP entrypoint for ``POST /gmail/send``."""
+    return await send_email(request)
 
 
 @router.post("/watch")

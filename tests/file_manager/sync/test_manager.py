@@ -196,23 +196,18 @@ class TestSyncManagerStop:
 
 
 class TestSyncManagerSSHKeyRetrieval:
-    """Tests for SSH key retrieval via the admin endpoint."""
+    """Tests for SSH key retrieval via the assistant-scoped filesync endpoint."""
 
     @pytest.mark.asyncio
-    async def test_uses_agent_id_endpoint_not_user_scoped(self, sync_config):
-        """SSH key retrieval should use GET /admin/assistant?agent_id=X,
-        not the user-scoped endpoint that excludes org assistants."""
+    async def test_uses_assistant_filesync_key_endpoint(self, sync_config):
+        """SSH key retrieval uses GET /assistant/{id}/desktop-filesync-key
+        with the assistant's own UNIFY_KEY (ownership-checked)."""
         manager = SyncManager(config=sync_config)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "info": [
-                {
-                    "agent_id": 42,
-                    "desktop_filesync_sshkey": "fake-ssh-key-content",
-                },
-            ],
+            "desktop_filesync_sshkey": "fake-ssh-key-content",
         }
 
         with (
@@ -228,32 +223,32 @@ class TestSyncManagerSSHKeyRetrieval:
             ) as mock_get,
         ):
             mock_sd.assistant.agent_id = 42
+            mock_sd.unify_key = "test-unify-key"
             mock_settings.ORCHESTRA_URL = "https://api.example.com/v0"
-            mock_settings.ORCHESTRA_ADMIN_KEY.get_secret_value.return_value = (
-                "test-admin-key"
-            )
 
             key = await manager._get_ssh_private_key()
 
         assert key == "fake-ssh-key-content"
         mock_get.assert_called_once()
         call_url = mock_get.call_args[0][0]
-        call_params = mock_get.call_args[1].get(
-            "params",
-            mock_get.call_args.kwargs.get("params"),
+        call_headers = mock_get.call_args.kwargs.get("headers") or mock_get.call_args[
+            1
+        ].get("headers")
+        assert call_url == (
+            "https://api.example.com/v0/assistant/42/desktop-filesync-key"
         )
-        assert call_url == "https://api.example.com/v0/admin/assistant"
-        assert call_params == {"agent_id": "42"}
+        assert call_headers == {"Authorization": "Bearer test-unify-key"}
+        assert "/admin/" not in call_url
         assert "/user/" not in call_url
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_assistant_not_found(self, sync_config):
-        """Should return None when the admin endpoint returns an empty list."""
+    async def test_returns_none_when_key_missing(self, sync_config):
+        """Should return None when the filesync endpoint has no key field."""
         manager = SyncManager(config=sync_config)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"info": []}
+        mock_response.json.return_value = {}
 
         with (
             patch(
@@ -268,10 +263,8 @@ class TestSyncManagerSSHKeyRetrieval:
             ),
         ):
             mock_sd.assistant.agent_id = 999
+            mock_sd.unify_key = "test-unify-key"
             mock_settings.ORCHESTRA_URL = "https://api.example.com/v0"
-            mock_settings.ORCHESTRA_ADMIN_KEY.get_secret_value.return_value = (
-                "test-admin-key"
-            )
 
             key = await manager._get_ssh_private_key()
 

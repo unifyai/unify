@@ -192,8 +192,8 @@ class SyncManager:
     async def _get_ssh_private_key(self) -> Optional[str]:
         """Retrieve SSH private key from Orchestra assistant record.
 
-        Uses the global admin list endpoint filtered by agent_id so that
-        both personal and org-level assistants are found.
+        Uses the assistant-scoped filesync-key endpoint with the assistant's
+        own UNIFY_KEY (ownership-checked on the server).
         """
         from unify.session_details import SESSION_DETAILS
         from unify.settings import SETTINGS

@@ -23,6 +23,8 @@ def _patch_conversation(monkeypatch: pytest.MonkeyPatch, **fields: object) -> No
         LOCAL_COMMS_HOST=fields.get("LOCAL_COMMS_HOST", "127.0.0.1"),
         LOCAL_COMMS_PORT=fields.get("LOCAL_COMMS_PORT", 8787),
         LOCAL_COMMS_PUBLIC_URL=fields.get("LOCAL_COMMS_PUBLIC_URL", ""),
+        # Empty file path skips filesystem lookup and uses LOCAL_COMMS_PUBLIC_URL.
+        LOCAL_COMMS_PUBLIC_URL_FILE=fields.get("LOCAL_COMMS_PUBLIC_URL_FILE", ""),
     )
     monkeypatch.setattr(
         callbacks,
