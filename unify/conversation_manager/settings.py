@@ -29,9 +29,6 @@ class ConversationSettings(BaseSettings):
             SLOW_BRAIN_MODEL when that setting is non-empty. Empty leaves
             call-site effort intact. Override via
             UNITY_CONVERSATION_SLOW_BRAIN_REASONING_EFFORT.
-        PROACTIVE_SPEECH_MODEL: Optional override for the silence-breaker LLM.
-            Empty (default) uses the shared slow-brain model. Override via
-            UNITY_CONVERSATION_PROACTIVE_SPEECH_MODEL.
         FAST_BRAIN_CONTEXT_WINDOW: Maximum number of conversation items
             (utterances, notifications, etc.) the fast brain keeps in its
             rolling context window. Also used as the limit when hydrating
@@ -70,7 +67,6 @@ class ConversationSettings(BaseSettings):
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
     SLOW_BRAIN_MODEL: str = "gpt-5.6-terra@openai"
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
-    PROACTIVE_SPEECH_MODEL: str = ""
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
     FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.4-mini@openai"

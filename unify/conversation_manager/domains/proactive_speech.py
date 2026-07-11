@@ -104,9 +104,6 @@ Output JSON matching the ProactiveDecision schema.\
 
 
 class ProactiveSpeech:
-    def __init__(self, model: str | None = None) -> None:
-        self._model = model
-
     async def decide(
         self,
         chat_history: list[dict],
@@ -119,10 +116,10 @@ class ProactiveSpeech:
         request+response file for the LLM call that produced this decision.
         """
         client = new_slow_brain_llm_client(
-            self._model,
             origin="ProactiveSpeech",
-            # Pin "high" for this silence-filler path: it already sits behind a
-            # debounce and delay, so extra max-effort latency is not worth it.
+            # Same slow-brain model as ConversationManager; pin "high" so this
+            # silence-filler path stays on the shared effort (already behind a
+            # debounce and delay).
             reasoning_effort="high",
         )
         client.set_response_format(ProactiveDecision)
