@@ -651,6 +651,10 @@ jobs:
       UNILLM_CACHE: "read-only"
       # Local orchestra path (cloned into workspace, not sibling directory)
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
+      # Coordinator local-stack tests need unify-deploy/selfhost/stack.sh when
+      # auto-managed; without a full self-host stack in CI they should skip.
+      UNIFY_DEPLOY_REPO_PATH: ${{ github.workspace }}/unify-deploy
+      LOCAL_STACK_NO_AUTO: "1"
       # API credentials
       # ORCHESTRA_URL: if repo variable set, use remote; otherwise local orchestra sets it
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
@@ -826,7 +830,8 @@ jobs:
         RAW_PATH='${{ matrix.test_path }}'
         echo "test_args=$RAW_PATH" >> $GITHUB_OUTPUT
 
-        # Normalize for artifact naming and display
+        # Normalize for artifact naming and display.
+        # Artifact names cannot contain : " < > | * ? \ / or newlines.
         if [[ "$RAW_PATH" == *" "* ]]; then
           # Bundled multi-file entry: derive name from common parent directory
           first_file="${RAW_PATH%% *}"
@@ -836,10 +841,13 @@ jobs:
           normalized="${normalized}_${file_count}_files"
           display_name="${parent_dir} (${file_count} files)"
         else
-          normalized=$(echo "$RAW_PATH" | sed 's|^tests/||' | tr '/' '_')
+          normalized=$(echo "$RAW_PATH" | sed 's|^tests/||' | tr '/:' '__' | tr ' ' '_')
           display_name="$RAW_PATH"
         fi
 
+        # Strip remaining characters forbidden by actions/upload-artifact
+        # (and keep names filesystem-agnostic like llm-cache-refresh).
+        normalized=$(echo "$normalized" | tr -cd '[:alnum:]_-' | cut -c1-120)
         if [[ -z "$normalized" || "$normalized" == "." ]]; then normalized="all"; fi
         echo "test_path_normalized=$normalized" >> $GITHUB_OUTPUT
         echo "display_name=$display_name" >> $GITHUB_OUTPUT

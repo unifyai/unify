@@ -128,6 +128,7 @@ def test_send_closed_window_returns_template_delivered_body(client: TestClient):
         "success": True,
         "method": "template",
         "delivered_body": render_greeting_template_text("Daniel", "T-W1N"),
+        "message_sid": "SM_template",
     }
     create_kwargs = twilio_client.messages.create.call_args.kwargs
     assert "body" not in create_kwargs
@@ -198,6 +199,7 @@ def test_send_open_window_returns_freeform_delivered_body(client: TestClient):
         "success": True,
         "method": "freeform",
         "delivered_body": "The clue is Blade Runner.",
+        "message_sid": "SM_freeform",
     }
     assert (
         twilio_client.messages.create.call_args.kwargs["body"]
@@ -571,6 +573,7 @@ class TestSend:
     ) -> None:
         """Open 24-hour window -> direct messages.create with body."""
         twilio_client = MagicMock()
+        twilio_client.messages.create.return_value = MagicMock(sid="SM_freeform")
         route_response = _async_httpx_response(
             status_code=200,
             json_body={"pool_number": "+15555550111", "window_open": True},
@@ -599,6 +602,7 @@ class TestSend:
             "success": True,
             "method": "freeform",
             "delivered_body": "hello from test",
+            "message_sid": "SM_freeform",
         }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["to"] == "whatsapp:+15555550000"
@@ -616,6 +620,7 @@ class TestSend:
         from unify.gateway.channels.whatsapp.views import GREETING_TEMPLATE_SID
 
         twilio_client = MagicMock()
+        twilio_client.messages.create.return_value = MagicMock(sid="SM_template")
         route_response = _async_httpx_response(
             status_code=200,
             json_body={"pool_number": "+15555550111", "window_open": False},
@@ -646,6 +651,7 @@ class TestSend:
             "success": True,
             "method": "template",
             "delivered_body": render_greeting_template_text("Alice", "Unity"),
+            "message_sid": "SM_template",
         }
         kwargs = twilio_client.messages.create.call_args.kwargs
         assert kwargs["content_sid"] == GREETING_TEMPLATE_SID
@@ -1111,6 +1117,10 @@ class TestSendCall:
             patch(
                 "unify.gateway.channels.whatsapp.views.build_twilio_wa_client",
                 return_value=twilio_client,
+            ),
+            patch(
+                "unify.gateway.channels.whatsapp.views._is_local_permission_probe_enabled",
+                return_value=False,
             ),
         ):
             resp = client.post(

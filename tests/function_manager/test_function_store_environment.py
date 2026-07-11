@@ -204,7 +204,8 @@ def test_get_prompt_context_warns_not_to_search(fm_factory):
     env = FunctionStoreEnvironment(fm, function_names=["alpha"])
     context = env.get_prompt_context()
 
-    assert "Do **not** search" in context
+    assert "excluded from FunctionManager search" in context
+    assert "prompt-injected" in context
 
 
 @_handle_project

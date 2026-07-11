@@ -167,6 +167,8 @@ jobs:
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
       UNILLM_CACHE: ${{ inputs.cache_mode == 'uncached-eval' && 'false' || 'true' }}
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
+      UNIFY_DEPLOY_REPO_PATH: ${{ github.workspace }}/unify-deploy
+      LOCAL_STACK_NO_AUTO: "1"
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
