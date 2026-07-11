@@ -2413,7 +2413,10 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
-        destination = payload.pop("destination", None)
+        # Destination routing is owned by sync_custom_tasks / sync_custom: the
+        # caller has already scoped self._ctx to the target root. Per-row
+        # destination is grouping metadata only (same as guidance/contacts).
+        payload.pop("destination", None)
         entrypoint_function = payload.pop("entrypoint_function", None)
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
@@ -2435,36 +2438,40 @@ class TaskScheduler(BaseTaskScheduler):
                     custom_key,
                 )
 
-        destination_arg = None if destination in (None, "personal") else destination
-        with self._use_task_destination(destination_arg):
-            result = self._create_task(
-                name=name,
-                description=description,
-                schedule=schedule,
-                trigger=trigger,
-                deadline=deadline,
-                repeat=repeat,
-                priority=priority,
-                response_policy=response_policy,
-                entrypoint=entrypoint,
-                offline=offline,
-                enabled=False,
-                destination=destination_arg,
-                _root_applied=True,
-            )
-            task_id = int(result["details"]["task_id"])
-            log_ids = self._store.get_rows(
-                filter=f"task_id == {task_id}",
-                return_ids_only=True,
-            )
-            self._write_log_entries(
-                logs=log_ids,
-                entries={
-                    "custom_key": custom_key,
-                    "custom_hash": custom_hash,
-                },
-            )
-            return task_id
+        current_destination = self._destination_from_task_context(self._ctx)
+        destination_arg = (
+            None
+            if current_destination in (None, PERSONAL_DESTINATION)
+            else current_destination
+        )
+        result = self._create_task(
+            name=name,
+            description=description,
+            schedule=schedule,
+            trigger=trigger,
+            deadline=deadline,
+            repeat=repeat,
+            priority=priority,
+            response_policy=response_policy,
+            entrypoint=entrypoint,
+            offline=offline,
+            enabled=False,
+            destination=destination_arg,
+            _root_applied=True,
+        )
+        task_id = int(result["details"]["task_id"])
+        log_ids = self._store.get_rows(
+            filter=f"task_id == {task_id}",
+            return_ids_only=True,
+        )
+        self._write_log_entries(
+            logs=log_ids,
+            entries={
+                "custom_key": custom_key,
+                "custom_hash": custom_hash,
+            },
+        )
+        return task_id
 
     def _update_custom_task(
         self,
@@ -2635,12 +2642,6 @@ class TaskScheduler(BaseTaskScheduler):
             for custom_key, source_data in source_tasks.items():
                 processed_keys.add(custom_key)
                 task_data = dict(source_data)
-                destination_value = task_data.get("destination") or "personal"
-                destination_arg = (
-                    None
-                    if destination_value in (None, "personal")
-                    else destination_value
-                )
 
                 if custom_key in db_tasks:
                     db_entry = db_tasks[custom_key]
