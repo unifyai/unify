@@ -23,6 +23,11 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
         lambda: None,
     )
     monkeypatch.setattr(
+        offline_runner,
+        "_ensure_offline_client_bundle",
+        lambda: None,
+    )
+    monkeypatch.setattr(
         offline_runner.unify,
         "ensure_initialised",
         lambda *, project_name: None,
@@ -85,7 +90,11 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
             assert task_id == 101
             assert trigger_attempt_token is None
             assert str(_activated_by) == "schedule"
-            assert events[:2] == ["populate_from_env", "ensure_initialised"]
+            assert events[:3] == [
+                "populate_from_env",
+                "ensure_client_bundle",
+                "ensure_initialised",
+            ]
             assert current_task_execution_delegate.get() is not None
             return _FakeHandle()
 
@@ -93,6 +102,11 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
         offline_runner.SESSION_DETAILS,
         "populate_from_env",
         lambda: events.append("populate_from_env"),
+    )
+    monkeypatch.setattr(
+        offline_runner,
+        "_ensure_offline_client_bundle",
+        lambda: events.append("ensure_client_bundle"),
     )
     monkeypatch.setattr(
         offline_runner.unify,
@@ -118,6 +132,7 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
     assert updates == []
     assert events == [
         "populate_from_env",
+        "ensure_client_bundle",
         "ensure_initialised",
         "scheduler.execute",
         "handle.result",
