@@ -9,6 +9,7 @@ from pathlib import Path
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from unify.common.plain_text import normalize_outbound_plain_text
+from unify.conversation_manager.settings import local_comms_listener_url
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
@@ -115,21 +116,11 @@ def _use_local_comms() -> bool:
     return enabled is True or (isinstance(mode, str) and mode == "local")
 
 
-def _local_comms_base_url() -> str:
-    public_url = SETTINGS.conversation.LOCAL_COMMS_PUBLIC_URL.strip()
-    if public_url:
-        return public_url.rstrip("/")
-    return (
-        f"http://{SETTINGS.conversation.LOCAL_COMMS_HOST}:"
-        f"{SETTINGS.conversation.LOCAL_COMMS_PORT}"
-    )
-
-
 def _gateway_comms_base_url() -> str:
     base_url = SETTINGS.conversation.COMMS_URL.strip()
     if base_url:
         return base_url.rstrip("/")
-    return _local_comms_base_url()
+    return local_comms_listener_url(SETTINGS.conversation)
 
 
 def _gateway_adapters_base_url() -> str:
@@ -142,7 +133,7 @@ def _gateway_adapters_base_url() -> str:
 async def _publish_local_outbox_async(payload: dict) -> bool:
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            f"{_local_comms_base_url()}/local/comms/outbox",
+            f"{local_comms_listener_url(SETTINGS.conversation)}/local/comms/outbox",
             json=payload,
         ) as response:
             return response.status < 400
@@ -152,7 +143,7 @@ def _publish_local_outbox_sync(payload: dict) -> bool:
     import requests
 
     response = requests.post(
-        f"{_local_comms_base_url()}/local/comms/outbox",
+        f"{local_comms_listener_url(SETTINGS.conversation)}/local/comms/outbox",
         json=payload,
         timeout=10,
     )
@@ -730,7 +721,10 @@ async def upload_unify_attachment(
     from io import BytesIO
 
     if _use_local_comms():
-        upload_url = f"{_local_comms_base_url()}/local/comms/attachments"
+        upload_url = (
+            f"{local_comms_listener_url(SETTINGS.conversation)}"
+            "/local/comms/attachments"
+        )
     else:
         upload_url = f"{_gateway_adapters_base_url()}/unify/attachment"
 

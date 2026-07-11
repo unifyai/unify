@@ -16,6 +16,7 @@ from .comms_manager import CommsManager
 from .local_providers import email as local_email
 from .local_providers import livekit as local_livekit
 from .local_providers import twilio as local_twilio
+from .settings import local_comms_callback_base_url
 
 _LOCAL_PHONE_CALL_SESSIONS: dict[str, dict] = {}
 _LOCAL_WHATSAPP_CALL_SESSIONS: dict[str, dict] = {}
@@ -191,10 +192,15 @@ class LocalCommsIngress:
             raise web.HTTPForbidden(text="Invalid admin key")
 
     async def _validate_twilio(self, request: web.Request, *, whatsapp: bool) -> dict:
+        from unify.settings import SETTINGS
+
         form = await request.post()
         params = {key: value for key, value in form.items()}
         signature = request.headers.get("X-Twilio-Signature", "")
-        url = f"{local_twilio.local_public_url()}{request.rel_url}"
+        url = (
+            f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+            f"{request.rel_url}"
+        )
         if not local_twilio.validate_signature(
             url,
             params,
@@ -760,7 +766,7 @@ class LocalCommsIngress:
         return web.Response(status=200)
 
     async def _twilio_twiml(self, request: web.Request) -> web.Response:
-        form = await request.post()
+        form = await self._validate_twilio(request, whatsapp=False)
         twilio_number = form.get("From", "") or ""
         phone_number = request.query.get("phone_number", "")
         if not phone_number:
