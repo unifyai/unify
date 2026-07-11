@@ -1651,7 +1651,12 @@ class SecretManager(BaseSecretManager):
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom secrets sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         with (
             self._temporary_secret_context("_ctx", secrets_context),
