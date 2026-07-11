@@ -54,8 +54,7 @@ def resolve_default_model() -> tuple[str, str | None]:
 
     The per-assistant default (from Orchestra, via SESSION_DETAILS) takes
     priority over the deployment-wide UNIFY_MODEL. A returned effort of None
-    means the assistant carries no effort override and per-call-site effort
-    levels apply.
+    means no effort override and per-call-site effort levels apply.
     """
     session_model = SESSION_DETAILS.assistant.default_model
     if session_model:
@@ -63,7 +62,8 @@ def resolve_default_model() -> tuple[str, str | None]:
             session_model,
             SESSION_DETAILS.assistant.default_reasoning_effort or None,
         )
-    return SETTINGS.UNIFY_MODEL, None
+    effort = SETTINGS.UNIFY_REASONING_EFFORT.strip() or None
+    return SETTINGS.UNIFY_MODEL, effort
 
 
 def resolve_slow_brain_model() -> tuple[str, str | None]:
