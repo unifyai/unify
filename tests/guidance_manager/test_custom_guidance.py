@@ -22,12 +22,12 @@ _EXAMPLE_GUIDANCE_LINES = [
         "key": "ops/triage",
         "title": "How to triage repairs",
         "content": "Check urgent repairs first.",
+        "function_names": ["sync_repairs"],
     },
     {
         "key": "ops/escalation",
         "title": "Escalation policy",
         "content": "Escalate when SLA is breached.",
-        "function_names": ["sync_repairs"],
         "destination": "team:42",
     },
     {
@@ -218,4 +218,4 @@ async def test_sync_custom_resolves_function_names(
     gm.sync_custom(source_guidance=source, function_name_to_id=function_name_to_id)
 
     db_guidance = gm._get_custom_guidance_from_db()
-    assert db_guidance["ops/escalation"]["function_ids"] == [42]
+    assert db_guidance["ops/triage"]["function_ids"] == [42]
