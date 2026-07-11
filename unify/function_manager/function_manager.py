@@ -96,6 +96,8 @@ FUNCTIONS_VENVS_TABLE = "Functions/VirtualEnvs"
 FUNCTIONS_COMPOSITIONAL_TABLE = "Functions/Compositional"
 FUNCTIONS_PRIMITIVES_TABLE = "Functions/Primitives"
 FUNCTIONS_META_TABLE = "Functions/Meta"
+# Sentinel: omit ``destination`` to federate; pass ``None``/``"personal"``/``"team:<id>"`` to scope.
+_DESTINATION_UNSET = object()
 FUNCTIONS_COMPOSITIONAL_DESTINATION_GUIDANCE = """destination : str | None, default None
     Where this composed function (or set of functions) lives. Pass
     ``"personal"`` (the default) for one-off helper scripts and private
@@ -5045,6 +5047,43 @@ class FunctionManager(BaseFunctionManager):
 
     @functools.wraps(BaseFunctionManager.filter_functions, updated=())
     def filter_functions(
+        self,
+        *,
+        filter: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+        include_implementations: bool = True,
+        destination: Optional[str] = _DESTINATION_UNSET,  # type: ignore[assignment]
+        _return_callable: bool = False,
+        _namespace: Optional[Dict[str, Any]] = None,
+        _also_return_metadata: bool = False,
+    ) -> List[Dict[str, Any]]:
+        if destination is not _DESTINATION_UNSET:
+            context = self._function_context_for_destination(
+                FUNCTIONS_COMPOSITIONAL_TABLE,
+                destination=destination,
+            )
+            with self._temporary_function_context("_compositional_ctx", context):
+                return self._filter_functions_impl(
+                    filter=filter,
+                    offset=offset,
+                    limit=limit,
+                    include_implementations=include_implementations,
+                    _return_callable=_return_callable,
+                    _namespace=_namespace,
+                    _also_return_metadata=_also_return_metadata,
+                )
+        return self._filter_functions_impl(
+            filter=filter,
+            offset=offset,
+            limit=limit,
+            include_implementations=include_implementations,
+            _return_callable=_return_callable,
+            _namespace=_namespace,
+            _also_return_metadata=_also_return_metadata,
+        )
+
+    def _filter_functions_impl(
         self,
         *,
         filter: Optional[str] = None,

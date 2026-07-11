@@ -338,6 +338,7 @@ def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
         task_name=config.task_name or None,
         task_description=config.task_description or config.request or None,
         attempt_token=_trigger_attempt_token(config),
+        destination=config.destination,
     )
 
 
@@ -412,6 +413,9 @@ class _OfflineTaskExecutionDelegate:
             or 0,
         )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        destination = kwargs.pop("destination", None)
+        if destination is None:
+            destination = self._config.destination
         if self._config.scheduled_for:
             entrypoint_kwargs.setdefault(
                 "scheduled_run_timestamp",
@@ -435,6 +439,7 @@ class _OfflineTaskExecutionDelegate:
                 "activation_revision": self._config.activation_revision,
                 "execution_style": execution_style,
                 "delivery_mode": "offline",
+                "destination": destination,
             },
         )
 
@@ -462,6 +467,7 @@ class _OfflineTaskExecutionDelegate:
             persist=False,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
+            destination=destination,
         )
         return _OfflineTaskHandle(self._config, handle)
 

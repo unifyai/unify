@@ -1134,6 +1134,7 @@ class TaskScheduler(BaseTaskScheduler):
                 if entrypoint_kwargs is not None
                 else None
             ),
+            destination=task.destination,
             task_run_provenance=task_run_provenance,
             task_entrypoint_review=self._build_task_entrypoint_review(
                 task=task,

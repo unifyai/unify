@@ -66,6 +66,7 @@ class _ConversationTaskExecutionDelegate:
             kwargs.pop("entrypoint_repair_attempts", 0) or 0,
         )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        destination = kwargs.pop("destination", None)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -79,6 +80,7 @@ class _ConversationTaskExecutionDelegate:
             entrypoint_kwargs=entrypoint_kwargs,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
+            destination=destination,
             _parent_chat_context=parent_chat_context,
             _clarification_up_q=clarification_up_q,
             _clarification_down_q=clarification_down_q,

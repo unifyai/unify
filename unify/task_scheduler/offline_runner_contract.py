@@ -52,6 +52,7 @@ def build_offline_runner_env(
     source_contact_id: int | str | None = None,
     source_contact_display_name: str | None = None,
     entrypoint: int | None = None,
+    destination: str | None = None,
     job_name: str = "",
 ) -> dict[str, str]:
     """Build the task-specific env-var dict for one offline_runner subprocess.
@@ -109,6 +110,8 @@ def build_offline_runner_env(
         )
     if job_name:
         env["UNITY_OFFLINE_TASK_JOB_NAME"] = str(job_name)
+    if destination:
+        env["TASK_DESTINATION"] = str(destination)
     return env
 
 

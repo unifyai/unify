@@ -171,6 +171,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         task_guidelines: Optional[str] = None,
         entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
+        destination: Optional[str] = None,
     ) -> "ActiveTask":
         """
         Create an ActiveTask by starting work through a delegate or fallback actor.
@@ -207,6 +208,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         entrypoint_kwargs=entrypoint_kwargs,
                         entrypoint_repair_attempts=entrypoint_repair_attempts,
                         entrypoint_repair_context=entrypoint_repair_context,
+                        destination=destination,
                     )
                 else:
                     if fallback_actor is None:
@@ -223,6 +225,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         entrypoint_kwargs=entrypoint_kwargs,
                         entrypoint_repair_attempts=entrypoint_repair_attempts,
                         entrypoint_repair_context=entrypoint_repair_context,
+                        destination=destination,
                         persist=False,
                     )
             except Exception as exc:
