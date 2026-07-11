@@ -247,6 +247,7 @@ class BaseFunctionManager(BaseStateManager):
         offset: int = 0,
         limit: int = 100,
         include_implementations: bool = True,
+        destination: Optional[str] = ...,  # type: ignore[assignment]
         _return_callable: bool = False,
         _namespace: Optional[Dict[str, Any]] = None,
         _also_return_metadata: bool = False,
@@ -273,6 +274,13 @@ class BaseFunctionManager(BaseStateManager):
             When ``True``, results include the full source code in the
             ``implementation`` field. When ``False``, implementations are
             omitted to reduce payload size.
+        destination : str | None, optional
+            When omitted, reads federate across personal and shared
+            Compositional roots (personal-first). When provided, restrict the
+            Compositional read to one root: ``None`` / ``"personal"`` for the
+            personal catalog, or ``"team:<id>"`` for a shared team catalog.
+            Use this when resolving a ``function_id`` that is only unique
+            within one destination (e.g. symbolic task entrypoints).
         _return_callable : bool, default ``False``
             When ``True``, return Python callables instead of metadata dicts.
             Implementations SHOULD inject the resulting callables (and any of their
