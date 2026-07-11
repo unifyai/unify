@@ -2063,6 +2063,7 @@ async def async_tool_loop_inner(
             logger.debug(
                 f"[setup +{_setup_elapsed()}] tool policy eval (step={runtime_state.step_index})",
             )
+            _policy_eager = False
             if tool_policy is not None:
                 _tools_snapshot = {n: s.fn for n, s in tools_data.normalized.items()}
                 try:
@@ -2077,8 +2078,10 @@ async def async_tool_loop_inner(
                             runtime_state.step_index,
                             _tools_snapshot,
                         )
-                    tool_choice_mode, filtered, _ = _parse_tool_policy_result(
-                        _policy_result,
+                    tool_choice_mode, filtered, _policy_eager = (
+                        _parse_tool_policy_result(
+                            _policy_result,
+                        )
                     )
                 except Exception as _e:  # never abort the loop on mis-behaving policies
                     logger.error(
@@ -3676,12 +3679,15 @@ async def async_tool_loop_inner(
                             f"Failed to insert immediate placeholders: {_ph_exc!r}",
                         )
 
-                    # Eager tool policies: if gates are still unsatisfied after
-                    # the calls just scheduled, grant another LLM turn now
-                    # (overlapping in-flight tools) instead of waiting for
-                    # results.  Re-evaluate with the updated called_tools so
-                    # eagerness ends as soon as the policy stops requesting it.
-                    if tool_policy is not None:
+                    # Eager tool policies: if this turn requested eager and
+                    # gates are still unsatisfied after the calls just
+                    # scheduled, grant another LLM turn now (overlapping
+                    # in-flight tools) instead of waiting for results.
+                    # Only re-invoke the policy when the turn was already
+                    # eager — non-eager policies must not be called again
+                    # with the same step_index (side-effectful policies /
+                    # tests treat one call per LLM turn as the contract).
+                    if _policy_eager and tool_policy is not None:
                         try:
                             _eager_snapshot = {
                                 n: s.fn for n, s in tools_data.normalized.items()
