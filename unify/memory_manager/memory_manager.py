@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 from typing import Optional, Callable, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
-
 
 from ..common.llm_client import new_llm_client
 from ..manager_registry import ManagerRegistry
@@ -22,6 +22,60 @@ if TYPE_CHECKING:
     from ..transcript_manager.base import BaseTranscriptManager
     from ..knowledge_manager.base import BaseKnowledgeManager
     from ..task_scheduler.base import BaseTaskScheduler
+
+# Fields MemoryManager refuses to expose to the contact-update LLM, even when
+# the underlying ContactManager signature still accepts them via **kwargs /
+# named params on the simulated manager.
+_CONTACT_TOOL_LLM_EXCLUDE = frozenset({"custom_fields"})
+
+
+def _llm_visible_contact_signature(
+    source: Callable[..., Any],
+    *,
+    exclude: frozenset[str] = _CONTACT_TOOL_LLM_EXCLUDE,
+) -> inspect.Signature:
+    """Closed tool signature for LLM schemas.
+
+    Unwraps monkeypatch/wraps spies to the real ContactManager method, then
+    drops ``**kwargs`` / ``*args`` so ``method_to_schema`` does not advertise
+    ``additionalProperties: true`` (OpenAI ignores freeform extras on empty
+    ``properties``). Also drops names in *exclude* (e.g. ``custom_fields``).
+    """
+    unwrapped = inspect.unwrap(getattr(source, "__func__", source))
+    sig = inspect.signature(unwrapped)
+    params = [
+        p
+        for p in sig.parameters.values()
+        if p.name != "self"
+        and p.name not in exclude
+        and p.kind
+        not in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        )
+    ]
+    return inspect.Signature(
+        parameters=params,
+        return_annotation=sig.return_annotation,
+    )
+
+
+def _pin_contact_tool_schema(
+    wrapper: Callable[..., Any],
+    source: Callable[..., Any],
+    *,
+    exclude: frozenset[str] = _CONTACT_TOOL_LLM_EXCLUDE,
+) -> None:
+    """Pin *wrapper*'s ``__signature__`` / annotations for closed LLM schemas."""
+    pinned = _llm_visible_contact_signature(source, exclude=exclude)
+    wrapper.__signature__ = pinned  # type: ignore[attr-defined]
+    ann = {
+        name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any)
+        for name, p in pinned.parameters.items()
+    }
+    if pinned.return_annotation is not inspect.Signature.empty:
+        ann["return"] = pinned.return_annotation
+    wrapper.__annotations__ = ann
 
 
 class MemoryManager(BaseMemoryManager):
@@ -190,54 +244,48 @@ class MemoryManager(BaseMemoryManager):
     # ------------------------------------------------------------------ #
 
     def _build_contact_tools(self) -> Dict[str, Callable[..., Any]]:
-        """Build the contact CRUD tool set with async wrappers."""
+        """Build the contact CRUD tool set with async wrappers.
 
-        @functools.wraps(self._contact_manager._create_contact, updated=())
+        Wrappers accept ``**kwargs`` at runtime for plumbing, but pin a closed
+        ``__signature__`` (no ``**kwargs``) so the LLM sees declared fields only.
+        """
+
+        create_src = self._contact_manager._create_contact
+        update_src = self._contact_manager.update_contact
+        merge_src = self._contact_manager._merge_contacts
+
+        def _named_params(src: Callable[..., Any]) -> set[str]:
+            return set(_llm_visible_contact_signature(src).parameters)
+
+        @functools.wraps(create_src, updated=())
         async def _create_contact(**kwargs):
             if kwargs.get("custom_fields"):
                 raise ValueError(
                     "Creation of custom columns is not allowed.",
                 )
-            import inspect
-
-            allowed = set(
-                inspect.signature(self._contact_manager._create_contact).parameters,
-            )
+            allowed = _named_params(create_src)
             cleaned_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
-            return await asyncio.to_thread(
-                self._contact_manager._create_contact,
-                **cleaned_kwargs,
-            )
+            return await asyncio.to_thread(create_src, **cleaned_kwargs)
 
-        @functools.wraps(self._contact_manager.update_contact, updated=())
+        @functools.wraps(update_src, updated=())
         async def _update_contact(**kwargs):
             if kwargs.get("custom_fields"):
                 raise ValueError(
                     "Modification involving custom columns is not allowed.",
                 )
-            import inspect
-
-            allowed = set(
-                inspect.signature(self._contact_manager.update_contact).parameters,
-            )
+            allowed = _named_params(update_src)
             cleaned_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
-            return await asyncio.to_thread(
-                self._contact_manager.update_contact,
-                **cleaned_kwargs,
-            )
+            return await asyncio.to_thread(update_src, **cleaned_kwargs)
 
-        @functools.wraps(self._contact_manager._merge_contacts, updated=())
+        @functools.wraps(merge_src, updated=())
         async def _merge_contacts(**kwargs):
-            import inspect
-
-            allowed = set(
-                inspect.signature(self._contact_manager._merge_contacts).parameters,
-            )
+            allowed = _named_params(merge_src)
             cleaned_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
-            return await asyncio.to_thread(
-                self._contact_manager._merge_contacts,
-                **cleaned_kwargs,
-            )
+            return await asyncio.to_thread(merge_src, **cleaned_kwargs)
+
+        _pin_contact_tool_schema(_create_contact, create_src)
+        _pin_contact_tool_schema(_update_contact, update_src)
+        _pin_contact_tool_schema(_merge_contacts, merge_src)
 
         return {
             "contact_ask": ToolSpec(
