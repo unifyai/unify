@@ -252,19 +252,12 @@ class TestDebouncerCancellationPropagation:
         )
 
 
-class TestDebouncerUserOriginProtection:
-    """Tests for user-origin pending task protection.
-
-    When a user utterance is pending in the debouncer, non-user events
-    (actor lifecycle, system events) must not replace it. This prevents
-    the scenario where a user speaks, their request is queued behind a
-    running task, and then an actor event arrives and silently replaces
-    the user's request.
-    """
+class TestDebouncerPendingReplacement:
+    """Any new submit replaces the pending slot; origin does not matter."""
 
     @pytest.mark.asyncio
-    async def test_non_user_cannot_replace_pending_user(self):
-        """A non-user submission is skipped when a user utterance is pending."""
+    async def test_non_user_can_replace_pending_user(self):
+        """An actor/system submit replaces a pending user utterance."""
         from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer(name="TestCM")
@@ -283,44 +276,31 @@ class TestDebouncerUserOriginProtection:
                 results.append(f"{label}:cancelled")
                 raise
 
-        # Task 0: running (non-user)
         await debouncer.submit(slow_task, args=("running",))
         await asyncio.wait_for(task0_started.wait(), timeout=2.0)
 
-        # User utterance: pending behind running task
-        await debouncer.submit(
-            slow_task,
-            args=("user",),
-            is_user_origin=True,
-        )
+        await debouncer.submit(slow_task, args=("user",))
         await _wait_for_condition(lambda: debouncer.pending_task is not None)
-        assert debouncer._pending_is_user_origin is True
 
-        # Actor event: should be SKIPPED because user utterance is pending
-        await debouncer.submit(
-            slow_task,
-            args=("actor",),
-            is_user_origin=False,
-        )
+        await debouncer.submit(slow_task, args=("actor",))
 
-        # Wait for the user task to run (after running task completes)
         await _wait_for_condition(
-            lambda: "user:completed" in results,
+            lambda: "actor:completed" in results,
             timeout=5.0,
         )
 
-        assert "user:completed" in results, (
-            f"User task should have completed, not been replaced.\n"
+        assert "actor:completed" in results, (
+            f"Actor task should have replaced the pending user task.\n"
             f"  Results: {results}"
         )
-        assert "actor:started" not in results, (
-            f"Actor task should have been skipped (user pending).\n"
+        assert "user:started" not in results, (
+            f"User task should have been replaced by actor task.\n"
             f"  Results: {results}"
         )
 
     @pytest.mark.asyncio
     async def test_user_can_replace_pending_non_user(self):
-        """A user submission replaces a pending non-user submission normally."""
+        """A user submission replaces a pending non-user submission."""
         from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
@@ -339,23 +319,11 @@ class TestDebouncerUserOriginProtection:
                 results.append(f"{label}:cancelled")
                 raise
 
-        # Task 0: running
         await debouncer.submit(slow_task, args=("running",))
         await asyncio.wait_for(task0_started.wait(), timeout=2.0)
 
-        # Actor event: pending
-        await debouncer.submit(
-            slow_task,
-            args=("actor",),
-            is_user_origin=False,
-        )
-
-        # User utterance: should REPLACE the actor pending
-        await debouncer.submit(
-            slow_task,
-            args=("user",),
-            is_user_origin=True,
-        )
+        await debouncer.submit(slow_task, args=("actor",))
+        await debouncer.submit(slow_task, args=("user",))
 
         await _wait_for_condition(
             lambda: "user:completed" in results,
@@ -369,8 +337,8 @@ class TestDebouncerUserOriginProtection:
         )
 
     @pytest.mark.asyncio
-    async def test_user_can_replace_pending_user(self):
-        """A newer user submission replaces an older pending user submission."""
+    async def test_newer_submit_replaces_older_pending(self):
+        """A newer submission replaces an older pending submission."""
         from unify.conversation_manager.domains.utils import Debouncer
 
         debouncer = Debouncer()
@@ -389,32 +357,20 @@ class TestDebouncerUserOriginProtection:
                 results.append(f"{label}:cancelled")
                 raise
 
-        # Task 0: running
         await debouncer.submit(slow_task, args=("running",))
         await asyncio.wait_for(task0_started.wait(), timeout=2.0)
 
-        # User utterance 1: pending
-        await debouncer.submit(
-            slow_task,
-            args=("user1",),
-            is_user_origin=True,
-        )
-
-        # User utterance 2: replaces user 1 (newer user beats older user)
-        await debouncer.submit(
-            slow_task,
-            args=("user2",),
-            is_user_origin=True,
-        )
+        await debouncer.submit(slow_task, args=("first",))
+        await debouncer.submit(slow_task, args=("second",))
 
         await _wait_for_condition(
-            lambda: "user2:completed" in results,
+            lambda: "second:completed" in results,
             timeout=5.0,
         )
 
-        assert "user2:completed" in results
-        assert "user1:started" not in results, (
-            f"Older user task should have been replaced by newer user task.\n"
+        assert "second:completed" in results
+        assert "first:started" not in results, (
+            f"Older pending task should have been replaced by newer submit.\n"
             f"  Results: {results}"
         )
 

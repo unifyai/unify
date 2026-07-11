@@ -1193,7 +1193,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self,
         delay: float = 0,
         trace_meta: dict[str, str] | None = None,
-        is_user_origin: bool = False,
     ):
         await self.debouncer.submit(
             self._run_llm_with_failure_notification,
@@ -1201,7 +1200,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             delay=delay,
             label=(trace_meta or {}).get("origin_event_name", ""),
             trace_meta=trace_meta,
-            is_user_origin=is_user_origin,
         )
 
     # Grace window for the owner to answer a Unify Meet ring before the
@@ -1841,7 +1839,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
         await self.run_llm(
             delay=delay,
             trace_meta=selected_meta,
-            is_user_origin=is_user_origin,
         )
 
     async def _open_slow_brain_follow_on_turn(
