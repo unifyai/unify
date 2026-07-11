@@ -919,7 +919,6 @@ class SimulatedContactManager(BaseContactManager):
         should_respond: bool = True,
         response_policy: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
     ) -> "ToolOutcome":
         """
         Create a new contact in the internal store with a deterministic contact_id.
@@ -952,10 +951,6 @@ class SimulatedContactManager(BaseContactManager):
         if custom_fields:
             contact.update(custom_fields)
 
-        # Add any extra kwargs
-        if kwargs:
-            contact.update(kwargs)
-
         # Store in internal contacts dict
         self._contacts[contact_id] = contact
 
@@ -983,7 +978,6 @@ class SimulatedContactManager(BaseContactManager):
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
     ) -> "ToolOutcome":
         """
         Update one or more fields of an existing contact in the internal store.
@@ -1015,7 +1009,6 @@ class SimulatedContactManager(BaseContactManager):
                             "should_respond": should_respond,
                             "response_policy": response_policy,
                             **(custom_fields or {}),
-                            **kwargs,
                         }.items()
                         if v is not None
                     ],
@@ -1049,7 +1042,6 @@ class SimulatedContactManager(BaseContactManager):
                 "should_respond": should_respond,
                 "response_policy": response_policy,
                 **(custom_fields or {}),
-                **kwargs,
             }.items()
             if v is not None
         }

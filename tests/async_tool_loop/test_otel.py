@@ -163,7 +163,7 @@ class TestUnitySpan:
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].name == "ContactManager.ask"
-        assert spans[0].attributes.get("unify.query") == "find john"
+        assert spans[0].attributes.get("unity.query") == "find john"
 
     def test_span_none_when_otel_disabled(self, monkeypatch):
         """unity_span yields None when OTel is disabled."""
@@ -495,7 +495,7 @@ class TestCrossPackageIntegration:
         unify_tracer = trace.get_tracer("unisdk")
 
         with logger.unity_span("Actor.act", method="ask") as unity_span:
-            unity_span.set_attribute("unify.query", "find contacts")
+            unity_span.set_attribute("unity.query", "find contacts")
 
             with unillm_tracer.start_as_current_span("LLM call") as llm_span:
                 llm_span.set_attribute("llm.model", "gpt-4")
@@ -512,8 +512,8 @@ class TestCrossPackageIntegration:
         llm_s = next(s for s in spans if "LLM" in s.name)
         http_s = next(s for s in spans if "HTTP" in s.name)
 
-        assert unity_s.attributes.get("unify.method") == "ask"
-        assert unity_s.attributes.get("unify.query") == "find contacts"
+        assert unity_s.attributes.get("unity.method") == "ask"
+        assert unity_s.attributes.get("unity.query") == "find contacts"
 
         assert llm_s.attributes.get("llm.model") == "gpt-4"
         assert llm_s.attributes.get("llm.cache_status") == "miss"
@@ -748,7 +748,7 @@ class TestFileSpanExporterIntegration:
 
         assert span_data["name"] == "ContactManager.ask"
         assert span_data["service"] == "unity"
-        assert span_data["attributes"]["unify.query"] == "find john"
+        assert span_data["attributes"]["unity.query"] == "find john"
 
     def test_full_hierarchy_writes_to_same_file(
         self,

@@ -72,7 +72,7 @@ def test_custom_column_shorthand():
     ), "Alias should not collide with built-in aliases"
 
     # Create a contact using the custom field, then ensure JSON shorthand uses the alias
-    out = cm._create_contact(first_name="Zoe", nickname="Z")
+    out = cm._create_contact(first_name="Zoe", custom_fields={"nickname": "Z"})
     cid = out["details"]["contact_id"]
     contact = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
 

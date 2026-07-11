@@ -23,6 +23,7 @@ from livekit.protocol.sip import (
     SIPDispatchRuleDirect,
 )
 
+from unify.conversation_manager.settings import local_comms_callback_base_url
 from unify.settings import SETTINGS
 
 
@@ -180,15 +181,6 @@ async def delete_sip_dispatch_rule(dispatch_rule_id: str | None) -> None:
         await livekit_api.aclose()
 
 
-def _local_public_url() -> str:
-    public_url = SETTINGS.conversation.LOCAL_COMMS_PUBLIC_URL.strip()
-    if public_url:
-        return public_url.rstrip("/")
-    host = SETTINGS.conversation.LOCAL_COMMS_HOST
-    port = SETTINGS.conversation.LOCAL_COMMS_PORT
-    return f"http://{host}:{port}"
-
-
 async def start_room_egress(
     room_name: str,
     assistant_id: str | int,
@@ -206,7 +198,8 @@ async def start_room_egress(
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
         filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
         webhook_url = (
-            f"{_local_public_url()}/local/livekit/recording-complete"
+            f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+            "/local/livekit/recording-complete"
             f"?assistant_id={quote_plus(str(assistant_id))}"
             f"&user_id={quote_plus(str(user_id))}"
             f"&room_name={quote_plus(room_name)}"

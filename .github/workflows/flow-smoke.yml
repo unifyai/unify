@@ -70,11 +70,12 @@ jobs:
       # slow-brain turns fail with a 401 "No cookie auth credentials found" and
       # no reply lands.
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
       # Orchestra routes embeddings (embed() derived logs / Builtins seeding)
       # through OpenRouter, so the CI-local Orchestra needs this key too.
       ORCHESTRA_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_CI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_CI_API_KEY }}
-      # Brain default model is minimax-v3@minimax (OpenRouter). OPENROUTER_API_KEY
+      # Brain default model is gpt-5.6-sol@openai (OpenAI). OPENAI_API_KEY
       # above covers slow-brain auth; DEEPSEEK remains for DeepSeek-specific tests.
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_CI_API_KEY }}
       # Communication service URL (org secret is still named UNITY_COMMS_URL).

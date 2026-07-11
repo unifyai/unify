@@ -148,7 +148,6 @@ def summarize_table_profile(
         settings.SUMMARY_MODEL,
         async_client=False,
         reasoning_effort=None,
-        service_tier=None,
         origin="FileParser.generate_summary",
     )
 

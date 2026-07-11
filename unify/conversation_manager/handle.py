@@ -6,7 +6,7 @@ from typing import Optional, Type, TypeVar, TYPE_CHECKING
 from pydantic import BaseModel
 from enum import Enum
 from unify.common.async_tool_loop import start_async_tool_loop, SteerableToolHandle
-from unify.common.llm_client import new_llm_client
+from unify.common.llm_client import new_slow_brain_llm_client
 from unify.manager_registry import ManagerRegistry
 from .base import BaseConversationManagerHandle
 from .events import (
@@ -204,7 +204,7 @@ class ConversationManagerHandle(BaseConversationManagerHandle):
         # ──────────────────────────────────────────────────────────────────
         # 3. START THE LOOP
         # ──────────────────────────────────────────────────────────────────
-        llm = new_llm_client(
+        llm = new_slow_brain_llm_client(
             return_full_completion=False,
         )
         llm.set_system_message(prompt_parts.to_list())

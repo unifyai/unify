@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from unify.common.llm_client import new_llm_client
+from unify.common.llm_client import new_slow_brain_llm_client
 
 
 class ProactiveDecision(BaseModel):
@@ -104,9 +104,6 @@ Output JSON matching the ProactiveDecision schema.\
 
 
 class ProactiveSpeech:
-    def __init__(self, model: str | None = None) -> None:
-        self._model = model
-
     async def decide(
         self,
         chat_history: list[dict],
@@ -118,12 +115,11 @@ class ProactiveSpeech:
         Returns (decision, llm_log_path) where llm_log_path is the unillm
         request+response file for the LLM call that produced this decision.
         """
-        client = new_llm_client(
-            self._model,
+        client = new_slow_brain_llm_client(
             origin="ProactiveSpeech",
-            # Runs on the deepseek slow-brain model but at "high", not the "max"
-            # system default: the extra max latency is not worth it for a silence
-            # filler that already sits behind a debounce and delay.
+            # Same slow-brain model as ConversationManager; pin "high" so this
+            # silence-filler path stays on the shared effort (already behind a
+            # debounce and delay).
             reasoning_effort="high",
         )
         client.set_response_format(ProactiveDecision)

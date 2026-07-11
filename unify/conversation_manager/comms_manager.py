@@ -61,9 +61,6 @@ from unify.conversation_manager.domains.coordinator_onboarding import (
 from unify.conversation_manager.domains.coordinator_delegate import (
     _coordinator_delegate_event_from_payload,
 )
-from unify.conversation_manager.domains.inactivity import (
-    _inactivity_followup_event_from_payload,
-)
 from unify.conversation_manager.domains.integration_sync import (
     _integration_tools_sync_completed_from_payload,
     _integration_tools_sync_failed_from_payload,
@@ -73,6 +70,7 @@ from unify.conversation_manager.events import *
 from unify.conversation_manager.metrics import pubsub_e2e_latency
 from unify.session_details import SESSION_DETAILS
 from unify.contact_manager.types.contact import UNASSIGNED
+from unify.contact_manager.ops import partition_create_kwargs
 from unify.conversation_manager.cm_types import MEDIUM_TO_CONTACT_FIELD, Medium
 
 load_dotenv()
@@ -428,7 +426,7 @@ def _get_or_create_unknown_contact(
                 "should_respond": False,
                 "response_policy": ContactManager.UNKNOWN_INBOUND_RESPONSE_POLICY,
             }
-            outcome = cm._create_contact(**create_kwargs)
+            outcome = cm._create_contact(**partition_create_kwargs(create_kwargs))
             new_contact_id = outcome["details"]["contact_id"]
 
             # Fetch the newly created contact
@@ -512,7 +510,7 @@ def _get_or_create_team_chat_sender_contact(
             }
             if sender_assistant_id is not None:
                 create_kwargs["agent_id"] = str(sender_assistant_id)
-            outcome = cm._create_contact(**create_kwargs)
+            outcome = cm._create_contact(**partition_create_kwargs(create_kwargs))
             new_contact_id = outcome["details"]["contact_id"]
             contact_info = cm.get_contact_info(new_contact_id)
             return contact_info.get(new_contact_id)
@@ -978,6 +976,11 @@ class CommsManager:
                         "default_reasoning_effort",
                         "",
                     ),
+                    "slow_brain_model": event.get("slow_brain_model", ""),
+                    "slow_brain_reasoning_effort": event.get(
+                        "slow_brain_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),
@@ -1036,10 +1039,6 @@ class CommsManager:
                         reason=r,
                     ),
                     "task_trigger": lambda r: _task_trigger_event_from_payload(
-                        event,
-                        reason=r,
-                    ),
-                    "inactivity_followup": lambda r: _inactivity_followup_event_from_payload(
                         event,
                         reason=r,
                     ),
@@ -2686,6 +2685,11 @@ class CommsManager:
                     "default_model": event.get("default_model", ""),
                     "default_reasoning_effort": event.get(
                         "default_reasoning_effort",
+                        "",
+                    ),
+                    "slow_brain_model": event.get("slow_brain_model", ""),
+                    "slow_brain_reasoning_effort": event.get(
+                        "slow_brain_reasoning_effort",
                         "",
                     ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),

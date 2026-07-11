@@ -3083,6 +3083,10 @@ class TestTriggeredTaskNotifications:
                 return_value="42",
             ),
             patch(
+                "unify.conversation_manager.domains.task_activation.get_task_activation",
+                return_value=None,
+            ),
+            patch(
                 "unify.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
             ) as remember_provenance,
         ):

@@ -78,6 +78,35 @@ class ToolLoopRuntimeState:
     message_count_offset: int = 0
 
 
+def _parse_tool_policy_result(
+    result: Any,
+) -> Tuple[str, Dict[str, Callable], bool]:
+    """Normalize a ``tool_policy`` return value.
+
+    Accepted shapes:
+      - ``(mode, tools)``
+      - ``(mode, tools, {"eager": bool, ...})``
+
+    ``eager=True`` means: after the model schedules tool calls on this turn,
+    immediately grant another LLM turn (without waiting for those tools to
+    finish) for as long as subsequent policy evaluations keep returning
+    ``eager=True``.  Default is ``False`` (wait for tool results).
+    """
+    if not isinstance(result, (tuple, list)) or len(result) < 2:
+        raise TypeError(
+            f"tool_policy must return (mode, tools[, opts]), got {type(result)!r}",
+        )
+    mode, tools = result[0], result[1]
+    eager = False
+    if len(result) >= 3:
+        opts = result[2]
+        if isinstance(opts, dict):
+            eager = bool(opts.get("eager", False))
+        else:
+            eager = bool(opts)
+    return str(mode), tools, eager
+
+
 def prune_duplicate_tool_calls(tool_calls: list) -> tuple[list, set[str]]:
     """Remove duplicate tool calls from a list.
 
@@ -252,10 +281,19 @@ async def async_tool_loop_inner(
     include_class_in_dynamic_tool_names: bool = False,
     tool_policy: Optional[
         Union[
-            Callable[[int, Dict[str, Callable]], Tuple[str, Dict[str, Callable]]],
+            Callable[
+                [int, Dict[str, Callable]],
+                Union[
+                    Tuple[str, Dict[str, Callable]],
+                    Tuple[str, Dict[str, Callable], Dict[str, Any]],
+                ],
+            ],
             Callable[
                 [int, Dict[str, Callable], list[str]],
-                Tuple[str, Dict[str, Callable]],
+                Union[
+                    Tuple[str, Dict[str, Callable]],
+                    Tuple[str, Dict[str, Callable], Dict[str, Any]],
+                ],
             ],
         ]
     ] = None,
@@ -361,10 +399,16 @@ async def async_tool_loop_inner(
          Optional callable that *dynamically* controls tool exposure **and**
          whether a tool call is **required** on a given turn.  Receives the
          current turn index (starting at ``0``) and the full mapping
-         ``{name → callable}``.  It must return a tuple ``(policy, tools)``
-         where ``policy`` is either ``"auto"`` or ``"required"`` (fed straight
-         into ``tool_choice``) and ``tools`` is the possibly-filtered mapping
-         of base tools visible on that turn.
+         ``{name → callable}`` (and optionally the list of previously called
+         tool names as a third argument).  It must return
+         ``(policy, tools)`` or ``(policy, tools, {"eager": bool})`` where
+         ``policy`` is either ``"auto"`` or ``"required"`` (fed straight into
+         ``tool_choice``) and ``tools`` is the possibly-filtered mapping of
+         base tools visible on that turn.  When ``eager`` is ``True``, the
+         loop grants another LLM turn immediately after scheduling tool
+         calls (without waiting for them to finish), for as long as the
+         policy keeps returning ``eager=True``.  Omit ``eager`` (or set it
+         ``False``) to keep the default wait-for-results behaviour.
 
     parent_chat_context : ``list[dict] | None``
         Nested chat structure passed from an **outer** loop.  When
@@ -2019,20 +2063,26 @@ async def async_tool_loop_inner(
             logger.debug(
                 f"[setup +{_setup_elapsed()}] tool policy eval (step={runtime_state.step_index})",
             )
+            _policy_eager = False
             if tool_policy is not None:
                 _tools_snapshot = {n: s.fn for n, s in tools_data.normalized.items()}
                 try:
                     if _policy_accepts_history:
-                        tool_choice_mode, filtered = tool_policy(
+                        _policy_result = tool_policy(
                             runtime_state.step_index,
                             _tools_snapshot,
                             list(runtime_state.called_tools),
                         )
                     else:
-                        tool_choice_mode, filtered = tool_policy(
+                        _policy_result = tool_policy(
                             runtime_state.step_index,
                             _tools_snapshot,
                         )
+                    tool_choice_mode, filtered, _policy_eager = (
+                        _parse_tool_policy_result(
+                            _policy_result,
+                        )
+                    )
                 except Exception as _e:  # never abort the loop on mis-behaving policies
                     logger.error(
                         f"tool_policy raised on turn {runtime_state.step_index}: {_e!r}",
@@ -3628,6 +3678,40 @@ async def async_tool_loop_inner(
                         logger.error(
                             f"Failed to insert immediate placeholders: {_ph_exc!r}",
                         )
+
+                    # Eager tool policies: if this turn requested eager and
+                    # gates are still unsatisfied after the calls just
+                    # scheduled, grant another LLM turn now (overlapping
+                    # in-flight tools) instead of waiting for results.
+                    # Only re-invoke the policy when the turn was already
+                    # eager — non-eager policies must not be called again
+                    # with the same step_index (side-effectful policies /
+                    # tests treat one call per LLM turn as the contract).
+                    if _policy_eager and tool_policy is not None:
+                        try:
+                            _eager_snapshot = {
+                                n: s.fn for n, s in tools_data.normalized.items()
+                            }
+                            if _policy_accepts_history:
+                                _eager_result = tool_policy(
+                                    runtime_state.step_index,
+                                    _eager_snapshot,
+                                    list(runtime_state.called_tools),
+                                )
+                            else:
+                                _eager_result = tool_policy(
+                                    runtime_state.step_index,
+                                    _eager_snapshot,
+                                )
+                            _, _, _still_eager = _parse_tool_policy_result(
+                                _eager_result,
+                            )
+                            if _still_eager:
+                                llm_turn_required = True
+                        except Exception as _eager_exc:
+                            logger.error(
+                                f"tool_policy eager re-check failed: {_eager_exc!r}",
+                            )
 
                     continue  # finished scheduling tools, back to the very top
 

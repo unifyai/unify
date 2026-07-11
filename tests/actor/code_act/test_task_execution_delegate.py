@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -159,7 +160,7 @@ async def test_codeact_task_delegate_reuses_actor_slot_for_entrypoint_tasks():
 
 
 @pytest.mark.asyncio
-async def test_task_execution_delegates_accept_shared_protocol_kwargs():
+async def test_task_execution_delegates_forward_named_protocol_kwargs():
     class _FakeHandle:
         async def result(self):
             return "ok"
@@ -188,7 +189,8 @@ async def test_task_execution_delegates_accept_shared_protocol_kwargs():
             images=[],
             guidelines="Follow task-specific execution guidelines.",
             entrypoint_kwargs={"scheduled_run_timestamp": "2026-04-10T09:00:00Z"},
-            future_option=True,
+            entrypoint_repair_attempts=1,
+            entrypoint_repair_context={"reason": "certification"},
         )
 
         assert await handle.result() == "ok"
@@ -200,7 +202,20 @@ async def test_task_execution_delegates_accept_shared_protocol_kwargs():
         assert call["kwargs"]["entrypoint_kwargs"] == {
             "scheduled_run_timestamp": "2026-04-10T09:00:00Z",
         }
-        assert call["kwargs"]["future_option"] is True
+        assert call["kwargs"]["entrypoint_repair_attempts"] == 1
+        assert call["kwargs"]["entrypoint_repair_context"] == {
+            "reason": "certification",
+        }
+
+        with pytest.raises(TypeError, match="unexpected keyword arguments"):
+            await delegate.start_task_run(
+                task_description="Reject undeclared protocol kwargs.",
+                entrypoint=None,
+                parent_chat_context=None,
+                clarification_up_q=None,
+                clarification_down_q=None,
+                future_option=True,
+            )
 
 
 @pytest.mark.asyncio
@@ -302,6 +317,54 @@ def repairable_task():
         assert await handle.result() == "repaired task completed"
         assert len(repair_calls) == 1
         assert repair_calls[0]["entrypoint_id"] == function_id
+    finally:
+        await actor.close()
+        ManagerRegistry.clear()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_repair_symbolic_entrypoint_snapshot_uses_callable_contract(monkeypatch):
+    """Repair must request metadata with _return_callable=True (FM contract)."""
+
+    ManagerRegistry.clear()
+    function_manager = FunctionManager()
+    actor = CodeActActor(function_manager=function_manager)
+
+    try:
+        function_manager.add_functions(
+            implementations=[
+                """
+def snapshot_task():
+    return "ok"
+""".strip(),
+            ],
+        )
+        function_id = function_manager.list_functions()["snapshot_task"]["function_id"]
+
+        class _FakeHandle:
+            async def result(self):
+                return "repaired"
+
+        monkeypatch.setattr(
+            "unify.actor.code_act_actor.start_async_tool_loop",
+            lambda **kwargs: _FakeHandle(),
+        )
+        monkeypatch.setattr(
+            "unify.actor.code_act_actor.new_llm_client",
+            lambda model: MagicMock(
+                set_system_message=MagicMock(),
+            ),
+        )
+
+        summary = await actor._repair_symbolic_entrypoint(
+            entrypoint_id=function_id,
+            request="Run snapshot task.",
+            entrypoint_kwargs={},
+            failure=RuntimeError("boom"),
+            repair_context=None,
+        )
+        assert summary == "repaired"
     finally:
         await actor.close()
         ManagerRegistry.clear()

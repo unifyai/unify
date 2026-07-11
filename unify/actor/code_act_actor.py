@@ -85,7 +85,9 @@ ToolPolicyFn = Callable[[int, Dict[str, Any]], tuple[str, Dict[str, Any]]]
 
 Receives ``(step_index, tools_dict)`` and returns ``(tool_choice_mode,
 filtered_tools_dict)`` where *tool_choice_mode* is ``"auto"`` or
-``"required"``.
+``"required"``.  An optional third dict ``{"eager": True}`` may be returned
+to request immediate follow-up LLM turns while the policy remains eager
+(see the async tool loop ``tool_policy`` docs).
 """
 
 _USE_DEFAULT: object = object()
@@ -138,6 +140,13 @@ def _default_tool_policy(
     satisfied the full (statically-filtered) tool set is returned with
     ``"auto"`` mode.
 
+    While gates remain open the policy also sets ``eager=True``, so the async
+    tool loop grants another LLM turn immediately after each partial discovery
+    call is scheduled (without waiting for that call's result).  That way a
+    model that only fires one of the two required discovery tools on the first
+    turn is prompted for the missing one right away, overlapping the in-flight
+    search.
+
     When only one of the two manager tool families is present, that single
     family acts as the sole gate.  When neither is present the policy is a
     no-op pass-through.
@@ -157,7 +166,7 @@ def _default_tool_policy(
         step: int,
         tools: Dict[str, Any],
         called_tools: list[str],
-    ) -> tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, Dict[str, Any]] | tuple[str, Dict[str, Any], dict]:
         filtered = filter_tools(tools)
 
         fm_satisfied = (not has_fm_tools) or any(
@@ -189,7 +198,9 @@ def _default_tool_policy(
                 },
             )
 
-        return ("required", gated) if gated else ("auto", filtered)
+        if gated:
+            return "required", gated, {"eager": True}
+        return "auto", filtered
 
     return _policy
 
@@ -402,6 +413,17 @@ class _CodeActTaskExecutionDelegate:
 
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
+        entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
+        entrypoint_repair_attempts = int(
+            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "TaskExecutionDelegate.start_task_run got unexpected "
+                f"keyword arguments: {unexpected}",
+            )
         return await self._actor.act(
             task_description,
             guidelines=task_guidelines,
@@ -409,9 +431,11 @@ class _CodeActTaskExecutionDelegate:
             _clarification_up_q=clarification_up_q,
             _clarification_down_q=clarification_down_q,
             entrypoint=entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=entrypoint_repair_attempts,
+            entrypoint_repair_context=entrypoint_repair_context,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
-            **kwargs,
         )
 
 
@@ -4305,9 +4329,17 @@ class CodeActActor(BaseCodeActActor):
                 "Cannot repair symbolic entrypoint without FunctionManager.",
             )
 
-        function_snapshot = fm.filter_functions(
+        snapshot_namespace: dict[str, Any] = {}
+        snapshot_result = fm.filter_functions(
             filter=f"function_id == {int(entrypoint_id)}",
+            _return_callable=True,
+            _namespace=snapshot_namespace,
             _also_return_metadata=True,
+        )
+        function_snapshot = (
+            snapshot_result.get("metadata", [])
+            if isinstance(snapshot_result, dict)
+            else snapshot_result
         )
         tools = methods_to_tool_dict(
             fm.search_functions,
@@ -4379,11 +4411,12 @@ class CodeActActor(BaseCodeActActor):
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
+        entrypoint_repair_attempts: int = 0,
+        entrypoint_repair_context: Optional[dict[str, Any]] = None,
         persist: Optional[bool] = None,
         can_compose: Optional[bool] = None,
         can_store: Optional[bool] = None,
         llm_profile: Optional[str] = None,
-        **kwargs,
     ) -> SteerableToolHandle:
         if not self._main_event_loop:
             self._main_event_loop = asyncio.get_running_loop()
@@ -4397,10 +4430,7 @@ class CodeActActor(BaseCodeActActor):
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] entered")
 
-        entrypoint_repair_attempts = int(
-            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
-        )
-        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        entrypoint_repair_attempts = int(entrypoint_repair_attempts or 0)
 
         effective_can_compose = (
             self.can_compose if can_compose is None else bool(can_compose)

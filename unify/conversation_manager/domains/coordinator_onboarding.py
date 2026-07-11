@@ -1,10 +1,9 @@
 """Coordinator onboarding narration handlers.
 
-Symmetric with ``inactivity`` for ``InactivityFollowup``: parses the
-``unity_system_event`` payload that orchestra publishes whenever a
-real user action lands during Coordinator onboarding (workspace
-OAuth, integration connect, or session start from the picker) and
-surfaces the request to the brain as a notification so it
+Parses the ``unity_system_event`` payload that orchestra publishes
+whenever a real user action lands during Coordinator onboarding
+(workspace OAuth, integration connect, or session start from the
+picker) and surfaces the request to the brain as a notification so it
 composes a short acknowledgement turn.
 
 We deliberately keep the handler dumb: the brain decides the wording
@@ -95,6 +94,11 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "if you're on a call with them, otherwise ring them with start_unify_meet "
         "— opener introduces the demo, briefing carries the demo script."
     ),
+    "your_computer_beat_requested": (
+        "The user clicked the Their Computer demo row — fetch a file from their "
+        "linked computer now and send it back in chat; works from chat or on a "
+        "call."
+    ),
 }
 
 
@@ -116,6 +120,7 @@ _SUBTYPE_INTEGRATION_CONNECT_CHIP_REQUESTED = "integration_connect_chip_requeste
 _SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
 _SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
+_SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED = "your_computer_beat_requested"
 
 _IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
     "Mandatory: the user's checklist click has no visible UI feedback until I "
@@ -149,6 +154,7 @@ _SUBTYPES_WITH_DURABLE_CLICK_TRACE = frozenset(
         _SUBTYPE_TASK_CHIP_REQUESTED,
         _SUBTYPE_LEARNING_BEAT_REQUESTED,
         _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
+        _SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED,
         _SUBTYPE_WORKSPACE_DEMO_REQUESTED,
     },
 )
@@ -324,8 +330,7 @@ def _coordinator_onboarding_event_from_payload(
 ) -> CoordinatorOnboardingEvent | None:
     """Build a :class:`CoordinatorOnboardingEvent` from a comms payload.
 
-    Mirrors :func:`_inactivity_followup_event_from_payload`: the
-    adapter publishes ``unity_system_event`` with
+    The adapter publishes ``unity_system_event`` with
     ``event_type == "coordinator_onboarding_event"`` and an
     ``extra_event_fields`` dict carrying ``subtype`` + optional
     ``details``. Either landing here. The helper is intentionally
@@ -731,6 +736,13 @@ def _coordinator_onboarding_notification_text(
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        text = f"{subtype_hint} {body}{framing_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED:
         details = event.details if isinstance(event.details, dict) else {}
         framing = _detail_string(details, "framing")
         framing_note = f" Section framing: {framing}" if framing else ""

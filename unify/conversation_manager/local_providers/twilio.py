@@ -14,6 +14,7 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
+from unify.conversation_manager.settings import local_comms_callback_base_url
 from unify.settings import SETTINGS
 
 from .livekit import ensure_phone_dispatch_rule, make_sip_uri
@@ -43,16 +44,6 @@ def get_twilio_wa_client() -> TwilioClient:
     if account_sid and auth_token:
         return TwilioClient(account_sid, auth_token)
     return get_twilio_client()
-
-
-def local_public_url() -> str:
-    """Resolve the externally reachable base URL for local comms callbacks."""
-    public_url = SETTINGS.conversation.LOCAL_COMMS_PUBLIC_URL.strip()
-    if public_url:
-        return public_url.rstrip("/")
-    host = SETTINGS.conversation.LOCAL_COMMS_HOST
-    port = SETTINGS.conversation.LOCAL_COMMS_PORT
-    return f"http://{host}:{port}"
 
 
 def validate_signature(
@@ -115,7 +106,8 @@ def create_conference_response(
     }
     if with_status:
         kwargs["status_callback"] = (
-            f"{local_public_url()}/local/twilio/conference-status"
+            f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+            "/local/twilio/conference-status"
         )
         kwargs["status_callback_event"] = "end"
     dial.conference(conference_name, **kwargs)
@@ -128,7 +120,10 @@ def build_outbound_call_twiml(twilio_number: str, phone_number: str) -> str:
     dial = response.dial(caller_id=twilio_number, timeout=15)
     dial.number(
         phone_number,
-        status_callback=f"{local_public_url()}/local/twilio/call-status",
+        status_callback=(
+            f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+            "/local/twilio/call-status"
+        ),
         status_callback_event="initiated ringing answered completed",
     )
     return str(response)
@@ -183,7 +178,10 @@ async def send_whatsapp_message(
             "to": f"whatsapp:{to_number}",
             "from_": f"whatsapp:{from_number}",
             "body": body,
-            "status_callback": f"{local_public_url()}/local/twilio/whatsapp-status",
+            "status_callback": (
+                f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+                "/local/twilio/whatsapp-status"
+            ),
         }
         if media_url:
             kwargs["media_url"] = [media_url]
@@ -203,7 +201,8 @@ async def start_call(
     client = get_twilio_client()
     sip_uri = make_sip_uri(from_number)
     callback_url = (
-        f"{local_public_url()}/local/twilio/twiml"
+        f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+        "/local/twilio/twiml"
         f"?phone_number={quote_plus(to_number)}"
     )
 
@@ -240,7 +239,10 @@ async def start_whatsapp_call(
             to=f"whatsapp:{to_number}",
             from_=f"whatsapp:{from_number}",
             twiml=response,
-            status_callback=f"{local_public_url()}/local/twilio/whatsapp-call-status",
+            status_callback=(
+                f"{local_comms_callback_base_url(SETTINGS.conversation)}"
+                "/local/twilio/whatsapp-call-status"
+            ),
             status_callback_event=["initiated", "ringing", "answered", "completed"],
         )
         client.calls.create(
