@@ -285,7 +285,12 @@ def test_constructor_annotation_is_set_and_not_persisted():
     )
 
     row = ds[img_id]
-    h = ImageHandle(manager=im, image=Image(**row), annotation="ctor-note")
+    h = ImageHandle(
+        manager=im,
+        image=Image(**row),
+        context=im._ctx,
+        annotation="ctor-note",
+    )
 
     # Annotation provided in constructor should be set on this handle only
     assert h.annotation == "ctor-note"
@@ -349,7 +354,12 @@ async def test_wait_for_annotation_immediate_via_constructor():
     )
 
     row = ds[img_id]
-    h = ImageHandle(manager=im, image=Image(**row), annotation="ready-now")
+    h = ImageHandle(
+        manager=im,
+        image=Image(**row),
+        context=im._ctx,
+        annotation="ready-now",
+    )
 
     got = await h.wait_for_annotation(timeout=0.5)
     assert got == "ready-now"
