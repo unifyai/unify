@@ -164,8 +164,11 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
     client = new_llm_client(**llm_config)
     # Instruct the real LLM to attempt three calls; the loop will prune to 2
     client.set_system_message(
-        "You are running inside an automated test. In your FIRST assistant turn, request the tool `short_tool` "
-        "THREE times in the same message. Then finish shortly.",
+        "You are running inside an automated test. Your FIRST assistant message "
+        "MUST contain exactly three parallel tool_calls to `short_tool` "
+        "(three separate entries in the tool_calls array of one message). "
+        "Do not call the tool once per turn. After emitting those three "
+        "tool_calls, finish shortly.",
     )
 
     handle = start_async_tool_loop(
@@ -176,6 +179,7 @@ async def test_prunes_over_quota_tool_calls(llm_config, monkeypatch):
             "short_tool": ToolSpec(fn=short_tool, max_total_calls=2),
         },
         prune_tool_duplicates=False,  # allow multiple identical tool_calls for this test
+        max_parallel_tool_calls=3,
         timeout=60,
         max_steps=100,
         raise_on_limit=False,
