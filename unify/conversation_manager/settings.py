@@ -73,7 +73,7 @@ class ConversationSettings(BaseSettings):
     PROACTIVE_SPEECH_MODEL: str = ""
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     FAST_BRAIN_MOOD_CLASSIFICATION_ENABLED: bool = False
-    FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.5-mini@openai"
+    FAST_BRAIN_MOOD_CLASSIFICATION_MODEL: str = "gpt-5.4-mini@openai"
     IMPL: str = "real"
     COMMS_URL: str = Field(default="", validation_alias="UNITY_COMMS_URL")
     ADAPTERS_URL: str = Field(default="", validation_alias="UNITY_ADAPTERS_URL")
