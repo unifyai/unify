@@ -1152,7 +1152,12 @@ class GuidanceManager(BaseGuidanceManager):
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom guidance sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         with (
             self._temporary_guidance_context("_ctx", guidance_context),

@@ -81,6 +81,14 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env(entrypoint=42)
         assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
+    def test_destination_omitted_without_destination(self):
+        env = self._make_env()
+        assert "TASK_DESTINATION" not in env
+
+    def test_destination_set_when_provided(self):
+        env = self._make_env(destination="team:41001")
+        assert env["TASK_DESTINATION"] == "team:41001"
+
     def test_request_text_uses_description_first(self):
         env = self._make_env(
             task_description="The full description",

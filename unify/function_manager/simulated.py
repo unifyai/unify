@@ -409,11 +409,13 @@ class SimulatedFunctionManager(BaseFunctionManager):
         offset: int = 0,
         limit: int = 100,
         include_implementations: bool = True,
+        destination: Optional[str] = None,
         _return_callable: bool = False,
         _namespace: Optional[Dict[str, Any]] = None,
         _also_return_metadata: bool = False,
         _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
+        _ = destination
         if _also_return_metadata and not _return_callable:
             raise ValueError("_also_return_metadata requires _return_callable=True")
         if _return_callable and _namespace is None:

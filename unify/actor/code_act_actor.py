@@ -418,6 +418,7 @@ class _CodeActTaskExecutionDelegate:
             kwargs.pop("entrypoint_repair_attempts", 0) or 0,
         )
         entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        destination = kwargs.pop("destination", None)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -434,6 +435,7 @@ class _CodeActTaskExecutionDelegate:
             entrypoint_kwargs=entrypoint_kwargs,
             entrypoint_repair_attempts=entrypoint_repair_attempts,
             entrypoint_repair_context=entrypoint_repair_context,
+            destination=destination,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
         )
@@ -4320,6 +4322,7 @@ class CodeActActor(BaseCodeActActor):
         entrypoint_kwargs: dict[str, Any],
         failure: BaseException,
         repair_context: dict[str, Any] | None,
+        destination: str | None = None,
     ) -> str:
         """Run a bounded review loop that can repair a failing symbolic executor."""
 
@@ -4332,6 +4335,7 @@ class CodeActActor(BaseCodeActActor):
         snapshot_namespace: dict[str, Any] = {}
         snapshot_result = fm.filter_functions(
             filter=f"function_id == {int(entrypoint_id)}",
+            destination=destination,
             _return_callable=True,
             _namespace=snapshot_namespace,
             _also_return_metadata=True,
@@ -4413,6 +4417,7 @@ class CodeActActor(BaseCodeActActor):
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
         entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
+        destination: Optional[str] = None,
         persist: Optional[bool] = None,
         can_compose: Optional[bool] = None,
         can_store: Optional[bool] = None,
@@ -4641,6 +4646,7 @@ class CodeActActor(BaseCodeActActor):
 
                 out = fm.filter_functions(
                     filter=f"function_id == {entrypoint_id}",
+                    destination=destination,
                     _return_callable=True,
                     _namespace=sandbox.global_state,
                     _also_return_metadata=True,
@@ -4691,6 +4697,7 @@ class CodeActActor(BaseCodeActActor):
                                 if isinstance(entrypoint_repair_context, dict)
                                 else None
                             ),
+                            destination=destination,
                         )
 
             delegate_token = current_task_execution_delegate.set(

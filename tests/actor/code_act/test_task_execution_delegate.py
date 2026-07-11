@@ -8,6 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.helpers import _handle_project
+from tests.destination_routing_helpers import (
+    manager_routing_context as manager_routing_context,  # noqa: F401
+)
 from unify.actor.code_act_actor import (
     CodeActActor,
     _CodeActTaskExecutionDelegate,
@@ -152,11 +155,13 @@ async def test_codeact_task_delegate_reuses_actor_slot_for_entrypoint_tasks():
         parent_chat_context=None,
         clarification_up_q=None,
         clarification_down_q=None,
+        destination="team:41001",
     )
     await handle.result()
 
     assert calls[0]["_reuse_actor_slot"] is True
     assert calls[0]["entrypoint"] == 123
+    assert calls[0]["destination"] == "team:41001"
 
 
 @pytest.mark.asyncio
@@ -317,6 +322,57 @@ def repairable_task():
         assert await handle.result() == "repaired task completed"
         assert len(repair_calls) == 1
         assert repair_calls[0]["entrypoint_id"] == function_id
+    finally:
+        await actor.close()
+        ManagerRegistry.clear()
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_symbolic_entrypoint_resolves_by_task_destination(
+    manager_routing_context,
+):
+    """Entrypoint function_id lookup must not prefer a colliding personal catalog row."""
+
+    _, team_id = manager_routing_context
+    team_destination = f"team:{team_id}"
+    ManagerRegistry.clear()
+    function_manager = FunctionManager(include_primitives=False)
+    actor = CodeActActor(function_manager=function_manager)
+
+    try:
+        function_manager.add_functions(
+            implementations="def collision_entrypoint():\n    return 'personal'",
+        )
+        personal_id = function_manager.list_functions()["collision_entrypoint"][
+            "function_id"
+        ]
+        function_manager.add_functions(
+            implementations="def collision_entrypoint():\n    return 'shared'",
+            destination=team_destination,
+        )
+        team_rows = function_manager.filter_functions(
+            filter="name == 'collision_entrypoint'",
+            destination=team_destination,
+        )
+        assert team_rows[0]["function_id"] == personal_id
+
+        federated_handle = await actor.act(
+            "Run colliding entrypoint without destination.",
+            entrypoint=personal_id,
+            clarification_enabled=False,
+            persist=False,
+        )
+        assert await federated_handle.result() == "personal"
+
+        team_handle = await actor.act(
+            "Run colliding entrypoint scoped to team.",
+            entrypoint=personal_id,
+            destination=team_destination,
+            clarification_enabled=False,
+            persist=False,
+        )
+        assert await team_handle.result() == "shared"
     finally:
         await actor.close()
         ManagerRegistry.clear()

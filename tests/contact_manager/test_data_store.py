@@ -132,9 +132,10 @@ def test_data_store_hygiene_after_custom_column_delete():
 
     # Create a custom column and a contact that uses it
     cm._create_custom_column(column_name="department", column_type="str")
-    cid = cm._create_contact(first_name="Jane", department="Engineering")["details"][
-        "contact_id"
-    ]
+    cid = cm._create_contact(
+        first_name="Jane",
+        custom_fields={"department": "Engineering"},
+    )["details"]["contact_id"]
 
     # Ensure cache has the field
     row = ds[cid]

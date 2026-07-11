@@ -14,6 +14,16 @@ from unify.task_scheduler.machine_state import (
     TaskOutboundOperationReference,
 )
 
+_ASSISTANT_SMS_NUMBER = "+15555550000"
+
+
+def _expected_first_sms_body(content: str) -> str:
+    """First SMS to a contact embeds the assistant reply-to number."""
+    return (
+        f"{content}\n\n(If this reached you from a short code/sender ID "
+        f"due to local carrier rules, text me directly at {_ASSISTANT_SMS_NUMBER}.)"
+    )
+
 
 def _seed_offline_env(monkeypatch):
     monkeypatch.setenv(
@@ -28,7 +38,7 @@ def _seed_offline_env(monkeypatch):
     monkeypatch.setattr(
         offline_support.SESSION_DETAILS.assistant,
         "number",
-        "+15555550000",
+        _ASSISTANT_SMS_NUMBER,
     )
     monkeypatch.setattr(
         offline_support.SESSION_DETAILS.assistant,
@@ -351,7 +361,7 @@ async def test_send_sms_offline_success_reserves_and_finalizes(monkeypatch):
 
     async def _fake_send_sms_message_via_number(*, to_number: str, content: str):
         assert to_number == "+15555550123"
-        assert content == "Hello from offline"
+        assert content == _expected_first_sms_body("Hello from offline")
         return {"success": True, "sid": "sms-1"}
 
     monkeypatch.setattr(
@@ -441,7 +451,7 @@ async def test_send_sms_offline_reservation_uses_normalized_phone_number(monkeyp
 
     async def _fake_send_sms_message_via_number(*, to_number: str, content: str):
         assert to_number == "+15555550123"
-        assert content == "Hello from offline"
+        assert content == _expected_first_sms_body("Hello from offline")
         return {"success": True, "sid": "sms-1"}
 
     monkeypatch.setattr(

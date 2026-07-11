@@ -74,6 +74,47 @@ def test_function_reads_keep_personal_implementation_when_names_overlap(
     assert "return 'personal'" in duplicate["implementation"]
 
 
+def test_filter_functions_destination_scopes_function_id_lookup(
+    manager_routing_context,
+):
+    """Same function_id in personal and team catalogs resolves by destination."""
+
+    _, team_id = manager_routing_context
+    manager = FunctionManager(include_primitives=False)
+    team_destination = f"team:{team_id}"
+
+    manager.add_functions(
+        implementations="def collision_fn():\n    return 'personal'",
+    )
+    personal_id = manager.list_functions()["collision_fn"]["function_id"]
+    manager.add_functions(
+        implementations="def collision_fn():\n    return 'shared'",
+        destination=team_destination,
+    )
+    team_id_value = manager.filter_functions(
+        filter="name == 'collision_fn'",
+        destination=team_destination,
+    )[0]["function_id"]
+    assert personal_id == team_id_value
+
+    federated = manager.filter_functions(filter=f"function_id == {personal_id}")
+    assert federated[0]["implementation"].count("return 'personal'") == 1
+
+    personal_only = manager.filter_functions(
+        filter=f"function_id == {personal_id}",
+        destination=None,
+    )
+    assert len(personal_only) == 1
+    assert "return 'personal'" in personal_only[0]["implementation"]
+
+    team_only = manager.filter_functions(
+        filter=f"function_id == {personal_id}",
+        destination=team_destination,
+    )
+    assert len(team_only) == 1
+    assert "return 'shared'" in team_only[0]["implementation"]
+
+
 def test_sync_custom_venvs_routes_each_destination_independently(
     manager_routing_context,
 ):

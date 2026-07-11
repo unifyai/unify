@@ -84,7 +84,7 @@ def test_unknown_emailless_assistant_is_provisioned_with_agent_id(
     assert contact is not None
     assert contact["contact_id"] == 7
     create_kwargs = manager._create_contact.call_args.kwargs
-    assert create_kwargs["agent_id"] == "777"
+    assert create_kwargs.get("custom_fields", {}).get("agent_id") == "777"
     assert create_kwargs["email_address"] is None
     assert create_kwargs["first_name"] == "Pat"
     assert create_kwargs["surname"] == "Peer"

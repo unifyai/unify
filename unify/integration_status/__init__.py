@@ -553,7 +553,7 @@ def build_function_filter_scope() -> str | None:
     return "function_id not in (" + ", ".join(str(i) for i in sorted(ids)) + ")"
 
 
-def enabled_summary_for_prompt() -> str:
+def build_guidance_filter_scope() -> str | None:
     """Return a GuidanceManager filter that hides disabled package guidance.
 
     User-authored guidance must remain searchable. Exclude guidance rows
