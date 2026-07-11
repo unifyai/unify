@@ -1845,6 +1845,11 @@ class _EventBusProxy:
     # transparent proxy behaviour -----------------------------------
     def __getattr__(self, item):
         if self._inner is None:
+            # hasattr()/unittest.mock/inspect must see AttributeError for
+            # private/dunder probes; raise RuntimeError only for public use
+            # before init.
+            if item.startswith("_"):
+                raise AttributeError(item)
             raise RuntimeError(
                 "EVENT_BUS has not been initialised yet – call unify.init() first.",
             )
