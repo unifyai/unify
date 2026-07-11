@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import requests
+import unisdk
 
 from unisdk.utils.http import RequestError
 from unify.common.context_store import TableStore, _create_context_with_retry
@@ -34,6 +35,8 @@ def test_ensure_creates_and_idempotent(monkeypatch):
         auto_counting=None,
         description=None,
         foreign_keys=None,
+        owner_scope=None,
+        owner_id=None,
         project=None,
     ):
         calls["create_context"] += 1

@@ -220,7 +220,7 @@ async def test_execute_with_computer_primitives_rpc(
         )
 
         assert result["error"] is None, f"Unexpected error: {result['error']}"
-        mock_primitives.computer.click.assert_called_once_with(selector="#button")
+        mock_computer_primitives.click.assert_called_once_with(selector="#button")
         assert result["result"] == "clicked"
     finally:
         venv_dir = fm._get_venv_dir(venv_id)
@@ -663,7 +663,7 @@ async def use_both(contact_q: str, url: str) -> dict:
         assert result["result"]["navigate"] == "navigated to url"
 
         # Reset mocks
-        full_mock_primitives.computer.navigate.reset_mock()
+        full_mock_computer_primitives.navigate.reset_mock()
 
         # Test mixed primitives
         result = await fm.execute_in_venv(

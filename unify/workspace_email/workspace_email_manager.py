@@ -288,7 +288,15 @@ class WorkspaceEmailManager:
         query: str,
         max_results: int = 20,
     ) -> list[dict[str, Any]]:
-        """Search the connected mailbox by provider query. See ``list_messages``."""
+        """Search the connected mailbox by provider query.
+
+        Parameters
+        ----------
+        query : str
+            Provider search query (Gmail search syntax or Microsoft ``$search``).
+        max_results : int, optional
+            Maximum number of messages to return.
+        """
         return await self.list_messages(query=query, max_results=max_results)
 
     async def get_message(self, message_id: str) -> dict[str, Any]:
