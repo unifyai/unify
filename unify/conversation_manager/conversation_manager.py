@@ -2262,12 +2262,13 @@ class ConversationManager(metaclass=SingletonABCMeta):
         else:
             client = new_llm_client(
                 origin="ConversationManager",
-                # Slow brain stays at "high"; the system default is "max" (used by
-                # the CodeActActor). On DeepSeek v4 "max" buys marginal gains on the
-                # hardest tasks at extra latency; on MiniMax M3 all non-none effort
-                # levels enable the same adaptive thinking mode. When the
-                # assistant carries a default-model effort override, it takes
-                # priority over this value inside new_llm_client().
+                # Slow brain pins "high" explicitly so an assistant-level effort
+                # override is the only thing that can raise it. On DeepSeek v4
+                # "max" buys marginal gains on the hardest tasks at extra
+                # latency; on MiniMax M3 all non-none effort levels enable the
+                # same adaptive thinking mode. When the assistant carries a
+                # default-model effort override, it takes priority over this
+                # value inside new_llm_client().
                 reasoning_effort="high",
             )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
