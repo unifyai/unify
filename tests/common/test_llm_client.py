@@ -8,7 +8,6 @@ from unittest.mock import patch
 from unify.common.llm_client import (
     new_llm_client,
     new_slow_brain_llm_client,
-    new_vision_llm_client,
     resolve_default_model,
     resolve_slow_brain_model,
 )
@@ -21,20 +20,6 @@ def _reset_session_default_model():
     yield
     SESSION_DETAILS.assistant.default_model = ""
     SESSION_DETAILS.assistant.default_reasoning_effort = ""
-
-
-def test_new_vision_llm_client_uses_vision_settings() -> None:
-    """Vision Q&A uses UNIFY_VISION_MODEL, not the text-only default."""
-    with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
-        client = new_vision_llm_client(origin="test.vision")
-        mock_async.assert_called_once_with(
-            SETTINGS.UNIFY_VISION_MODEL,
-            reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
-            service_tier="priority",
-            stateful=False,
-            origin="test.vision",
-        )
-        assert client is mock_async.return_value
 
 
 def test_resolve_default_model_falls_back_to_settings() -> None:
@@ -113,7 +98,7 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
 
 
 def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
-    """Call sites pinning a model (vision, fast brain, profiles) are untouched."""
+    """Call sites pinning a model (fast brain, profiles) are untouched."""
     SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
     SESSION_DETAILS.assistant.default_reasoning_effort = "low"
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:

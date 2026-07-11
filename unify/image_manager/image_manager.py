@@ -10,7 +10,7 @@ import threading
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
-from ..common.llm_client import new_vision_llm_client
+from ..common.llm_client import new_llm_client
 from ..common.authorship import stamp_authoring_assistant_id
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.context_dump import make_messages_safe_for_context_dump
@@ -375,7 +375,7 @@ class ImageHandle:
         `question`, and returns the model's textual answer directly (no nested
         tool-use loop).
         If the image is stored as a GCS URL, a temporary signed URL is generated
-        to make it accessible to the vision model.
+        to make it accessible to the LLM.
 
         Parameters
         ----------
@@ -387,8 +387,7 @@ class ImageHandle:
             context as JSON (read-only), helping the model understand why the question
             is being asked.
         """
-        # Single-call vision client (independent of the actor's text-only default).
-        client = new_vision_llm_client(origin="ImageHandle.ask")
+        client = new_llm_client(origin="ImageHandle.ask")
 
         # Build a succinct system message tailored to image Q&A
         client.set_system_message(
