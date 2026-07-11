@@ -754,11 +754,21 @@ class SingleFunctionActor(BaseActor):
             )
             result = await handle.result()
             if isinstance(result, GeneratedCallKwargs):
-                return result.call_kwargs
+                kwargs = result.call_kwargs
+            else:
+                result_dict = json.loads(result)
+                parsed = GeneratedCallKwargs.model_validate(result_dict)
+                kwargs = parsed.call_kwargs
 
-            result_dict = json.loads(result)
-            parsed = GeneratedCallKwargs.model_validate(result_dict)
-            return parsed.call_kwargs
+            # Models sometimes nest the schema field again
+            # ({"call_kwargs": {"a": 1}} instead of {"a": 1}). Unwrap that.
+            while (
+                isinstance(kwargs, dict)
+                and set(kwargs) == {"call_kwargs"}
+                and isinstance(kwargs["call_kwargs"], dict)
+            ):
+                kwargs = kwargs["call_kwargs"]
+            return kwargs
         except Exception as e:
             logger.error(
                 f"Argument generation LLM call failed for '{function_name}': {e}. "

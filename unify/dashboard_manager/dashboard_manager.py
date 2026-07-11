@@ -176,7 +176,9 @@ class DashboardManager(BaseDashboardManager):
 
     def _table_context_for_root(self, root_context: str, table_name: str) -> str:
         """Return the concrete dashboard context under one registry root."""
-        return f"{root_context.strip('/')}/{table_name}"
+        context = f"{root_context.strip('/')}/{table_name}"
+        suffix = table_name.rsplit("/", 1)[-1]
+        return _require_dashboard_context(context, suffix)
 
     def _table_context_for_destination(
         self,

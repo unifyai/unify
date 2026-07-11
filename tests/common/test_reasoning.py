@@ -118,7 +118,7 @@ def test_query_llm_docstring_contains_actor_usage_guidance():
     assert "EmailDraftDecision" in doc
     assert "Anti-patterns" in doc
     assert "images=[" in doc
-    assert "Vision reasoning over a local image path" in doc
+    assert "Text and images" in doc
     assert "billable UniLLM call" in doc
     assert "substring checks" in doc
     assert "label-specific canned prose or templates" in doc
