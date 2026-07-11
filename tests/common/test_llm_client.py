@@ -77,7 +77,6 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
         mock_async.assert_called_once_with(
             "gpt-5.6-terra@openai",
             reasoning_effort="high",
-            service_tier="priority",
             stateful=False,
             origin="ConversationManager",
         )
@@ -91,7 +90,6 @@ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
         mock_async.assert_called_once_with(
             "gpt-5.6-luna@openai",
             reasoning_effort="low",
-            service_tier="priority",
             stateful=False,
             origin="ConversationManager",
         )
@@ -106,7 +104,6 @@ def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
         mock_async.assert_called_once_with(
             "gpt-5.5@openai",
             reasoning_effort="low",
-            service_tier="priority",
             stateful=False,
             origin=None,
         )
@@ -121,7 +118,6 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
         mock_async.assert_called_once_with(
             SETTINGS.UNIFY_MODEL,
             reasoning_effort="high",
-            service_tier="priority",
             stateful=False,
             origin=None,
         )
@@ -136,7 +132,6 @@ def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
         mock_async.assert_called_once_with(
             "claude-4.8-opus@anthropic",
             reasoning_effort="high",
-            service_tier="priority",
             stateful=False,
             origin=None,
         )

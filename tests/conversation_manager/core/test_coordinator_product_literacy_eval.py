@@ -45,7 +45,6 @@ _ACCESSIBLE_ORGANIZATIONS = [
 _PRIMARY_LLM_CONFIG = {
     "model": "gpt-5.5@openai",
     "reasoning_effort": "high",
-    "service_tier": "priority",
 }
 
 _SECONDARY_SMOKE_SCENARIOS = {
