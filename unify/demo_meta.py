@@ -146,7 +146,9 @@ def apply_prospect_to_boss_contact(
         update_kwargs["phone_number"] = prospect.phone
 
     try:
-        contact_manager.update_contact(**update_kwargs)
+        from unify.contact_manager.ops import partition_update_kwargs
+
+        contact_manager.update_contact(**partition_update_kwargs(update_kwargs))
         logger.info(
             f"Applied prospect details to boss contact: "
             f"first_name={prospect.first_name}, surname={prospect.surname}, "

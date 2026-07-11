@@ -81,10 +81,8 @@ def test_create_with_custom_field():
 
     cid = cm._create_contact(
         first_name="Jane",
-        department="Engineering",
-    )[
-        "details"
-    ]["contact_id"]
+        custom_fields={"department": "Engineering"},
+    )["details"]["contact_id"]
     contacts = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"]
     assert contacts and contacts[0].department == "Engineering"
 
@@ -97,8 +95,13 @@ def test_update_custom_field():
     cm = ContactManager()
 
     cm._create_custom_column(column_name="age", column_type="int")
-    cid = cm._create_contact(first_name="Tom", age=30)["details"]["contact_id"]
+    cid = cm._create_contact(
+        first_name="Tom",
+        custom_fields={"age": 30},
+    )[
+        "details"
+    ]["contact_id"]
 
-    cm.update_contact(contact_id=cid, age=31)
+    cm.update_contact(contact_id=cid, custom_fields={"age": 31})
     contact = cm.filter_contacts(filter=f"contact_id == {cid}")["contacts"][0]
     assert contact.age == 31
