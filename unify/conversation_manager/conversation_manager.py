@@ -37,7 +37,7 @@ from unify.conversation_manager.events import *
 from unify.integrations.sync_state import IntegrationSyncCoordinator
 from unify.common.prompt_helpers import now as prompt_now
 
-from unify.common.llm_client import new_slow_brain_llm_client, new_vision_llm_client
+from unify.common.llm_client import new_slow_brain_llm_client
 from unify.common.single_shot import ToolExecution, single_shot_tool_decision
 from unify.events.manager_event_logging import _EVENT_SOURCE
 from unify.conversation_manager.domains.notifications import NotificationBar
@@ -2253,21 +2253,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         _t0 = _rl_time.perf_counter()
         _client_step_t0 = _t0
-        if screenshots:
-            client = new_vision_llm_client(
-                origin="ConversationManager",
-                reasoning_effort=SETTINGS.UNIFY_VISION_REASONING_EFFORT,
-            )
-        else:
-            client = new_slow_brain_llm_client(
-                origin="ConversationManager",
-                # Slow brain pins "high" explicitly so an assistant-level or
-                # SLOW_BRAIN_REASONING_EFFORT override is the only thing that
-                # can change it. When the assistant carries a default-model
-                # effort override, it takes priority inside
-                # new_slow_brain_llm_client().
-                reasoning_effort="high",
-            )
+        client = new_slow_brain_llm_client(
+            origin="ConversationManager",
+            # Slow brain pins "high" explicitly so an assistant-level or
+            # SLOW_BRAIN_REASONING_EFFORT override is the only thing that
+            # can change it. When the assistant carries a default-model
+            # effort override, it takes priority inside
+            # new_slow_brain_llm_client(). Screenshots use the same
+            # multimodal slow-brain client as text turns.
+            reasoning_effort="high",
+        )
         _new_client_ms = (_rl_time.perf_counter() - _client_step_t0) * 1000
         _client_step_t0 = _rl_time.perf_counter()
         if hasattr(client, "_pending_thinking_log"):

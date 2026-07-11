@@ -64,7 +64,7 @@ from unify.common.embed_utils import list_private_fields
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.tool_outcome import ToolErrorException
 from unify.common.model_to_fields import model_to_fields
-from unify.common.llm_client import new_llm_client, new_vision_llm_client
+from unify.common.llm_client import new_llm_client
 from .utils.search import (
     resolve_table_ref as _srch_resolve_table_ref,
 )
@@ -98,7 +98,7 @@ class _FileContextBinding:
 # Lightweight handle for single-shot vision answers
 # ---------------------------------------------------------------------------
 class _ImageVisionHandle(SteerableToolHandle):
-    """Wraps a single-shot vision LLM call as a SteerableToolHandle."""
+    """Wraps a single-shot image LLM call as a SteerableToolHandle."""
 
     def __init__(self, coro, *, _return_reasoning_steps: bool = False):
         self._coro = coro
@@ -127,10 +127,10 @@ class _ImageVisionHandle(SteerableToolHandle):
         self._done = True
 
     async def pause(self):
-        return "Single-shot vision call cannot be paused."
+        return "Single-shot image call cannot be paused."
 
     async def resume(self):
-        return "Single-shot vision call is not paused."
+        return "Single-shot image call is not paused."
 
     async def next_clarification(self):
         return {}
@@ -2313,7 +2313,7 @@ class FileManager(BaseFileManager):
         _return_reasoning_steps: bool = False,
         _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
     ) -> SteerableToolHandle:
-        """Single-shot vision LLM call for image files (JPEG/PNG)."""
+        """Single-shot LLM call for image files (JPEG/PNG)."""
         from unify.common.image_content import to_image_content_block
 
         if not self._adapter.exists(file_path):
@@ -2324,7 +2324,7 @@ class FileManager(BaseFileManager):
         async def _vision_call() -> str:
             from unify.image_manager.prompt_builders import build_image_ask_prompt
 
-            client = new_vision_llm_client(origin="FileManager.ask_about_image_file")
+            client = new_llm_client(origin="FileManager.ask_about_image_file")
             client.set_system_message(
                 build_image_ask_prompt(caption=file_path, timestamp=None).to_list(),
             )
