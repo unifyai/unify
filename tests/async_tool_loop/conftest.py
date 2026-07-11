@@ -16,8 +16,8 @@ from unify.settings import SETTINGS
 
 _DEFAULT_MODEL = SETTINGS.UNIFY_MODEL
 
-# Single production-default config — ``new_llm_client`` supplies reasoning_effort
-# and service_tier unless a test overrides them explicitly.
+# Single production-default config — ``new_llm_client`` supplies
+# reasoning_effort unless a test overrides it explicitly.
 DEFAULT_LLM_CONFIG: dict[str, str] = {"model": _DEFAULT_MODEL}
 
 LLM_CONFIGS = [

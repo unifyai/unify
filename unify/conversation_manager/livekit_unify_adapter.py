@@ -50,14 +50,12 @@ class UnifyLLM(llm.LLM):
         model: str = "gpt-5.4-mini@openai",
         *,
         reasoning_effort: str | None = None,
-        service_tier: str | None = None,
         temperature: float | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
         self._model = model
         self._reasoning_effort = reasoning_effort
-        self._service_tier = service_tier
         self._temperature = temperature
         self._extra_kwargs = kwargs
         self._pending_trace_contexts: deque[dict[str, Any]] = deque()
@@ -97,7 +95,6 @@ class UnifyLLM(llm.LLM):
             conn_options=conn_options,
             model=self._model,
             reasoning_effort=self._reasoning_effort,
-            service_tier=self._service_tier,
             temperature=self._temperature,
             extra_kwargs=self._extra_kwargs,
             trace_context=trace_context,
@@ -115,7 +112,6 @@ class UnifyLLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         model: str,
         reasoning_effort: str | None,
-        service_tier: str | None,
         temperature: float | None,
         extra_kwargs: dict[str, Any],
         trace_context: dict[str, Any] | None,
@@ -128,7 +124,6 @@ class UnifyLLMStream(llm.LLMStream):
         )
         self._model = model
         self._reasoning_effort = reasoning_effort
-        self._service_tier = service_tier
         self._temperature = temperature
         self._extra_kwargs = extra_kwargs
         self._request_id = str(uuid.uuid4())
@@ -178,8 +173,6 @@ class UnifyLLMStream(llm.LLMStream):
         client_kwargs = dict(self._extra_kwargs)
         if self._reasoning_effort is not None:
             client_kwargs["reasoning_effort"] = self._reasoning_effort
-        if self._service_tier is not None:
-            client_kwargs["service_tier"] = self._service_tier
 
         # Create Unify client
         client = new_llm_client(

@@ -62,7 +62,6 @@ def _generate_embedding_safe_summary(
         settings.SUMMARY_MODEL,
         async_client=False,
         reasoning_effort=None,
-        service_tier=None,
         origin="FileParser.generate_summary",
     )
 
@@ -378,7 +377,6 @@ def extract_metadata(
         settings.SUMMARY_MODEL,
         async_client=False,
         reasoning_effort=None,
-        service_tier=None,
         origin="FileParser.extract_metadata",
     )
 

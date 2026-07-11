@@ -130,7 +130,6 @@ def extract_metadata_from_text_best_effort(
         settings.SUMMARY_MODEL,
         async_client=False,
         reasoning_effort=None,
-        service_tier=None,
         origin="FileParser.extract_metadata",
     )
 
@@ -322,7 +321,6 @@ def summarize_spreadsheet_profile_best_effort(
         settings.SUMMARY_MODEL,
         async_client=False,
         reasoning_effort=None,
-        service_tier=None,
         origin="FileParser.generate_summary",
     )
 
