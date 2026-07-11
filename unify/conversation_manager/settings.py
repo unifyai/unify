@@ -5,6 +5,8 @@ These settings are composed into the global ProductionSettings.
 Environment variables use the prefix UNITY_CONVERSATION_.
 """
 
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -55,6 +57,9 @@ class ConversationSettings(BaseSettings):
             the comms_utils publish helpers use. Same value semantics
             as INGRESS_TRANSPORT. Override via
             ``UNITY_CONVERSATION_OUTBOUND_TRANSPORT``.
+        LOCAL_COMMS_PUBLIC_URL_FILE: File containing the current public URL
+            for local comms callbacks. The file is read for each URL
+            construction so rotating quick tunnels take effect immediately.
     """
 
     FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
@@ -79,6 +84,7 @@ class ConversationSettings(BaseSettings):
     LOCAL_COMMS_HOST: str = "127.0.0.1"
     LOCAL_COMMS_PORT: int = 8787
     LOCAL_COMMS_PUBLIC_URL: str = ""
+    LOCAL_COMMS_PUBLIC_URL_FILE: str = "/runtime/call-tunnel-url"
     LOCAL_EMAIL_POLL_INTERVAL: float = 15.0
     INGRESS_TRANSPORT: str = ""
     OUTBOUND_TRANSPORT: str = ""
@@ -88,3 +94,33 @@ class ConversationSettings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+
+def local_comms_public_url(settings: ConversationSettings) -> str:
+    """Resolve the current externally reachable local comms URL.
+
+    A non-empty URL from the configured runtime file takes precedence. Missing,
+    unreadable, or empty files fall back to the environment-backed setting.
+    """
+    path = settings.LOCAL_COMMS_PUBLIC_URL_FILE.strip()
+    if path:
+        try:
+            public_url = Path(path).read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            public_url = ""
+        if public_url:
+            return public_url.rstrip("/")
+    return settings.LOCAL_COMMS_PUBLIC_URL.strip().rstrip("/")
+
+
+def local_comms_listener_url(settings: ConversationSettings) -> str:
+    """Resolve the internal URL of the local comms listener."""
+    return f"http://{settings.LOCAL_COMMS_HOST}:{settings.LOCAL_COMMS_PORT}"
+
+
+def local_comms_callback_base_url(settings: ConversationSettings) -> str:
+    """Resolve the public callback URL or its local listener fallback."""
+    public_url = local_comms_public_url(settings)
+    if public_url:
+        return public_url
+    return local_comms_listener_url(settings)
