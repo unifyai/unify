@@ -1925,7 +1925,7 @@ async def entrypoint(ctx: agents.JobContext):
     # Uses UnifyLLM adapter for local caching (CI) and usage tracking
     llm_model = UnifyLLM(
         model=SETTINGS.conversation.FAST_BRAIN_MODEL,
-        reasoning_effort="low",
+        reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
     )
 
     assistant_name = SESSION_DETAILS.assistant.name
@@ -3614,7 +3614,7 @@ async def entrypoint(ctx: agents.JobContext):
         greeting_client = new_llm_client(
             model=SETTINGS.conversation.FAST_BRAIN_MODEL,
             origin="fast_brain_greeting",
-            reasoning_effort="low",
+            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
         )
         greeting_messages = build_opening_greeting_messages(
             system_prompt=system_prompt,

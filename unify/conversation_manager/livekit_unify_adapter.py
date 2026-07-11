@@ -38,7 +38,10 @@ class UnifyLLM(llm.LLM):
 
     Usage:
         from unify.settings import SETTINGS
-        llm_model = UnifyLLM(model=SETTINGS.conversation.FAST_BRAIN_MODEL)
+        llm_model = UnifyLLM(
+            model=SETTINGS.conversation.FAST_BRAIN_MODEL,
+            reasoning_effort=SETTINGS.conversation.FAST_BRAIN_REASONING_EFFORT,
+        )
         session = AgentSession(llm=llm_model, ...)
     """
 
