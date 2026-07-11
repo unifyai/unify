@@ -61,16 +61,29 @@ class _ConversationTaskExecutionDelegate:
     ) -> "SteerableToolHandle":
         _ = images
         task_guidelines = kwargs.pop("guidelines", None)
+        entrypoint_kwargs = kwargs.pop("entrypoint_kwargs", None)
+        entrypoint_repair_attempts = int(
+            kwargs.pop("entrypoint_repair_attempts", 0) or 0,
+        )
+        entrypoint_repair_context = kwargs.pop("entrypoint_repair_context", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "ConversationManagerTaskExecutionDelegate.start_task_run got "
+                f"unexpected keyword arguments: {unexpected}",
+            )
         return await self._actor.act(
             task_description,
             guidelines=task_guidelines,
             entrypoint=entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=entrypoint_repair_attempts,
+            entrypoint_repair_context=entrypoint_repair_context,
             _parent_chat_context=parent_chat_context,
             _clarification_up_q=clarification_up_q,
             _clarification_down_q=clarification_down_q,
             persist=False,
             _reuse_actor_slot=entrypoint is not None,
-            **kwargs,
         )
 
 

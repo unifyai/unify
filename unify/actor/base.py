@@ -275,16 +275,26 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         _clarification_up_q: Optional[asyncio.Queue[str]] = None,
         _clarification_down_q: Optional[asyncio.Queue[str]] = None,
         _call_id: Optional[str] = None,
+        _reuse_actor_slot: bool = False,
         entrypoint: Optional[int] = None,
         entrypoint_args: Optional[list[Any]] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
-        persist: bool = True,
+        entrypoint_repair_attempts: int = 0,
+        entrypoint_repair_context: Optional[dict[str, Any]] = None,
+        persist: Optional[bool] = None,
+        can_compose: Optional[bool] = None,
+        can_store: Optional[bool] = None,
         llm_profile: Optional[str] = None,
     ) -> SteerableToolHandle:
         """Perform work from a natural-language request and return a steerable handle.
 
         Args:
             request: Natural-language or structured request describing the work.
+            entrypoint_repair_attempts: How many times a failing symbolic
+                entrypoint may be repaired and retried before surfacing the
+                failure.
+            entrypoint_repair_context: Optional structured context passed into
+                the symbolic-entrypoint repair loop.
             llm_profile: Optional curated model profile for this actor run.
                 Leave unset for the default profile, which uses the actor's
                 configured model (normally ``minimax-v3@minimax``).
