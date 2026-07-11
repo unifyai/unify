@@ -1360,6 +1360,9 @@ class _SessionConfigBase(Event):
     # reasoning-effort level. Empty = platform default (UNIFY_MODEL).
     default_model: str = ""
     default_reasoning_effort: str = ""
+    # ConversationManager slow-brain LLM. Empty = SLOW_BRAIN_MODEL setting.
+    slow_brain_model: str = ""
+    slow_brain_reasoning_effort: str = ""
     assistant_whatsapp_number: str = ""
     assistant_discord_bot_id: str = ""
     assistant_slack_bot_user_id: str = ""

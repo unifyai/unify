@@ -2696,6 +2696,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # meaningful value (reset to the platform default model).
         self.default_model = payload.get("default_model", "")
         self.default_reasoning_effort = payload.get("default_reasoning_effort", "")
+        self.slow_brain_model = payload.get("slow_brain_model", "")
+        self.slow_brain_reasoning_effort = payload.get(
+            "slow_brain_reasoning_effort",
+            "",
+        )
         self.binding_id = payload.get("binding_id", "")
         self.desktop_mode = payload.get("desktop_mode", "none")
         self.managed_desktop_status = payload.get("managed_desktop_status")
@@ -2744,6 +2749,8 @@ class ConversationManager(metaclass=SingletonABCMeta):
             voice_id=self.voice_id,
             default_model=self.default_model,
             default_reasoning_effort=self.default_reasoning_effort,
+            slow_brain_model=self.slow_brain_model,
+            slow_brain_reasoning_effort=self.slow_brain_reasoning_effort,
             binding_id=self.binding_id,
             desktop_mode=self.desktop_mode,
             managed_desktop_status=self.managed_desktop_status,

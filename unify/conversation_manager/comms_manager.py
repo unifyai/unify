@@ -976,6 +976,11 @@ class CommsManager:
                         "default_reasoning_effort",
                         "",
                     ),
+                    "slow_brain_model": event.get("slow_brain_model", ""),
+                    "slow_brain_reasoning_effort": event.get(
+                        "slow_brain_reasoning_effort",
+                        "",
+                    ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
                     "user_desktops": event.get("user_desktops") or [],
                     "org_id": event.get("org_id"),
@@ -2680,6 +2685,11 @@ class CommsManager:
                     "default_model": event.get("default_model", ""),
                     "default_reasoning_effort": event.get(
                         "default_reasoning_effort",
+                        "",
+                    ),
+                    "slow_brain_model": event.get("slow_brain_model", ""),
+                    "slow_brain_reasoning_effort": event.get(
+                        "slow_brain_reasoning_effort",
                         "",
                     ),
                     "desktop_mode": event.get("desktop_mode", "ubuntu"),
