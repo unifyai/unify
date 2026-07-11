@@ -105,7 +105,7 @@ class Debouncer:
                     await asyncio.shield(self.running_task)
             except asyncio.CancelledError:
                 # CancelledError can come from two sources:
-                # 1. The running task was cancelled externally (e.g. speech urgency)
+                # 1. The running task was cancelled externally
                 # 2. This pending task was cancelled (debounced by a newer submit)
                 #
                 # In case 1, we should proceed to create a new running task.
