@@ -80,9 +80,9 @@ def new_llm_client(
     If model is not specified, uses the assistant's default model when one is
     set (which also pins its reasoning effort, overriding the call site), and
     otherwise UNIFY_MODEL from settings.
-    Defaults to max reasoning_effort and priority service_tier where applicable.
-    Callers that want a lighter setting (e.g. the ConversationManager slow brain
-    at "high", or fast-path helpers) pass ``reasoning_effort`` explicitly.
+    Defaults to high reasoning_effort and priority service_tier where applicable.
+    Callers that want a different setting (e.g. fast-path helpers at "low", or
+    max-effort actor profiles) pass ``reasoning_effort`` explicitly.
     Caching is controlled by the UNILLM_CACHE env var (owned by unillm).
     Returns an AsyncUnify client by default, or a synchronous Unify client when
     async_client=False.
@@ -92,7 +92,7 @@ def new_llm_client(
         model, default_effort = resolve_default_model()
 
     config = {
-        "reasoning_effort": "max",
+        "reasoning_effort": "high",
         "service_tier": "priority",
         "stateful": stateful,
         "origin": origin,
