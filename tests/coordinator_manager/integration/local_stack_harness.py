@@ -59,27 +59,65 @@ def _real_home() -> Path:
     return Path.home()
 
 
+def _unify_repo_root() -> Path:
+    # local_stack_harness.py → integration → coordinator_manager → tests → unify
+    return Path(__file__).resolve().parents[3]
+
+
 def _resolve_unify_root() -> Path:
     configured = os.getenv("UNIFY_STACK_ROOT", "").strip()
     if configured:
         return Path(configured).expanduser()
-    return _real_home() / "Unify"
+    # Prefer the parent of this unify checkout (siblings live next to it).
+    # Fall back to ~/Unify for the older nested worktree layout.
+    sibling_root = _unify_repo_root().parent
+    legacy_root = _real_home() / "Unify"
+    if (sibling_root / "unify-deploy").is_dir() or (
+        sibling_root / "orchestra"
+    ).is_dir():
+        return sibling_root
+    if legacy_root.is_dir():
+        return legacy_root
+    return sibling_root
 
 
 def resolve_sibling_repo(name: str) -> Path:
     """Return a sibling repo path, preferring ``*-teams-unify`` worktrees."""
 
-    env_key = f"{name.upper()}_REPO_PATH"
-    configured = os.getenv(env_key, "").strip()
-    if configured:
-        return Path(configured).expanduser()
+    env_keys = [f"{name.upper().replace('-', '_')}_REPO_PATH"]
+    # Deploy repo still has a legacy UNITY_* env alias in places.
+    if name in {"unify-deploy", "unity-deploy"}:
+        env_keys = [
+            "UNIFY_DEPLOY_REPO_PATH",
+            "UNITY_DEPLOY_REPO_PATH",
+            *env_keys,
+        ]
+    for env_key in env_keys:
+        configured = os.getenv(env_key, "").strip()
+        if configured:
+            return Path(configured).expanduser()
 
-    unify_root = _resolve_unify_root()
-    for candidate in (f"{name}-teams-unify", name):
-        path = unify_root / candidate
-        if path.is_dir():
-            return path
-    return unify_root / name
+    unify_repo = _unify_repo_root()
+    search_roots = (
+        _resolve_unify_root(),
+        unify_repo.parent,
+        unify_repo,  # CI nests checkouts under the unify workspace
+        _real_home() / "Unify",
+        _real_home(),
+    )
+    names = (name,)
+    if name == "unify-deploy":
+        names = ("unify-deploy", "unity-deploy")
+    elif name == "unity-deploy":
+        names = ("unity-deploy", "unify-deploy")
+
+    for root in search_roots:
+        for repo_name in names:
+            for candidate in (f"{repo_name}-teams-unify", repo_name):
+                path = root / candidate
+                if path.is_dir():
+                    return path
+    return _resolve_unify_root() / name
 
 
 def _resolve_stack_script() -> tuple[Path, Path]:

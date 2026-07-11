@@ -28,6 +28,8 @@ from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.status import Status
+from unify.task_scheduler.types.trigger import Trigger
+from unify.conversation_manager.cm_types import Medium
 from unify.common.task_execution_context import (
     current_post_run_review_context,
     current_task_execution_delegate,
@@ -711,6 +713,7 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
         name="Triggered offline report",
         description="Send the triggered offline delegated report.",
         status=Status.triggerable,
+        trigger=Trigger(medium=Medium.SMS_MESSAGE),
         entrypoint=777,
         offline=True,
     )["details"]["task_id"]
