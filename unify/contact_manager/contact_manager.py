@@ -1859,7 +1859,12 @@ class ContactManager(BaseContactManager):
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom contacts sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         with (
             self._temporary_contact_context("_ctx", contacts_context),

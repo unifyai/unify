@@ -2580,7 +2580,12 @@ class TaskScheduler(BaseTaskScheduler):
                 destination,
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom tasks sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         previous_context = self._ctx
         previous_store = self._store
