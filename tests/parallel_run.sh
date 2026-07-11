@@ -447,14 +447,14 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     else
       # Not running - need to start it
       if _full_stack_source_is_active && [[ "${UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA:-0}" != "1" ]]; then
-        _deploy_repo="${UNITY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unity-deploy}"
+        _deploy_repo="${UNIFY_DEPLOY_REPO_PATH:-${UNITY_DEPLOY_REPO_PATH:-$REPO_ROOT/../unify-deploy}}"
         _stack_script="$_deploy_repo/selfhost/stack.sh"
         echo "Error: Full local stack is active but Orchestra is not responding at http://127.0.0.1:8000/v0." >&2
         if [[ -x "$_stack_script" ]]; then
           echo "  Repair or restart the stack: bash \"$_stack_script\" status" >&2
           echo "  Full restart: bash \"$_stack_script\" up --durable" >&2
         else
-          echo "  Start or repair the stack with unity-deploy/selfhost/stack.sh." >&2
+          echo "  Start or repair the stack with unify-deploy/selfhost/stack.sh." >&2
         fi
         echo "  To run an isolated test Orchestra anyway: UNITY_ALLOW_ISOLATED_TEST_ORCHESTRA=1" >&2
         unset _deploy_repo _stack_script

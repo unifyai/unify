@@ -651,6 +651,10 @@ jobs:
       UNILLM_CACHE: "read-only"
       # Local orchestra path (cloned into workspace, not sibling directory)
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
+      # Coordinator local-stack tests need unify-deploy/selfhost/stack.sh when
+      # auto-managed; without a full self-host stack in CI they should skip.
+      UNIFY_DEPLOY_REPO_PATH: ${{ github.workspace }}/unify-deploy
+      LOCAL_STACK_NO_AUTO: "1"
       # API credentials
       # ORCHESTRA_URL: if repo variable set, use remote; otherwise local orchestra sets it
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
