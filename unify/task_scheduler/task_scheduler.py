@@ -2279,17 +2279,27 @@ class TaskScheduler(BaseTaskScheduler):
         self,
         task: Union[Dict[str, Any], Task],
     ) -> Union[Dict[str, Any], Task]:
-        """Drop activated_by unless the row is currently active."""
+        """Clear ``activated_by`` only on pre-activation rows.
+
+        Active and terminal statuses keep the activation reason so callers can
+        tell how a completed/failed/cancelled instance was started.
+        """
+        keep_statuses = {
+            Status.active,
+            Status.completed,
+            Status.cancelled,
+            Status.failed,
+        }
 
         if isinstance(task, Task):
-            if task.status != Status.active:
+            if task.status not in keep_statuses:
                 task.activated_by = None
             return task
         try:
-            if to_status(task.get("status")) != Status.active:  # type: ignore[arg-type]
+            if to_status(task.get("status")) not in keep_statuses:  # type: ignore[arg-type]
                 task.pop("activated_by", None)
         except Exception:
-            if str(task.get("status")) != str(Status.active):
+            if str(task.get("status")) not in {s.value for s in keep_statuses}:
                 task.pop("activated_by", None)
         return task
 
