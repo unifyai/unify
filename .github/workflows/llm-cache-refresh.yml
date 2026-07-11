@@ -223,6 +223,8 @@ jobs:
           cp .cache_write.ndjson cache-artifacts/current/.cache_write.ndjson
         fi
         python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
+        # actions/cache/save fails if the path is absent (e.g. no LLM writes yet).
+        touch .cache.ndjson
 
     - name: Store consolidated cache
       if: always() && inputs.cache_mode == 'write-misses'
