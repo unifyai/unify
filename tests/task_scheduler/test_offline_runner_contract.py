@@ -45,8 +45,6 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env()
         required = {
             "UNITY_OFFLINE_TASK_MODE",
-            "EVENTBUS_PUBLISHING_ENABLED",
-            "EVENTBUS_PUBSUB_STREAMING",
             "UNITY_OFFLINE_TASK_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
@@ -68,10 +66,11 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env()
         assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
 
-    def test_eventbus_disabled(self):
+    def test_eventbus_not_forced_off(self):
+        """Offline runners inherit EventBus settings from the full pod env."""
         env = self._make_env()
-        assert env["EVENTBUS_PUBLISHING_ENABLED"] == "false"
-        assert env["EVENTBUS_PUBSUB_STREAMING"] == "false"
+        assert "EVENTBUS_PUBLISHING_ENABLED" not in env
+        assert "EVENTBUS_PUBSUB_STREAMING" not in env
 
     def test_function_id_blank_without_entrypoint(self):
         env = self._make_env(entrypoint=None)
@@ -331,8 +330,6 @@ def _original_communication_env_builder(
 
     return {
         "UNITY_OFFLINE_TASK_MODE": "actor",
-        "EVENTBUS_PUBLISHING_ENABLED": "false",
-        "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
@@ -367,7 +364,9 @@ def _original_communication_env_builder(
         "ASSISTANT_WHATSAPP_NUMBER": str(
             assistant_data.get("assistant_whatsapp_number") or "",
         ),
-        "ASSISTANT_DESKTOP_MODE": "none",
+        "ASSISTANT_DESKTOP_MODE": str(
+            assistant_data.get("desktop_mode") or "ubuntu",
+        ),
         "ASSISTANT_USER_DESKTOPS": json.dumps(
             assistant_data.get("user_desktops") or [],
         ),
@@ -446,7 +445,9 @@ def _new_communication_env_builder(
             "ASSISTANT_WHATSAPP_NUMBER": str(
                 assistant_data.get("assistant_whatsapp_number") or "",
             ),
-            "ASSISTANT_DESKTOP_MODE": "none",
+            "ASSISTANT_DESKTOP_MODE": str(
+                assistant_data.get("desktop_mode") or "ubuntu",
+            ),
             "ASSISTANT_USER_DESKTOPS": json.dumps(
                 assistant_data.get("user_desktops") or [],
             ),

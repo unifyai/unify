@@ -502,6 +502,18 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             ),
         )
         return False
+
+    # Offline due tasks stay disconnected from the CM→act chat loop: spawn the
+    # offline_runner subprocess on this same pod (LocalOfflineDispatcher).
+    if str(getattr(event, "execution_mode", "") or "").lower() == "offline" or (
+        activation is not None and activation.execution_mode == "offline"
+    ):
+        return await _handle_offline_scheduled_due(
+            event,
+            cm,
+            activation=activation,
+        )
+
     assistant_id_for_run = assistant_id or activation.assistant_id or ""
     if assistant_id_for_run:
         remember_live_task_run_provenance(
@@ -552,6 +564,48 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         cm,
         content=_task_due_fast_brain_context(event, activation),
         source="task_due",
+    )
+    return False
+
+
+async def _handle_offline_scheduled_due(
+    event: TaskDue,
+    cm: "ConversationManager",
+    *,
+    activation: "TaskActivationSnapshot",
+) -> bool:
+    """Run an offline due task as a disconnected in-pod subprocess."""
+
+    from unify.task_scheduler.local_scheduler.offline_dispatcher import (
+        LocalOfflineDispatcher,
+    )
+
+    dispatcher = getattr(cm, "_offline_dispatcher", None)
+    if dispatcher is None:
+        dispatcher = LocalOfflineDispatcher()
+        cm._offline_dispatcher = dispatcher
+
+    try:
+        await dispatcher.dispatch(activation, source_type="scheduled")
+    except Exception as exc:
+        error_message = (
+            f"Offline scheduled task '{_task_due_label(event, activation)}' failed "
+            f"to dispatch: {type(exc).__name__}: {exc}"
+        )
+        cm._session_logger.error("task_due", error_message)
+        publish_system_error(
+            error_message,
+            error_type="offline_scheduled_task_dispatch_failed",
+        )
+        return False
+
+    cm._session_logger.info(
+        "task_due",
+        (
+            f"Dispatched offline due task {event.task_id} as disconnected "
+            f"in-pod runner (activation_revision="
+            f"{activation.activation_revision or '-'})"
+        ),
     )
     return False
 

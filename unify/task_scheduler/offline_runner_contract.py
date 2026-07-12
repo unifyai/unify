@@ -5,8 +5,8 @@ shape that an offline-execution attempt uses. It is imported by:
 
 - :mod:`unify.task_scheduler.local_scheduler.offline_dispatcher` — local
   in-process spawn (``asyncio.create_subprocess_exec``).
-- :mod:`communication.infra.task_activation` — hosted Kubernetes job
-  spawn (``create_unity_job``).
+- :mod:`communication.infra.task_activation` — hosted cold session wake /
+  warm in-pod spawn (env embedded in AssistantSession bootstrap or Pub/Sub).
 
 Keep this module dependency-free (no Orchestra, no Communication, no
 DB or HTTP imports) so it can be loaded from either side without
@@ -64,12 +64,10 @@ def build_offline_runner_env(
     included here — callers supply them differently in the two
     deployment topologies:
 
-    - K8s jobs (hosted) get a fresh environment, so the caller must
-      compose the assistant-identity vars on top of this dict before
-      passing them to ``create_unity_job``.
-    - Local subprocesses inherit ``os.environ`` from the parent
-      conversation-manager process, which already has those vars set,
-      so the caller just merges ``{**os.environ, **this_dict}``.
+    - Hosted cold wakes compose assistant-identity vars on top of this
+      dict and embed them in the AssistantSession bootstrap secret.
+    - Local / warm in-pod subprocesses inherit ``os.environ`` from the
+      parent process and merge ``{**os.environ, **this_dict}``.
 
     All scalar parameters are converted to strings; missing optional
     parameters resolve to empty-string env vars so downstream parsing
@@ -85,8 +83,6 @@ def build_offline_runner_env(
 
     env: dict[str, str] = {
         "UNITY_OFFLINE_TASK_MODE": "actor",
-        "EVENTBUS_PUBLISHING_ENABLED": "false",
-        "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_ID": str(task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(source_task_log_id),

@@ -54,26 +54,24 @@ on:
     branches:
     - '**'    # All branches
 
-# Cancel in-progress runs for the same source branch when a newer
-# commit lands. Without this:
-#   1. Every push during active development queues a fresh ~67-job
-#      matrix while previous matrices still occupy runner capacity,
-#      leading to "runner has received a shutdown signal" cancellations
-#      on older runs and starvation on newer ones.
-#   2. A staging push triggers BOTH a `push`-event run AND (when the
-#      perpetual staging→main PR exists, which it usually does)
-#      a `pull_request`-event run for the same commit. Without a
-#      shared concurrency key these double up, also doubling credit
-#      usage.
+# Debouncer semantics (same model as the slow-brain Debouncer): one running
+# matrix per branch, one pending slot that newer runs replace. Push and
+# workflow_dispatch never cancel a matrix already in flight — manual
+# validation runs complete even when staging keeps landing commits.
+#
+# Pull requests still use cancel-in-progress so outdated PR matrices are
+# dropped once a newer commit pushes to the branch.
+#
+# Without a shared group, a staging push triggers BOTH a `push`-event run
+# AND (when the perpetual staging→main PR exists) a `pull_request`-event
+# run for the same commit, doubling credit usage.
 #
 # Group key uses `github.head_ref` (PR source branch) when available,
 # falling back to `github.ref_name` (branch name on a direct push).
-# Both event types on the same source branch therefore share a group
-# and supersede each other — exactly one matrix runs per commit per
-# branch. Different branches still parallelise.
+# Different branches still parallelise.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Determine if tests should run based on trigger and commit/PR message
