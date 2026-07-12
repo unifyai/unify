@@ -15,9 +15,11 @@ on:
     - '.github/workflows/trigger-selfhost-images.yml'
   workflow_dispatch:
 
+# Debouncer semantics: let an in-flight publish dispatch finish; only the
+# pending slot is replaced when staging/main keeps moving.
 concurrency:
   group: trigger-selfhost-images-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
