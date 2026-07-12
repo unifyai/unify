@@ -2795,12 +2795,8 @@ class FunctionManager(BaseFunctionManager):
             compositional_ctx = getattr(self, "_compositional_ctx", None)
             if compositional_ctx is not None and names_to_delete:
                 try:
-                    dep_filter = " or ".join(
-                        f"{name!r} in depends_on" for name in sorted(names_to_delete)
-                    )
                     compositional_logs = unisdk.get_logs(
                         context=compositional_ctx,
-                        filter=dep_filter,
                         exclude_fields=list_private_fields(compositional_ctx),
                     )
                     self._append_missing_dependency_reasons(
@@ -5218,20 +5214,14 @@ class FunctionManager(BaseFunctionManager):
                             to_process.add(dep_name)
         else:
             # Keep dependents, but record link debt on rows that still
-            # reference the deleted name(s). Prefer a filtered fetch over a
-            # full scan when possible.
-            dep_filter = " or ".join(
-                f"{name!r} in depends_on" for name in sorted(target_names)
-            )
-            dependent_logs = unisdk.get_logs(
-                context=self._compositional_ctx,
-                filter=dep_filter,
-                exclude_fields=exclude_fields,
-            )
+            # reference the deleted name(s). Need the compositional snapshot
+            # (list-membership filters are not reliable enough here).
+            if all_logs is None:
+                all_logs = _load_compositional_logs()
             self._append_missing_dependency_reasons(
                 logs=[
                     log
-                    for log in dependent_logs
+                    for log in all_logs
                     if log.entries["function_id"] not in ids_to_delete
                 ],
                 missing_names=set(target_names),
