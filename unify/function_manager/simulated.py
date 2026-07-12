@@ -401,6 +401,21 @@ class SimulatedFunctionManager(BaseFunctionManager):
             maybe_tool_log_completed(label, cid, "delete_function", result, t0)
         return result
 
+    @functools.wraps(BaseFunctionManager.reconcile_dependencies, updated=())
+    def reconcile_dependencies(
+        self,
+        *,
+        function_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "outcome": "dependencies reconciled",
+            "details": {
+                "checked": len(function_ids or []),
+                "stale_function_ids": [],
+                "stale_count": 0,
+            },
+        }
+
     @functools.wraps(BaseFunctionManager.filter_functions, updated=())
     def filter_functions(
         self,
@@ -520,7 +535,7 @@ class SimulatedFunctionManager(BaseFunctionManager):
     def search_functions(
         self,
         *,
-        query: str,
+        query: str = "",
         n: int = 5,
         include_implementations: bool = True,
         _return_callable: bool = False,

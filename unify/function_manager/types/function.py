@@ -1,7 +1,8 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import List, Optional, Dict, Any, Literal
 
 from unify.common.authorship import AuthoredRow
+from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 
 class Function(AuthoredRow):
@@ -45,13 +46,17 @@ class Function(AuthoredRow):
         ),
     )
     depends_on: List[str] = Field(
-        [],
+        default_factory=list,
         description=(
             "Functions this function depends on, auto-detected from the AST "
             "at storage time. Bare names (e.g. 'helper') are compositional "
             "functions. Dotted names (e.g. 'primitives.contacts.ask') are "
             "environment namespaces; root segments resolve to fresh instances."
         ),
+    )
+    stale_reasons: List[StaleReason] = Field(
+        default_factory=list,
+        description="Structured records for declared dependencies that no longer resolve.",
     )
     embedding_text: str = Field(
         ...,
@@ -135,3 +140,8 @@ class Function(AuthoredRow):
             "Present for functions defined in the custom/ folder."
         ),
     )
+
+    @field_validator("stale_reasons", mode="before")
+    @classmethod
+    def _validate_stale_reasons(cls, v):
+        return coerce_stale_reasons(v)
