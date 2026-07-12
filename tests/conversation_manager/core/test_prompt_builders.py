@@ -745,17 +745,40 @@ class TestExternalAppIntegration:
 
 
 class TestExternalResourcesActBlock:
-    """External-resource work must go through ``act``."""
+    """External-resource work must go through ``act`` (not conversational mail)."""
 
     def test_external_resources_block_present(self):
         prompt = _build()
         assert "External resources (use ``act``)" in prompt
         assert "Ground truth rule" in prompt
-        assert "I do not answer from memory" in prompt
+        assert "I do not answer" in prompt and "from memory" in prompt
+        assert "ordinary conversational replies" in prompt
+        assert "programmatic mailbox/workspace automation" in prompt
+        # Conversational inbox monitoring must not be blanket-forced into act.
+        assert "API, inbox," not in prompt
 
     def test_external_resources_block_absent_in_demo_mode(self):
         prompt = _build(demo_mode=True)
         assert "External resources (use ``act``)" not in prompt
+
+
+class TestConversationalVsProgrammaticComms:
+    """Standing reply instructions stay on CM tools; mailbox automation uses act."""
+
+    def test_split_present_for_assistant(self):
+        prompt = _build(is_coordinator=False)
+        assert "Conversational messaging vs programmatic workspace" in prompt
+        assert 'act("monitor for email and reply…")' in prompt
+        assert "every Monday auto-label" in prompt
+        assert "are **mine** (this assistant's)" in prompt
+
+    def test_workspace_ownership_for_coordinator(self):
+        prompt = _build(is_coordinator=True)
+        assert "Connected Google/Microsoft Workspace is **my boss's**" in prompt
+
+    def test_split_absent_in_demo_mode(self):
+        prompt = _build(demo_mode=True)
+        assert "Conversational messaging vs programmatic workspace" not in prompt
 
 
 # ---------------------------------------------------------------------------
