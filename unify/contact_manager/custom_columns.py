@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import unisdk
 
-from ..knowledge_manager.types import ColumnType
+from ..common.column_types import ColumnType
 
 
 def create_custom_column(
