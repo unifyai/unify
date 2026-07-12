@@ -287,7 +287,10 @@ async def make_code_act_actor(
     impl: Literal["real", "simulated"],
     include_function_manager_tools: bool = False,
     function_manager: Optional["FunctionManager"] = None,
+    guidance_manager: Any = None,
+    knowledge_manager: Any = None,
     exposed_managers: Optional[set[str]] = None,
+    tool_policy: Any = ...,
 ) -> AsyncIterator[tuple[CodeActActor, Primitives, list[str]]]:
     """
     Create a CodeActActor wired to a provided Primitives with both
@@ -300,6 +303,11 @@ async def make_code_act_actor(
     NOTE: IMPL selection ("real" vs "simulated") is controlled by the autouse fixtures
     in `tests/actor/state_managers/conftest.py`, keyed off test path.
     This argument is kept as an assertion/documentation aid.
+
+    tool_policy:
+        Forwarded to ``CodeActActor``. Pass ``None`` to disable discovery-first
+        gating (useful for routing evals that should see write tools immediately).
+        Omit to keep the actor default (discovery-first).
     """
     if exposed_managers:
         from unify.function_manager.primitives import PrimitiveScope
@@ -312,7 +320,15 @@ async def make_code_act_actor(
     env = StateManagerEnvironment(primitives)
 
     fm = function_manager if function_manager is not None else FunctionManager()
-    actor = CodeActActor(environments=[env], function_manager=fm)
+    actor_kwargs: dict[str, Any] = {
+        "environments": [env],
+        "function_manager": fm,
+        "guidance_manager": guidance_manager,
+        "knowledge_manager": knowledge_manager,
+    }
+    if tool_policy is not ...:
+        actor_kwargs["tool_policy"] = tool_policy
+    actor = CodeActActor(**actor_kwargs)
 
     if not include_function_manager_tools:
         act_tools = actor.get_tools("act")
@@ -320,7 +336,10 @@ async def make_code_act_actor(
             k: v
             for k, v in act_tools.items()
             if not k.startswith("FunctionManager_")
-            and not k.startswith("GuidanceManager_")
+            # Keep Guidance/Knowledge JSON tools when those managers are wired;
+            # they are not primitives and are the intended surfaces.
+            and (not k.startswith("GuidanceManager_") or guidance_manager is not None)
+            and (not k.startswith("KnowledgeManager_") or knowledge_manager is not None)
         }
         actor.add_tools("act", keep)
 

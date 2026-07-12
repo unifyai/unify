@@ -399,6 +399,7 @@ class SingleFunctionActor(BaseActor):
         *,
         environments: Optional[list] = None,
         guidance_manager=None,
+        knowledge_manager=None,
     ):
         """
         Initialize the SingleFunctionActor.
@@ -417,11 +418,13 @@ class SingleFunctionActor(BaseActor):
                 compatibility with CodeActActor / BaseActor but only used to
                 extract computer primitives if *computer_primitives* is None).
             guidance_manager: Accepted for compatibility with BaseActor; unused.
+            knowledge_manager: Accepted for compatibility with BaseActor; unused.
         """
         super().__init__(
             environments=environments,
             function_manager=function_manager,
             guidance_manager=guidance_manager,
+            knowledge_manager=knowledge_manager,
         )
 
         # If an explicit ComputerPrimitives was passed, prefer it over whatever
