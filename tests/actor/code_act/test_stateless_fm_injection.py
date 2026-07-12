@@ -78,6 +78,9 @@ class _InjectingFunctionManager:
     def delete_function(self, **kwargs) -> dict:
         return {}
 
+    def reconcile_dependencies(self, **kwargs) -> dict:
+        return {}
+
     def _get_function_data_by_name(self, *, name: str):
         return None
 

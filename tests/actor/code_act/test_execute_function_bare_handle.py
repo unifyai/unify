@@ -135,6 +135,9 @@ class _FakeFunctionManager:
     async def delete_function(self, **kwargs):
         return {"deleted": True}
 
+    def reconcile_dependencies(self, **kwargs):
+        return {}
+
 
 @pytest.mark.asyncio
 async def test_execute_function_does_not_expose_venv_id():

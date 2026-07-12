@@ -75,7 +75,7 @@ async def actor_with_primitives(
     from unify.function_manager.primitives import PrimitiveScope
 
     scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "tasks", "transcripts", "knowledge"}),
+        scoped_managers=frozenset({"contacts", "tasks", "transcripts"}),
     )
     primitives = Primitives(primitive_scope=scope)
     env = StateManagerEnvironment(primitives)

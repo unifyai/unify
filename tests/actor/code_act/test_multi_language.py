@@ -29,7 +29,7 @@ async def test_repo_navigation_and_analysis_via_shell_then_python():
     """
     RepoNavSummary.model_rebuild()
 
-    actor = CodeActActor(timeout=60)
+    actor = CodeActActor(timeout=60, tool_policy=None)
 
     handle = await actor.act(
         "Do the following steps using ONLY JSON tool calls (no prose until the final answer):\n"
@@ -67,7 +67,7 @@ async def test_validation_error_self_correction():
     """
     ValidationRecoveryResult.model_rebuild()
 
-    actor = CodeActActor(timeout=60)
+    actor = CodeActActor(timeout=60, tool_policy=None)
 
     handle = await actor.act(
         "You MUST do these steps in order:\n"
