@@ -320,7 +320,7 @@ jobs:
 
     - name: Upload cache diff
       if: always() && inputs.cache_mode == 'write-misses'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: cache-diff-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: .cache_write.ndjson
@@ -335,7 +335,7 @@ jobs:
 
     - name: Upload test logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: protected-llm-logs-${{ github.run_id }}-${{ steps.normalize-path.outputs.test_path_normalized }}
         path: logs/
@@ -481,7 +481,7 @@ jobs:
 
     - name: Upload .cache.ndjson for local sync
       if: ${{ inputs.parallel_run_args != 'SKIP_UPLOAD' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: cache-ndjson-upstream
         path: .cache.ndjson
