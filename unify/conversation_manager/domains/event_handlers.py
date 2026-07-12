@@ -3272,6 +3272,31 @@ async def _(
     await cm.request_llm_run(delay=0)
 
 
+OPEN_SLOW_BRAIN_TURN_NOTIFICATION = (
+    "Open slow-brain turn — your previous turn finished without calling "
+    "`wait`. You have another thinking turn now. Continue any outstanding "
+    "work (reply to the user, send onboarding deliverables, follow up on "
+    "in-flight actions). Recurring turns keep opening until you explicitly "
+    "call `wait()` or `wait(delay=…)`. Do not call `wait` while the user is "
+    "still waiting on you in chat."
+)
+
+
+@EventHandler.register((OpenSlowBrainTurn,))
+async def _(
+    event: OpenSlowBrainTurn,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    cm.notifications_bar.push_notif(
+        "System",
+        OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
+        event.timestamp,
+    )
+    await cm.request_llm_run(delay=0)
+
+
 # Notification text shown to the slow brain when initialization completes.
 #
 # Wording is deliberately strong about preferring `wait` over a follow-up

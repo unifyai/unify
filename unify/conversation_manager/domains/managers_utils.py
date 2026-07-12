@@ -2480,6 +2480,31 @@ async def init_conv_manager(
 
             os.environ["UNITY_CM_INITIALIZED"] = "1"
 
+            # Tell Communication this session now has ConversationManager attached
+            # so offline-dispatch can Pub/Sub warm tasks onto this pod.
+            try:
+                assistant_id = SESSION_DETAILS.assistant.agent_id
+                unify_key = (os.environ.get("UNIFY_KEY") or "").strip()
+                comms_url = (
+                    os.environ.get("UNITY_COMMS_URL")
+                    or os.environ.get("COMMS_URL")
+                    or ""
+                ).rstrip("/")
+                if assistant_id and unify_key and comms_url:
+                    import requests as _requests
+
+                    _requests.post(
+                        f"{comms_url}/infra/session/{assistant_id}/cm-attached",
+                        data={"attached": "true"},
+                        headers={"Authorization": f"Bearer {unify_key}"},
+                        timeout=10,
+                    )
+            except Exception:
+                LOGGER.warning(
+                    "Failed to record cmAttached=true for assistant session",
+                    exc_info=True,
+                )
+
             # Best-effort: learn whether the boss's WhatsApp free-form window is
             # already open so the brain's send_whatsapp docstring can warn up
             # front when a first send would only deliver a template placeholder.

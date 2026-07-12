@@ -41,9 +41,11 @@ permissions:
 
 # Share a group across the push and pull_request events for the same source
 # branch so a [run-flows] push and its staging -> main PR don't double-run.
+# Debouncer semantics on push/dispatch: running smoke completes; only the
+# pending slot is replaced. PRs cancel in-progress for fast feedback.
 concurrency:
   group: flow-smoke-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   flows:
