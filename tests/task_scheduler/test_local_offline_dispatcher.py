@@ -129,13 +129,13 @@ class TestBuildLocalOfflineRunnerEnv:
         )
         assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
-    def test_eventbus_disabled_to_avoid_clobbering_live_session(self):
+    def test_eventbus_not_forced_off(self):
         env = od._build_local_offline_runner_env(
             _make_snapshot(),
             source_type="scheduled",
         )
-        assert env["EVENTBUS_PUBLISHING_ENABLED"] == "false"
-        assert env["EVENTBUS_PUBSUB_STREAMING"] == "false"
+        assert "EVENTBUS_PUBLISHING_ENABLED" not in env
+        assert "EVENTBUS_PUBSUB_STREAMING" not in env
 
     def test_trigger_medium_propagates_for_triggered_dispatch(self):
         snap = _make_snapshot(trigger_medium="email", execution_mode="offline")
