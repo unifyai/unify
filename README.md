@@ -234,19 +234,17 @@ When the Actor calls `primitives.contacts.ask(...)`, the `ContactManager` return
 Most agents emit one JSON tool call at a time and let the LLM stitch results across turns. Unify's Actor writes a single sandboxed Python program per turn over typed `primitives.*`:
 
 ```python
-deps = await primitives.knowledge.ask(
-    "Which Python deps am I tracking for security updates?"
+contacts = await primitives.contacts.ask(
+    "Which vendors am I tracking for security updates?"
 )
-for dep in deps:
+for contact in contacts:
     latest = await primitives.web.ask(
-        f"What's the latest released version of {dep}?"
+        f"What's the latest security advisory for {contact}?"
     )
-    await primitives.knowledge.update(
-        f"Record that {dep}'s latest known release is {latest}."
-    )
+    print(latest)
 ```
 
-A memory lookup → external check → memory write becomes one coherent plan with real variables, loops, and control flow — rather than three separate tool-selection turns round-tripping through tool messages.
+A contacts lookup → external check becomes one coherent plan with real variables, loops, and control flow — rather than separate tool-selection turns round-tripping through tool messages. Durable domain claims are stored via top-level `KnowledgeManager_*` JSON tools (typed claim ledger), not `primitives.knowledge.*`.
 
 ### Dual-brain voice and video
 
@@ -309,7 +307,7 @@ CodeActActor (generates Python plans, calls primitives.* APIs)
 State Managers (each runs its own async LLM tool loop)
     │
     ├── ContactManager        — people and relationships
-    ├── KnowledgeManager      — domain facts, structured knowledge
+    ├── KnowledgeManager      — typed claim ledger (facts, policies, decisions, …)
     ├── TaskScheduler         — durable tasks, schedules, triggers, execution with live handles
     ├── TranscriptManager     — conversation history and search
     ├── GuidanceManager       — procedures, SOPs, how-to knowledge
@@ -344,7 +342,7 @@ The colour palette is locked across all three diagrams and means exactly one thi
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-dark.png">
-    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-light.png" alt="Unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, knowledge, tasks, transcripts, files, images, web, secrets, functions, guidance); primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
+    <img src="https://raw.githubusercontent.com/unifyai/.github/main/public_images/unity-architecture-light.png" alt="Unify architecture: user (white) and scheduled tasks + triggers (peach, natural-language Tasks, fired in-process) → mediums (chat, voice, phone, video, screen-share, sms, email) → a dual-brain conversation tier with the real-time fast brain (voice + video, sub-second) on the left and the ConversationManager / slow brain (a pink-marked persistent reasoning loop that is always present) on the right, coordinating over IPC (SPEAK / NOTIFY · events / context); the slow brain dispatches act(...) into CodeActActor (green tool-calling loop), a separate background-reasoner tier that writes Python plans over typed primitives (contacts, tasks, transcripts, files, images, web, secrets, functions) plus KnowledgeManager/GuidanceManager JSON tools; primitives read and write a back office of typed state managers (ContactManager, KnowledgeManager, TaskScheduler, TranscriptManager, FileManager, ImageManager, WebSearcher, SecretManager, FunctionManager, GuidanceManager) — each manager runs its own tool loop. Drawn in the same shared visual grammar as the OpenClaw and Hermes diagrams below. Architectural deltas vs. the other two: the pink persistent reasoning loop, the dual-brain split at the conversation tier, the separate Actor tier below the slow brain, the typed back office of named managers instead of opaque file storage, and a natural-language autonomous wake source fired in-process by the same single daemon (no Cloud Tasks / K8s required for the local install)." width="780">
   </picture>
 </p>
 
