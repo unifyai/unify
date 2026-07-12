@@ -2115,7 +2115,7 @@ class TaskScheduler(BaseTaskScheduler):
             row_filter=None,
             unique_id_field="task_id",
         )
-        return [Task(**lg) for lg in filled]
+        return [Task(**self._sanitize_activation(dict(lg))) for lg in filled]
 
     def _filter_tasks(
         self,
@@ -2279,10 +2279,13 @@ class TaskScheduler(BaseTaskScheduler):
         self,
         task: Union[Dict[str, Any], Task],
     ) -> Union[Dict[str, Any], Task]:
-        """Clear ``activated_by`` only on pre-activation rows.
+        """Prepare a task row for ``Task`` construction after an Orchestra read.
 
-        Active and terminal statuses keep the activation reason so callers can
-        tell how a completed/failed/cancelled instance was started.
+        Clears ``activated_by`` on pre-activation rows (active/terminal statuses
+        keep the activation reason). Also drops keys whose value is ``None``:
+        Orchestra ``get_logs`` / ``include_fields`` returns explicit null for
+        unset columns, and Pydantic v2 does not apply ``Field(default=…)`` when
+        the key is present with ``None`` (e.g. ``offline`` / ``enabled``).
         """
         keep_statuses = {
             Status.active,
@@ -2301,7 +2304,7 @@ class TaskScheduler(BaseTaskScheduler):
         except Exception:
             if str(task.get("status")) not in {s.value for s in keep_statuses}:
                 task.pop("activated_by", None)
-        return task
+        return {key: value for key, value in task.items() if value is not None}
 
     def _meta_context_for_destination(self, destination: str | None) -> str:
         """Resolve a public destination into one concrete Tasks/Meta context."""
