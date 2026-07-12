@@ -1,216 +1,398 @@
-"""
-*Public* contract that every concrete **knowledge-manager** must satisfy.
-
-Exposes exactly three user‑facing operations:
-
-• **ask**      — answer questions about stored knowledge (read‑only)
-• **update**   — create or change knowledge expressed in plain English
-• **refactor** — restructure schemas so data are clear, normalised and efficient
-
-All operations return a :class:`SteerableToolHandle` so a caller (or higher‑level
-agent) can pause, resume, interject or stop the LLM reasoning loop.
-"""
-
 from __future__ import annotations
 
-import asyncio
 from abc import abstractmethod
-from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
-from pydantic import BaseModel
+from datetime import datetime
+from typing import Dict, List, Optional
 
-from ..common.async_tool_loop import SteerableToolHandle
 from ..manager_registry import SingletonABCMeta
 from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.state_managers import BaseStateManager
+from ..common.tool_outcome import ToolOutcome
+from .types.knowledge import Knowledge, KnowledgeKind
+from .types.source_ref import SourceRef
 
 
 class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
     """
-    *Public* contract that every concrete **knowledge-manager** must satisfy.
+    Public contract that every concrete knowledge-manager must satisfy.
 
-    A knowledge‑manager exposes:
+    Stores durable domain claims in a single typed Knowledge ledger: facts,
+    policies, definitions, decisions, constraints, insights, and preferences.
+    Each claim carries provenance (``source_refs``), optional validity windows,
+    confidence, topic tags, structured ``stale_reasons`` for broken source
+    links, and lifecycle status (active / superseded / invalidated).
 
-    • `ask`      — answer questions about knowledge that already exists
-      (read‑only)
-    • `update`   — create, amend, delete or merge knowledge via
-      natural‑language instructions
-    • `refactor` — restructure the schema across knowledge tables (and related
-      tables where applicable) to improve clarity, normalisation and efficiency
+    Exposes CRUD and lifecycle operations (search, filter, get_knowledge,
+    add_knowledge, update_knowledge, delete_knowledge, invalidate_knowledge,
+    supersede_knowledge, reconcile_sources, clear) as first-class JSON tool
+    calls on the CodeActActor.
 
-    Implementations may talk to a real vector store, an HTTP API, Unity logs,
-    an in‑memory mock or a simulated LLM – but they **all** expose exactly the
-    public methods documented below.
+    Prefer reading and writing claims here when the durable unit of knowledge
+    is a typed statement with provenance — not a person attribute, procedure,
+    executable function, raw file corpus, or credential.
     """
 
     _as_caller_description: str = (
-        "the KnowledgeManager, managing domain knowledge on behalf of the end user"
+        "the KnowledgeManager, managing typed domain claims on behalf of the end user"
     )
 
     # ------------------------------------------------------------------ #
     # Public interface                                                   #
     # ------------------------------------------------------------------ #
+
     @abstractmethod
-    async def update(
+    def search(
         self,
-        text: str,
         *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
-        _clarification_up_q: Optional[asyncio.Queue[str]] = None,
-        _clarification_down_q: Optional[asyncio.Queue[str]] = None,
-    ) -> SteerableToolHandle:  # noqa: D401 – full docstring below
-        """
-        Apply a **mutation** request – create, edit, delete or merge knowledge –
-        expressed in plain English and receive a steerable LLM handle.
+        references: Optional[Dict[str, str]] = None,
+        k: int = 10,
+    ) -> List["Knowledge"]:
+        """Search for knowledge claims by semantic similarity to reference content.
 
-        Do *not* request *how* the change should be implemented; describe the
-        desired end‑state in natural language and allow the `update` method to
-        determine the best method to apply it (e.g. table/column operations and
-        data writes).
+        Knowledge claims are typed ledger entries (facts, policies, definitions,
+        decisions, constraints, insights, preferences) with provenance and
+        lifecycle status.
 
-        Ask vs Clarification
-        --------------------
-        • `ask` is ONLY for inspecting/locating knowledge that ALREADY EXISTS
-          (e.g., to verify stored facts or locate relevant records).
-        • Do NOT use `ask` to ask the human for details about NEW knowledge
-          being created/changed in this update request; call
-          ``request_clarification`` when a clarification channel is available.
-        • When no clarification tool exists, proceed with sensible defaults or
-          best‑guess values and state those assumptions in the final reply.
+        By default only ``status == 'active'`` claims are returned. Pass an
+        explicit filter via ``filter`` (on the filter method) or include
+        ``status`` in a follow-up filter when you need superseded or invalidated
+        claims. Long claims are returned with a truncated content
+        preview; fetch the complete text with ``get_knowledge``.
 
         Parameters
         ----------
-        text : str
-            The user's request (e.g. *"Add that Tesla's battery warranty is
-            eight years."*).
-        _return_reasoning_steps : bool, default ``False``
-            When *True*, :pyfunc:`SteerableToolHandle.result` returns a tuple
-            ``(answer, messages)`` where *messages* is the invisible
-            chain‑of‑thought exchanged with the LLM.
-        _parent_chat_context : list[dict] | None
-            **Read‑only** conversation context to prepend to the tool loop.
-        _clarification_up_q / _clarification_down_q : asyncio.Queue[str] | None
-            Optional duplex channels enabling interactive follow‑ups. If
-            supplied, the LLM may push a question onto *_clarification_up_q* and
-            must read the human's answer from *_clarification_down_q*.
+        references : Dict[str, str] | None, default None
+            Mapping of source expressions to reference text for semantic
+            search. Keys are column names or descriptive labels; values are
+            the reference text to compare against.
+        k : int, default 10
+            Maximum number of results to return. Must be <= 1000.
 
         Returns
         -------
-        SteerableToolHandle
-            Handle whose :pyfunc:`result` yields confirmation of the mutation
-            and (optionally) reasoning steps.
-        """
-
-    @abstractmethod
-    async def ask(
-        self,
-        text: str,
-        *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
-        _clarification_up_q: Optional[asyncio.Queue[str]] = None,
-        _clarification_down_q: Optional[asyncio.Queue[str]] = None,
-    ) -> SteerableToolHandle:
-        """
-        Interrogate the **existing knowledge** (read‑only) and obtain a live
-        :class:`SteerableToolHandle`.
-
-        Purpose
-        -------
-        Use this method to locate and inspect knowledge that already exists in
-        the store: retrieve or compare facts, perform semantic searches,
-        aggregate/summarise existing entries, or identify structures relevant to
-        a subsequent update. This call must never create, modify or delete
-        knowledge or schema.
-
-        Clarifications
-        --------------
-        Do not use this method to ask the human follow‑up questions. If the
-        caller needs clarification about what to retrieve (e.g., which topic,
-        which time window, which source), route the question via a dedicated
-        ``request_clarification`` tool when available. If no clarification
-        channel exists, proceed with sensible defaults/best‑guess values and
-        state those assumptions in the outer loop's final reply.
-
-        Do *not* request *how* the question should be answered; just ask the
-        question in natural language and allow this `ask` method to determine
-        the best method to answer it.
+        List[Knowledge]
+            Up to *k* rows ranked by similarity, backfilled to *k* when
+            similarity yields fewer rows.
 
         Examples
         --------
-        • Good: "What warranty information do we hold about Tesla vehicles?"
-          → retrieve relevant facts and cite their locations when possible.
-        • Bad:  "What should the category name be for the new policy I'm about
-          to add?" → this is a human clarification; use
-          ``request_clarification`` instead.
+        Good::
 
-        Parameters
-        ----------
-        text : str
-            The user's plain‑English question (e.g. *"List return policies for
-            ACME by effective date."*).
-        _return_reasoning_steps : bool, default ``False``
-            When ``True`` the handle's :pyfunc:`~SteerableToolHandle.result`
-            yields ``(answer, messages)`` – the first element is the
-            assistant's reply, the second the hidden chain‑of‑thought (useful
-            for debugging).
-        _parent_chat_context : list[dict] | None
-            Optional read‑only chat history that will be provided to all nested
-            tool calls.
-        _clarification_up_q / _clarification_down_q : asyncio.Queue[str] | None
-            Duplex channels enabling interactive clarification questions. If
-            supplied the LLM may push a follow‑up question onto
-            *_clarification_up_q* and must read the human's answer from
-            *_clarification_down_q*.
+            KnowledgeManager_search(references={"content": "battery warranty"})
 
-        Returns
-        -------
-        SteerableToolHandle
-            Handle that eventually yields the answer text (and optionally the
-            hidden reasoning steps).
+        Anti-pattern: do not use search to invent new facts — call
+        ``add_knowledge`` after confirming the claim is not already stored.
         """
+        raise NotImplementedError
 
     @abstractmethod
-    async def refactor(
+    def filter(
         self,
-        text: str,
         *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: Optional[List[Dict[str, Any]]] = None,
-        _clarification_up_q: Optional[asyncio.Queue[str]] = None,
-        _clarification_down_q: Optional[asyncio.Queue[str]] = None,
-    ) -> SteerableToolHandle:
-        """
-        **Restructure the schema** of all knowledge tables (and any directly
-        related tables within the same store) so that data are de‑duplicated,
-        normalised and stored as clearly and efficiently as possible.
+        filter: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> List["Knowledge"]:
+        """Filter knowledge claims using a Python filter expression.
 
-        Do *not* request *how* to perform the refactor; state the high‑level
-        intent in natural language and allow the `refactor` method to determine
-        the best method and specific operations (e.g., column renames, moves,
-        deletions, key introduction).
+        By default only ``status == 'active'`` claims are returned unless the
+        caller filter already mentions ``status``. Long claims are returned
+        with a truncated content preview; use ``get_knowledge`` for the full
+        body.
 
         Parameters
         ----------
-        text : str
-            A high‑level English instruction, e.g. *"Remove duplicated company
-            names and introduce surrogate primary keys where appropriate."* –
-            the low‑level operations are carried out by the LLM via the exposed
-            table/column‑manipulation tools.
-        _return_reasoning_steps, _parent_chat_context,
-        _clarification_up_q, _clarification_down_q
-            Behaviour identical to :py:meth:`update`.
+        filter : str | None, default None
+            A Python boolean expression evaluated with column names in scope
+            (e.g. ``"kind == 'policy' and 'warranty' in topics"``). When
+            ``None``, returns active claims subject to pagination.
+        offset : int, default 0
+            Zero-based index of the first result to include.
+        limit : int, default 100
+            Maximum number of records to return. Must be <= 1000.
 
         Returns
         -------
-        SteerableToolHandle
-            Handle whose :pyfunc:`result` yields a natural‑language summary of
-            every structural change (and, optionally, the hidden chain‑of‑
-            thought when *_return_reasoning_steps* is *True*).
+        List[Knowledge]
+            Matching knowledge records as Knowledge models.
+
+        Examples
+        --------
+        Good::
+
+            KnowledgeManager_filter(filter="kind == 'decision'")
+            KnowledgeManager_filter(filter="status == 'superseded'")
+
+        Anti-pattern: do not use filter to invent missing claims — if nothing
+        matches, leave the result empty and add a claim only when the user
+        (or a trusted source) actually provided one.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+    ) -> "Knowledge":
+        """Fetch one knowledge claim by id with its complete, untruncated content.
+
+        ``search`` and ``filter`` return truncated content previews for long
+        claims; call this before relying on the full text.
+
+        Parameters
+        ----------
+        knowledge_id : int
+            Identifier of the claim to fetch.
+
+        Returns
+        -------
+        Knowledge
+            The complete knowledge claim.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def add_knowledge(
+        self,
+        *,
+        title: str,
+        content: str,
+        kind: KnowledgeKind | str = KnowledgeKind.fact,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Create a new typed knowledge claim in the ledger.
+
+        Use for durable domain statements the assistant should remember:
+        facts, policies, definitions, decisions, constraints, insights, or
+        preferences. Always attach ``source_refs`` when provenance is known.
+
+        Parameters
+        ----------
+        title : str
+            Short human-readable title.
+        content : str
+            Full claim body.
+        kind : KnowledgeKind | str, default fact
+            Claim kind.
+        topics : list[str] | None
+            Optional topic tags.
+        source_refs : list[SourceRef | dict] | None
+            Provenance pointers (user_statement, transcript, file, data, web,
+            actor_trajectory, derived_from_knowledge, manual).
+        confidence : float | None
+            Optional confidence in [0, 1].
+        observed_at / valid_from / valid_until : datetime | None
+            Optional observation and validity window.
+        destination : str | None, default None
+            Where this claim lives. Pass ``"personal"`` (the default) for
+            private working knowledge. Pass ``"team:<id>"`` for team-shared
+            claims. See the *Accessible shared teams* block in your system
+            prompt for available teams.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome string and details containing the newly assigned
+            ``knowledge_id``.
+
+        Examples
+        --------
+        Good::
+
+            KnowledgeManager_add_knowledge(
+                title="Battery warranty",
+                content="Tesla battery warranty is eight years.",
+                kind="fact",
+                topics=["warranty", "tesla"],
+                source_refs=[{"kind": "user_statement", "note": "said in chat"}],
+            )
+
+        Anti-pattern: do not store person attributes, step-by-step procedures,
+        executable code, raw file corpora, or credentials here. Do not invent
+        provenance; omit ``source_refs`` rather than fabricating them.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        kind: Optional[KnowledgeKind | str] = None,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Update fields of an existing knowledge claim by id.
+
+        Use for in-place corrections that do not replace the claim's identity.
+        When a new claim should replace an old one (contradiction, revision
+        with new provenance), prefer ``supersede_knowledge`` so lineage is
+        preserved. Built-in claims (``is_builtin=True``) are read-only.
+
+        Parameters
+        ----------
+        knowledge_id : int
+            Identifier of the row to update.
+        title / content / kind / topics / source_refs / confidence /
+        observed_at / valid_from / valid_until
+            Fields to replace; omit to keep existing values.
+        destination : str | None, default None
+            Destination scope for the write (personal or ``team:<id>``).
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome string and details with the ``knowledge_id``.
+
+        Anti-pattern: do not use update to soft-delete — call
+        ``invalidate_knowledge`` or ``delete_knowledge``. Do not use update
+        to mark a claim as replaced — call ``supersede_knowledge``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Hard-delete a knowledge claim by id.
+
+        Prefer ``invalidate_knowledge`` when you want to retain an audit trail.
+        Built-in claims (``is_builtin=True``) cannot be deleted.
+
+        Parameters
+        ----------
+        knowledge_id : int
+            Identifier of the row to delete.
+        destination : str | None, default None
+            Destination scope for the write.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome string and details with the removed ``knowledge_id``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def invalidate_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Mark a knowledge claim as invalidated without deleting it.
+
+        Use when a claim is known to be wrong or withdrawn but should remain
+        in the ledger for audit. Invalidated claims are excluded from default
+        search/filter results.
+
+        Parameters
+        ----------
+        knowledge_id : int
+            Identifier of the claim to invalidate.
+        destination : str | None, default None
+            Destination scope for the write.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome string and details with the ``knowledge_id``.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def supersede_knowledge(
+        self,
+        *,
+        old_knowledge_id: int,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        kind: Optional[KnowledgeKind | str] = None,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        new_knowledge_id: Optional[int] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Replace an existing claim with a newer one, preserving lineage.
+
+        Creates a new claim (or links an existing ``new_knowledge_id``), sets
+        the old claim's ``status`` to ``superseded`` and ``superseded_by_id``
+        to the replacement, and records the old id in the new claim's
+        ``supersedes_ids``.
+
+        Parameters
+        ----------
+        old_knowledge_id : int
+            Claim being replaced.
+        title / content / ...
+            Fields for the replacement claim when creating a new row. Required
+            (at least title and content) unless ``new_knowledge_id`` is given.
+        new_knowledge_id : int | None
+            Optional existing claim that should become the replacement instead
+            of creating a new row.
+        destination : str | None, default None
+            Destination scope for the write.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome with ``old_knowledge_id`` and ``new_knowledge_id``.
+
+        Anti-pattern: do not manually edit ``status`` / ``superseded_by_id``
+        via ``update_knowledge`` — use this method so both sides stay wired.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def reconcile_sources(
+        self,
+        *,
+        knowledge_ids: Optional[List[int]] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Best-effort check that claim provenance still resolves.
+
+        Scans active claims (or the given ``knowledge_ids``) and verifies
+        identity-bearing file, contact, data-context, and derived-knowledge
+        source refs. Each claim's structured ``stale_reasons`` is refreshed
+        without changing its lifecycle status. Declared source refs remain
+        attached even when their targets no longer resolve.
+
+        Parameters
+        ----------
+        knowledge_ids : list[int] | None
+            Optional subset to check; when omitted, scans active claims.
+        destination : str | None, default None
+            Destination scope for reads and stale-reason writes.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome with ``checked``, ``stale_knowledge_ids``, and
+            ``stale_count`` details.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def clear(self) -> None:
@@ -219,7 +401,3 @@ class BaseKnowledgeManager(BaseStateManager, metaclass=SingletonABCMeta):
 
 # Attach centralised docstring
 BaseKnowledgeManager.clear.__doc__ = CLEAR_METHOD_DOCSTRING
-
-
-if TYPE_CHECKING:
-    pass
