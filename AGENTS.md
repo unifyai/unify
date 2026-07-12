@@ -8,7 +8,7 @@ Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first for the system design. This file
 
 ## What Unify is
 
-Unify implements an AI assistant's brain as a **distributed back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TaskScheduler`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, ...) through code-first plans. Every public manager method runs inside an **async LLM tool loop** and returns a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree.
+Unify implements an AI assistant's brain as a **distributed back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TaskScheduler`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, ...) through code-first plans. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
 
 Sibling repos consumed via editable installs (see `[tool.uv.sources]` in `pyproject.toml`):
 - **`unify`** — Python SDK wrapping the Orchestra REST API
@@ -177,7 +177,7 @@ The public API of each state manager is defined by the abstract methods on `Base
 |---|---|
 | People, contact records | `primitives.contacts.*` |
 | Conversation history search | `primitives.transcripts.*` |
-| Domain facts, structured knowledge | `primitives.knowledge.*` |
+| Domain facts, typed knowledge claims | `KnowledgeManager_*` (top-level JSON tools, not primitives) |
 | Durable tasks (create, execute) | `primitives.tasks.*` / `TaskScheduler` |
 | Files (parse, query) | `primitives.files.*` |
 | Web research (lightweight) | `primitives.web.*` |
@@ -252,7 +252,7 @@ unify/
 │   ├── actor/               # CodeAct Actor, central orchestrator
 │   ├── conversation_manager/ # Slow brain, live chat orchestration
 │   ├── contact_manager/     # People + relationships
-│   ├── knowledge_manager/   # Structured domain facts
+│   ├── knowledge_manager/   # Typed claim ledger (facts, policies, …)
 │   ├── task_scheduler/      # Durable tasks, schedules, triggers
 │   ├── transcript_manager/  # Conversation history
 │   ├── guidance_manager/    # Procedures, SOPs

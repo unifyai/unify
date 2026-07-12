@@ -6,7 +6,7 @@ This document describes Unify's internal architecture for developers who want to
 
 Unify implements an AI assistant's brain as a **distributed back office**. Rather than one monolithic agent loop, there are specialized **state managers** — each owning a slice of the assistant's persistent state (contacts, knowledge, tasks, transcripts, etc.) — coordinated by a central **Actor** that writes Python programs to compose them.
 
-Every public operation in the system, from searching contacts to executing a multi-step task, runs inside its own **async LLM tool loop** and returns a **steerable handle**. These handles are the universal interface: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running.
+Most public operations in the system, from searching contacts to executing a multi-step task, run inside an **async LLM tool loop** and return a **steerable handle**. These handles are the universal interface for steerable work: you can pause, resume, interject into, ask questions about, or stop any operation — at any nesting depth — while it's running. Typed catalogues (Knowledge, Guidance) are the exception: they expose direct CRUD/lifecycle methods as Actor JSON tools, not NL tool loops.
 
 ```
 User
@@ -16,12 +16,13 @@ ConversationManager ◄── voice IPC ──► Fast Brain (LiveKit)
  │
  │  starts actions, steers in-flight work
  ▼
-CodeActActor ── generates Python plans ──► primitives.* API
+CodeActActor ── Python plans over primitives.* + JSON tools ──►
  │
- │  each primitive call starts its own LLM tool loop
+ │  primitive calls start LLM tool loops;
+ │  KnowledgeManager_* / GuidanceManager_* are typed CRUD tools
  ▼
 ┌───────────────────────────────────────────────────────┐
-│  State Managers (each returns a SteerableToolHandle)  │
+│  State Managers                                       │
 │                                                       │
 │  ContactManager    KnowledgeManager   TaskScheduler   │
 │  TranscriptManager GuidanceManager    FileManager     │
@@ -33,7 +34,7 @@ CodeActActor ── generates Python plans ──► primitives.* API
 └───────────────────────────────────────────────────────┘
 ```
 
-Steering propagates through the full tree: stopping the Actor stops its inner manager loops; interjecting into the ConversationManager can reach a deeply nested knowledge query.
+Steering propagates through the full tree: stopping the Actor stops its inner manager loops; interjecting into the ConversationManager can reach a deeply nested in-flight tool loop.
 
 Hosted deployment concerns are intentionally optional at this boundary. The
 public repo exposes a small `unify.deploy_runtime` SPI for session assignment,
@@ -46,7 +47,7 @@ defaults when no private hosted backend is installed.
 
 **Files:** `unify/common/async_tool_loop.py`, `unify/common/_async_tool/loop.py`
 
-The async tool loop is the universal runtime. Nearly every public manager method is implemented as: create an LLM client, register domain-specific tools, start a loop, return a handle.
+The async tool loop is the primary runtime for steerable manager methods. Those methods typically: create an LLM client, register domain-specific tools, start a loop, and return a handle. Typed catalogues (KnowledgeManager, GuidanceManager) instead expose direct CRUD/lifecycle methods consumed as Actor JSON tools.
 
 ### How it works
 
@@ -146,15 +147,15 @@ The Actor doesn't pick from a JSON tool menu. It generates Python programs that 
 ```python
 contacts = await primitives.contacts.ask("Who was at the Henderson meeting?")
 for contact in contacts:
-    history = await primitives.knowledge.ask(f"What is {contact} working on?")
+    history = await primitives.transcripts.ask(f"What is {contact} working on?")
     await primitives.contacts.update(f"Send {contact} a status email about {history}")
 ```
 
-This runs in a `PythonExecutionSession` — a sandboxed environment where the `primitives` namespace is pre-populated with async methods that dispatch to the real managers.
+This runs in a `PythonExecutionSession` — a sandboxed environment where the `primitives` namespace is pre-populated with async methods that dispatch to the real managers. Typed catalogues such as Knowledge and Guidance are exposed as top-level JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than `primitives.*`.
 
 ### Why CodeAct over JSON tools
 
-JSON tool calling forces every composition to be a separate round-trip. To look up contacts, query knowledge for each, and send emails, the LLM needs 3+ turns where it re-reads the entire context each time. With CodeAct, the same logic is a single program with variables, loops, and branching — one plan, one LLM turn for the plan, then execution.
+JSON tool calling forces every composition to be a separate round-trip. To look up contacts, query transcripts for each, and send emails, the LLM needs 3+ turns where it re-reads the entire context each time. With CodeAct, the same logic is a single program with variables, loops, and branching — one plan, one LLM turn for the plan, then execution.
 
 The Actor still uses the async tool loop internally (the LLM generates code as a "tool call" that gets executed), so it inherits all the steering, compression, and observability infrastructure.
 
@@ -191,13 +192,13 @@ Each manager follows the same pattern:
 
 Managers communicate through their public APIs, not shared state. When the TranscriptManager needs contact information to resolve participant names, it calls `ContactManager.ask()` — which starts its own tool loop and returns a handle. This keeps each manager independently testable and replaceable.
 
-The `_as_caller_description` class attribute on each manager tells nested loops who is calling: when KnowledgeManager calls FileManager, the FileManager's LLM sees "the KnowledgeManager, querying structured domain knowledge" as the caller context, not a raw user message.
+The `_as_caller_description` class attribute on each manager tells nested loops who is calling: when one manager calls another, the callee's LLM sees the caller's description as context, not a raw user message.
 
 ### Key managers
 
 **ContactManager** — People and relationships. CRUD over structured contact records with search, merge (deduplication), and relationship tracking.
 
-**KnowledgeManager** — Domain facts. Structured knowledge tables with typed columns, vector search, and schema refactoring. Facts are queryable, not just dumped text.
+**KnowledgeManager** — Typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance and lifecycle status. Exposed as `KnowledgeManager_*` JSON tools on the Actor (like Guidance), not as `primitives.knowledge.*`. Passive store; writers are the live Actor/CM, StorageCheck, and optionally MemoryManager.
 
 **TaskScheduler** — Durable tasks. Create, edit, reorder, and execute tasks. `execute()` starts a task via `Actor.act()` and returns a live steerable handle, making tasks first-class concurrent operations.
 
