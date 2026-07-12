@@ -151,9 +151,9 @@ def test_model_to_fields_uses_field_description():
     # Short description is preserved
     assert fields["short_desc"].get("description") == "Short description"
 
-    # Long description is also preserved (truncation happens in Orchestra, not here)
-    # The key point is we use Field.description, not the JSON Schema description
-    assert fields["long_desc"].get("description") == "A" * 300
+    # Orchestra StandardFieldDefinition.description max_length is 256; truncate
+    # here so create_fields does not mis-route into JsonSchemaFieldDefinition.
+    assert fields["long_desc"].get("description") == "A" * 256
 
 
 def test_model_to_fields_mutable_flag():
