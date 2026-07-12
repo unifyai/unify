@@ -3977,18 +3977,20 @@ class CommsPrimitives:
                         for entry in self._cm.contact_index.global_thread
                         if entry.medium == Medium.EMAIL
                     ]
+                    clean_subject = subject.removeprefix("Re: ").strip()
                     for message in reversed(all_emails):
-                        if (
-                            getattr(message, "name", None) != "You"
-                            and getattr(
-                                message,
-                                "subject",
-                                None,
-                            )
-                            == subject
-                            and getattr(message, "email_id", None)
-                        ):
-                            reply_email_id = message.email_id
+                        if getattr(message, "name", None) == "You":
+                            continue
+                        message_email_id = getattr(message, "email_id", None)
+                        if not message_email_id:
+                            continue
+                        clean_message_subject = (
+                            (getattr(message, "subject", "") or "")
+                            .removeprefix("Re: ")
+                            .strip()
+                        )
+                        if clean_subject == clean_message_subject or not clean_subject:
+                            reply_email_id = message_email_id
                             break
                 except Exception:
                     pass
