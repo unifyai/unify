@@ -375,6 +375,7 @@ jobs:
         if-no-files-found: error
         retention-days: 3
         compression-level: 0
+        include-hidden-files: true
 
   consolidate:
     name: Consolidate and store cache
