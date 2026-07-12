@@ -85,16 +85,28 @@ def _create_actor(args) -> BaseActor:
             primitives = Primitives()
             environments = [StateManagerEnvironment(primitives)]
 
-            # Optionally inject FunctionManager if available
+            # Optionally inject managers if available
             function_manager = None
+            guidance_manager = None
+            knowledge_manager = None
             try:
                 function_manager = ManagerRegistry.get_function_manager()
             except Exception:
                 LG.debug("FunctionManager not available, continuing without it")
+            try:
+                guidance_manager = ManagerRegistry.get_guidance_manager()
+            except Exception:
+                LG.debug("GuidanceManager not available, continuing without it")
+            try:
+                knowledge_manager = ManagerRegistry.get_knowledge_manager()
+            except Exception:
+                LG.debug("KnowledgeManager not available, continuing without it")
 
             return CodeActActor(
                 environments=environments,
                 function_manager=function_manager,
+                guidance_manager=guidance_manager,
+                knowledge_manager=knowledge_manager,
             )
         else:
             # Full computer mode (web/desktop)
