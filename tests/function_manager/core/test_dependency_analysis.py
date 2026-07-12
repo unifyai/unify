@@ -177,7 +177,7 @@ async def main():
         source = """
 async def main():
     data = helper()
-    result = await primitives.knowledge.ask(data)
+    result = await primitives.web.ask(data)
     return result
 """
         deps = collect_dependencies_from_source(
@@ -185,7 +185,7 @@ async def main():
             {"helper"},
             environment_namespaces=frozenset({"primitives"}),
         )
-        assert deps == {"helper", "primitives.knowledge.ask"}
+        assert deps == {"helper", "primitives.web.ask"}
 
     def test_unknown_dotted_name_not_detected(self):
         """Dotted calls whose root is not in environment_namespaces are ignored."""

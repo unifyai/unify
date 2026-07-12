@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     )
     from unify.contact_manager.contact_manager import ContactManager
     from unify.transcript_manager.transcript_manager import TranscriptManager
-    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
     from unify.task_scheduler.task_scheduler import TaskScheduler
     from unify.secret_manager.secret_manager import SecretManager
     from unify.web_searcher.web_searcher import WebSearcher
@@ -1498,7 +1497,6 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "dashboards": "get_dashboard_manager",
     "data": "get_data_manager",
     "transcripts": "get_transcript_manager",
-    "knowledge": "get_knowledge_manager",
     "tasks": "get_task_scheduler",
     "secrets": "get_secret_manager",
     "web": "get_web_searcher",
@@ -1645,11 +1643,6 @@ class Primitives:
     def transcripts(self) -> "TranscriptManager":
         """Transcript management primitives (ask)."""
         return self._get_manager("transcripts")
-
-    @property
-    def knowledge(self) -> "KnowledgeManager":
-        """Knowledge management primitives (ask, update, refactor)."""
-        return self._get_manager("knowledge")
 
     @property
     def tasks(self) -> "TaskScheduler":

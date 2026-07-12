@@ -41,7 +41,7 @@ class _FakePrimitives:
 
     def __init__(self):
         self.contacts = _FakeManager()
-        self.knowledge = _FakeManager()
+        self.tasks = _FakeManager()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -72,8 +72,8 @@ async def test_proxy_injection_is_selective():
     proxy = ContextForwardingProxy(prims, _parent_chat_context=ctx)
 
     # Accepting method on a different manager → still injected.
-    result = await proxy.knowledge.ask(text="facts")
-    assert result["ctx"] is ctx, "context not forwarded to knowledge.ask"
+    result = await proxy.tasks.ask(text="facts")
+    assert result["ctx"] is ctx, "context not forwarded to tasks.ask"
 
     # Non-accepting method → no TypeError, no injection.
     assert await proxy.contacts.update(payload="x") == "updated:x"
