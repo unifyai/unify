@@ -20,6 +20,10 @@ class _FakeClient:
         self.system_message = message
         return self
 
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        """Stub for discovery-mutator wrapping in CodeActActor.act."""
+        raise NotImplementedError("FakeClient.generate should not be called")
+
 
 class _ImmediateHandle(SteerableToolHandle):
     def __init__(self, result_text: str = "done") -> None:
@@ -82,6 +86,9 @@ class _DummyFunctionManager:
     async def delete_function(self, *args: Any, **kwargs: Any) -> dict:
         return {}
 
+    def reconcile_dependencies(self, *args: Any, **kwargs: Any) -> dict:
+        return {}
+
 
 class _DummyGuidanceManager:
     def search(self, *args: Any, **kwargs: Any) -> list:
@@ -100,6 +107,9 @@ class _DummyGuidanceManager:
         return {}
 
     def delete_guidance(self, *args: Any, **kwargs: Any) -> dict:
+        return {}
+
+    def reconcile_dependencies(self, *args: Any, **kwargs: Any) -> dict:
         return {}
 
 

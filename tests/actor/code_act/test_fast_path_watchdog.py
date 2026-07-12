@@ -36,7 +36,13 @@ def _make_actor() -> CodeActActor:
     ManagerRegistry.clear()
     cp = ComputerPrimitives(computer_mode="mock")
     computer_env = ComputerEnvironment(cp)
-    return CodeActActor(environments=[computer_env], timeout=60)
+    return CodeActActor(
+        environments=[computer_env],
+        timeout=60,
+        # Fast-path escalation uses execute_code(notify(...)); discovery-first
+        # would hide that tool until FM/GM/KM search runs.
+        tool_policy=None,
+    )
 
 
 async def _wait_for_escalation(handle, *, timeout: float = 60) -> dict:

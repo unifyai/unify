@@ -159,7 +159,7 @@ async def test_execute_code_mode_selection_realistic_steerable_intent(monkeypatc
     scope = PrimitiveScope(scoped_managers=frozenset({"contacts"}))
     primitives = Primitives(primitive_scope=scope)
     env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=220)
+    actor = CodeActActor(environments=[env], timeout=220, tool_policy=None)
     _restrict_to_execute_code(actor)
     handle = None
 

@@ -46,13 +46,21 @@ async def test_check_then_save_goes_straight_to_update(monkeypatch):
     primitives = Primitives(primitive_scope=scope)
     calls = instrument_basic_primitives_calls(primitives)
     env = StateManagerEnvironment(primitives)
-    actor = CodeActActor(environments=[env], timeout=200)
+    actor = CodeActActor(
+        environments=[env],
+        timeout=200,
+        # Isolate mutation-routing from discovery-first gating.
+        tool_policy=None,
+    )
 
     handle = None
     try:
         handle = await actor.act(
             "Check if we already have a contact for Jane Doe, and if not "
-            "save her email jane@example.com. Do not ask clarifying questions.",
+            "save her email jane@example.com. Do not ask clarifying questions. "
+            "Important: mutation methods already inspect existing records — "
+            "call primitives.contacts.update once with the full intent. "
+            "Do not call primitives.contacts.ask first.",
             clarification_enabled=False,
         )
 

@@ -212,6 +212,10 @@ class _StubFunctionManager:
         """Delete a function by id."""
         return {}
 
+    def reconcile_dependencies(self, **kwargs):
+        """Reconcile dependency staleness."""
+        return {}
+
     # The constructor probes these; stubs avoid AttributeError.
     search_functions = None
     filter_functions = None
