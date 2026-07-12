@@ -69,8 +69,9 @@ async def test_explicit_calls_visible_in_passive_chunk(
         knowledge_manager=SimulatedKnowledgeManager(
             description=(
                 "TEST SCENARIO: Explicit ConversationManager calls are present. If the"
-                " transcript contains an explicit KnowledgeManager.update manager-method,"
-                " treat the fact as already stored; otherwise behave as if absent."
+                " transcript contains an explicit KnowledgeManager.add_knowledge"
+                " manager-method, treat the fact as already stored; otherwise behave"
+                " as if absent."
             ),
         ),
         task_scheduler=SimulatedTaskScheduler(
@@ -104,7 +105,7 @@ async def test_explicit_calls_visible_in_passive_chunk(
     await publish_manager_method_event(
         call_id,
         "KnowledgeManager",
-        "update",
+        "add_knowledge",
         phase="incoming",
         request="remember_fact",
         source="ConversationManager",
@@ -112,7 +113,7 @@ async def test_explicit_calls_visible_in_passive_chunk(
     await publish_manager_method_event(
         call_id,
         "KnowledgeManager",
-        "update",
+        "add_knowledge",
         phase="outgoing",
         result="stored",
         source="ConversationManager",

@@ -174,9 +174,9 @@ async def test_events_for_process_chunk():
 @pytest.mark.asyncio
 @_handle_project
 async def test_inner_events_carry_mm_lineage():
-    """When MemoryManager.update_knowledge calls KnowledgeManager.ask (etc.)
-    inside its tool loop, those inner ManagerMethod events should include
-    'MemoryManager.update_knowledge' in their hierarchy."""
+    """When MemoryManager.update_knowledge calls KnowledgeManager search/add
+    (etc.) inside its tool loop, those inner ManagerMethod events should
+    include 'MemoryManager.update_knowledge' in their hierarchy."""
     mm = SimulatedMemoryManager()
 
     async with capture_events("ManagerMethod") as events:
