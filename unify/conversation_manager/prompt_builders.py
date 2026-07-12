@@ -1963,7 +1963,7 @@ Use `act` to access:
 
 **IMPORTANT: Check in_flight_actions first.** Before calling `act`, `ask_about_contacts`, `update_contacts`, or `query_past_transcripts`, check if an action is already handling the request. If there's already an action doing the same work, use steering tools (ask_*, interject_*, etc.) instead of creating duplicate work.
 
-**When to use `act`:** If my boss asks about anything that might be stored in these systems, or asks me to do any work beyond sending a message, AND no in-flight action is already handling it — call `act`. Don't assume I lack access to information or capability — try first.
+**When to use `act`:** If my boss asks about anything that might be stored in these systems, or asks me to do non-conversational work (files, apps, research, automation, programmatic mailbox/workspace management — see below), AND no in-flight action is already handling it — call `act`. Don't assume I lack access to information or capability — try first. Ordinary conversational messaging and standing reply instructions stay on my communication tools + `wait`; they are not reasons to start `act`.
 
 Examples of questions that should trigger `act`:
 - "What's our refund policy?" → knowledge
@@ -1978,16 +1978,54 @@ Examples of questions that should trigger `act`:
 **Skill storage notifications:** After `act` completes, I may see progress events mentioning that skills or reusable functions are being stored for future use. This is an internal housekeeping process — there is no need to relay information about skill storage to my boss unless they specifically ask about how skills are being learned or stored."""
 
 
+def _build_conversational_vs_programmatic_comms_block(
+    *,
+    is_coordinator: bool = False,
+) -> str:
+    """Split live conversation (CM tools) from programmatic mailbox/workspace work."""
+    if is_coordinator:
+        ownership = (
+            f"Connected Google/Microsoft Workspace is **my boss's**. "
+            f"Programmatic mailbox/calendar/drive automation via ``act`` "
+            f"operates on their account. Direct CM communication tools remain "
+            f"boss-only; third-party conversational sends follow the "
+            f"{COORDINATOR_NAME} guidelines (``act``), not this mailbox-automation path."
+        )
+    else:
+        ownership = (
+            "Connected Google/Microsoft Workspace and my outbound email/SMS/etc. "
+            "identity are **mine** (this assistant's). Conversational sends use my "
+            "CM communication tools; programmatic mailbox/workspace automation "
+            "via ``act`` also targets my connected account."
+        )
+    return f"""Conversational messaging vs programmatic workspace
+-------------------------------------------------
+**Conversational (always ConversationManager tools + ``wait``):** General
+conversation — especially with my boss — and ordinary messaging with contacts.
+Standing instructions like "when Alice emails about X, reply and CC Bob" are
+conversational: I acknowledge, call ``wait``, and when the inbound event
+arrives I reply with ``send_email`` / ``send_sms`` / ``send_unify_message`` /
+etc. I do **not** start ``act("monitor for email and reply…")`` for that.
+
+**Programmatic mailbox/workspace (use ``act``):** Batch, scheduled, or
+automation work against the connected account that is not a live conversation
+turn — e.g. "every Monday auto-label unread mail", invent filters/rules, sweep
+or search large mailbox state, sync folders, or otherwise manage inbox/
+calendar/drive as a system. That is ``act``, not a standing ``wait`` + send.
+
+**Whose account:** {ownership}"""
+
+
 def _build_external_resources_act_block() -> str:
-    """Build guidance requiring ``act`` whenever external resources are involved."""
+    """Build guidance requiring ``act`` for grounded external-system work."""
     return """External resources (use ``act``)
 --------------------------------
-Whenever a request involves anything **outside** this chat — a file, folder,
-attachment, spreadsheet, document, application, website, platform, API, inbox,
-calendar, database, cloud service, or any live system state — I **must** use
-``act`` (or the appropriate direct specialist tool for single-domain
-contact/transcript work) to inspect or mutate it. I do not answer from memory,
-prior conversation turns, or assumed contents.
+Whenever a request requires inspecting or mutating something **outside** this
+chat as a system — a file, folder, attachment contents, spreadsheet, document,
+application, website, platform, API, calendar store, database, cloud drive, or
+other live system state — I **must** use ``act`` (or the appropriate direct
+specialist tool for single-domain contact/transcript work). I do not answer
+from memory, prior conversation turns, or assumed contents.
 
 **Ground truth rule:** If I need specific facts, figures, quotes, rows, fields,
 error messages, or UI state from an external resource, I call ``act`` first
@@ -1997,8 +2035,13 @@ fresh grounded ``act`` read in the same session.
 
 **Includes:** reading or summarizing attachments; analyzing spreadsheets;
 checking task/knowledge/guidance stores; web research; software/desktop control;
-integration setup and validation; delegated third-party messages and calls;
-any follow-up that depends on what is actually stored or displayed right now.
+integration setup and validation; programmatic mailbox/workspace automation
+(see Conversational messaging vs programmatic workspace above); any follow-up
+that depends on what is actually stored or displayed right now.
+
+**Does not include:** ordinary conversational replies and standing
+"when they message/email, reply…" instructions — those stay on CM communication
+tools + ``wait`` when the inbound event arrives.
 
 **Specialist shortcuts:** Pure contact-only or transcript-only reads/writes may
 use ``ask_about_contacts``, ``update_contacts``, or ``query_past_transcripts``
@@ -2818,6 +2861,11 @@ Messages from the current turn have **NEW** tag prepended:
             _build_act_capabilities_block(
                 has_linked_user_desktop=has_linked_user_desktop,
                 user_filesys_available=user_filesys_available,
+            ),
+        )
+        parts.add(
+            _build_conversational_vs_programmatic_comms_block(
+                is_coordinator=is_coordinator,
             ),
         )
         parts.add(_build_external_resources_act_block())
