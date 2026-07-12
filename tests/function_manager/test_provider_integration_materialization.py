@@ -61,6 +61,7 @@ class FakeIntegrationOps:
                 "connection_id": "conn-1",
                 "canonical_app_slug": "hubspot",
                 "status": "connected",
+                "backend_id": "composio",
             },
         ]
         self.results = [MOCK_TOOL]

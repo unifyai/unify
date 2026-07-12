@@ -14,33 +14,33 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `Actor.act` (central intelligence); relays in‑flight handles from `Actor.act` and `TaskScheduler.execute`.
 
 ### Actor
-- **Role**: Central intelligence that orchestrates all state managers through code-first plans. Generates and executes Python plans that call primitives directly.
-- **Scope**: Code-first execution via `act()` method. Generates Python plans that orchestrate `primitives.contacts.*`, `primitives.knowledge.*`, `primitives.tasks.*`, etc. Wires in‑flight handles to `ConversationManager` for real‑time steering.
+- **Role**: Central intelligence that orchestrates all state managers through code-first plans. Generates and executes Python plans that call primitives and top-level JSON tools.
+- **Scope**: Code-first execution via `act()` method. Generates Python plans that orchestrate `primitives.contacts.*`, `primitives.tasks.*`, etc., plus top-level JSON tools such as `GuidanceManager_*` and `KnowledgeManager_*`. Wires in‑flight handles to `ConversationManager` for real‑time steering.
 - **Connections**:
   - **Steered by**: `ConversationManager` (primary caller of `act()`).
-  - **Steers**: All state manager primitives (`primitives.contacts.*`, `primitives.knowledge.*`, `primitives.tasks.*`, etc.), `TaskScheduler`, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`). Uses `FunctionManager` for function discovery and execution.
+  - **Steers**: State manager primitives (`primitives.contacts.*`, `primitives.tasks.*`, etc.), `KnowledgeManager_*` / `GuidanceManager_*` JSON tools, `TaskScheduler`, and the `ConversationManager` handle (`ask`/`interject`/`get_full_transcript`). Uses `FunctionManager` for function discovery and execution.
 
 ### Actor routing playbook
 - **Read‑only questions**
   - Tasks → `primitives.tasks.ask` or `TaskScheduler.ask`
   - Contacts → `primitives.contacts.ask`
   - Transcripts → `primitives.transcripts.ask` (may call `primitives.contacts.ask` for participants)
-  - Knowledge → `primitives.knowledge.ask`
+  - Knowledge → `KnowledgeManager_search` / `KnowledgeManager_filter` / `KnowledgeManager_get_knowledge` (top-level JSON tool calls, not primitives)
   - Secrets (metadata/placeholders only) → `primitives.secrets.ask`
   - Time‑sensitive/web ("today/latest/now") → `primitives.web.ask`
   - About a specific received file (filename known) → `primitives.files.ask`
 - **Mutations (create/edit/delete/merge)**
   - Tasks/queues/ordering → `primitives.tasks.update` or `TaskScheduler.update`
   - Contacts → `primitives.contacts.update`
-  - Knowledge/schema changes or ingestion → `primitives.knowledge.update` / `primitives.knowledge.refactor`
+  - Knowledge claims → `KnowledgeManager_add_knowledge` / `KnowledgeManager_update_knowledge` / `KnowledgeManager_invalidate_knowledge` / `KnowledgeManager_supersede_knowledge` / `KnowledgeManager_delete_knowledge` (top-level JSON tool calls)
   - Guidance → `GuidanceManager_add_guidance` / `GuidanceManager_update_guidance` / `GuidanceManager_delete_guidance` (top-level JSON tool calls)
   - Secrets → `primitives.secrets.update`
 - **Execution vs. interaction**
   - Ephemeral live action (UI control/one‑off interaction) → `Actor.act` (called via ConversationManager)
   - Durable, tracked work → `TaskScheduler.execute` (via `primitives.tasks.execute`)
   - Never use `TaskScheduler.update` to start work; always use `execute`.
-- **File ingestion pipeline**
-  - `primitives.files.parse` → `primitives.knowledge.update` (to persist structured facts)
+- **File → knowledge distillation**
+  - Parse with `primitives.files.parse`, then distill durable statements into typed claims via `KnowledgeManager_add_knowledge` (attach `source_refs` pointing at the file / transcript / user statement). There is no `primitives.knowledge` pipeline and no NL `ask`/`update`/`refactor` loop on KnowledgeManager.
 - **Images**
   - Images are referenced **by filesystem path** across the entire stack. Screenshot directories (`Screenshots/User/`, `Screenshots/Assistant/`) and other workspace paths serve as the universal cross‑manager pointer for visual content. Managers and plans reference images via their relative filepath — no special `images` parameter or structured ref types are needed at the public API boundary.
 
@@ -71,12 +71,13 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - **Steers**: `Actor` (to run tasks via `execute`); exposes a live `ActiveTask` handle that is wired back through `ConversationManager` for steering.
 
 ### KnowledgeManager
-- **Role**: Source of truth for domain knowledge.
-- **Scope**: ask (read‑only facts), update (create/change facts), refactor (schema restructuring across knowledge tables).
-- **Edge**: Parse with `FileManager`, then persist extracted facts with `KnowledgeManager.update`.
+- **Role**: Passive typed claim ledger for durable domain knowledge (facts, policies, definitions, decisions, constraints, insights, preferences) with provenance (`source_refs`) and lifecycle status (active / superseded / invalidated).
+- **Scope**: CRUD and lifecycle operations (`search`, `filter`, `get_knowledge`, `add_knowledge`, `update_knowledge`, `delete_knowledge`, `invalidate_knowledge`, `supersede_knowledge`, `reconcile_sources`, `clear`) exposed as first-class JSON tool calls on the CodeActActor (`KnowledgeManager_*`) — **not** as `primitives.knowledge.*`. No natural-language `ask` / `update` / `refactor` tool loops.
+- **Negative scope**: Does **not** own people/contacts (ContactManager), procedural how-tos/SOPs (GuidanceManager), user Python functions (FunctionManager), received file bytes/parsing (FileManager), or secrets/credentials (SecretManager).
+- **Writers**: KnowledgeManager is a passive store. Live writers are the Actor / ConversationManager (user-requested claim storage), StorageCheck (trajectory distillation into claims), and optionally MemoryManager (offline consolidation). Distill file/transcript content into claims with `source_refs`; do not treat KnowledgeManager as a schema-refactoring table store.
 - **Connections**:
-  - **Steered by**: `Actor` (via `primitives.knowledge.*`).
-  - **Steers**: `FileManager` (for document parsing/ingestion in update/refactor flows); may read from the root `Contacts` table for joins (no direct `ContactManager` calls).
+  - **Steered by**: `Actor` (via top-level `KnowledgeManager_*` JSON tool calls, not primitives); optional offline writes from `MemoryManager`.
+  - **Steers**: — (exposes typed claim records; callers attach provenance and decide when to write).
 
 ### ContactManager
 - **Role**: Source of truth for people/contact records.
@@ -112,7 +113,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Scope**: ask only (search, extract, crawl, map against the public web); returns live handle. No gated-site access, no browser automation, no credentials. For authenticated or complex web workflows, use Tavily + SecretManager + ComputerPrimitives directly via code-first plans.
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.web.*`).
-  - **Steers**: — (results may subsequently be persisted via `KnowledgeManager.update` when requested).
+  - **Steers**: — (results may subsequently be persisted as typed claims via `KnowledgeManager_add_knowledge` when requested).
 
 ### SecretManager
 - **Role**: Owner of secrets.
@@ -149,7 +150,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Scope**: One‑shot methods that return strings (no live handles), e.g., updating contacts/knowledge from transcripts.
 - **Connections**:
   - **Steered by**: Offline scheduler/controller (outside live chat orchestration).
-  - **Steers**: `ContactManager.update`, `KnowledgeManager.update` (to persist distilled facts from transcripts).
+  - **Steers**: `ContactManager.update`, `KnowledgeManager` typed claim APIs (`add_knowledge` / `update_knowledge` / lifecycle methods) to persist distilled facts from transcripts.
 
 ### EventBus
 - **Role**: Cross‑cutting, in‑process publish/subscribe backbone and searchable event log used by all managers for telemetry and coordination.

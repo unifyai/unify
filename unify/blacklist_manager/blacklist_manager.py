@@ -502,7 +502,12 @@ class BlackListManager(BaseBlackListManager):
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom blacklist sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         with (
             self._temporary_blacklist_context("_ctx", blacklist_context),

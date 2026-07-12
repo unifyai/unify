@@ -213,6 +213,9 @@ async def test_sync_custom_resolves_function_names(
 ):
     gm = guidance_manager_factory()
     source = collect_custom_guidance(path=custom_guidance_dir)
+    # Resolve names against the personal store; team destinations need a live
+    # ContextRegistry team root which this unit test does not provision.
+    source["ops/escalation"]["destination"] = "personal"
     function_name_to_id = {"sync_repairs": 42}
 
     gm.sync_custom(source_guidance=source, function_name_to_id=function_name_to_id)

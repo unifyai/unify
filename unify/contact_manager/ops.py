@@ -538,6 +538,25 @@ def delete_contact(
             raise RuntimeError("Cannot delete assistant self or boss system contacts.")
         resolved_id = _log_id
 
+    # Snapshot Knowledge provenance debt before Contacts FK CASCADE pops
+    # ``source_refs[*].contact_id``.
+    try:
+        from unify.common.stale_reason import StaleReason
+        from unify.knowledge_manager.knowledge_manager import (
+            mark_knowledge_stale_for_deleted_sources,
+        )
+
+        mark_knowledge_stale_for_deleted_sources(
+            reasons=[
+                StaleReason(
+                    dep_kind="contact",
+                    id=int(contact_id),
+                    message=f"missing contact_id={int(contact_id)}",
+                ),
+            ],
+        )
+    except Exception:
+        pass
     unisdk.delete_logs(context=context_name, logs=resolved_id)
     try:
         store.delete(contact_id)

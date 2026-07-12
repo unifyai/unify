@@ -84,18 +84,18 @@ async def test_execute_function_primitive_sync(function_manager_factory):
     fm = function_manager_factory()
 
     mock_primitives = MagicMock()
-    mock_primitives.knowledge = MagicMock()
+    mock_primitives.web = MagicMock()
     # Sync callable (non-coroutine)
-    mock_primitives.knowledge.ask = MagicMock(return_value="The sky is blue")
+    mock_primitives.web.ask = MagicMock(return_value="The sky is blue")
 
     result = await fm.execute_function(
-        function_name="primitives.knowledge.ask",
+        function_name="primitives.web.ask",
         call_kwargs={"text": "What colour is the sky?"},
         extra_namespaces={"primitives": mock_primitives},
     )
 
     assert result == "The sky is blue"
-    mock_primitives.knowledge.ask.assert_called_once_with(
+    mock_primitives.web.ask.assert_called_once_with(
         text="What colour is the sky?",
     )
 
@@ -205,17 +205,17 @@ async def test_execute_function_primitive_no_kwargs(function_manager_factory):
     fm = function_manager_factory()
 
     mock_primitives = MagicMock()
-    mock_primitives.knowledge = MagicMock()
-    mock_primitives.knowledge.ask = AsyncMock(return_value="All knowledge tables")
+    mock_primitives.web = MagicMock()
+    mock_primitives.web.ask = AsyncMock(return_value="All web results")
 
     result = await fm.execute_function(
-        function_name="primitives.knowledge.ask",
+        function_name="primitives.web.ask",
         # No call_kwargs provided
         extra_namespaces={"primitives": mock_primitives},
     )
 
-    assert result == "All knowledge tables"
-    mock_primitives.knowledge.ask.assert_called_once_with()
+    assert result == "All web results"
+    mock_primitives.web.ask.assert_called_once_with()
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ _EXAMPLE_TASK_LINES = [
         "key": "ops/on-event",
         "name": "On inbound email",
         "description": "React to inbound email.",
-        "trigger": {"event": "email_received"},
+        "trigger": {"medium": "email"},
         "destination": "team:42",
     },
     {
@@ -98,7 +98,7 @@ def test_derive_initial_task_status():
     assert (
         derive_initial_task_status(
             schedule=None,
-            trigger={"event": "email_received"},
+            trigger={"medium": "email"},
         )
         == Status.triggerable
     )

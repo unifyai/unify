@@ -13,13 +13,13 @@ import pytest
 
 from unify.integration_status import discovery as D
 
-# This test module exercises real package discovery, which needs unity_deploy
+# This test module exercises real package discovery, which needs unify_deploy
 # importable.  In unity's standalone venv that's not the case; skip cleanly
 # rather than emit confusing failures.
-_UNITY_DEPLOY_AVAILABLE = importlib.util.find_spec("unity_deploy") is not None
+_UNIFY_DEPLOY_AVAILABLE = importlib.util.find_spec("unify_deploy") is not None
 pytestmark = pytest.mark.skipif(
-    not _UNITY_DEPLOY_AVAILABLE,
-    reason="unity_deploy not installed in this venv; run from unify-deploy/.venv",
+    not _UNIFY_DEPLOY_AVAILABLE,
+    reason="unify_deploy not installed in this venv; run from unify-deploy/.venv",
 )
 
 

@@ -7,7 +7,7 @@ from typing import Any
 import jsonref
 from pydantic import BaseModel
 
-from ..knowledge_manager.types import ColumnType
+from ..common.column_types import ColumnType
 
 # Map JSON Schema types to ColumnType
 _JSON_SCHEMA_TYPE_MAP = {
@@ -130,9 +130,11 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         if field_info and isinstance(extra, dict) and extra.get("unique"):
             entry["unique"] = True
 
-        # Use Field description (not JSON Schema description which can be very long)
+        # Use Field description (not JSON Schema description which can be very long).
+        # Orchestra StandardFieldDefinition.description max_length is 256; longer
+        # values mis-route create_fields into JsonSchemaFieldDefinition and 400.
         if field_info and getattr(field_info, "description", None):
-            entry["description"] = field_info.description.strip()
+            entry["description"] = field_info.description.strip()[:256]
 
         result[name] = entry
 

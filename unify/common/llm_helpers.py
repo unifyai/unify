@@ -545,9 +545,22 @@ def _annotation_to_schema(ann: Any) -> Dict[str, Any]:
     if isinstance(ann, type) and issubclass(ann, Enum):
         return {"type": "string", "enum": [member.value for member in ann]}
 
-    # Pydantic model
+    # Pydantic model — dereference $refs so the schema stays valid when nested
+    # as a single tool-parameter property (providers like Parasail compile the
+    # whole parameters object as one JSON grammar; nested `#/$defs/...` refs
+    # otherwise resolve against the wrong document root).
     if isinstance(ann, type) and issubclass(ann, BaseModel):
-        return ann.model_json_schema()
+        import copy
+
+        import jsonref
+
+        schema = ann.model_json_schema()
+        dereferenced = jsonref.loads(json.dumps(schema))
+        plain = copy.deepcopy(dereferenced)
+        if isinstance(plain, dict):
+            plain.pop("$defs", None)
+            plain.pop("definitions", None)
+        return plain
 
     # Dict[K, V]
     if origin is dict or origin is Dict:

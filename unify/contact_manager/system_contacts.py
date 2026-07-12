@@ -13,7 +13,7 @@ _PERSONAL_SCOPE = "personal"
 _SELF_RELATIONSHIP = "self"
 _BOSS_RELATIONSHIP = "boss"
 
-from ..knowledge_manager.types import ColumnType
+from ..common.column_types import ColumnType
 from ..session_details import (
     PLACEHOLDER_ASSISTANT_BIO,
     PLACEHOLDER_ASSISTANT_EMAIL,

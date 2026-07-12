@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from unify.common.async_tool_loop import SteerableToolHandle
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
+    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,17 @@ def _build_scoped_gm(
     if guidance_scope is not None:
         gm.filter_scope = guidance_scope
     return gm
+
+
+def _build_scoped_km() -> "KnowledgeManager":
+    """Build a fresh KnowledgeManager for an inner actor.
+
+    Uses ``_force_new=True`` to bypass ``SingletonABCMeta`` caching so the
+    inner actor does not share mutable filter state with the parent.
+    """
+    from unify.manager_registry import ManagerRegistry
+
+    return ManagerRegistry.get_knowledge_manager(_force_new=True)
 
 
 def _resolve_prompt_guidance(
@@ -564,11 +576,14 @@ class _ActorRunner:
         if resolved_guidance_ids:
             inner_gm.exclude_ids = resolved_guidance_ids
 
+        inner_km = _build_scoped_km()
+
         # Create inner CodeActActor.
         inner_actor = CodeActActor(
             environments=inner_envs,
             function_manager=inner_fm,
             guidance_manager=inner_gm,
+            knowledge_manager=inner_km,
             can_compose=bool(can_compose),
             can_store=bool(can_store),
             timeout=effective_timeout,

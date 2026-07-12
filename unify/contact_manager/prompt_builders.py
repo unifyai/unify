@@ -4,7 +4,7 @@ import textwrap
 from typing import Dict, Callable, List, Union
 
 from .types.contact import Contact
-from ..knowledge_manager.types import column_type_schema
+from ..common.column_types import column_type_schema
 from ..common.prompt_helpers import (
     sig_dict,
     now,

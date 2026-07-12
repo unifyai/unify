@@ -1,8 +1,12 @@
 """
-CodeActActor routing tests for KnowledgeManager.update (simulated managers).
+CodeActActor routing tests for KnowledgeManager writes (simulated managers).
 
-Validates that CodeActActor uses ``execute_function`` (not ``execute_code``)
-for simple single-primitive knowledge mutations.
+Validates that CodeActActor uses KnowledgeManager JSON tools (not
+``execute_function`` / ``primitives.knowledge``) for knowledge mutations.
+
+Discovery-first gating is disabled via ``tool_policy=None`` so these evals
+isolate write routing; gate behaviour is covered by
+``tests/actor/code_act/test_discovery_first_policy*.py``.
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from tests.actor.state_managers.utils import (
-    assert_used_execute_function,
+    get_code_act_tool_calls,
     make_code_act_actor,
 )
 
@@ -18,7 +22,9 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 UPDATE_QUERIES: list[str] = [
-    "Store: Office hours are 9–5 PT.",
+    # Novel claim (seed has office hours / onboarding already — storing those
+    # invites a no-op duplicate skip instead of a write tool).
+    "Store: Parking validation is available at reception for visitors.",
     "Update the onboarding policy to require security training in week one.",
 ]
 
@@ -26,10 +32,15 @@ UPDATE_QUERIES: list[str] = [
 @pytest.mark.asyncio
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("request_text", UPDATE_QUERIES)
-async def test_code_act_update_uses_execute_function(
+async def test_code_act_update_uses_knowledge_manager_tools(
     request_text: str,
+    seeded_knowledge_manager,
 ):
-    async with make_code_act_actor(impl="simulated") as (actor, _primitives, calls):
+    async with make_code_act_actor(
+        impl="simulated",
+        knowledge_manager=seeded_knowledge_manager,
+        tool_policy=None,
+    ) as (actor, _primitives, _calls):
         handle = await actor.act(
             f"{request_text} Do not ask clarifying questions. Do not create any stubs. Proceed with the best interpretation of the request.",
             clarification_enabled=False,
@@ -37,5 +48,15 @@ async def test_code_act_update_uses_execute_function(
         result = await handle.result()
         assert result is not None
 
-        assert_used_execute_function(handle)
-        assert "primitives.knowledge.update" in set(calls), f"Calls seen: {calls}"
+        tool_calls = set(get_code_act_tool_calls(handle))
+        km_tools = {n for n in tool_calls if n.startswith("KnowledgeManager_")}
+        assert km_tools, f"Expected KnowledgeManager_* tools, saw: {tool_calls}"
+        assert any(
+            n
+            in {
+                "KnowledgeManager_add_knowledge",
+                "KnowledgeManager_update_knowledge",
+                "KnowledgeManager_supersede_knowledge",
+            }
+            for n in km_tools
+        ), f"Expected a KnowledgeManager write tool, saw: {km_tools}"

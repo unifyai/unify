@@ -1,6 +1,6 @@
 """Runtime discovery of integration packages installed on disk.
 
-This module enumerates every manifest under unity_deploy's package roots
+This module enumerates every manifest under unify_deploy's package roots
 and projects each one into a lightweight metadata record.  It is the
 **single source of truth** for "what integration packages exist" at
 runtime — :mod:`unify.integration_status` reads from here, never from the
@@ -13,7 +13,7 @@ stale registry rows masking new disk packages — so the read side was
 collapsed to disk-only.  Deploy still writes the rows; runtime ignores
 them.)
 
-Everything is best-effort: if unity_deploy isn't importable on the runtime
+Everything is best-effort: if unify_deploy isn't importable on the runtime
 container (the only environment where this matters in practice is a
 unity-only test env), every helper here returns an empty result and
 callers fall through to existing behaviour.
@@ -52,7 +52,7 @@ def discover_available_packages(*, force_reload: bool = False) -> list[dict[str,
             "guidance_dir": Path(...) | None,
         }
 
-    Returns ``[]`` when unity_deploy isn't importable (test envs, broken
+    Returns ``[]`` when unify_deploy isn't importable (test envs, broken
     install).  Cached across calls; pass ``force_reload=True`` to invalidate
     (used by tests).
     """
@@ -68,19 +68,19 @@ def discover_available_packages(*, force_reload: bool = False) -> list[dict[str,
 
 def _read_packages_from_disk() -> list[dict[str, Any]]:
     try:
-        from unity_deploy.assistant_deployments.integrations.discovery import (
+        from unify_deploy.assistant_deployments.integrations.discovery import (
             _BUILTIN_DIR,
             _CLIENT_DIR,
         )
-        from unity_deploy.assistant_deployments.integrations.discovery import (
+        from unify_deploy.assistant_deployments.integrations.discovery import (
             discover_from_directory,
         )
-        from unity_deploy.assistant_deployments.integrations.loader import (
+        from unify_deploy.assistant_deployments.integrations.loader import (
             _stem_to_title,
         )
     except Exception:
         logger.debug(
-            "unity_deploy package paths not importable from runtime; "
+            "unify_deploy package paths not importable from runtime; "
             "discovery returning []",
             exc_info=True,
         )

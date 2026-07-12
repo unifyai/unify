@@ -171,7 +171,7 @@ def dispatch_rpc_response(msg: dict) -> None:
 
 
 class ManagerProxy:
-    """Proxy for a state manager (e.g., contacts, knowledge)."""
+    """Proxy for a state manager (e.g., contacts, tasks)."""
 
     def __init__(self, manager_name: str, is_async: bool = True):
         self._manager_name = manager_name

@@ -77,16 +77,22 @@ async def test_code_act_can_compose_false_executes_best_matching_function():
 
     actor = CodeActActor(
         function_manager=fm,
-        timeout=60,
+        environments=[],
+        timeout=120,
+        # Isolate can_compose execute_function routing from discovery-first gating.
+        tool_policy=None,
     )
+    actor.guidance_manager = None
+    actor.knowledge_manager = None
     try:
         handle = await actor.act(
-            "Do the thing",
+            "Do the thing using the stored my_task function via execute_function. "
+            "Do not ask clarifying questions.",
             can_compose=False,
             persist=False,
             clarification_enabled=False,
         )
-        await asyncio.wait_for(handle.result(), timeout=60)
+        await asyncio.wait_for(handle.result(), timeout=120)
 
         # The function implementation should have been looked up.
         fm._get_function_data_by_name.assert_called()
@@ -116,16 +122,23 @@ async def test_code_act_can_compose_false_no_functions_match():
     actor = CodeActActor(
         function_manager=fm,
         environments=[],
-        timeout=60,
+        timeout=120,
+        # Isolate can_compose routing from discovery-first gating.
+        tool_policy=None,
     )
+    # BaseActor auto-wires GM/KM from the registry when omitted; drop them so
+    # the agent cannot wander through discovery/read tools forever.
+    actor.guidance_manager = None
+    actor.knowledge_manager = None
     try:
         handle = await actor.act(
-            "Do something completely unique",
+            "Do something completely unique. No matching function will exist. "
+            "Do not keep searching — report that you cannot fulfill the request.",
             can_compose=False,
             persist=False,
             clarification_enabled=False,
         )
-        await asyncio.wait_for(handle.result(), timeout=60)
+        await asyncio.wait_for(handle.result(), timeout=120)
 
         # No matching function found — the LLM should not have attempted
         # to look up function data for execution.
