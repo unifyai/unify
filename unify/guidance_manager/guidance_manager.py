@@ -36,6 +36,7 @@ from ..image_manager.types import AnnotatedImageRefs, AnnotatedImageRef
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
+from ..common.stale_reason import StaleReason, merge_stale_reasons
 
 GUIDANCE_TABLE = "Guidance"
 GUIDANCE_META_TABLE = "Guidance/Meta"
@@ -210,6 +211,51 @@ class GuidanceManager(BaseGuidanceManager):
                 FUNCTION_MANAGER_COMPOSITIONAL_TABLE,
             )
         ]
+
+    def _available_functions_by_id(self) -> dict[int, str]:
+        """Return currently resolvable compositional functions keyed by id."""
+        available: dict[int, str] = {}
+        for context in self._function_contexts_for_read():
+            for log in unisdk.get_logs(
+                context=context,
+                from_fields=["function_id", "name"],
+            ):
+                function_id = log.entries.get("function_id")
+                if function_id is not None:
+                    available[int(function_id)] = str(log.entries.get("name") or "")
+        return available
+
+    @staticmethod
+    def _missing_function_reasons(
+        guidance: Guidance,
+        *,
+        available: dict[int, str],
+        preserve_historical: bool,
+    ) -> list[StaleReason]:
+        preserved = [
+            reason for reason in guidance.stale_reasons if reason.dep_kind != "function"
+        ]
+        candidates: dict[int, str | None] = {
+            int(function_id): None for function_id in guidance.function_ids
+        }
+        if preserve_historical:
+            for reason in guidance.stale_reasons:
+                if reason.dep_kind == "function" and reason.id is not None:
+                    candidates.setdefault(int(reason.id), reason.name)
+        missing = [
+            StaleReason(
+                dep_kind="function",
+                id=function_id,
+                name=name,
+                message=(
+                    f"missing function_id={function_id}"
+                    + (f" name={name}" if name else "")
+                ),
+            )
+            for function_id, name in candidates.items()
+            if function_id not in available
+        ]
+        return merge_stale_reasons(preserved, *missing)
 
     # ------------------------------- Helpers ---------------------------------
 
@@ -802,22 +848,32 @@ class GuidanceManager(BaseGuidanceManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         self._raise_if_builtin(guidance_id, "updated")
-        ids = unisdk.get_logs(
+        logs = unisdk.get_logs(
             context=context,
             filter=f"guidance_id == {int(guidance_id)}",
             limit=2,
-            return_ids_only=True,
+            exclude_fields=list_private_fields(context),
         )
-        if not ids:
+        if not logs:
             raise ValueError(
                 f"No guidance found with guidance_id {guidance_id} to update.",
             )
-        if len(ids) > 1:
+        if len(logs) > 1:
             raise RuntimeError(
                 f"Multiple rows found with guidance_id {guidance_id}. Data integrity issue.",
             )
+        if function_ids is not None:
+            candidate = Guidance(**{**logs[0].entries, **updates})
+            updates["stale_reasons"] = [
+                reason.model_dump(mode="json")
+                for reason in self._missing_function_reasons(
+                    candidate,
+                    available=self._available_functions_by_id(),
+                    preserve_historical=False,
+                )
+            ]
         unisdk.update_logs(
-            logs=[ids[0]],
+            logs=[logs[0].id],
             context=context,
             entries=updates,
             overwrite=True,
@@ -940,6 +996,61 @@ class GuidanceManager(BaseGuidanceManager):
             )
         unisdk.delete_logs(context=context, logs=ids[0])
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
+
+    @functools.wraps(BaseGuidanceManager.reconcile_dependencies, updated=())
+    def reconcile_dependencies(
+        self,
+        *,
+        guidance_ids: Optional[List[int]] = None,
+        destination: str | None = None,
+    ) -> ToolOutcome:
+        try:
+            context = self._guidance_context_for_destination(destination)
+        except ToolErrorException as exc:
+            return exc.payload  # type: ignore[return-value]
+        filter_expr = (
+            " or ".join(
+                f"guidance_id == {int(guidance_id)}" for guidance_id in guidance_ids
+            )
+            if guidance_ids
+            else None
+        )
+        logs = unisdk.get_logs(
+            context=context,
+            filter=filter_expr,
+            limit=1000,
+            exclude_fields=list_private_fields(context),
+        )
+        available = self._available_functions_by_id()
+        stale_guidance_ids: list[int] = []
+        for log in logs:
+            guidance = Guidance(**log.entries)
+            refreshed = self._missing_function_reasons(
+                guidance,
+                available=available,
+                preserve_historical=True,
+            )
+            if refreshed:
+                stale_guidance_ids.append(int(guidance.guidance_id))
+            serialized = [reason.model_dump(mode="json") for reason in refreshed]
+            if serialized == [
+                reason.model_dump(mode="json") for reason in guidance.stale_reasons
+            ]:
+                continue
+            unisdk.update_logs(
+                logs=[log.id],
+                context=context,
+                entries={"stale_reasons": serialized},
+                overwrite=True,
+            )
+        return {
+            "outcome": "dependencies reconciled",
+            "details": {
+                "checked": len(logs),
+                "stale_guidance_ids": stale_guidance_ids,
+                "stale_count": len(stale_guidance_ids),
+            },
+        }
 
     @functools.wraps(BaseGuidanceManager.search, updated=())
     def search(
@@ -1275,11 +1386,15 @@ class GuidanceManager(BaseGuidanceManager):
         changed = False
         for destination, group in by_destination.items():
             destination_arg = None if destination == "personal" else destination
-            changed |= self.sync_custom_guidance(
+            result = self.sync_custom_guidance(
                 source_guidance=group,
                 function_name_to_id=function_name_to_id,
                 destination=destination_arg,
             )
+            # Destination helpers may return a tool-error payload dict; skip
+            # that destination and continue syncing the remaining groups.
+            if isinstance(result, bool):
+                changed |= result
         return changed
 
 

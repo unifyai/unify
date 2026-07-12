@@ -83,6 +83,9 @@ class ActorFactory:
 
         actor = CodeActActor(
             environments=envs,
+            function_manager=ManagerRegistry.get_function_manager(),
+            guidance_manager=ManagerRegistry.get_guidance_manager(),
+            knowledge_manager=ManagerRegistry.get_knowledge_manager(),
         )
 
         return ActorFactoryResult(

@@ -224,30 +224,41 @@ class FlowHarness:
             description=f"secret {name}",
         )
 
-    def seed_knowledge_table(
+    def seed_knowledge_claims(
         self,
         *,
-        table_name: str,
-        rows: list[dict[str, Any]],
-        columns: dict[str, str] | None = None,
-    ) -> None:
-        """Create a knowledge table, insert rows, and verify they are readable."""
+        claims: list[dict[str, Any]],
+    ) -> list[int]:
+        """Insert typed knowledge claims and verify they are readable.
+
+        Each claim dict must include ``title`` and ``content``; optional keys
+        match ``KnowledgeManager.add_knowledge`` (``kind``, ``topics``, …).
+        Returns the assigned ``knowledge_id`` values in order.
+        """
 
         km = self.manager("knowledge")
-        if columns:
-            km._create_table(name=table_name, columns=columns)
-        else:
-            km._create_table(name=table_name)
-        outcome = km._add_rows(table=table_name, rows=rows)
-        if outcome.get("outcome") != "rows added successfully":
-            raise RuntimeError(
-                f"Knowledge table {table_name} add_rows failed: {outcome!r}",
-            )
-        filtered = km._filter(tables=table_name, filter=None)
-        if not (filtered.get(table_name) or []):
-            raise RuntimeError(
-                f"Knowledge table {table_name} not readable after seed: {filtered!r}",
-            )
+        ids: list[int] = []
+        for claim in claims:
+            title = claim["title"]
+            content = claim["content"]
+            kwargs = {
+                k: v
+                for k, v in claim.items()
+                if k not in {"title", "content"} and v is not None
+            }
+            outcome = km.add_knowledge(title=title, content=content, **kwargs)
+            if outcome.get("outcome") != "knowledge created successfully":
+                raise RuntimeError(
+                    f"Knowledge add_knowledge failed for {title!r}: {outcome!r}",
+                )
+            kid = int(outcome["details"]["knowledge_id"])
+            ids.append(kid)
+            fetched = km.get_knowledge(knowledge_id=kid)
+            if fetched.title != title:
+                raise RuntimeError(
+                    f"Knowledge claim {kid} not readable after seed: {fetched!r}",
+                )
+        return ids
 
     async def start_listener(self) -> None:
         """Subscribe to assistant unify replies on the CM event broker."""
@@ -536,10 +547,8 @@ class FlowHarness:
             knowledge_manager._ctx = (
                 f"{self.context_path.rstrip('/')}/{KNOWLEDGE_TABLE}"
             )
-            object.__setattr__(
-                knowledge_manager,
-                "_KnowledgeManager__data_manager",
-                None,
+            knowledge_manager._meta_ctx = (
+                f"{self.context_path.rstrip('/')}/{KNOWLEDGE_TABLE}/Meta"
             )
             SESSION_DETAILS.user.id = _runtime_user_context(self.context_path)
         except Exception:

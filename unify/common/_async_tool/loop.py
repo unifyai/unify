@@ -91,6 +91,10 @@ def _parse_tool_policy_result(
     immediately grant another LLM turn (without waiting for those tools to
     finish) for as long as subsequent policy evaluations keep returning
     ``eager=True``.  Default is ``False`` (wait for tool results).
+
+    While ``eager=True``, the loop also withholds ``compress_context`` from the
+    visible tool schema (except on the forced over-threshold compression path)
+    so gated required policies cannot be bypassed by compressing context.
     """
     if not isinstance(result, (tuple, list)) or len(result) < 2:
         raise TypeError(
@@ -407,8 +411,10 @@ async def async_tool_loop_inner(
          base tools visible on that turn.  When ``eager`` is ``True``, the
          loop grants another LLM turn immediately after scheduling tool
          calls (without waiting for them to finish), for as long as the
-         policy keeps returning ``eager=True``.  Omit ``eager`` (or set it
-         ``False``) to keep the default wait-for-results behaviour.
+         policy keeps returning ``eager=True``.  Eager turns also withhold
+         ``compress_context`` from the visible schema (forced over-threshold
+         compression is unchanged).  Omit ``eager`` (or set it ``False``) to
+         keep the default wait-for-results behaviour.
 
     parent_chat_context : ``list[dict] | None``
         Nested chat structure passed from an **outer** loop.  When
@@ -2063,6 +2069,9 @@ async def async_tool_loop_inner(
             logger.debug(
                 f"[setup +{_setup_elapsed()}] tool policy eval (step={runtime_state.step_index})",
             )
+            # Eager policies (e.g. discovery-first gates) keep the model on a
+            # narrow required tool subset.  Track that so we do not leak
+            # compress_context into the schema as an escape hatch.
             _policy_eager = False
             if tool_policy is not None:
                 _tools_snapshot = {n: s.fn for n, s in tools_data.normalized.items()}
@@ -2088,6 +2097,7 @@ async def async_tool_loop_inner(
                         f"tool_policy raised on turn {runtime_state.step_index}: {_e!r}",
                     )
                     tool_choice_mode, filtered = "auto", _tools_snapshot
+                    _policy_eager = False
                 policy_tools_norm = normalise_tools(filtered)
             else:
                 tool_choice_mode = "auto"
@@ -2181,7 +2191,10 @@ async def async_tool_loop_inner(
                     for name, spec in policy_tools_norm.items()
                     if tools_data.concurrency_ok(name) and tools_data.quota_ok(name)
                 ]
-                if _compress_schema is not None:
+                # Keep compress_context out of eager gated turns so required
+                # discovery/tool policies cannot be satisfied by compressing.
+                # Forced over-threshold compression above is unchanged.
+                if _compress_schema is not None and not _policy_eager:
                     visible_base_tools_schema.append(_compress_schema)
 
             # Inject the response-submission tool when response_format is set
@@ -2410,6 +2423,10 @@ async def async_tool_loop_inner(
                 }
                 if max_parallel_tool_calls is not None:
                     _gen_kwargs["parallel_tool_calls"] = max_parallel_tool_calls > 1
+                elif _policy_eager:
+                    # Discovery-first (and other eager gates) expose multiple
+                    # required tools that must be callable in one assistant turn.
+                    _gen_kwargs["parallel_tool_calls"] = True
 
                 llm_task = asyncio.create_task(
                     generate_with_preprocess(
@@ -2627,6 +2644,8 @@ async def async_tool_loop_inner(
                     }
                     if max_parallel_tool_calls is not None:
                         _gen_kwargs["parallel_tool_calls"] = max_parallel_tool_calls > 1
+                    elif _policy_eager:
+                        _gen_kwargs["parallel_tool_calls"] = True
 
                     _full_completion = await generate_with_preprocess(
                         client,
@@ -3679,15 +3698,14 @@ async def async_tool_loop_inner(
                             f"Failed to insert immediate placeholders: {_ph_exc!r}",
                         )
 
-                    # Eager tool policies: if this turn requested eager and
-                    # gates are still unsatisfied after the calls just
-                    # scheduled, grant another LLM turn now (overlapping
-                    # in-flight tools) instead of waiting for results.
-                    # Only re-invoke the policy when the turn was already
-                    # eager — non-eager policies must not be called again
-                    # with the same step_index (side-effectful policies /
-                    # tests treat one call per LLM turn as the contract).
-                    if _policy_eager and tool_policy is not None:
+                    # Eager tool policies: if gates are still unsatisfied after
+                    # the calls just scheduled, grant another LLM turn now
+                    # (overlapping in-flight tools) instead of waiting for
+                    # results.  Re-evaluate with the updated called_tools so
+                    # eagerness ends as soon as the policy stops requesting it.
+                    # Only re-invoke when this turn was already eager — non-eager
+                    # policies must not get an extra same-step callback.
+                    if tool_policy is not None and _policy_eager:
                         try:
                             _eager_snapshot = {
                                 n: s.fn for n, s in tools_data.normalized.items()

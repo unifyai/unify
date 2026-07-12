@@ -140,13 +140,13 @@ def build_persistent_steps():
     ws_method = "WebSearcher.ask"
 
     kb_suffix = "c3d4"
-    kb_h = [*h, f"execute_function(primitives.knowledge.update)({kb_suffix})"]
+    kb_h = [*h, f"KnowledgeManager_add_knowledge({kb_suffix})"]
     kb_cid = str(uuid4())
 
     # Inner primitives spawned by execute_code share the parent lineage
     # (no intermediate execute_code boundary — code is just a tool).
     ec_kb_suffix = "g7h8"
-    ec_kb_h = [*h, f"KnowledgeManager.update({ec_kb_suffix})"]
+    ec_kb_h = [*h, f"KnowledgeManager.add_knowledge({ec_kb_suffix})"]
     ec_kb_cid = str(uuid4())
     ec_ct_suffix = "i9j0"
     ec_ct_h = [*h, f"ContactManager.update({ec_ct_suffix})"]
@@ -676,12 +676,7 @@ def build_persistent_steps():
                                 "execute_code",
                                 {
                                     "code": (
-                                        "kb_result = await primitives.knowledge.update(\n"
-                                        '    instructions="Store the following: GCP project unify-prod-2026 '
-                                        "(display name: unify-production) is being configured with a Drive API "
-                                        'service account. Setup initiated on 2026-03-09."\n'
-                                        ")\n"
-                                        "\n"
+                                        "# Knowledge claims use top-level JSON tools outside execute_code.\n"
                                         "ct_result = await primitives.contacts.update(\n"
                                         '    instructions="Update the DevOps team contact with the new '
                                         "Google Drive service account credentials for project "
@@ -696,12 +691,12 @@ def build_persistent_steps():
                 ),
             ],
         },
-        # ── 21–26. Inner primitive 1: KnowledgeManager.update (with tool loop) ──
+        # ── 21–26. Inner: KnowledgeManager.add_knowledge (typed claim write) ──
         # These share the root lineage — execute_code is just a tool, not a
         # boundary. The pending-call fallback in findSpawningToolCallId
         # correlates them to the in-flight execute_code tool call.
         {
-            "label": "Inner: KnowledgeManager.update incoming",
+            "label": "Inner: KnowledgeManager.add_knowledge incoming",
             "delay": 1.5,
             "events": [
                 mm(
@@ -709,8 +704,8 @@ def build_persistent_steps():
                     ec_kb_h,
                     phase="incoming",
                     manager="KnowledgeManager",
-                    method="update",
-                    display_label="Updating notes",
+                    method="add_knowledge",
+                    display_label="Saving a new knowledge claim",
                     request="Store GCP project unify-prod-2026 credential details.",
                 ),
             ],
@@ -725,12 +720,12 @@ def build_persistent_steps():
                         "role": "user",
                         "content": "Store GCP project unify-prod-2026 credential details.",
                     },
-                    method="KnowledgeManager.update",
+                    method="KnowledgeManager.add_knowledge",
                 ),
             ],
         },
         {
-            "label": "KM inner: thinking + _filter",
+            "label": "KM inner: thinking + search",
             "delay": 1.0,
             "events": [
                 tl(
@@ -741,32 +736,40 @@ def build_persistent_steps():
                         tool_calls=[
                             _tc(
                                 "tc_km_filter",
-                                "_filter",
+                                "KnowledgeManager_search",
                                 {
-                                    "table": "Credentials",
-                                    "filter": "project == 'unify-prod-2026'",
+                                    "references": {
+                                        "content": "GCP project unify-prod-2026 credentials",
+                                    },
+                                    "k": 5,
                                 },
                             ),
                         ],
                     ),
-                    method="KnowledgeManager.update",
-                    tool_aliases={"_filter": "Searching knowledge base"},
+                    method="KnowledgeManager.add_knowledge",
+                    tool_aliases={
+                        "KnowledgeManager_search": "Searching knowledge claims",
+                    },
                 ),
             ],
         },
         {
-            "label": "KM inner: _filter result",
+            "label": "KM inner: search result",
             "delay": 1.0,
             "events": [
                 tl(
                     ec_kb_h,
-                    _tool_result("tc_km_filter", "_filter", {"rows": [], "count": 0}),
-                    method="KnowledgeManager.update",
+                    _tool_result(
+                        "tc_km_filter",
+                        "KnowledgeManager_search",
+                        {"rows": [], "count": 0},
+                    ),
+                    method="KnowledgeManager.add_knowledge",
                 ),
             ],
         },
         {
-            "label": "KM inner: thinking + _insert",
+            "label": "KM inner: thinking + add_knowledge",
             "delay": 0.8,
             "events": [
                 tl(
@@ -776,39 +779,53 @@ def build_persistent_steps():
                         tool_calls=[
                             _tc(
                                 "tc_km_insert",
-                                "_insert",
+                                "KnowledgeManager_add_knowledge",
                                 {
-                                    "table": "Credentials",
-                                    "row": {
-                                        "project": "unify-prod-2026",
-                                        "display_name": "unify-production",
-                                        "service_account": "unify-drive-access",
-                                        "api": "Google Drive",
-                                        "key_format": "JSON",
-                                        "status": "active",
-                                    },
+                                    "title": "GCP project unify-prod-2026 credentials",
+                                    "content": (
+                                        "GCP project unify-prod-2026 (unify-production) uses "
+                                        "service account unify-drive-access for Google Drive API. "
+                                        "JSON key format; status active."
+                                    ),
+                                    "kind": "fact",
+                                    "topics": ["gcp", "credentials", "drive"],
+                                    "source_refs": [
+                                        {
+                                            "kind": "user_statement",
+                                            "note": "setup chat",
+                                        },
+                                    ],
                                 },
                             ),
                         ],
                     ),
-                    method="KnowledgeManager.update",
-                    tool_aliases={"_insert": "Inserting row"},
+                    method="KnowledgeManager.add_knowledge",
+                    tool_aliases={
+                        "KnowledgeManager_add_knowledge": "Saving a new knowledge claim",
+                    },
                 ),
             ],
         },
         {
-            "label": "KM inner: _insert result + final response",
+            "label": "KM inner: add_knowledge result + final response",
             "delay": 0.8,
             "events": [
                 tl(
                     ec_kb_h,
-                    _tool_result("tc_km_insert", "_insert", {"inserted": 1}),
-                    method="KnowledgeManager.update",
+                    _tool_result(
+                        "tc_km_insert",
+                        "KnowledgeManager_add_knowledge",
+                        {
+                            "outcome": "knowledge created successfully",
+                            "details": {"knowledge_id": 1},
+                        },
+                    ),
+                    method="KnowledgeManager.add_knowledge",
                 ),
             ],
         },
         {
-            "label": "Inner: KnowledgeManager.update outgoing",
+            "label": "Inner: KnowledgeManager.add_knowledge outgoing",
             "delay": 0.3,
             "events": [
                 mm(
@@ -816,8 +833,8 @@ def build_persistent_steps():
                     ec_kb_h,
                     phase="outgoing",
                     manager="KnowledgeManager",
-                    method="update",
-                    display_label="Updating notes",
+                    method="add_knowledge",
+                    display_label="Saving a new knowledge claim",
                     answer="Knowledge base updated with credential details.",
                 ),
             ],
@@ -1144,7 +1161,7 @@ def build_persistent_steps():
             "events": [tl(h, {"role": "assistant", "_thinking_in_flight": True})],
         },
         {
-            "label": "Doing: send_notification + execute_function(primitives.knowledge.update)",
+            "label": "Doing: send_notification + KnowledgeManager_add_knowledge",
             "delay": 4.5,
             "events": [
                 tl(
@@ -1162,24 +1179,30 @@ def build_persistent_steps():
                             ),
                             _tc(
                                 "tc_kb",
-                                "execute_function",
+                                "KnowledgeManager_add_knowledge",
                                 {
-                                    "function_name": "primitives.knowledge.update",
-                                    "call_kwargs": {
-                                        "instructions": (
-                                            "Update the Google Drive credentials entry for project unify-prod-2026: "
-                                            "JSON key file downloaded and stored in the organization secrets manager "
-                                            "per DevOps policy. Service account: unify-drive-access. "
-                                            "Drive API enabled. Setup completed 2026-03-09."
-                                        ),
-                                    },
+                                    "title": "GCP project unify-prod-2026 credentials",
+                                    "content": (
+                                        "Google Drive credentials for project unify-prod-2026: "
+                                        "JSON key file downloaded and stored in the organization secrets manager "
+                                        "per DevOps policy. Service account: unify-drive-access. "
+                                        "Drive API enabled. Setup completed 2026-03-09."
+                                    ),
+                                    "kind": "fact",
+                                    "topics": ["gcp", "credentials", "drive"],
+                                    "source_refs": [
+                                        {
+                                            "kind": "user_statement",
+                                            "note": "DevOps confirmed in chat",
+                                        },
+                                    ],
                                 },
                             ),
                         ],
                     ),
                     tool_aliases={
                         "send_notification": "Sending notification",
-                        "execute_function": "primitives.knowledge.update",
+                        "KnowledgeManager_add_knowledge": "Saving a new knowledge claim",
                     },
                 ),
             ],
@@ -1205,25 +1228,26 @@ def build_persistent_steps():
         # ── 32. Child ManagerMethod for knowledge update ──
         # Second parallel tool completes → cancels the in-flight LLM call.
         {
-            "label": "Child ManagerMethod: primitives.knowledge.update",
+            "label": "Child ManagerMethod: KnowledgeManager_add_knowledge",
             "delay": 1.7,
             "events": [
                 mm(
                     kb_cid,
                     kb_h,
                     phase="incoming",
-                    manager="CodeActActor",
-                    method="execute_function",
-                    display_label="Running: primitives.knowledge.update",
+                    manager="KnowledgeManager",
+                    method="add_knowledge",
+                    display_label="Saving a new knowledge claim",
+                    request="Store credential details for unify-prod-2026.",
                 ),
                 mm(
                     kb_cid,
                     kb_h,
                     phase="outgoing",
-                    manager="CodeActActor",
-                    method="execute_function",
-                    display_label="Running: primitives.knowledge.update",
-                    answer="Knowledge base updated with credential details.",
+                    manager="KnowledgeManager",
+                    method="add_knowledge",
+                    display_label="Saving a new knowledge claim",
+                    answer="Knowledge claim stored with credential details.",
                 ),
             ],
         },
@@ -1236,7 +1260,7 @@ def build_persistent_steps():
                     h,
                     _tool_result(
                         "tc_kb",
-                        "execute_function",
+                        "KnowledgeManager_add_knowledge",
                         {"result": "Knowledge base updated successfully."},
                     ),
                 ),

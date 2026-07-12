@@ -37,7 +37,6 @@ DYNAMIC_AUTHORED_TABLE_PREFIXES: frozenset[str] = frozenset(
         "Data",
         "FileRecords",
         "Files",
-        "Knowledge",
     },
 )
 SHARED_TABLE_MATCHERS: tuple[tuple[str, tuple[str, ...]], ...] = tuple(

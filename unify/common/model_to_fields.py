@@ -7,7 +7,7 @@ from typing import Any
 import jsonref
 from pydantic import BaseModel
 
-from ..knowledge_manager.types import ColumnType
+from ..common.column_types import ColumnType
 
 # Map JSON Schema types to ColumnType
 _JSON_SCHEMA_TYPE_MAP = {

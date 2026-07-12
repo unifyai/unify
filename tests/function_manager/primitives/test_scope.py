@@ -144,7 +144,6 @@ def test_valid_manager_aliases_contains_expected():
         "dashboards",
         "tasks",
         "transcripts",
-        "knowledge",
         "secrets",
         "web",
         "data",

@@ -5,6 +5,7 @@ from typing import List, Optional
 from pydantic import Field, field_validator, model_validator
 
 from unify.common.authorship import AuthoredRow
+from unify.common.stale_reason import StaleReason, coerce_stale_reasons
 
 from ...image_manager.types import AnnotatedImageRefs
 
@@ -39,6 +40,10 @@ class Guidance(AuthoredRow):
             "List of Function.function_id values that this guidance is relevant for. "
             "Represents a many-to-many relationship between Guidance and Functions."
         ),
+    )
+    stale_reasons: List[StaleReason] = Field(
+        default_factory=list,
+        description="Structured records for related functions that no longer resolve.",
     )
 
     is_builtin: bool = Field(
@@ -88,6 +93,11 @@ class Guidance(AuthoredRow):
             except Exception as exc:
                 raise ValueError("function_ids must contain integers") from exc
         return out
+
+    @field_validator("stale_reasons", mode="before")
+    @classmethod
+    def _validate_stale_reasons(cls, v):
+        return coerce_stale_reasons(v)
 
     @model_validator(mode="before")
     @classmethod

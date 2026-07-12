@@ -52,9 +52,9 @@ echo "Primitive result: $result"
 SCRIPT_CALLS_MULTIPLE_PRIMITIVES = """#!/bin/sh
 # Call multiple primitives
 contacts=$(unity-primitive contacts ask --text "Who is Alice?")
-knowledge=$(unity-primitive knowledge ask --text "What is 2+2?")
+web=$(unity-primitive web ask --text "What is 2+2?")
 echo "Contacts: $contacts"
-echo "Knowledge: $knowledge"
+echo "Web: $web"
 """
 
 SCRIPT_WITH_JSON_ARG = """#!/bin/sh
@@ -154,8 +154,8 @@ def mock_primitives():
     primitives = MagicMock()
     primitives.contacts = MagicMock()
     primitives.contacts.ask = AsyncMock(return_value="Alice is a test contact")
-    primitives.knowledge = MagicMock()
-    primitives.knowledge.ask = AsyncMock(return_value="4")
+    primitives.web = MagicMock()
+    primitives.web.ask = AsyncMock(return_value="4")
     primitives.files = MagicMock()
     primitives.files.search_files = AsyncMock(
         return_value=[
@@ -312,7 +312,7 @@ async def test_shell_calls_multiple_primitives(
     assert "Alice is a test contact" in result["stdout"]
     assert "4" in result["stdout"]
     mock_primitives.contacts.ask.assert_called_once()
-    mock_primitives.knowledge.ask.assert_called_once()
+    mock_primitives.web.ask.assert_called_once()
 
 
 @_handle_project

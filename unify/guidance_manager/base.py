@@ -243,6 +243,34 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         raise NotImplementedError
 
     @abstractmethod
+    def reconcile_dependencies(
+        self,
+        *,
+        guidance_ids: Optional[List[int]] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        """Refresh structured link debt for related functions.
+
+        Checks each selected entry's declared ``function_ids`` and any
+        previously recorded missing-function identities. Missing links remain
+        represented in ``stale_reasons`` without reconstructing
+        ``function_ids`` from names.
+
+        Parameters
+        ----------
+        guidance_ids : list[int] | None
+            Optional subset to audit; when omitted, checks all stored guidance.
+        destination : str | None
+            Destination scope for reads and stale-reason writes.
+
+        Returns
+        -------
+        ToolOutcome
+            Outcome with checked and stale guidance identifiers.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def clear(self) -> None:
         raise NotImplementedError
 

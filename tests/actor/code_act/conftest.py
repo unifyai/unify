@@ -13,6 +13,7 @@ _FM_METHOD_NAMES = (
     "list_functions",
     "add_functions",
     "delete_function",
+    "reconcile_dependencies",
     "add_venv",
     "list_venvs",
     "get_venv",

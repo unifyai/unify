@@ -256,6 +256,25 @@ def delete_table_impl(context: str, *, dangerous_ok: bool = False) -> None:
             "delete_table requires dangerous_ok=True to confirm deletion. "
             "This is a safety guard to prevent accidental data loss.",
         )
+    # Data contexts are path-keyed (no Orchestra FK). Snapshot Knowledge
+    # claims that cite this context before the path disappears.
+    try:
+        from unify.common.stale_reason import StaleReason
+        from unify.knowledge_manager.knowledge_manager import (
+            mark_knowledge_stale_for_deleted_sources,
+        )
+
+        mark_knowledge_stale_for_deleted_sources(
+            reasons=[
+                StaleReason(
+                    dep_kind="data",
+                    context=context,
+                    message=f"missing data context={context}",
+                ),
+            ],
+        )
+    except Exception:
+        pass
     logger.info("Deleting table context: %s", context)
     unisdk.delete_context(context)
 

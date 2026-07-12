@@ -66,6 +66,11 @@ from ..image_manager.image_manager import ImageHandle
 from ..manager_registry import ManagerRegistry
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import ContextRegistry, TableContext
+from ..common.stale_reason import (
+    StaleReason,
+    coerce_stale_reasons,
+    merge_stale_reasons,
+)
 from unify.function_manager.primitives.scope import (
     PrimitiveScope,
     default_runtime_scope,
@@ -2774,12 +2779,36 @@ class FunctionManager(BaseFunctionManager):
                     app_keys,
                 )
             ]
+            names_to_delete = {
+                str(lg.entries["name"])
+                for lg in logs or []
+                if lg.id in ids_to_delete and lg.entries.get("name")
+            }
             if not ids_to_delete:
                 return 0
             unisdk.delete_logs(
                 context=self._primitives_ctx,
                 logs=ids_to_delete,
             )
+            # Compositional link-debt updates are best-effort; a successful
+            # delete must still report the removed count.
+            compositional_ctx = getattr(self, "_compositional_ctx", None)
+            if compositional_ctx is not None and names_to_delete:
+                try:
+                    compositional_logs = unisdk.get_logs(
+                        context=compositional_ctx,
+                        exclude_fields=list_private_fields(compositional_ctx),
+                    )
+                    self._append_missing_dependency_reasons(
+                        logs=compositional_logs,
+                        missing_names=names_to_delete,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to append missing-dependency reasons after "
+                        "provider integration delete: %s",
+                        e,
+                    )
             return len(ids_to_delete)
         except Exception as e:
             logger.warning(f"Failed to delete provider integration rows: {e}")
@@ -3419,6 +3448,14 @@ class FunctionManager(BaseFunctionManager):
         update_data = strip_authoring_assistant_id(
             {k: v for k, v in data.items() if k != "function_id"},
         )
+        if "depends_on" in update_data:
+            update_data["stale_reasons"] = [
+                reason.model_dump(mode="json")
+                for reason in self._dependency_stale_reasons(
+                    update_data["depends_on"] or [],
+                    available_names=self._available_dependency_names(),
+                )
+            ]
         unisdk.update_logs(
             context=self._compositional_ctx,
             logs=[log.id],
@@ -3430,6 +3467,13 @@ class FunctionManager(BaseFunctionManager):
         """Insert a new custom function."""
         # Remove function_id if present - let it be auto-assigned
         insert_data = {k: v for k, v in data.items() if k != "function_id"}
+        insert_data["stale_reasons"] = [
+            reason.model_dump(mode="json")
+            for reason in self._dependency_stale_reasons(
+                insert_data.get("depends_on") or [],
+                available_names=self._available_dependency_names(),
+            )
+        ]
         result = unity_create_logs(
             context=self._compositional_ctx,
             entries=[insert_data],
@@ -4075,6 +4119,13 @@ class FunctionManager(BaseFunctionManager):
                     "embedding_text": embedding_text,
                     "precondition": precondition,
                     "verify": should_verify,
+                    "stale_reasons": [
+                        reason.model_dump(mode="json")
+                        for reason in self._dependency_stale_reasons(
+                            dependencies_list,
+                            available_names=all_known_function_names,
+                        )
+                    ],
                 }
 
                 if venv_id is not None:
@@ -4250,6 +4301,7 @@ class FunctionManager(BaseFunctionManager):
                     "embedding_text": embedding_text,
                     "precondition": precondition,
                     "verify": should_verify,
+                    "stale_reasons": [],
                 }
 
                 if name in existing_to_update:
@@ -4853,6 +4905,8 @@ class FunctionManager(BaseFunctionManager):
                 ),  # Default for backward compat
                 "argspec": ent.get("argspec"),
                 "docstring": ent.get("docstring", ""),
+                "depends_on": ent.get("depends_on", []),
+                "stale_reasons": ent.get("stale_reasons", []),
                 "guidance_ids": ent.get("guidance_ids", []),
                 "verify": ent.get("verify", True),
                 "venv_id": ent.get("venv_id"),
@@ -4916,6 +4970,129 @@ class FunctionManager(BaseFunctionManager):
 
         return logs[0].entries.get("precondition")
 
+    @staticmethod
+    def _dependency_stale_reasons(
+        depends_on: List[str],
+        *,
+        available_names: set[str],
+        existing: Optional[List[StaleReason]] = None,
+    ) -> List[StaleReason]:
+        preserved = [
+            reason
+            for reason in coerce_stale_reasons(existing)
+            if reason.dep_kind != "depends_on"
+        ]
+        missing = [
+            StaleReason(
+                dep_kind="depends_on",
+                name=name,
+                message=f"missing dependency name={name}",
+            )
+            for name in depends_on
+            if name not in available_names
+        ]
+        return merge_stale_reasons(preserved, *missing)
+
+    def _available_dependency_names(
+        self,
+        compositional_logs: Optional[List[Any]] = None,
+    ) -> set[str]:
+        if compositional_logs is None:
+            compositional_logs = unisdk.get_logs(
+                context=self._compositional_ctx,
+                exclude_fields=list_private_fields(self._compositional_ctx),
+            )
+        available = {
+            str(log.entries["name"])
+            for log in compositional_logs
+            if log.entries.get("name")
+        }
+        if self._include_primitives:
+            available.update(
+                str(row["name"]) for row in self._primitive_logs() if row.get("name")
+            )
+        return available
+
+    def _append_missing_dependency_reasons(
+        self,
+        *,
+        logs: List[Any],
+        missing_names: set[str],
+    ) -> None:
+        for log in logs:
+            dependencies = set(log.entries.get("depends_on") or [])
+            matched = sorted(dependencies.intersection(missing_names))
+            if not matched:
+                continue
+            existing = coerce_stale_reasons(log.entries.get("stale_reasons"))
+            merged = merge_stale_reasons(
+                existing,
+                *[
+                    StaleReason(
+                        dep_kind="depends_on",
+                        name=name,
+                        message=f"missing dependency name={name}",
+                    )
+                    for name in matched
+                ],
+            )
+            if [reason.model_dump(mode="json") for reason in merged] == [
+                reason.model_dump(mode="json") for reason in existing
+            ]:
+                continue
+            unisdk.update_logs(
+                context=self._compositional_ctx,
+                logs=[log.id],
+                entries={
+                    "stale_reasons": [
+                        reason.model_dump(mode="json") for reason in merged
+                    ],
+                },
+                overwrite=True,
+            )
+
+    def _mark_guidance_stale_for_deleted_functions(
+        self,
+        deleted_functions: List[tuple[int, str]],
+    ) -> None:
+        if not deleted_functions:
+            return
+        from ..guidance_manager.guidance_manager import GUIDANCE_TABLE, GuidanceManager
+
+        for root in ContextRegistry.read_roots(GuidanceManager, GUIDANCE_TABLE):
+            context = f"{root.strip('/')}/{GUIDANCE_TABLE}"
+            for function_id, name in deleted_functions:
+                logs = unisdk.get_logs(
+                    context=context,
+                    filter=f"{int(function_id)} in function_ids",
+                    exclude_fields=list_private_fields(context),
+                )
+                for log in logs:
+                    existing = coerce_stale_reasons(
+                        log.entries.get("stale_reasons"),
+                    )
+                    merged = merge_stale_reasons(
+                        existing,
+                        StaleReason(
+                            dep_kind="function",
+                            id=int(function_id),
+                            name=name,
+                            message=(
+                                f"missing function_id={int(function_id)} name={name}"
+                            ),
+                        ),
+                    )
+                    unisdk.update_logs(
+                        context=context,
+                        logs=[log.id],
+                        entries={
+                            "stale_reasons": [
+                                reason.model_dump(mode="json") for reason in merged
+                            ],
+                        },
+                        overwrite=True,
+                    )
+
     # 3. Deletion ------------------------------------------------------- #
 
     @functools.wraps(BaseFunctionManager.delete_function, updated=())
@@ -4960,7 +5137,15 @@ class FunctionManager(BaseFunctionManager):
                     f"Cannot delete primitives (system-owned): {prim_names}",
                 )
 
-        # Handle single function optimization
+        exclude_fields = list_private_fields(self._compositional_ctx)
+
+        def _load_compositional_logs():
+            return unisdk.get_logs(
+                context=self._compositional_ctx,
+                exclude_fields=exclude_fields,
+            )
+
+        # Single-id: cheap existence check before any full-table scan.
         if len(function_ids) == 1:
             log = self._get_log_by_function_id(
                 function_id=function_ids[0],
@@ -4973,18 +5158,16 @@ class FunctionManager(BaseFunctionManager):
             ids_to_delete = {function_ids[0]}
             log_ids_to_delete = [log.id]
             results = {target_name: "deleted"}
+            target_names = {target_name}
+            id_to_name = {function_ids[0]: target_name}
+            id_to_log = {function_ids[0]: log}
+            all_logs = None
         else:
-            # Multiple functions - build from all logs
-            all_logs = unisdk.get_logs(
-                context=self._compositional_ctx,
-                exclude_fields=list_private_fields(self._compositional_ctx),
-            )
-
+            all_logs = _load_compositional_logs()
             id_to_log = {lg.entries["function_id"]: lg for lg in all_logs}
             id_to_name = {
                 lg.entries["function_id"]: lg.entries["name"] for lg in all_logs
             }
-
             ids_to_delete = set(function_ids)
             target_names = {
                 id_to_name[fid] for fid in function_ids if fid in id_to_name
@@ -5000,29 +5183,18 @@ class FunctionManager(BaseFunctionManager):
                 id_to_name[fid]: "deleted" for fid in function_ids if fid in id_to_name
             }
 
-            function_deps = {
-                lg.entries["function_id"]: set(lg.entries.get("depends_on", []))
-                for lg in all_logs
-            }
-
         if delete_dependents:
-            # Get all logs if not already loaded
-            if len(function_ids) == 1:
-                all_logs = unisdk.get_logs(
-                    context=self._compositional_ctx,
-                    exclude_fields=list_private_fields(self._compositional_ctx),
-                )
+            # BFS needs the full depends_on graph.
+            if all_logs is None:
+                all_logs = _load_compositional_logs()
                 id_to_log = {lg.entries["function_id"]: lg for lg in all_logs}
                 id_to_name = {
                     lg.entries["function_id"]: lg.entries["name"] for lg in all_logs
                 }
-                function_deps = {
-                    lg.entries["function_id"]: set(lg.entries.get("depends_on", []))
-                    for lg in all_logs
-                }
-                target_names = {target_name}
-
-            # BFS to find all transitive dependents
+            function_deps = {
+                lg.entries["function_id"]: set(lg.entries.get("depends_on", []))
+                for lg in all_logs
+            }
             to_process = set(target_names)
             processed = set()
 
@@ -5040,6 +5212,28 @@ class FunctionManager(BaseFunctionManager):
                             dep_name = id_to_name[fid]
                             results[dep_name] = "deleted"
                             to_process.add(dep_name)
+        else:
+            # Keep dependents, but record link debt on rows that still
+            # reference the deleted name(s). Need the compositional snapshot
+            # (list-membership filters are not reliable enough here).
+            if all_logs is None:
+                all_logs = _load_compositional_logs()
+            self._append_missing_dependency_reasons(
+                logs=[
+                    log
+                    for log in all_logs
+                    if log.entries["function_id"] not in ids_to_delete
+                ],
+                missing_names=set(target_names),
+            )
+
+        self._mark_guidance_stale_for_deleted_functions(
+            [
+                (int(function_id), str(id_to_name[function_id]))
+                for function_id in sorted(ids_to_delete)
+                if function_id in id_to_name
+            ],
+        )
 
         # Batch delete all functions
         if log_ids_to_delete:
@@ -5049,6 +5243,57 @@ class FunctionManager(BaseFunctionManager):
             )
 
         return results
+
+    @functools.wraps(BaseFunctionManager.reconcile_dependencies, updated=())
+    def reconcile_dependencies(
+        self,
+        *,
+        function_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        all_logs = unisdk.get_logs(
+            context=self._compositional_ctx,
+            exclude_fields=list_private_fields(self._compositional_ctx),
+        )
+        selected_ids = (
+            {int(function_id) for function_id in function_ids}
+            if function_ids is not None
+            else None
+        )
+        selected = [
+            log
+            for log in all_logs
+            if selected_ids is None or int(log.entries["function_id"]) in selected_ids
+        ]
+        available = self._available_dependency_names(all_logs)
+        stale_function_ids: list[int] = []
+        for log in selected:
+            function = Function(**log.entries)
+            refreshed = self._dependency_stale_reasons(
+                function.depends_on,
+                available_names=available,
+                existing=function.stale_reasons,
+            )
+            if refreshed:
+                stale_function_ids.append(int(function.function_id))
+            serialized = [reason.model_dump(mode="json") for reason in refreshed]
+            if serialized == [
+                reason.model_dump(mode="json") for reason in function.stale_reasons
+            ]:
+                continue
+            unisdk.update_logs(
+                context=self._compositional_ctx,
+                logs=[log.id],
+                entries={"stale_reasons": serialized},
+                overwrite=True,
+            )
+        return {
+            "outcome": "dependencies reconciled",
+            "details": {
+                "checked": len(selected),
+                "stale_function_ids": stale_function_ids,
+                "stale_count": len(stale_function_ids),
+            },
+        }
 
     # 4. Filter --------------------------------------------------------- #
 
@@ -5168,7 +5413,7 @@ class FunctionManager(BaseFunctionManager):
     def search_functions(
         self,
         *,
-        query: str,
+        query: str = "",
         n: int = 5,
         include_implementations: bool = True,
         _return_callable: bool = False,
@@ -5181,6 +5426,20 @@ class FunctionManager(BaseFunctionManager):
         if _return_callable and _namespace is None:
             raise ValueError("_namespace required when _return_callable=True")
 
+        # Soft models sometimes call search with ``{}`` / empty query during
+        # discovery. Orchestra rejects embed(""), so fall back to a plain
+        # catalogue sample instead of a vector sort.
+        if not str(query or "").strip():
+            return self.filter_functions(
+                filter=None,
+                offset=0,
+                limit=n,
+                include_implementations=include_implementations,
+                _return_callable=_return_callable,
+                _namespace=_namespace,
+                _also_return_metadata=_also_return_metadata,
+            )
+
         allowed_fields = (
             list(Function.model_fields.keys())
             if _return_callable
@@ -5191,6 +5450,7 @@ class FunctionManager(BaseFunctionManager):
                 "argspec",
                 "docstring",
                 "depends_on",
+                "stale_reasons",
                 "embedding_text",
                 "precondition",
                 "guidance_ids",

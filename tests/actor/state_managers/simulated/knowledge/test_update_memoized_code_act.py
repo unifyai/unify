@@ -1,10 +1,13 @@
 """
-CodeActActor routing tests for KnowledgeManager.update with FunctionManager discovery
-tools available (simulated managers).
+CodeActActor routing tests for KnowledgeManager writes with FunctionManager
+discovery tools available (simulated managers).
 
-Validates that even with FunctionManager search/filter/list tools exposed,
-the LLM routes simple knowledge mutations via ``execute_function`` calling the
-primitive directly.
+Validates that even with FunctionManager tools exposed, knowledge mutations
+route via KnowledgeManager JSON tools.
+
+Discovery-first gating is disabled via ``tool_policy=None`` so these evals
+isolate write routing; gate behaviour is covered by
+``tests/actor/code_act/test_discovery_first_policy*.py``.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from tests.actor.state_managers.utils import (
-    assert_used_execute_function,
+    get_code_act_tool_calls,
     make_code_act_actor,
 )
 
@@ -20,7 +23,8 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 UPDATE_QUERIES: list[str] = [
-    "Store: Office hours are 9–5 PT.",
+    # Novel claim (seed already has office hours / onboarding).
+    "Store: Parking validation is available at reception for visitors.",
     "Update the onboarding policy to require security training in week one.",
 ]
 
@@ -28,13 +32,16 @@ UPDATE_QUERIES: list[str] = [
 @pytest.mark.asyncio
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("request_text", UPDATE_QUERIES)
-async def test_code_act_updates_use_execute_function_with_fm_tools(
+async def test_code_act_update_uses_knowledge_manager_with_fm_tools(
     request_text: str,
+    seeded_knowledge_manager,
 ):
     async with make_code_act_actor(
         impl="simulated",
         include_function_manager_tools=True,
-    ) as (actor, _primitives, calls):
+        knowledge_manager=seeded_knowledge_manager,
+        tool_policy=None,
+    ) as (actor, _primitives, _calls):
         handle = await actor.act(
             f"{request_text} Do not ask clarifying questions. Do not create any stubs. Proceed with the best interpretation of the request.",
             clarification_enabled=False,
@@ -42,5 +49,15 @@ async def test_code_act_updates_use_execute_function_with_fm_tools(
         result = await handle.result()
         assert result is not None
 
-        assert_used_execute_function(handle)
-        assert "primitives.knowledge.update" in set(calls), f"Calls seen: {calls}"
+        tool_calls = set(get_code_act_tool_calls(handle))
+        km_tools = {n for n in tool_calls if n.startswith("KnowledgeManager_")}
+        assert km_tools, f"Expected KnowledgeManager_* tools, saw: {tool_calls}"
+        assert any(
+            n
+            in {
+                "KnowledgeManager_add_knowledge",
+                "KnowledgeManager_update_knowledge",
+                "KnowledgeManager_supersede_knowledge",
+            }
+            for n in km_tools
+        ), f"Expected a KnowledgeManager write tool, saw: {km_tools}"

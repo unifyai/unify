@@ -129,6 +129,11 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
             updates["images"] = images
         if function_ids is not None:
             updates["function_ids"] = function_ids
+            updates["stale_reasons"] = [
+                reason
+                for reason in existing.stale_reasons
+                if reason.dep_kind != "function"
+            ]
         if not updates:
             raise ValueError("At least one field must be provided for an update.")
         self._entries[guidance_id] = existing.model_copy(update=updates)
@@ -146,6 +151,28 @@ class SimulatedGuidanceManager(BaseGuidanceManager):
             )
         del self._entries[guidance_id]
         return {"outcome": "guidance deleted", "details": {"guidance_id": guidance_id}}
+
+    @functools.wraps(BaseGuidanceManager.reconcile_dependencies, updated=())
+    def reconcile_dependencies(
+        self,
+        *,
+        guidance_ids: Optional[List[int]] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        selected = [
+            entry
+            for guidance_id, entry in self._entries.items()
+            if guidance_ids is None or guidance_id in guidance_ids
+        ]
+        stale_ids = [entry.guidance_id for entry in selected if entry.stale_reasons]
+        return {
+            "outcome": "dependencies reconciled",
+            "details": {
+                "checked": len(selected),
+                "stale_guidance_ids": stale_ids,
+                "stale_count": len(stale_ids),
+            },
+        }
 
     # ------------------------------------------------------------------ #
     # clear
