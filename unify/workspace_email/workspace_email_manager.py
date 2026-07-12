@@ -293,7 +293,7 @@ class WorkspaceEmailManager:
         Parameters
         ----------
         query : str
-            Provider search query (Gmail search syntax or Microsoft ``$search``).
+            Provider search string (Gmail ``q`` syntax or Microsoft ``$search``).
         max_results : int, optional
             Maximum number of messages to return.
         """

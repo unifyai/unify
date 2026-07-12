@@ -52,11 +52,12 @@ async def update_contacts_and_search():
 |----------|---------|---------|
 | `primitives.contacts` | ContactManager | `ask`, `update` |
 | `primitives.transcripts` | TranscriptManager | `ask` |
-| `primitives.knowledge` | KnowledgeManager | `ask`, `update`, `refactor` |
 | `primitives.tasks` | TaskScheduler | `ask`, `update`, `execute` |
 | `primitives.secrets` | SecretManager | `ask`, `update` |
 | `primitives.web` | WebSearcher | `ask` |
 | `primitives.computer` | ComputerPrimitives | `navigate`, `act`, `observe`, `query`, `reason` |
+
+Knowledge and Guidance are **not** primitives. They are typed catalogues exposed as top-level Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`).
 
 ---
 
@@ -148,7 +149,10 @@ from unity.function_manager.custom import custom_function
 @custom_function()
 async def acme_data_export(format: str = "csv") -> str:
     """Export ACME's proprietary data."""
-    data = await primitives.knowledge.ask(question="Get all ACME records")
+    data = await primitives.data.filter(
+        context="Knowledge",
+        filter="'ACME' in title or 'ACME' in content",
+    )
     return f"Exported to /exports/acme.{format}"
 
 
@@ -450,7 +454,7 @@ async def delegated_research(topic: str) -> SteerableToolHandle:
     """
     return await primitives.actor.act(
         request=f"Research the following topic thoroughly: {topic}",
-        prompt_functions=["primitives.web.ask", "primitives.knowledge.update"],
+        prompt_functions=["primitives.web.ask", "primitives.contacts.ask"],
         can_store=False,
         timeout=300,
     )

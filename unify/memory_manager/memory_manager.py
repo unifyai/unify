@@ -364,9 +364,22 @@ class MemoryManager(BaseMemoryManager):
 
         tools: Dict[str, Callable[..., Any]] = methods_to_tool_dict(
             ToolSpec(fn=self._contact_manager.ask, display_label="Looking up contacts"),
-            ToolSpec(fn=_km.ask, display_label="Querying notes"),
-            ToolSpec(fn=_km.refactor, display_label="Reorganising notes"),
-            ToolSpec(fn=_km.update, display_label="Updating notes"),
+            ToolSpec(fn=_km.search, display_label="Searching knowledge claims"),
+            ToolSpec(fn=_km.filter, display_label="Filtering knowledge claims"),
+            ToolSpec(fn=_km.get_knowledge, display_label="Reading a knowledge claim"),
+            ToolSpec(fn=_km.add_knowledge, display_label="Adding a knowledge claim"),
+            ToolSpec(
+                fn=_km.update_knowledge,
+                display_label="Updating a knowledge claim",
+            ),
+            ToolSpec(
+                fn=_km.invalidate_knowledge,
+                display_label="Invalidating a knowledge claim",
+            ),
+            ToolSpec(
+                fn=_km.supersede_knowledge,
+                display_label="Superseding a knowledge claim",
+            ),
             include_class_name=True,
         )
 
@@ -462,9 +475,28 @@ class MemoryManager(BaseMemoryManager):
             _km = self._knowledge_manager
             tools.update(
                 methods_to_tool_dict(
-                    ToolSpec(fn=_km.ask, display_label="Querying notes"),
-                    ToolSpec(fn=_km.refactor, display_label="Reorganising notes"),
-                    ToolSpec(fn=_km.update, display_label="Updating notes"),
+                    ToolSpec(fn=_km.search, display_label="Searching knowledge claims"),
+                    ToolSpec(fn=_km.filter, display_label="Filtering knowledge claims"),
+                    ToolSpec(
+                        fn=_km.get_knowledge,
+                        display_label="Reading a knowledge claim",
+                    ),
+                    ToolSpec(
+                        fn=_km.add_knowledge,
+                        display_label="Adding a knowledge claim",
+                    ),
+                    ToolSpec(
+                        fn=_km.update_knowledge,
+                        display_label="Updating a knowledge claim",
+                    ),
+                    ToolSpec(
+                        fn=_km.invalidate_knowledge,
+                        display_label="Invalidating a knowledge claim",
+                    ),
+                    ToolSpec(
+                        fn=_km.supersede_knowledge,
+                        display_label="Superseding a knowledge claim",
+                    ),
                     include_class_name=True,
                 ),
             )

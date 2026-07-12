@@ -14,10 +14,11 @@ class KnowledgeSettings(BaseSettings):
     Attributes:
         ENABLED: Whether KnowledgeManager is enabled.
         IMPL: Implementation type - "real" or "simulated".
-        MODEL_MAX_INPUT_TOKENS: Maximum input tokens for model context.
+        MODEL_MAX_INPUT_TOKENS: Maximum input tokens for model context
+            (used by shared token utilities).
     """
 
-    ENABLED: bool = False
+    ENABLED: bool = True
     IMPL: str = "real"
     MODEL_MAX_INPUT_TOKENS: int = 128000
 

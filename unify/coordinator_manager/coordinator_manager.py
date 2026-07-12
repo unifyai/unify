@@ -84,6 +84,8 @@ _DELEGATE_INTENT_SURFACES: dict[str, CoordinatorActivitySurface] = {
     "general": "colleagues",
     "schedule_task": "tasks",
     "add_guidance": "guidance",
+    # Knowledge claims surface under the coordinator "memory" activity lane
+    # (typed KnowledgeManager ledger), parallel to guidance/functions/tasks.
     "add_knowledge": "memory",
     "create_function": "functions",
     "create_dashboard": "dashboards",

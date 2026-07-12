@@ -204,6 +204,10 @@ class _MinimalGuidanceManager:
         """Delete guidance."""
         return {"deleted": True}
 
+    def reconcile_dependencies(self, *, guidance_ids=None, destination=None):
+        """Refresh structured link debt for related functions."""
+        return {"outcome": "checked", "details": {"guidance_ids": guidance_ids or []}}
+
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)

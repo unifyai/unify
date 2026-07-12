@@ -37,7 +37,7 @@ given, `--stream` is assumed.
 discovery (GuidanceManager + FunctionManager search), nested
 `WebSearcher.ask` with inner `_search` / `_extract` tool calls,
 clarification requests, `execute_code` spawning concurrent
-`KnowledgeManager.update` + `ContactManager.update` with interleaved
+`KnowledgeManager_add_knowledge` + `ContactManager.update` with interleaved
 inner tool loops, interjections, pause/resume/stop steering.
 
 **single_action** — A one-shot `act(persist=False)` action demonstrating:

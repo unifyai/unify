@@ -31,12 +31,17 @@ async def test_core_state_managers_persist_and_recall(
 
     token = uuid.uuid4().hex[:8]
 
-    # Knowledge: seed a table the assistant must ground its later answer on.
+    # Knowledge: seed a typed claim the assistant must ground its later answer on.
     codename = f"orbit-{token}"
-    table_name = f"FlowFacts{token}"
-    flow_session.seed_knowledge_table(
-        table_name=table_name,
-        rows=[{"content": f"The launch codename is {codename}."}],
+    flow_session.seed_knowledge_claims(
+        claims=[
+            {
+                "title": f"Launch codename {token}",
+                "content": f"The launch codename is {codename}.",
+                "kind": "fact",
+                "topics": ["launch", "flows"],
+            },
+        ],
     )
 
     # Contacts: natural-language create -> primitives.contacts.update -> row.
@@ -69,11 +74,11 @@ async def test_core_state_managers_persist_and_recall(
         await flow_session.wait_for_secret_name(secret_name, timeout=240.0)
     assert_primitive_invoked(secret_events, "SecretManager", "update")
 
-    # Knowledge recall: the assistant must answer from the seeded table via
-    # primitives.knowledge.ask rather than guessing or reading it another way.
+    # Knowledge recall: the assistant must answer via KnowledgeManager JSON
+    # tools (search/filter/get) rather than guessing or reading another way.
     async with capture_events("ManagerMethod") as knowledge_events:
         await flow_session.inject_unify_message(
-            f"What is the launch codename in knowledge table {table_name}? "
+            f"What is the launch codename stored in knowledge? "
             "Reply with just the codename.",
         )
         reply = await flow_session.wait_for_unify_reply_containing(
@@ -81,4 +86,13 @@ async def test_core_state_managers_persist_and_recall(
             timeout=300.0,
         )
     assert codename in str(reply.content or "")
-    assert_primitive_invoked(knowledge_events, "KnowledgeManager", "ask")
+    observed_methods = {
+        (getattr(e, "payload", {}) or {}).get("method")
+        for e in knowledge_events
+        if (getattr(e, "payload", {}) or {}).get("manager") == "KnowledgeManager"
+    }
+    assert observed_methods & {
+        "search",
+        "filter",
+        "get_knowledge",
+    }, f"Expected KnowledgeManager read tools, saw: {observed_methods}"
