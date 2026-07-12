@@ -183,17 +183,6 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         examples="'What did Bob say yesterday?', 'Last SMS with Alice?', 'Messages mentioning budget?'",
     ),
     ManagerSpec(
-        manager_alias="knowledge",
-        manager_registry_key="knowledge",
-        primitive_class_path="unify.knowledge_manager.knowledge_manager.KnowledgeManager",
-        excluded_methods=frozenset({"filter", "search"}),
-        priority=1,
-        domain="Facts, Policies & Domain Knowledge",
-        description="Organizational facts, policies, procedures, reference material, documentation, stored information",
-        use_when="Questions about company policies, operational procedures, reference docs, 'what is our X policy?', 'summarize Y procedure'",
-        examples="'What's our return policy?', 'Summarize onboarding procedure', 'Office hours?', 'Warranty terms for X?'",
-    ),
-    ManagerSpec(
         manager_alias="tasks",
         manager_registry_key="tasks",
         primitive_class_path="unify.task_scheduler.task_scheduler.TaskScheduler",
@@ -502,10 +491,6 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
     ],
     "tasks": [
         "get_primitives_task_execute_example",
-    ],
-    "knowledge": [
-        "get_primitives_knowledge_ask_example",
-        "get_primitives_knowledge_update_example",
     ],
     "transcripts": [
         "get_primitives_transcript_ask_example",
@@ -1050,18 +1035,20 @@ class ToolSurfaceRegistry:
         if len(specs) > 1:
             lines.append("\n**Manager Selection Priorities**:")
             lines.append(
-                "1. **knowledge** takes priority for organizational policies, procedures, company facts, internal documentation",
+                "1. **transcripts** for historical communications (what was said/written)",
+            )
+            lines.append("2. **contacts** for people/relationship information")
+            lines.append("3. **tasks** for work items, deadlines, assignments")
+            lines.append(
+                "4. **web** for current external information (weather, news, real-time data)",
             )
             lines.append(
-                "2. **transcripts** for historical communications (what was said/written)",
-            )
-            lines.append("3. **contacts** for people/relationship information")
-            lines.append("4. **tasks** for work items, deadlines, assignments")
-            lines.append(
-                "5. **web** for current external information (weather, news, real-time data)",
+                "5. **files** when dealing with specific documents or file-level operations",
             )
             lines.append(
-                "7. **files** when dealing with specific documents or file-level operations",
+                "\nTyped claim / procedure catalogues (`KnowledgeManager_*`, "
+                "`GuidanceManager_*`) are top-level Actor JSON tools, not "
+                "`primitives.*` — use them for durable domain claims and SOPs.",
             )
 
         # ── Section 3: Routing guidance for commonly confused pairs ──

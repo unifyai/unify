@@ -17,7 +17,6 @@ VALID_MANAGER_ALIASES: frozenset[str] = frozenset(
         "dashboards",
         "tasks",
         "transcripts",
-        "knowledge",
         "secrets",
         "web",
         "data",
