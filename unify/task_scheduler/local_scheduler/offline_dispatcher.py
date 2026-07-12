@@ -1,16 +1,11 @@
-"""Local subprocess dispatcher for offline-execution tasks.
+"""Local / in-pod subprocess dispatcher for offline-execution tasks.
 
-The hosted ``Communication`` service materialises offline scheduled /
-triggered tasks as Kubernetes jobs that run ``unify.task_scheduler.offline_runner``
-with the activation context injected as env vars. Local installs have no
-K8s cluster, so this module spawns the runner as an ordinary Python
-subprocess from the conversation manager's own process.
-
-Communication's ``_build_offline_runner_env`` shape is the source of truth
-for which env vars ``offline_runner._load_config_from_env`` expects. This
-module mirrors the minimal subset needed for execution and inherits the
-rest from ``os.environ`` (UNIFY_KEY, ORCHESTRA_URL, ORCHESTRA_ADMIN_KEY,
-ASSISTANT_*, USER_*) which a local install already has set.
+Hosted offline work runs on the same AssistantSession pod as live traffic.
+When ConversationManager is already attached, Communication publishes an
+offline ``task_due`` and this dispatcher spawns
+``unify.task_scheduler.offline_runner`` as a disconnected subprocess (same
+contract as a cold headless runner). Local installs use the same path from
+the in-process activation scheduler.
 """
 
 from __future__ import annotations
