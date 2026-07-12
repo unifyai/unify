@@ -28,6 +28,7 @@ from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
     assert_has_one,
     make_contacts_visible,
+    step_voice_user_turn,
 )
 from tests.conversation_manager.conftest import (
     TEST_CONTACTS,
@@ -755,7 +756,8 @@ async def test_phone_call_to_sms(initialized_cm):
     )
     await cm.step(PhoneCallStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundPhoneUtterance(
             contact=contact,
             content="Send me a joke via SMS right now",
@@ -783,7 +785,8 @@ async def test_phone_call_to_email(initialized_cm):
     )
     await cm.step(PhoneCallStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundPhoneUtterance(
             contact=contact,
             content="Send me a joke via email right now",
@@ -811,7 +814,8 @@ async def test_phone_call_to_unify_message(initialized_cm):
     )
     await cm.step(PhoneCallStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundPhoneUtterance(
             contact=contact,
             content="Send me a joke via unify message right now",
@@ -864,7 +868,8 @@ async def test_unify_meet_to_sms(initialized_cm):
     await cm.step(UnifyMeetReceived(contact=contact))
     await cm.step(UnifyMeetStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundUnifyMeetUtterance(
             contact=contact,
             content="Send me a joke via sms right now",
@@ -887,7 +892,8 @@ async def test_unify_meet_to_email(initialized_cm):
     await cm.step(UnifyMeetReceived(contact=contact))
     await cm.step(UnifyMeetStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundUnifyMeetUtterance(
             contact=contact,
             content="Send me a joke via email right now",
@@ -910,7 +916,8 @@ async def test_unify_meet_to_unify_message(initialized_cm):
     await cm.step(UnifyMeetReceived(contact=contact))
     await cm.step(UnifyMeetStarted(contact=contact))
 
-    result = await cm.step_until_wait(
+    result = await step_voice_user_turn(
+        cm,
         InboundUnifyMeetUtterance(
             contact=contact,
             content="Send me a joke via unify message right now",

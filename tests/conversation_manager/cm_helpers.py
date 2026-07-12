@@ -57,6 +57,43 @@ def make_contacts_visible(cm: "CMStepDriver", *contact_ids: int) -> None:
         )
 
 
+async def step_voice_user_turn(
+    cm: "CMStepDriver",
+    utterance,
+    *,
+    max_steps: int = 5,
+    classification: str | None = None,
+    intended_speech: str = "",
+    turn_id: int = 1,
+) -> "StepResult":
+    """Record a voice utterance, then wake the slow brain via FastBrainTurnCompleted.
+
+    Engaged voice utterances are transcript-only; the slow brain runs after the
+    Voice Agent finishes the turn. Flow tests that assert cross-channel tools
+    must publish ``FastBrainTurnCompleted`` (classification ``defer`` for
+    action requests) rather than stepping the raw utterance with ``run_llm``.
+    """
+    from unify.conversation_manager.events import (
+        FAST_BRAIN_TURN_DEFER,
+        FastBrainTurnCompleted,
+    )
+
+    if classification is None:
+        classification = FAST_BRAIN_TURN_DEFER
+
+    await cm.step(utterance, run_llm=False)
+    return await cm.step_until_wait(
+        FastBrainTurnCompleted(
+            contact=utterance.contact,
+            turn_id=turn_id,
+            user_content=getattr(utterance, "content", "") or "",
+            classification=classification,
+            intended_speech=intended_speech,
+        ),
+        max_steps=max_steps,
+    )
+
+
 # =============================================================================
 # Event Filtering Helpers
 # =============================================================================
