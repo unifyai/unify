@@ -97,11 +97,7 @@ class Knowledge(AuthoredRow):
         default_factory=list,
         description=(
             "Structured link debt when provenance no longer resolves "
-            "(missing file/contact/data/derived knowledge, etc.). "
-            "Non-empty means second-class for discovery; empty means "
-            "no known broken links. Cleared by reconcile/update when "
-            "still-declared pointers resolve again — never by inventing "
-            "new citations."
+            "(missing file/contact/data/derived knowledge, etc.)."
         ),
     )
     is_builtin: bool = Field(
