@@ -48,6 +48,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # One refresh campaign per branch. Inside a campaign, the matrix parallelizes.
 concurrency:
@@ -71,8 +72,18 @@ jobs:
           exit 1
         }
 
-        [[ "${{ inputs.confirm_llm_spend }}" == "LLM_SPEND_OK" ]] || fail "confirm_llm_spend must be LLM_SPEND_OK"
         [[ -n "$TEST_PATH" ]] || fail "test_path is required"
+        # CONSOLIDATE_FROM:<run_id> skips paid refresh and only merges that
+        # run's cache-diff artifacts into the shared Actions cache.
+        if [[ "$TEST_PATH" == CONSOLIDATE_FROM:* ]]; then
+          RUN_ID="${TEST_PATH#CONSOLIDATE_FROM:}"
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || fail "CONSOLIDATE_FROM requires a numeric run id"
+          [[ "${{ inputs.cache_mode }}" == "write-misses" ]] || fail "CONSOLIDATE_FROM requires cache_mode=write-misses"
+          echo "Consolidate-only mode from run $RUN_ID"
+          exit 0
+        fi
+
+        [[ "${{ inputs.confirm_llm_spend }}" == "LLM_SPEND_OK" ]] || fail "confirm_llm_spend must be LLM_SPEND_OK"
         if [[ "$TEST_PATH" == "." ]]; then
           [[ "${{ inputs.confirm_full_matrix }}" == "FULL_MATRIX_OK" ]] || fail "test_path='.' requires confirm_full_matrix=FULL_MATRIX_OK"
         fi
@@ -112,6 +123,12 @@ jobs:
         TEST_PATH="${{ inputs.test_path }}"
         declare -a RAW_PATHS=()
         declare -a PATHS=()
+
+        if [[ "$TEST_PATH" == CONSOLIDATE_FROM:* ]]; then
+          # Placeholder matrix value; refresh job is skipped in consolidate-only mode.
+          echo 'test_dirs=["__consolidate_only__"]' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         if [[ "$TEST_PATH" == "." ]]; then
           while IFS= read -r path; do
@@ -154,6 +171,7 @@ jobs:
     name: refresh (${{ matrix.test_path }})
     runs-on: ubuntu-latest-8-cores
     needs: [validate, discover]
+    if: ${{ !startsWith(inputs.test_path, 'CONSOLIDATE_FROM:') }}
     environment: unity-llm-cache-refresh
     timeout-minutes: 130
     strategy:
@@ -323,11 +341,25 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate, discover, refresh]
     if: always() && needs.validate.result == 'success' && inputs.cache_mode == 'write-misses'
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 1
+
+    - name: Resolve cache-diff source run
+      id: src
+      shell: bash
+      run: |
+        TEST_PATH="${{ inputs.test_path }}"
+        if [[ "$TEST_PATH" == CONSOLIDATE_FROM:* ]]; then
+          RUN_ID="${TEST_PATH#CONSOLIDATE_FROM:}"
+        else
+          RUN_ID="${{ github.run_id }}"
+        fi
+        echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        echo "pattern=cache-diff-${RUN_ID}-*" >> "$GITHUB_OUTPUT"
+        echo "Using cache-diff artifacts from run $RUN_ID"
 
     - name: Restore existing consolidated cache
       uses: actions/cache/restore@v4
@@ -340,9 +372,12 @@ jobs:
     - name: Download cache diffs from matrix shards
       uses: actions/download-artifact@v4
       with:
-        pattern: cache-diff-${{ github.run_id }}-*
+        pattern: ${{ steps.src.outputs.pattern }}
         path: cache-artifacts
         merge-multiple: false
+        repository: ${{ github.repository }}
+        run-id: ${{ steps.src.outputs.run_id }}
+        github-token: ${{ github.token }}
 
     - name: Consolidate .cache.ndjson
       run: |
