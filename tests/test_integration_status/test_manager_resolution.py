@@ -195,6 +195,7 @@ async def test_code_act_actor_appends_enabled_integration_summary(
         environments=[],
         function_manager=None,
         guidance_manager=None,
+        knowledge_manager=None,
         can_store=False,
         tool_policy=None,
     )
