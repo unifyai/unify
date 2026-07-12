@@ -54,6 +54,10 @@ class _StubGuidanceManager:
     def delete_guidance(self, *, guidance_id):
         return {"deleted": True}
 
+    def reconcile_dependencies(self, *, guidance_ids=None, destination=None):
+        """Refresh structured link debt for related functions."""
+        return {"outcome": "checked", "details": {"guidance_ids": guidance_ids or []}}
+
 
 def _make_delayed_threshold(trigger_after: int = 2):
     """Build a ``context_over_threshold`` replacement that triggers the 70%

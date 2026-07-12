@@ -212,35 +212,35 @@ async def test_update_contacts_preserves_nameless_service_contact(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# 2. update_knowledge -- should call KnowledgeManager.update at least once     #
+# 2. update_knowledge -- should call KnowledgeManager_add_knowledge once       #
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_update_knowledge_invokes_kb_update(monkeypatch):
-    counts = {"kb_update": 0}
+async def test_update_knowledge_invokes_kb_add(monkeypatch):
+    counts = {"kb_add": 0}
 
-    orig_kb_update = SimulatedKnowledgeManager.update
+    orig_kb_add = SimulatedKnowledgeManager.add_knowledge
 
-    @functools.wraps(orig_kb_update)
-    async def spy_kb_update(self, text: str, **kw):
-        counts["kb_update"] += 1
-        return await orig_kb_update(self, text, **kw)
+    @functools.wraps(orig_kb_add)
+    def spy_kb_add(self, **kw):
+        counts["kb_add"] += 1
+        return orig_kb_add(self, **kw)
 
     monkeypatch.setattr(
         SimulatedKnowledgeManager,
-        "update",
-        spy_kb_update,
+        "add_knowledge",
+        spy_kb_add,
         raising=True,
     )
 
     km = SimulatedKnowledgeManager(
         description=(
             "TEST SCENARIO: Knowledge update. SimulatedKnowledgeManager MUST treat the knowledge base as EMPTY for"
-            " this run. All KnowledgeManager.ask calls MUST respond 'not found/absent' for facts introduced in"
-            " this transcript unless the transcript itself includes an explicit KnowledgeManager.update"
+            " this run. All KnowledgeManager_search / filter / get_knowledge calls MUST respond 'not found/absent' for facts introduced in"
+            " this transcript unless the transcript itself includes an explicit KnowledgeManager_add_knowledge"
             " manager-method proving prior storage. Therefore the flow should proceed to call"
-            " KnowledgeManager.update exactly once to store the new fact. No external I/O."
+            " KnowledgeManager_add_knowledge exactly once to store the new fact. No external I/O."
         ),
     )
     mm = SimulatedMemoryManager(
@@ -253,7 +253,7 @@ async def test_update_knowledge_invokes_kb_update(monkeypatch):
     result = await mm.update_knowledge(transcript)
 
     assert isinstance(result, str) and result.strip()
-    assert counts["kb_update"] >= 1, "KnowledgeManager.update should be invoked"
+    assert counts["kb_add"] >= 1, "KnowledgeManager.add_knowledge should be invoked"
 
 
 # --------------------------------------------------------------------------- #

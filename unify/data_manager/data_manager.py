@@ -1453,7 +1453,15 @@ class DataManager(BaseDataManager):
         destination: str | None = None,
     ) -> bool:
         """Ensure deployment-defined data rows match source definitions."""
-        meta_context, is_personal = self._sync_destination_contexts(destination)
+        try:
+            meta_context, is_personal = self._sync_destination_contexts(destination)
+        except ToolErrorException as exc:
+            logger.warning(
+                "Skipping custom data sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
         with self._temporary_meta_context(meta_context):
             if source_tables is None:
                 source_tables = {}

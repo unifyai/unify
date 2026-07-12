@@ -60,7 +60,7 @@ def test_all_columns_default():
     cm = ContactManager()
 
     # Create a custom column to be included in the composite expression
-    from unify.knowledge_manager.types import ColumnType
+    from unify.common.column_types import ColumnType
 
     cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
 
@@ -104,7 +104,7 @@ def test_mean_cosine_ranking():
     cm = ContactManager()
 
     # Ensure custom column exists
-    from unify.knowledge_manager.types import ColumnType
+    from unify.common.column_types import ColumnType
 
     cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
 

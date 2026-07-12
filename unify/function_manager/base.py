@@ -240,6 +240,32 @@ class BaseFunctionManager(BaseStateManager):
         """
 
     @abstractmethod
+    def reconcile_dependencies(
+        self,
+        *,
+        function_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """Refresh structured link debt for compositional dependencies.
+
+        Audits each selected compositional function's declared ``depends_on``
+        names against the current compositional and primitive catalogues.
+        Existing ``stale_reasons`` for dependencies that resolve again are
+        removed; missing dependencies are recorded without changing
+        ``depends_on``.
+
+        Parameters
+        ----------
+        function_ids : list[int] | None
+            Optional subset to audit; when omitted, checks all compositional
+            functions.
+
+        Returns
+        -------
+        dict[str, Any]
+            Outcome with checked and stale function identifiers.
+        """
+
+    @abstractmethod
     def filter_functions(
         self,
         *,
@@ -322,7 +348,7 @@ class BaseFunctionManager(BaseStateManager):
     def search_functions(
         self,
         *,
-        query: str,
+        query: str = "",
         n: int = 5,
         include_implementations: bool = True,
         _return_callable: bool = False,
@@ -338,8 +364,10 @@ class BaseFunctionManager(BaseStateManager):
 
         Parameters
         ----------
-        query : str
-            Natural‑language text describing the desired function(s).
+        query : str, default ``""``
+            Natural‑language text describing the desired function(s). An empty
+            query is allowed (soft models sometimes omit it during discovery)
+            and returns a broad backfilled sample rather than failing.
         n : int, default ``5``
             Number of similar results to return.
         include_implementations : bool, default ``True``

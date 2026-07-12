@@ -259,3 +259,33 @@ def test_task_scheduler_clear():
     # Creating again should work and ids should restart from 0
     out3 = ts._create_task(name="Gamma", description="gamma desc")
     assert out3["details"]["task_id"] == 0
+
+
+def test_sanitize_activation_drops_orchestra_nulls_for_bool_defaults():
+    """Orchestra include_fields returns null for unset bool columns.
+
+    Pydantic only applies Field defaults when the key is absent, so hydrate
+    must drop those nulls before Task(**row) (due-task execute path).
+    """
+
+    from unify.task_scheduler.types.task import Task
+
+    ts = TaskScheduler.__new__(TaskScheduler)
+    row = {
+        "task_id": 1,
+        "instance_id": 0,
+        "name": "Integration scheduled task",
+        "description": "Quietly start this work when it becomes due.",
+        "status": "scheduled",
+        "priority": "normal",
+        "offline": None,
+        "enabled": None,
+        "schedule": None,
+        "trigger": None,
+    }
+    sanitized = ts._sanitize_activation(row)
+    assert "offline" not in sanitized
+    assert "enabled" not in sanitized
+    task = Task(**sanitized)
+    assert task.offline is False
+    assert task.enabled is True

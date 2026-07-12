@@ -306,7 +306,7 @@ def main() -> int:
             "  unity-primitive --list-managers\n"
             "  unity-primitive files --list-methods\n"
             '  unity-primitive files search_files --references \'{"query": "budget"}\' --k 5\n'
-            "  unity-primitive knowledge ask --text 'What is our return policy?'\n",
+            "  unity-primitive contacts ask --text 'Who is Alice?'\n",
         )
         return 0
 

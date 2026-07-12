@@ -502,16 +502,16 @@ def _ensure_offline_client_bundle() -> None:
     Live assistants get this from the ConversationManager startup hook. Offline
     jobs skip that hook, so the runner (and entrypoint.sh) must bootstrap the
     GCS client tree before entrypoint bodies import
-    ``unity_deploy.assistant_deployments.clients.<client>.*``.
+    ``unify_deploy.assistant_deployments.clients.<client>.*``.
     """
 
     try:
-        from unity_deploy.client_bundle.bootstrap import (
+        from unify_deploy.client_bundle.bootstrap import (
             ensure_offline_client_bundle,
         )
     except ImportError:
         LOGGER.warning(
-            "unity_deploy.client_bundle.bootstrap unavailable; "
+            "unify_deploy.client_bundle.bootstrap unavailable; "
             "skipping offline client-bundle registration",
         )
         return

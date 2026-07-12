@@ -131,7 +131,7 @@ def test_primitive_methods_respects_common_exclusions():
     """primitive_methods() excludes common excluded methods."""
     registry = get_registry()
     # Check for all managers
-    for alias in ["contacts", "files", "tasks", "knowledge"]:
+    for alias in ["contacts", "files", "tasks"]:
         methods = registry.primitive_methods(manager_alias=alias)
         for excluded in _COMMON_EXCLUDED_METHODS:
             assert (

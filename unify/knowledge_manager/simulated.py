@@ -1,541 +1,418 @@
 from __future__ import annotations
 
-import asyncio
 import functools
-import threading
-from typing import List, Dict, Any, Optional, Type
+from datetime import datetime
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-import unillm
-from pydantic import BaseModel
 from .base import BaseKnowledgeManager
-from ..common.async_tool_loop import SteerableToolHandle
-from .prompt_builders import (
-    build_refactor_prompt,
-    build_update_prompt,
-    build_ask_prompt,
-    build_simulated_method_prompt,
+from .types.knowledge import Knowledge, KnowledgeKind, KnowledgeStatus
+from .types.source_ref import SourceKind, SourceRef, coerce_source_refs
+from ..common.stale_reason import (
+    StaleReason,
+    merge_stale_reasons,
+    stale_reason_key,
 )
 from ..common.simulated import (
-    mirror_knowledge_manager_tools,
-    SimulatedLineage,
-    SimulatedLog,
-    simulated_llm_roundtrip,
-    SimulatedHandleMixin,
-    build_followup_prompt,
     maybe_tool_log_scheduled,
     maybe_tool_log_completed,
 )
-from ..logger import LOGGER
-from ..common.hierarchical_logger import ICONS
-from ..common.llm_client import new_llm_client
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal helper
-# ─────────────────────────────────────────────────────────────────────────────
-class _SimulatedKnowledgeHandle(SimulatedHandleMixin, SteerableToolHandle):
-    """
-    Handle returned by SimulatedKnowledgeManager.store / retrieve.
-    """
-
-    def __init__(
-        self,
-        llm: unillm.Unify,
-        initial_text: str,
-        *,
-        mode: str,
-        _return_reasoning_steps: bool,
-        _requests_clarification: bool = False,
-        clarification_up_q: asyncio.Queue[str] | None,
-        clarification_down_q: asyncio.Queue[str] | None,
-        response_format: Optional[Type[BaseModel]] = None,
-        hold_completion: bool = False,
-    ):
-        self._llm = llm
-        self._initial = initial_text
-        self._mode = str(mode or "ask")
-        self._want_steps = _return_reasoning_steps
-        self._clar_up_q = clarification_up_q
-        self._clar_down_q = clarification_down_q
-        self._response_format = response_format
-        if _requests_clarification and (
-            not clarification_up_q or not clarification_down_q
-        ):
-            raise ValueError(
-                "Clarification queues must be provided when _requests_clarification is True",
-            )
-        self._needs_clar = _requests_clarification
-
-        # Human-friendly log label derived from current lineage:
-        # "<outer...>->SimulatedKnowledgeManager.<mode>(abcd)"
-        self._log_label = SimulatedLineage.make_label(
-            f"SimulatedKnowledgeManager.{self._mode}",
-        )
-
-        # fire clarification request immediately if queues supplied
-        if self._needs_clar:
-            try:
-                q_text = "Could you clarify your knowledge request?"
-                self._clar_up_q.put_nowait(q_text)
-                try:
-                    SimulatedLog.log_clarification_request(self._log_label, q_text)
-                except Exception:
-                    pass
-                try:
-                    LOGGER.info(
-                        f"{ICONS['clarification']} [{self._log_label}] Clarification requested",
-                    )
-                except Exception:
-                    pass
-            except asyncio.QueueFull:
-                pass
-
-        self._extra_msgs: List[str] = []
-
-        self._done_event = threading.Event()
-        self._cancelled = False
-        self._answer: str | None = None
-        self._messages: List[Dict[str, Any]] = []
-        self._paused = False
-        # Async cancellation signal to break clarification waits
-        self._cancel_event: asyncio.Event = asyncio.Event()
-
-        self._init_completion_gate(hold_completion)
-
-    # --------------------------------------------------------------------- #
-    # SteerableToolHandle API
-    # --------------------------------------------------------------------- #
-    async def result(self):
-        if self._cancelled:
-            return "processed stopped early, no result"
-
-        # honour pauses injected by an outer loop
-        while self._paused and not self._cancelled:
-            await asyncio.sleep(0.05)
-
-        if not self._done_event.is_set():
-            if self._needs_clar:
-                try:
-                    LOGGER.info(
-                        f"{ICONS['pending']} [{self._log_label}] Waiting for clarification answer…",
-                    )
-                except Exception:
-                    pass
-                clar: str | None = None
-                get_task = asyncio.create_task(self._clar_down_q.get())
-                cancel_task = asyncio.create_task(self._cancel_event.wait())
-                done, pending = await asyncio.wait(
-                    {get_task, cancel_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for t in pending:
-                    t.cancel()
-                if cancel_task in done:
-                    self._done_event.set()
-                    return "processed stopped early, no result"
-                try:
-                    clar = get_task.result()
-                except Exception:
-                    clar = None
-                if clar is None:
-                    self._done_event.set()
-                    return "processed stopped early, no result"
-                self._extra_msgs.append(f"Clarification: {clar}")
-                try:
-                    SimulatedLog.log_clarification_answer(self._log_label, clar)
-                except Exception:
-                    pass
-                try:
-                    LOGGER.info(
-                        f"{ICONS['interjection']} [{self._log_label}] Clarification answer received",
-                    )
-                except Exception:
-                    pass
-
-            prompt = "\n\n---\n\n".join([self._initial] + self._extra_msgs)
-            # Unified LLM roundtrip for consistent simulated logging and optional dumps
-            try:
-                sys_msg = getattr(self._llm, "system_message", None)
-            except Exception:
-                sys_msg = None
-            answer = await simulated_llm_roundtrip(
-                self._llm,
-                label=self._log_label,
-                prompt=prompt,
-                response_format=self._response_format,
-            )
-            self._answer = answer
-            self._messages = [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": answer},
-            ]
-            await self._await_completion_gate()
-            self._done_event.set()
-
-        # If cancellation happened after the coroutine started, return a stable post-cancel value.
-        if self._cancelled:
-            return "processed stopped early, no result"
-        if self._want_steps:
-            return self._answer, self._messages
-        return self._answer
-
-    async def interject(
-        self,
-        message: str,
-        *,
-        _parent_chat_context_cont: list[dict] | None = None,
-    ) -> None:
-        """Interject a message into the in-flight handle.
-
-        Args:
-            message: The interjection message to inject.
-            _parent_chat_context_cont: Optional continuation of parent chat context.
-                Accepted for API parity with real handles but not currently used.
-        """
-        if self._cancelled:
-            return
-        self._log_interject(message)
-        self._extra_msgs.append(message)
-
-    async def stop(
-        self,
-        reason: str | None = None,
-        **kwargs,
-    ) -> None:
-        """Stop the in-flight handle.
-
-        Args:
-            reason: Optional reason for stopping.
-        """
-        self._log_stop(reason)
-        self._cancelled = True
-        try:
-            self._cancel_event.set()
-        except Exception:
-            pass
-        self._done_event.set()
-
-    async def pause(self) -> str:
-        if self._paused:
-            return "Already paused."
-        self._log_pause()
-        self._paused = True
-        return "Paused."
-
-    async def resume(self) -> str:
-        if not self._paused:
-            return "Already running."
-        self._log_resume()
-        self._paused = False
-        return "Resumed."
-
-    def done(self) -> bool:
-        return self._done_event.is_set()
-
-    async def ask(
-        self,
-        question: str,
-        *,
-        _parent_chat_context: list[dict] | None = None,
-    ) -> "SteerableToolHandle":
-        """Ask a follow-up question about the current operation.
-
-        Args:
-            question: The question to ask.
-            parent_chat_context: Optional parent chat context for the inspection loop.
-                Accepted for API parity with real handles but not currently used.
-        """
-        follow_up_prompt = build_followup_prompt(
-            question=question,
-            initial_instruction=self._initial,
-            extra_messages=list(self._extra_msgs),
-        )
-
-        handle = _SimulatedKnowledgeHandle(
-            self._llm,
-            follow_up_prompt,
-            mode=self._mode,
-            _return_reasoning_steps=self._want_steps,
-            _requests_clarification=False,
-            clarification_up_q=self._clar_up_q,
-            clarification_down_q=self._clar_down_q,
-        )
-        # Align with other simulated components: concise "Question(<parent>)" label
-        try:
-            handle._log_label = SimulatedLineage.question_label(self._log_label)  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        # Emit a human-facing log for the nested ask
-        try:
-            SimulatedLog.log_request("ask", getattr(handle, "_log_label", ""), question)  # type: ignore[arg-type]
-        except Exception:
-            pass
-        return handle
-
-    # --- event APIs required by SteerableToolHandle ---------------------
-    async def next_clarification(self) -> dict:
-        """Block until a clarification arrives, or forever if not requested."""
-        if not getattr(self, "_needs_clar", False):
-            return await super().next_clarification()
-        try:
-            if self._clar_up_q is not None:
-                msg = await self._clar_up_q.get()
-                return {
-                    "type": "clarification",
-                    "call_id": "unknown",
-                    "tool_name": "unknown",
-                    "question": msg,
-                }
-        except Exception:
-            pass
-        return await super().next_clarification()
-
-    async def answer_clarification(self, call_id: str, answer: str) -> None:
-        try:
-            if self._clar_down_q is not None:
-                await self._clar_down_q.put(answer)
-        except Exception:
-            pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public simulated KnowledgeManager
-# ─────────────────────────────────────────────────────────────────────────────
 class SimulatedKnowledgeManager(BaseKnowledgeManager):
-    """
-    A drop-in, side-effect-free replacement for KnowledgeManager that uses a
-    single stateful LLM to invent and recall knowledge in-chat.
-    """
+    """Drop-in replacement for KnowledgeManager with an in-memory store."""
 
     def __init__(
         self,
         description: str = "nothing fixed, make up some imaginary scenario",
         *,
+        log_events: bool = False,
         rolling_summary_in_prompts: bool = True,
         simulation_guidance: Optional[str] = None,
         hold_completion: bool = False,
-        # Accept but ignore extra parameters for compatibility
         **kwargs: Any,
     ) -> None:
         super().__init__()
         self._description = description
+        self._log_events = log_events
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
         self._simulation_guidance = simulation_guidance
         self._hold_completion = hold_completion
+        self._entries: Dict[int, Knowledge] = {}
+        self._next_id: int = 1
 
-        # One shared, memory-retaining LLM (reuse common client for fast init/clear)
-        self._llm = new_llm_client(
-            stateful=True,
-            origin="SimulatedKnowledgeManager",
-        )
-        # Mirror the real knowledge manager's tool exposure for prompts
-        ref_tools = mirror_knowledge_manager_tools("refactor")
-        upd_tools = mirror_knowledge_manager_tools("update")
-        ask_tools = mirror_knowledge_manager_tools("ask")
-
-        refactor_ref = build_refactor_prompt(
-            ref_tools,
-            table_schemas_json="{}",
-            include_activity=self._rolling_summary_in_prompts,
-        ).flatten()
-        store_ref = build_update_prompt(
-            upd_tools,
-            table_schemas_json="{}",
-            include_activity=self._rolling_summary_in_prompts,
-        ).flatten()
-        retrieve_ref = build_ask_prompt(
-            ask_tools,
-            table_schemas_json="{}",
-            include_activity=self._rolling_summary_in_prompts,
-        ).flatten()
-
-        self._llm.set_system_message(
-            "You are a *simulated* knowledge-base manager. "
-            "There is no real database; invent plausible tables, columns and rows "
-            "and keep your story consistent across turns.\n\n"
-            "As a reference, the (tool-enabled) system messages for the *real* "
-            "knowledge-manager are pasted below. **You do not actually have access "
-            "to any tools – just produce the final answer.**\n\n"
-            f"'refactor' system message:\n{refactor_ref}\n\n"
-            f"'store' system message:\n{store_ref}\n\n"
-            f"'retrieve' system message:\n{retrieve_ref}\n\n"
-            f"Back-story: {self._description}",
-        )
-
-    def reduce(
+    @functools.wraps(BaseKnowledgeManager.search, updated=())
+    def search(
         self,
         *,
-        table: str,
-        metric: str,
-        keys: str | list[str],
-        filter: Optional[str | dict[str, str]] = None,
-        group_by: Optional[str | list[str]] = None,
-    ) -> Any:
-        """
-        Simulated counterpart of the KnowledgeManager.reduce tool.
+        references: Optional[Dict[str, str]] = None,
+        k: int = 10,
+    ) -> List[Knowledge]:
+        return [
+            c for c in self._entries.values() if c.status == KnowledgeStatus.active
+        ][:k]
 
-        There is no real backing store; this method returns deterministic,
-        shape-correct placeholder values so that tests and demos can rely on
-        the same return structure as the concrete implementation.
-        """
-
-        def _scalar(k: str) -> float:
-            # Use both table and key name so different tables get different values
-            return float(len(str(table)) + len(str(k)) or 1)
-
-        key_list: list[str] = [keys] if isinstance(keys, str) else list(keys)
-
-        if group_by is None:
-            if isinstance(keys, str):
-                return _scalar(keys)
-            return {k: _scalar(k) for k in key_list}
-
-        groups: list[str] = (
-            [group_by] if isinstance(group_by, str) else [str(g) for g in group_by]
-        )
-        if isinstance(keys, str):
-            return {g: _scalar(keys) for g in groups}
-        return {g: {k: _scalar(k) for k in key_list} for g in groups}
-
-    # ------------------------------------------------------------------ #
-    #  refactor                                                          #
-    # ------------------------------------------------------------------ #
-    @functools.wraps(BaseKnowledgeManager.refactor, updated=())
-    async def refactor(
+    @functools.wraps(BaseKnowledgeManager.filter, updated=())
+    def filter(
         self,
-        text: str,
         *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: list[dict] | None = None,
-        _clarification_up_q: asyncio.Queue[str] | None = None,
-        _clarification_down_q: asyncio.Queue[str] | None = None,
-    ) -> SteerableToolHandle:
-        """
-        Simulated version of KnowledgeManager.refactor – no real DDL is run.
-        The LLM simply invents a plausible migration plan and returns it.
-        """
-        # Tool-style scheduled log (only when no parent lineage)
-        maybe_tool_log_scheduled(
-            "SimulatedKnowledgeManager.refactor",
-            "refactor",
-            {"text": text if isinstance(text, str) else repr(text)},
-        )
+        filter: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> List[Knowledge]:
+        rows = list(self._entries.values())
+        if filter is not None:
+            matched = []
+            for claim in rows:
+                try:
+                    if eval(filter, {"__builtins__": {}}, claim.model_dump()):
+                        matched.append(claim)
+                except Exception:
+                    pass
+            rows = matched
+            if "status" not in filter:
+                rows = [c for c in rows if c.status == KnowledgeStatus.active]
+        else:
+            rows = [c for c in rows if c.status == KnowledgeStatus.active]
+        return rows[offset : offset + limit]
 
-        instruction = build_simulated_method_prompt(
-            "refactor",
-            text,
-            parent_chat_context=_parent_chat_context,
-        )
-        handle = _SimulatedKnowledgeHandle(
-            self._llm,
-            instruction,
-            mode="refactor",
-            _return_reasoning_steps=_return_reasoning_steps,
-            _requests_clarification=False,
-            clarification_up_q=_clarification_up_q,
-            clarification_down_q=_clarification_down_q,
-            response_format=response_format,
-        )
-
-        return handle
-
-    # ------------------------------------------------------------------ #
-    #  store                                                             #
-    # ------------------------------------------------------------------ #
-    @functools.wraps(BaseKnowledgeManager.update, updated=())
-    async def update(
+    @functools.wraps(BaseKnowledgeManager.get_knowledge, updated=())
+    def get_knowledge(
         self,
-        text: str,
         *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: list[dict] | None = None,
-        _requests_clarification: bool = False,
-        _clarification_up_q: asyncio.Queue[str] | None = None,
-        _clarification_down_q: asyncio.Queue[str] | None = None,
-    ) -> SteerableToolHandle:
-        # Tool-style scheduled log (only when no parent lineage)
-        maybe_tool_log_scheduled(
-            "SimulatedKnowledgeManager.update",
-            "update",
-            {
-                "text": text if isinstance(text, str) else repr(text),
-                "requests_clarification": _requests_clarification,
+        knowledge_id: int,
+    ) -> Knowledge:
+        entry = self._entries.get(knowledge_id)
+        if entry is None:
+            raise ValueError(f"No knowledge found with knowledge_id {knowledge_id}.")
+        return entry
+
+    @functools.wraps(BaseKnowledgeManager.add_knowledge, updated=())
+    def add_knowledge(
+        self,
+        *,
+        title: str,
+        content: str,
+        kind: KnowledgeKind | str = KnowledgeKind.fact,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        kid = self._next_id
+        self._next_id += 1
+        self._entries[kid] = Knowledge(
+            knowledge_id=kid,
+            title=title,
+            content=content,
+            kind=kind,
+            topics=topics or [],
+            source_refs=coerce_source_refs(source_refs),
+            confidence=confidence,
+            observed_at=observed_at,
+            valid_from=valid_from,
+            valid_until=valid_until,
+        )
+        self.reconcile_sources(knowledge_ids=[kid], destination=destination)
+        return {
+            "outcome": "knowledge created successfully",
+            "details": {"knowledge_id": kid},
+        }
+
+    @functools.wraps(BaseKnowledgeManager.update_knowledge, updated=())
+    def update_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        kind: Optional[KnowledgeKind | str] = None,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        existing = self._entries.get(knowledge_id)
+        if existing is None:
+            raise ValueError(
+                f"No knowledge found with knowledge_id {knowledge_id} to update.",
+            )
+        updates: Dict[str, Any] = {}
+        if title is not None:
+            updates["title"] = title
+        if content is not None:
+            updates["content"] = content
+        if kind is not None:
+            updates["kind"] = kind
+        if topics is not None:
+            updates["topics"] = topics
+        if source_refs is not None:
+            updates["source_refs"] = coerce_source_refs(source_refs)
+            updates["stale_reasons"] = []
+        if confidence is not None:
+            updates["confidence"] = confidence
+        if observed_at is not None:
+            updates["observed_at"] = observed_at
+        if valid_from is not None:
+            updates["valid_from"] = valid_from
+        if valid_until is not None:
+            updates["valid_until"] = valid_until
+        if not updates:
+            raise ValueError("At least one field must be provided for an update.")
+        self._entries[knowledge_id] = existing.model_copy(update=updates)
+        self.reconcile_sources(
+            knowledge_ids=[knowledge_id],
+            destination=destination,
+        )
+        return {
+            "outcome": "knowledge updated",
+            "details": {"knowledge_id": knowledge_id},
+        }
+
+    @functools.wraps(BaseKnowledgeManager.delete_knowledge, updated=())
+    def delete_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        if knowledge_id not in self._entries:
+            raise ValueError(
+                f"No knowledge found with knowledge_id {knowledge_id} to delete.",
+            )
+        reason = StaleReason(
+            dep_kind="knowledge",
+            id=int(knowledge_id),
+            message=f"missing knowledge_id={int(knowledge_id)}",
+        )
+        for claim in list(self._entries.values()):
+            if any(
+                ref.kind == SourceKind.derived_from_knowledge
+                and int(ref.knowledge_id) == int(knowledge_id)
+                for ref in claim.source_refs or []
+            ):
+                self._append_stale_reasons(
+                    knowledge_ids=[claim.knowledge_id],
+                    reasons=[reason],
+                )
+        del self._entries[knowledge_id]
+        return {
+            "outcome": "knowledge deleted",
+            "details": {"knowledge_id": knowledge_id},
+        }
+
+    @functools.wraps(BaseKnowledgeManager.invalidate_knowledge, updated=())
+    def invalidate_knowledge(
+        self,
+        *,
+        knowledge_id: int,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        existing = self._entries.get(knowledge_id)
+        if existing is None:
+            raise ValueError(
+                f"No knowledge found with knowledge_id {knowledge_id} to invalidate.",
+            )
+        self._entries[knowledge_id] = existing.model_copy(
+            update={"status": KnowledgeStatus.invalidated},
+        )
+        return {
+            "outcome": "knowledge invalidated",
+            "details": {"knowledge_id": knowledge_id},
+        }
+
+    @functools.wraps(BaseKnowledgeManager.supersede_knowledge, updated=())
+    def supersede_knowledge(
+        self,
+        *,
+        old_knowledge_id: int,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        kind: Optional[KnowledgeKind | str] = None,
+        topics: Optional[List[str]] = None,
+        source_refs: Optional[List[SourceRef | dict]] = None,
+        confidence: Optional[float] = None,
+        observed_at: Optional[datetime] = None,
+        valid_from: Optional[datetime] = None,
+        valid_until: Optional[datetime] = None,
+        new_knowledge_id: Optional[int] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        old = self._entries.get(old_knowledge_id)
+        if old is None:
+            raise ValueError(
+                f"No knowledge found with knowledge_id {old_knowledge_id} to supersede.",
+            )
+        if new_knowledge_id is None:
+            if not title or not content:
+                raise ValueError(
+                    "title and content are required when creating a replacement claim.",
+                )
+            result = self.add_knowledge(
+                title=title,
+                content=content,
+                kind=kind or KnowledgeKind.fact,
+                topics=topics,
+                source_refs=source_refs,
+                confidence=confidence,
+                observed_at=observed_at,
+                valid_from=valid_from,
+                valid_until=valid_until,
+            )
+            new_knowledge_id = int(result["details"]["knowledge_id"])
+            new = self._entries[new_knowledge_id]
+            self._entries[new_knowledge_id] = new.model_copy(
+                update={"supersedes_ids": [old_knowledge_id]},
+            )
+        else:
+            new = self._entries.get(new_knowledge_id)
+            if new is None:
+                raise ValueError(
+                    f"No knowledge found with knowledge_id {new_knowledge_id}.",
+                )
+            supersedes = list(new.supersedes_ids or [])
+            if old_knowledge_id not in supersedes:
+                supersedes.append(old_knowledge_id)
+            self._entries[new_knowledge_id] = new.model_copy(
+                update={"supersedes_ids": supersedes},
+            )
+        self._entries[old_knowledge_id] = old.model_copy(
+            update={
+                "status": KnowledgeStatus.superseded,
+                "superseded_by_id": new_knowledge_id,
             },
         )
-
-        instruction = build_simulated_method_prompt(
-            "update",
-            text,
-            parent_chat_context=_parent_chat_context,
-        )
-        # Append additional guidance about tasks, which is domain-specific
-        instruction += (
-            "\n\nIf the user refers to creating *tasks*, then you should **not** store any tasks. "
-            "Tasks should be stored by a separate task manager – explain this in your response if relevant."
-        )
-        handle = _SimulatedKnowledgeHandle(
-            self._llm,
-            instruction,
-            mode="update",
-            _return_reasoning_steps=_return_reasoning_steps,
-            _requests_clarification=_requests_clarification,
-            clarification_up_q=_clarification_up_q,
-            clarification_down_q=_clarification_down_q,
-            response_format=response_format,
-            hold_completion=self._hold_completion,
-        )
-
-        return handle
-
-    # ------------------------------------------------------------------ #
-    #  retrieve                                                          #
-    # ------------------------------------------------------------------ #
-    @functools.wraps(BaseKnowledgeManager.ask, updated=())
-    async def ask(
-        self,
-        text: str,
-        *,
-        response_format: Optional[Type[BaseModel]] = None,
-        _return_reasoning_steps: bool = False,
-        _parent_chat_context: list[dict] | None = None,
-        _requests_clarification: bool = False,
-        _clarification_up_q: asyncio.Queue[str] | None = None,
-        _clarification_down_q: asyncio.Queue[str] | None = None,
-    ) -> SteerableToolHandle:
-        # Tool-style scheduled log (only when no parent lineage)
-        maybe_tool_log_scheduled(
-            "SimulatedKnowledgeManager.ask",
-            "ask",
-            {
-                "text": text if isinstance(text, str) else repr(text),
-                "requests_clarification": _requests_clarification,
+        return {
+            "outcome": "knowledge superseded",
+            "details": {
+                "old_knowledge_id": old_knowledge_id,
+                "new_knowledge_id": new_knowledge_id,
             },
+        }
+
+    def _append_stale_reasons(
+        self,
+        *,
+        knowledge_ids: List[int],
+        reasons: List[StaleReason],
+        destination: str | None = None,
+    ) -> None:
+        """Append deduplicated link debt to claims before dependency deletion."""
+        for knowledge_id in knowledge_ids:
+            claim = self._entries.get(knowledge_id)
+            if claim is None:
+                continue
+            merged = merge_stale_reasons(claim.stale_reasons, *reasons)
+            self._entries[knowledge_id] = claim.model_copy(
+                update={"stale_reasons": merged},
+            )
+
+    def mark_stale_for_missing_source(
+        self,
+        *,
+        knowledge_ids: List[int],
+        reason: StaleReason | dict,
+        destination: str | None = None,
+    ) -> None:
+        """Snapshot source-link debt before an external dependency is deleted."""
+        stale_reason = (
+            reason
+            if isinstance(reason, StaleReason)
+            else StaleReason.model_validate(reason)
+        )
+        self._append_stale_reasons(
+            knowledge_ids=knowledge_ids,
+            reasons=[stale_reason],
+            destination=destination,
         )
 
-        instruction = build_simulated_method_prompt(
-            "retrieve",
-            text,
-            parent_chat_context=_parent_chat_context,
-        )
-        handle = _SimulatedKnowledgeHandle(
-            self._llm,
-            instruction,
-            mode="ask",
-            _return_reasoning_steps=_return_reasoning_steps,
-            _requests_clarification=_requests_clarification,
-            clarification_up_q=_clarification_up_q,
-            clarification_down_q=_clarification_down_q,
-            response_format=response_format,
-            hold_completion=self._hold_completion,
-        )
+    @staticmethod
+    def _reason_identity(reason: StaleReason) -> tuple[str, object] | None:
+        if (
+            reason.dep_kind in {"file", "contact", "knowledge"}
+            and reason.id is not None
+        ):
+            return reason.dep_kind, int(reason.id)
+        if reason.dep_kind == "data" and reason.context:
+            return "data", reason.context.strip("/")
+        return None
 
-        return handle
+    @staticmethod
+    def _ref_identity(ref: SourceRef) -> tuple[str, object] | None:
+        if ref.kind == SourceKind.file and ref.file_id is not None:
+            return "file", int(ref.file_id)
+        if ref.kind == SourceKind.contact:
+            return "contact", int(ref.contact_id)
+        if ref.kind == SourceKind.derived_from_knowledge:
+            return "knowledge", int(ref.knowledge_id)
+        if ref.kind == SourceKind.data:
+            return "data", ref.context.strip("/")
+        return None
+
+    @functools.wraps(BaseKnowledgeManager.reconcile_sources, updated=())
+    def reconcile_sources(
+        self,
+        *,
+        knowledge_ids: Optional[List[int]] = None,
+        destination: str | None = None,
+    ) -> "ToolOutcome":
+        targets = (
+            [self._entries[i] for i in knowledge_ids if i in self._entries]
+            if knowledge_ids
+            else [
+                c for c in self._entries.values() if c.status == KnowledgeStatus.active
+            ]
+        )
+        stale_knowledge_ids: list[int] = []
+        for claim in targets:
+            declared_identities = {
+                identity
+                for ref in claim.source_refs
+                if (identity := self._ref_identity(ref)) is not None
+            }
+            preserved = [
+                reason
+                for reason in claim.stale_reasons
+                if self._reason_identity(reason) not in declared_identities
+            ]
+            missing: list[StaleReason] = []
+            for ref in claim.source_refs or []:
+                if (
+                    ref.kind == SourceKind.derived_from_knowledge
+                    and ref.knowledge_id not in self._entries
+                ):
+                    missing.append(
+                        StaleReason(
+                            dep_kind="knowledge",
+                            id=ref.knowledge_id,
+                            message=f"missing knowledge_id={ref.knowledge_id}",
+                        ),
+                    )
+            refreshed = merge_stale_reasons(preserved, *missing)
+            if refreshed:
+                stale_knowledge_ids.append(claim.knowledge_id)
+            if [stale_reason_key(r) for r in refreshed] != [
+                stale_reason_key(r) for r in claim.stale_reasons
+            ]:
+                self._entries[claim.knowledge_id] = claim.model_copy(
+                    update={"stale_reasons": refreshed},
+                )
+        return {
+            "outcome": "sources reconciled",
+            "details": {
+                "checked": len(targets),
+                "stale_knowledge_ids": stale_knowledge_ids,
+                "stale_count": len(stale_knowledge_ids),
+            },
+        }
 
     @functools.wraps(BaseKnowledgeManager.clear, updated=())
     def clear(self) -> None:
-        # Tool-style scheduled log (only when no parent lineage)
         sched = maybe_tool_log_scheduled(
             "SimulatedKnowledgeManager.clear",
             "clear",
@@ -548,6 +425,7 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
                 "_description",
                 "nothing fixed, make up some imaginary scenario",
             ),
+            log_events=getattr(self, "_log_events", False),
             rolling_summary_in_prompts=getattr(
                 self,
                 "_rolling_summary_in_prompts",
@@ -559,3 +437,7 @@ class SimulatedKnowledgeManager(BaseKnowledgeManager):
         if sched:
             label, cid, t0 = sched
             maybe_tool_log_completed(label, cid, "clear", {"outcome": "reset"}, t0)
+
+
+if TYPE_CHECKING:
+    from ..common.tool_outcome import ToolOutcome  # noqa: F401

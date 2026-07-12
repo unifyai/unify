@@ -12,6 +12,7 @@ from unify.actor.execution import (
     ImagePart,
     OutputPart,
 )
+from unify.actor.execution.capture import _encode_image_for_llm
 from unify.common._async_tool.formatting import (
     serialize_tool_content,
     FormattedToolResult,
@@ -372,13 +373,10 @@ print("after")
 async def test_display_compresses_oversized_image():
     """display() must keep images within Anthropic's 5 MB base64 limit.
 
-    A 4032x3024 random-noise image produces ~48 MB as a lossless PNG.
-    Without compression, this silently passes through, the next LLM
-    inference call hits the API limit, and the tool loop crashes with
-    no feedback to the model.
-
-    The fix: display() falls back to JPEG with progressive quality
-    reduction when PNG exceeds the limit.
+    A 4032x3024 random-noise image is huge as a lossless PNG at native
+    resolution. ``display()`` first fits to the observation space, then
+    encodes as PNG, falling back to JPEG with progressive quality
+    reduction only when PNG still exceeds the limit.
     """
     sandbox = PythonExecutionSession()
 
@@ -400,9 +398,27 @@ display(img)
         f"display() produced a {len(img_part.data):,} byte base64 image "
         f"(limit is 5,242,880). It should compress to fit."
     )
-    assert (
-        img_part.mime == "image/jpeg"
-    ), f"Expected JPEG fallback for oversized image, got {img_part.mime}"
+    assert img_part.mime in {
+        "image/png",
+        "image/jpeg",
+    }, f"Expected PNG or JPEG for oversized image, got {img_part.mime}"
+
+
+def test_encode_image_falls_back_to_jpeg_when_png_exceeds_limit(monkeypatch):
+    """JPEG fallback still triggers when observation fitting is a no-op."""
+    import numpy as np
+    from PIL import Image
+
+    monkeypatch.setattr(
+        "unify.common.observation_scaling.fit_image_to_observation_space",
+        lambda img: img,
+    )
+    img = Image.fromarray(
+        np.random.randint(0, 255, (3024, 4032, 3), dtype=np.uint8),
+    )
+    b64_data, mime = _encode_image_for_llm(img)
+    assert mime == "image/jpeg"
+    assert len(b64_data) <= 5_242_880
 
 
 def test_execution_result_implements_formatted_tool_result():

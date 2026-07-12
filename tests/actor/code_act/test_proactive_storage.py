@@ -74,6 +74,10 @@ class _TrackingGuidanceManager:
         """Delete a guidance entry by ID."""
         return {"deleted": True}
 
+    def reconcile_dependencies(self, *, guidance_ids=None, destination=None):
+        """Refresh structured link debt for related functions."""
+        return {"outcome": "checked", "details": {"guidance_ids": guidance_ids or []}}
+
 
 def test_storage_prompt_encourages_bounded_agent_loop_distillation():
     prompt = _STORAGE_WHAT_CAN_BE_STORED

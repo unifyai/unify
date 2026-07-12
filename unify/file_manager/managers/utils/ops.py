@@ -673,6 +673,27 @@ def delete_file(
 
     sync_errors = []
 
+    # Snapshot Knowledge provenance debt before FileRecords FK CASCADE pops
+    # ``source_refs[*].file_id``.
+    try:
+        from unify.common.stale_reason import StaleReason
+        from unify.knowledge_manager.knowledge_manager import (
+            mark_knowledge_stale_for_deleted_sources,
+        )
+
+        mark_knowledge_stale_for_deleted_sources(
+            reasons=[
+                StaleReason(
+                    dep_kind="file",
+                    id=int(file_id),
+                    path=file_path,
+                    message=f"missing file_id={int(file_id)}",
+                ),
+            ],
+        )
+    except Exception as e:
+        sync_errors.append(("knowledge_stale_snapshot", str(e)))
+
     # 1) Adapter deletion when supported (filesystem operation)
     if getattr(file_manager, "_adapter", None) is not None and getattr(
         file_manager._adapter.capabilities,

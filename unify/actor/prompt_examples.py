@@ -265,7 +265,7 @@ def get_handle_mode_selection_example() -> str:
 # CORRECT — single primitive call → use execute_function (JSON tool call):
 #   execute_function(function_name="primitives.contacts.ask", call_kwargs={"text": "Find contacts in Berlin"})
 #   execute_function(function_name="primitives.tasks.execute", call_kwargs={"task_id": 123})
-#   execute_function(function_name="primitives.knowledge.update", call_kwargs={"text": "Store: Office hours are 9-5 PT."})
+#   KnowledgeManager_add_knowledge(title="Office hours", content="Office hours are 9-5 PT.", kind="fact")
 #
 # WRONG — wrapping a single primitive in execute_code just to add notify():
 #   execute_code(code='''
@@ -396,13 +396,20 @@ async def build_contact_insights(city: str) -> str:
     notify({
         "message": "Step 3/3: Persisting synthesized insights to the knowledge store.",
     })
-    save_handle = await primitives.knowledge.update(
-        f"Store structured contact insights for {city}: contacts={contacts}, summary={interaction_summary}"
-    )
-    save_result = await save_handle.result()
+    # Outside execute_code, persist via KnowledgeManager JSON tools, e.g.:
+    # KnowledgeManager_add_knowledge(
+    #     title=f"Contact insights for {city}",
+    #     content=f"contacts={contacts}, summary={interaction_summary}",
+    #     kind="insight",
+    # )
+    save_result = {
+        "city": city,
+        "contacts": contacts,
+        "summary": interaction_summary,
+    }
 
     notify({
-        "message": f"Done — built and stored contact insights for {city}.",
+        "message": f"Done — built contact insights for {city}.",
         "completed": True,
     })
     return str(save_result)
@@ -816,16 +823,19 @@ def get_computer_interactive_workflow_example() -> str:
     Support email: help@example.com
     ```
 
-*Turn 3: Persist the extracted info to the knowledge base (single primitive → execute_function)*
+*Turn 3: Persist the extracted info to the knowledge base (KnowledgeManager JSON tool)*
 * **Tool Call**:
     ```json
     {
       "tool_calls": [{
-        "name": "execute_function",
+        "name": "KnowledgeManager_add_knowledge",
         "arguments": {
-          "thought": "I have the support email (help@example.com). A single knowledge update is best done via execute_function so the outer loop retains the handle.",
-          "function_name": "primitives.knowledge.update",
-          "call_kwargs": {"text": "Store that Example Corp\'s support email is help@example.com"}
+          "thought": "I have the support email (help@example.com). Persist it as a durable sourced claim via KnowledgeManager.",
+          "title": "Example Corp support email",
+          "content": "Example Corp\'s support email is help@example.com",
+          "kind": "fact",
+          "topics": ["support", "example-corp"],
+          "source_refs": [{"kind": "web", "note": "extracted from example.com contact page"}]
         }
       }]
     }
@@ -873,29 +883,51 @@ async def update_contact_phone(email: str, phone: str) -> str:
 '''
 
 
+def get_knowledge_manager_search_example() -> str:
+    """Example: search durable knowledge claims via KnowledgeManager JSON tools."""
+
+    return """
+# Example: KnowledgeManager search (JSON tool call)
+#
+# CORRECT — discover prior facts/policies before answering or writing:
+#   KnowledgeManager_search(references={"content": "battery warranty terms"})
+#   KnowledgeManager_get_knowledge(knowledge_id=<id from search>)
+#
+# CORRECT — store a durable sourced claim after confirming it is new:
+#   KnowledgeManager_add_knowledge(
+#       title="Battery warranty",
+#       content="Tesla battery warranty is eight years.",
+#       kind="fact",
+#       topics=["warranty", "tesla"],
+#       source_refs=[{"kind": "user_statement", "note": "said in chat"}],
+#   )
+#
+# Anti-pattern: do not store contact attributes, procedures, or secrets here.
+# Anti-pattern: there is no primitives.knowledge.* — use KnowledgeManager_* tools.
+"""
+
+
 def get_primitives_cross_manager_example() -> str:
-    """Example: cross-manager workflow (KnowledgeManager → ContactManager)."""
+    """Example: cross-manager workflow (ContactManager + KnowledgeManager)."""
 
     return '''
 # Example: Cross-manager workflow
 async def find_employee_count_for_contact(contact_name: str) -> int:
     """Find how many employees work at a contact's company.
 
-    This demonstrates cross-manager integration:
-    1. KnowledgeManager.ask internally calls ContactManager.ask to find employer
-    2. KnowledgeManager.ask then queries its own tables for employee count
+    Compose ContactManager (people) with KnowledgeManager (org facts):
+    1. Look up the contact's employer via primitives.contacts.ask
+    2. Search KnowledgeManager for the company's employee-count claim
     """
-    # Single high-level query; KM handles cross-manager coordination internally
-    handle = await primitives.knowledge.ask(
-        f"How many employees are at the company {contact_name} works at?"
+    contacts_handle = await primitives.contacts.ask(
+        f"What company does {contact_name} work at?"
     )
-    answer = await handle.result()
+    company = await contacts_handle.result()
 
-    # Extract count from natural language answer
-    # (In practice, use response_format for structured output)
-    import re
-    match = re.search(r'(\\d+)', answer)
-    return int(match.group(1)) if match else 0
+    # Outside execute_code, call KnowledgeManager_search / get_knowledge
+    # with references={"content": f"employee count for {company}"}.
+    # This example focuses on the contacts half of the composition.
+    return company
 '''
 
 
@@ -1706,7 +1738,7 @@ def get_interjection_routing_only_examples() -> str:
   "routing_action": "broadcast_filtered",
   "broadcast_filter": {
     "capabilities": ["interjectable"],
-    "origin_tool_prefixes": ["primitives.contacts", "primitives.transcripts", "primitives.knowledge"]
+    "origin_tool_prefixes": ["primitives.contacts", "primitives.transcripts", "KnowledgeManager"]
   },
   "routed_message": "For the summaries currently in progress: focus ONLY on Q4 2024 (Oct/Nov/Dec). Ignore Q3 entirely and do not mention it."
 }
@@ -1877,7 +1909,7 @@ def get_primitives_verification_cross_manager_example() -> str:
 - **Agent Trace**:
   - `REASONING: I queried the company but found no CEO field.`
   - `notify({'type': 'progress', 'message': 'Searching company details for CEO information.'})`
-  - `primitives.knowledge.ask(...)`
+  - `KnowledgeManager_search(references={"content": "Acme CEO"})`
   - `✓ done (insufficient data)`
 - **Evidence**: Return value indicates missing CEO data; nothing to create.
 - **Decision**:
@@ -1897,12 +1929,12 @@ def get_mixed_verification_browse_persist_example() -> str:
   - `notify({'type': 'progress', 'message': 'Reading the site for the support email.'})`
   - `session.observe('Extract support email') -> 'help@company.com'`
   - `notify({'type': 'progress', 'message': 'Saving the support email to shared knowledge.'})`
-  - `primitives.knowledge.update('Save support_email=help@company.com')`
+  - `KnowledgeManager_add_knowledge(title='Support email', content='support_email=help@company.com', kind='fact')`
   - `✓ done`
-- **Evidence**: Screenshot shows the extracted email; update return value indicates persistence succeeded.
+- **Evidence**: Screenshot shows the extracted email; KnowledgeManager outcome indicates persistence succeeded.
 - **Decision**:
 ```json
-{"status": "ok", "reason": "The computer evidence matches the extracted email, and the state-manager update confirms it was saved."}
+{"status": "ok", "reason": "The computer evidence matches the extracted email, and the knowledge claim write confirms it was saved."}
 ```
 """.strip()
 
@@ -2081,9 +2113,8 @@ def get_example_function_map() -> dict[str, callable]:
         # Tasks
         "get_primitives_task_execute_example": get_primitives_task_execute_example,
         "get_primitives_task_recurring_creation_example": get_primitives_task_recurring_creation_example,
-        # Knowledge
-        "get_primitives_knowledge_ask_example": get_primitives_cross_manager_example,
-        "get_primitives_knowledge_update_example": lambda: "",  # placeholder
+        # Knowledge (JSON tools — not primitives)
+        "get_knowledge_manager_search_example": get_knowledge_manager_search_example,
         # Transcripts
         "get_primitives_transcript_ask_example": lambda: "",  # placeholder
         # Files (using real FileManager primitives)
@@ -2121,19 +2152,30 @@ def get_example_function_map() -> dict[str, callable]:
 
 
 def get_discovery_first_anti_pattern_example() -> str:
-    """Anti-pattern: treating discovery as permission to jump into custom code."""
+    """Anti-pattern: serial discovery or skipping straight to execute_code."""
 
     return r"""
-# ❌ ANTI-PATTERN: Treating discovery as permission to write new code
+# ❌ ANTI-PATTERN A: Serial / partial discovery across turns
 #
 # DON'T do this:
-#   1) Search FunctionManager / GuidanceManager
+#   Turn 1) Only FunctionManager_search_functions
+#   Turn 2) Only GuidanceManager_search
+#   Turn 3) Only KnowledgeManager_search
+#   …or answer in plain text / call execute_code before all present families
+#
+# ❌ ANTI-PATTERN B: Treating discovery as permission to write new code
+#
+# DON'T do this:
+#   1) Search FunctionManager / GuidanceManager / KnowledgeManager
 #   2) Find no relevant library hit
 #   3) Jump straight to execute_code for work that could be completed by one
 #      exact function or primitive call
 #
 # ✅ CORRECT:
-#   1) Call both discovery tools first
+#   1) On the FIRST tool-calling assistant message, call every present
+#      discovery family in parallel in that same message:
+#        FunctionManager_search_functions + GuidanceManager_search +
+#        KnowledgeManager_search (omit only families whose tools are absent)
 #   2) Then choose the minimal correct execution path
 #   3) If one exact function or primitive call is enough, use execute_function
 #   4) Use execute_code only when the task genuinely needs multi-step composition

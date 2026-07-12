@@ -80,6 +80,7 @@ def _storage_actor_stub():
         list_functions=_tool_stub,
         add_functions=_tool_stub,
         delete_function=_tool_stub,
+        reconcile_dependencies=_tool_stub,
         add_venv=_tool_stub,
         list_venvs=_tool_stub,
         get_venv=_tool_stub,
@@ -95,12 +96,15 @@ def _storage_actor_stub():
         add_guidance=_tool_stub,
         update_guidance=_tool_stub,
         delete_guidance=_tool_stub,
+        reconcile_dependencies=_tool_stub,
     )
 
     class _Actor:
         def __init__(self):
             self.function_manager = function_manager
             self.guidance_manager = guidance_manager
+            # Storage tools optionally wire Knowledge; absent is valid.
+            self.knowledge_manager = None
 
         async def act(self, *args, **kwargs):
             raise AssertionError("certification evidence submission must not execute")

@@ -2115,7 +2115,7 @@ class TaskScheduler(BaseTaskScheduler):
             row_filter=None,
             unique_id_field="task_id",
         )
-        return [Task(**lg) for lg in filled]
+        return [Task(**self._sanitize_activation(dict(lg))) for lg in filled]
 
     def _filter_tasks(
         self,
@@ -2279,10 +2279,13 @@ class TaskScheduler(BaseTaskScheduler):
         self,
         task: Union[Dict[str, Any], Task],
     ) -> Union[Dict[str, Any], Task]:
-        """Clear ``activated_by`` only on pre-activation rows.
+        """Prepare a task row for ``Task`` construction after an Orchestra read.
 
-        Active and terminal statuses keep the activation reason so callers can
-        tell how a completed/failed/cancelled instance was started.
+        Clears ``activated_by`` on pre-activation rows (active/terminal statuses
+        keep the activation reason). Also drops keys whose value is ``None``:
+        Orchestra ``get_logs`` / ``include_fields`` returns explicit null for
+        unset columns, and Pydantic v2 does not apply ``Field(default=…)`` when
+        the key is present with ``None`` (e.g. ``offline`` / ``enabled``).
         """
         keep_statuses = {
             Status.active,
@@ -2301,7 +2304,7 @@ class TaskScheduler(BaseTaskScheduler):
         except Exception:
             if str(task.get("status")) not in {s.value for s in keep_statuses}:
                 task.pop("activated_by", None)
-        return task
+        return {key: value for key, value in task.items() if value is not None}
 
     def _meta_context_for_destination(self, destination: str | None) -> str:
         """Resolve a public destination into one concrete Tasks/Meta context."""
@@ -2413,7 +2416,10 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
-        destination = payload.pop("destination", None)
+        # Destination routing is owned by sync_custom_tasks / sync_custom: the
+        # caller has already scoped self._ctx to the target root. Per-row
+        # destination is grouping metadata only (same as guidance/contacts).
+        payload.pop("destination", None)
         entrypoint_function = payload.pop("entrypoint_function", None)
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
@@ -2435,36 +2441,40 @@ class TaskScheduler(BaseTaskScheduler):
                     custom_key,
                 )
 
-        destination_arg = None if destination in (None, "personal") else destination
-        with self._use_task_destination(destination_arg):
-            result = self._create_task(
-                name=name,
-                description=description,
-                schedule=schedule,
-                trigger=trigger,
-                deadline=deadline,
-                repeat=repeat,
-                priority=priority,
-                response_policy=response_policy,
-                entrypoint=entrypoint,
-                offline=offline,
-                enabled=False,
-                destination=destination_arg,
-                _root_applied=True,
-            )
-            task_id = int(result["details"]["task_id"])
-            log_ids = self._store.get_rows(
-                filter=f"task_id == {task_id}",
-                return_ids_only=True,
-            )
-            self._write_log_entries(
-                logs=log_ids,
-                entries={
-                    "custom_key": custom_key,
-                    "custom_hash": custom_hash,
-                },
-            )
-            return task_id
+        current_destination = self._destination_from_task_context(self._ctx)
+        destination_arg = (
+            None
+            if current_destination in (None, PERSONAL_DESTINATION)
+            else current_destination
+        )
+        result = self._create_task(
+            name=name,
+            description=description,
+            schedule=schedule,
+            trigger=trigger,
+            deadline=deadline,
+            repeat=repeat,
+            priority=priority,
+            response_policy=response_policy,
+            entrypoint=entrypoint,
+            offline=offline,
+            enabled=False,
+            destination=destination_arg,
+            _root_applied=True,
+        )
+        task_id = int(result["details"]["task_id"])
+        log_ids = self._store.get_rows(
+            filter=f"task_id == {task_id}",
+            return_ids_only=True,
+        )
+        self._write_log_entries(
+            logs=log_ids,
+            entries={
+                "custom_key": custom_key,
+                "custom_hash": custom_hash,
+            },
+        )
+        return task_id
 
     def _update_custom_task(
         self,
@@ -2580,7 +2590,12 @@ class TaskScheduler(BaseTaskScheduler):
                 destination,
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom tasks sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         previous_context = self._ctx
         previous_store = self._store
@@ -2630,12 +2645,6 @@ class TaskScheduler(BaseTaskScheduler):
             for custom_key, source_data in source_tasks.items():
                 processed_keys.add(custom_key)
                 task_data = dict(source_data)
-                destination_value = task_data.get("destination") or "personal"
-                destination_arg = (
-                    None
-                    if destination_value in (None, "personal")
-                    else destination_value
-                )
 
                 if custom_key in db_tasks:
                     db_entry = db_tasks[custom_key]

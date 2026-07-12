@@ -1,136 +1,97 @@
+"""Docstring / schema stability for KnowledgeManager public methods."""
+
 from __future__ import annotations
 
-import os
-import sys
-import subprocess
-import textwrap
+import inspect
+import json
 
+from unify.common.llm_helpers import method_to_schema, methods_to_tool_dict
+from unify.knowledge_manager.base import BaseKnowledgeManager
 from unify.knowledge_manager.knowledge_manager import KnowledgeManager
-from unify.session_details import UNASSIGNED_USER_CONTEXT, UNASSIGNED_ASSISTANT_CONTEXT
-from tests.assertion_helpers import first_diff_block
-from tests.helpers import _handle_project
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+
+_PUBLIC_METHODS = (
+    "search",
+    "filter",
+    "get_knowledge",
+    "add_knowledge",
+    "update_knowledge",
+    "delete_knowledge",
+    "invalidate_knowledge",
+    "supersede_knowledge",
+    "reconcile_sources",
+)
 
 
-def _unwrap_callable(tool):
-    """Return the underlying callable from either a ToolSpec or a function."""
-    return getattr(tool, "fn", tool)
+def test_public_methods_have_substantial_docstrings():
+    for name in _PUBLIC_METHODS:
+        doc = (getattr(BaseKnowledgeManager, name).__doc__ or "").strip()
+        assert doc, f"BaseKnowledgeManager.{name} is missing a docstring"
+        assert len(doc) >= 100, f"Docstring for {name} is too short (len={len(doc)})"
 
 
-@_handle_project
-def test_ask_tools_have_docstrings():
-    km = KnowledgeManager()
-    tools = km.get_tools("ask")
-
-    assert tools, "KnowledgeManager.ask should expose at least one tool"
-
-    for name, value in tools.items():
-        fn = _unwrap_callable(value)
-        doc = (getattr(fn, "__doc__", None) or "").strip()
-        assert doc, f"Tool '{name}' is missing a docstring"
-        assert (
-            len(doc) >= 100
-        ), f"Docstring for tool '{name}' is too short (len={len(doc)})"
-
-
-def _build_tools_schema_in_subprocess(method: str, test_context: str) -> str:
-    """
-    Build tools→schema JSON in a fresh Python process to catch cross-session drift.
-
-    The test_context is passed via environment variable to ensure the subprocess
-    uses an isolated context rather than the shared default context.
-    """
-    assert method in {"ask", "update"}
-    code = textwrap.dedent(
-        f"""
-		import os, sys, json
-		sys.path.insert(0, os.getcwd())
-		import unisdk
-		# Activate the test project before setting context
-		project_name = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityTests")
-		unisdk.activate(project_name, overwrite=False)
-		# Set test-specific context before creating KnowledgeManager to avoid races
-		test_ctx = os.environ.get("_TEST_CONTEXT")
-		if test_ctx:
-			unisdk.set_context(test_ctx, relative=False)
-		from unify.common.llm_helpers import method_to_schema
-		def _unwrap_callable(tool):
-			return getattr(tool, "fn", tool)
-		from unify.knowledge_manager.knowledge_manager import KnowledgeManager
-		km = KnowledgeManager()
-		tools = km.get_tools("{method}")
-		if not tools:
-			raise AssertionError("KnowledgeManager.{method} should expose at least one tool")
-		mapping = {{
-			name: method_to_schema(_unwrap_callable(value), name)
-			for name, value in tools.items()
-		}}
-		sys.stdout.write(json.dumps(mapping, sort_keys=True, indent=2))
-		""",
+def test_actor_facing_tool_schemas_are_stable():
+    """Schemas for KnowledgeManager_* tools must be deterministic."""
+    km = SimulatedKnowledgeManager()
+    tools = methods_to_tool_dict(
+        km.search,
+        km.filter,
+        km.get_knowledge,
+        km.add_knowledge,
+        km.update_knowledge,
+        km.delete_knowledge,
+        km.invalidate_knowledge,
+        km.supersede_knowledge,
+        km.reconcile_sources,
+        include_class_name=True,
     )
-    env = os.environ.copy()
-    env["_TEST_CONTEXT"] = test_context
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True,
-        env=env,
-    )
-    return proc.stdout
+    assert tools
+    for name, fn in tools.items():
+        assert name.startswith("KnowledgeManager_"), name
+        schema1 = method_to_schema(fn, name)
+        schema2 = method_to_schema(fn, name)
+        assert schema1 == schema2, f"Schema for {name} is non-deterministic"
+        assert (fn.__doc__ or "").strip(), f"Tool {name} missing docstring"
+        serialized = json.dumps(schema1)
+        assert "related_function_ids" not in serialized
+        assert "related_guidance_ids" not in serialized
+        assert "orphaned" not in serialized
 
 
-@_handle_project
-def test_update_tools_have_docstrings():
-    km = KnowledgeManager()
-    tools = km.get_tools("update")
-
-    assert tools, "KnowledgeManager.update should expose at least one tool"
-
-    for name, value in tools.items():
-        fn = _unwrap_callable(value)
-        doc = (getattr(fn, "__doc__", None) or "").strip()
-        assert doc, f"Tool '{name}' is missing a docstring"
-        assert (
-            len(doc) >= 100
-        ), f"Docstring for tool '{name}' is too short (len={len(doc)})"
-
-
-@_handle_project
-def test_ask_schemas_are_stable():
-    # Build a test-specific context path matching _handle_project pattern
-    test_ctx = f"tests/knowledge_manager/test_tool_definitions/test_ask_schemas_are_stable/{UNASSIGNED_USER_CONTEXT}/{UNASSIGNED_ASSISTANT_CONTEXT}"
-    p1 = _build_tools_schema_in_subprocess("ask", test_ctx)
-    p2 = _build_tools_schema_in_subprocess("ask", test_ctx)
-    if p1 != p2:
-        snippet = first_diff_block(
-            p1,
-            p2,
-            context=3,
-            label_a="First JSON",
-            label_b="Second JSON",
+def test_real_and_simulated_share_signatures():
+    for name in _PUBLIC_METHODS:
+        real_params = list(
+            inspect.signature(getattr(KnowledgeManager, name)).parameters,
         )
-        raise AssertionError(
-            "Tool schemas for ask-tools changed between separate Python sessions.\n\n"
-            + snippet,
+        sim_params = list(
+            inspect.signature(getattr(SimulatedKnowledgeManager, name)).parameters,
         )
+        base_params = list(
+            inspect.signature(getattr(BaseKnowledgeManager, name)).parameters,
+        )
+        assert sim_params == base_params, name
+        # KnowledgeManager may append destination guidance / signature on writes;
+        # parameter names must still cover the base contract.
+        assert set(base_params) <= set(real_params), name
 
 
-@_handle_project
-def test_update_schemas_are_stable():
-    # Build a test-specific context path matching _handle_project pattern
-    test_ctx = f"tests/knowledge_manager/test_tool_definitions/test_update_schemas_are_stable/{UNASSIGNED_USER_CONTEXT}/{UNASSIGNED_ASSISTANT_CONTEXT}"
-    p1 = _build_tools_schema_in_subprocess("update", test_ctx)
-    p2 = _build_tools_schema_in_subprocess("update", test_ctx)
-    if p1 != p2:
-        snippet = first_diff_block(
-            p1,
-            p2,
-            context=3,
-            label_a="First JSON",
-            label_b="Second JSON",
-        )
-        raise AssertionError(
-            "Tool schemas for update-tools changed between separate Python sessions.\n\n"
-            + snippet,
-        )
+def test_scoped_filter_helpers_compose_status_scope_and_exclusions():
+    km = object.__new__(KnowledgeManager)
+    km._filter_scope = "kind == 'policy'"
+    km._exclude_ids = frozenset({3, 1})
+
+    composed = km._scoped_filter("title == 'A'")
+    assert "title == 'A'" in composed
+    assert "status == 'active'" in composed
+    assert "kind == 'policy'" in composed
+    assert "knowledge_id not in [1, 3]" in composed
+
+    # Explicit status in the caller filter suppresses the active default.
+    with_status = km._scoped_filter("status == 'invalidated'")
+    assert with_status.count("status == 'invalidated'") == 1
+    assert "status == 'active'" not in with_status
+
+    # get_knowledge path: default_active=False
+    no_default = km._scoped_filter("knowledge_id == 9", default_active=False)
+    assert "status == 'active'" not in no_default
+    assert "knowledge_id == 9" in no_default

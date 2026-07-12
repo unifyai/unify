@@ -1,199 +1,55 @@
+"""SimulatedKnowledgeManager parity with BaseKnowledgeManager."""
+
 from __future__ import annotations
 
-import asyncio
-import pytest
+from unify.knowledge_manager.base import BaseKnowledgeManager
+from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
+from unify.knowledge_manager.types.knowledge import KnowledgeStatus
 
-from unify.knowledge_manager.simulated import (
-    SimulatedKnowledgeManager,
+_PUBLIC_METHODS = (
+    "search",
+    "filter",
+    "get_knowledge",
+    "add_knowledge",
+    "update_knowledge",
+    "delete_knowledge",
+    "invalidate_knowledge",
+    "supersede_knowledge",
+    "reconcile_sources",
+    "clear",
 )
 
-# helper that wraps each test in its own Unify project / trace context
-from tests.helpers import (
-    _handle_project,
-    DEFAULT_TIMEOUT,
-)
 
-
-# ────────────────────────────────────────────────────────────────────────────
-# 1.  Doc-string inheritance                                                 #
-# ────────────────────────────────────────────────────────────────────────────
 def test_simulated_km_docstrings_match_base():
-    """
-    Public methods in SimulatedKnowledgeManager should copy the real
-    BaseKnowledgeManager doc-strings one-for-one (via functools.wraps).
-    """
-    from unify.knowledge_manager.base import BaseKnowledgeManager
-    from unify.knowledge_manager.simulated import SimulatedKnowledgeManager
-
-    assert (
-        BaseKnowledgeManager.ask.__doc__.strip()
-        in SimulatedKnowledgeManager.ask.__doc__.strip()
-    ), ".retrieve doc-string was not copied correctly"
-
-    assert (
-        BaseKnowledgeManager.update.__doc__.strip()
-        in SimulatedKnowledgeManager.update.__doc__.strip()
-    ), ".store doc-string was not copied correctly"
-
-    assert (
-        BaseKnowledgeManager.refactor.__doc__.strip()
-        in SimulatedKnowledgeManager.refactor.__doc__.strip()
-    ), ".refactor doc-string was not copied correctly"
+    for name in _PUBLIC_METHODS:
+        base_doc = getattr(BaseKnowledgeManager, name).__doc__
+        sim_doc = getattr(SimulatedKnowledgeManager, name).__doc__
+        assert base_doc and sim_doc, f"{name} missing docstring"
+        assert (
+            base_doc.strip() in sim_doc.strip()
+        ), f"{name} docstring was not copied via functools.wraps"
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# 2.  Basic start-and-ask                                                    #
-# ────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_start_and_ask_simulated_km():
-    km = SimulatedKnowledgeManager("Demo KB for unit-tests.")
-    handle = await km.ask("What do we already know about Zebulon?")
-    answer = await handle.result()
-    assert isinstance(answer, str) and answer.strip(), "Answer should be non-empty"
+def test_simulated_crud_and_clear(simulated_km):
+    kid = simulated_km.add_knowledge(
+        title="Temp",
+        content="temporary fact",
+        kind="insight",
+    )["details"]["knowledge_id"]
+    assert simulated_km.get_knowledge(knowledge_id=kid).status == KnowledgeStatus.active
+
+    simulated_km.clear()
+    assert simulated_km.filter() == []
+    assert simulated_km.search(k=5) == []
+
+    # Remains usable after clear
+    kid2 = simulated_km.add_knowledge(title="After clear", content="ok")["details"][
+        "knowledge_id"
+    ]
+    assert simulated_km.get_knowledge(knowledge_id=kid2).title == "After clear"
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# 3.  Stateful memory – serial retrieves                                     #
-# ────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_km_stateful_serial_retrieves():
-    """
-    Two consecutive .retrieve() calls should share context.
-    """
-    km = SimulatedKnowledgeManager()
-
-    # first question – ask for a single‐word theme of the KB
-    h1 = await km.ask(
-        "Using one word only, how would you describe the overall theme of our knowledge base?",
-    )
-    theme = (await h1.result()).strip()
-    assert theme, "Theme word should not be empty"
-
-    # follow-up question
-    h2 = await km.ask(
-        "What single word did you just use to describe the knowledge base?",
-    )
-    ans2 = (await h2.result()).lower()
-    assert theme.lower() in ans2, "LLM should recall the theme it produced earlier"
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 4.  Update then ask – state carries through                                #
-# ────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_km_stateful_update_then_retrieve():
-    """
-    A fact stored via .store() should be recalled by a later .retrieve().
-    """
-    km = SimulatedKnowledgeManager()
-    fact = "The flagship product of Acme Corp is the Quantum Widget."
-
-    # store a new fact
-    h_store = await km.update(fact)
-    await h_store.result()
-
-    # retrieve it
-    h_ret = await km.ask("What is the flagship product of Acme Corp?")
-    answer = (await h_ret.result()).lower()
-    assert "quantum" in answer and "widget" in answer
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 5.  Basic refactor                                                         #
-# ────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_refactor_simulated_km():
-    """
-    The simulated KM should return a non-empty migration plan in response to
-    .refactor().  We do **not** verify the content in detail – only that the
-    string is present and mentions something schema-related (e.g. "column").
-    """
-    km = SimulatedKnowledgeManager(
-        "Tiny demo KB where Contacts duplicate company opening hours.",
-    )
-
-    handle = await km.refactor(
-        "Please remove duplicated columns and introduce proper primary keys.",
-    )
-    migration_plan = await handle.result()
-
-    assert (
-        isinstance(migration_plan, str) and migration_plan.strip()
-    ), "Migration plan should be non-empty"
-    # Allow any schema-vocabulary the LLM might use to describe the refactor.
-    # Original assertion was just "column" / "table", but current models often
-    # describe 3NF moves with words like "schema", "primary key", "foreign
-    # key", or "attribute" without ever literally saying "column"/"table"
-    # (the response satisfies the docstring's "mentions something schema-
-    # related" intent — the assertion just needed to keep up with phrasing
-    # drift). Matches the test's stated intent: smoke-check the plan is
-    # schema-shaped, don't grade its prose.
-    _schema_vocab = (
-        "column",
-        "table",
-        "schema",
-        "primary key",
-        "foreign key",
-        "attribute",
-        "normalis",  # normalise / normalize / normalisation / normalization
-    )
-    _plan_lower = migration_plan.lower()
-    assert any(w in _plan_lower for w in _schema_vocab), (
-        f"Plan should mention any schema element (one of {_schema_vocab}).",
-        migration_plan,
-    )
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 11. Clear – reset and remain usable                                         #
-# ────────────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
-@pytest.mark.llm_call
-@_handle_project
-async def test_simulated_clear():
-    """
-    SimulatedKnowledgeManager.clear should reset the manager (hard-coded completion)
-    and remain usable afterwards.
-    """
-    km = SimulatedKnowledgeManager()
-    # Seed some prior state via an update call
-    h_store = await km.update("Add a temporary fact about Project Phoenix.")
-    await asyncio.wait_for(h_store.result(), timeout=DEFAULT_TIMEOUT)
-
-    # Clear should not raise and should be quick (no LLM roundtrip requirement)
-    km.clear()
-
-    # Post-clear, an ask should still work
-    h_q = await km.ask("List any knowledge stored today.")
-    answer = await asyncio.wait_for(h_q.result(), timeout=DEFAULT_TIMEOUT)
-    assert (
-        isinstance(answer, str) and answer.strip()
-    ), "Answer should be non-empty after clear()"
-
-
-@_handle_project
-def test_simulated_knowledge_manager_reduce_shapes():
-    km = SimulatedKnowledgeManager()
-
-    scalar = km.reduce(table="Content", metric="sum", keys="row_id")
-    assert isinstance(scalar, (int, float))
-
-    multi = km.reduce(table="Content", metric="max", keys=["row_id"])
-    assert isinstance(multi, dict)
-    assert set(multi.keys()) == {"row_id"}
-
-    grouped = km.reduce(
-        table="Content",
-        metric="sum",
-        keys="row_id",
-        group_by="row_id",
-    )
-    assert isinstance(grouped, dict)
+def test_simulated_implements_all_base_methods():
+    for name in _PUBLIC_METHODS:
+        assert hasattr(SimulatedKnowledgeManager, name)
+        assert callable(getattr(SimulatedKnowledgeManager, name))

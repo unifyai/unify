@@ -13,7 +13,7 @@ logger = _log
 CONTACTS_TABLE = "Contacts"
 CONTACTS_META_TABLE = "Contacts/Meta"
 from .prompt_builders import build_ask_prompt, build_update_prompt
-from ..knowledge_manager.types import ColumnType
+from ..common.column_types import ColumnType
 from ..common.embed_utils import ensure_vector_column
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
@@ -1859,7 +1859,12 @@ class ContactManager(BaseContactManager):
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
-            return exc.payload  # type: ignore[return-value]
+            logger.warning(
+                "Skipping custom contacts sync for destination %r: %s",
+                destination,
+                exc.payload,
+            )
+            return False
 
         with (
             self._temporary_contact_context("_ctx", contacts_context),

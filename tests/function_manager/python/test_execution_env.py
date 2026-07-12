@@ -168,9 +168,9 @@ def test_execution_globals():
     # Primitives object should provide lazy access to managers
     primitives = execution["primitives"]
     assert hasattr(primitives, "contacts")
-    assert hasattr(primitives, "knowledge")
     assert hasattr(primitives, "tasks")
     assert hasattr(primitives, "files")
+    assert not hasattr(primitives, "knowledge")
 
 
 # ────────────────────────────────────────────────────────────────────────────

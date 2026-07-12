@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
+    from unify.knowledge_manager.knowledge_manager import KnowledgeManager
 
 __all__ = [
     "BaseActor",
@@ -87,6 +88,7 @@ class BaseActor(ABC):
         environments: Optional[list["BaseEnvironment"]] = None,
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
+        knowledge_manager: Optional["KnowledgeManager"] = None,
     ) -> None:
         """
         Shared initialization for concrete actor implementations.
@@ -95,6 +97,7 @@ class BaseActor(ABC):
         - Environment setup (grouping by namespace, composite merging)
         - FunctionManager resolution (registry fallback)
         - GuidanceManager resolution (registry fallback)
+        - KnowledgeManager resolution (registry fallback)
         - Extraction of computer primitives for backward compatibility
         """
         self.environments: Dict[str, "BaseEnvironment"] = self._setup_environments(
@@ -108,6 +111,9 @@ class BaseActor(ABC):
         )
         self.guidance_manager = (
             guidance_manager or ManagerRegistry.get_guidance_manager()
+        )
+        self.knowledge_manager = (
+            knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
 
         # Backward-compat: some call sites expect an actor-level computer primitives instance.
@@ -254,12 +260,14 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         environments: Optional[list["BaseEnvironment"]] = None,
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
+        knowledge_manager: Optional["KnowledgeManager"] = None,
     ) -> None:
         BaseActor.__init__(
             self,
             environments=environments,
             function_manager=function_manager,
             guidance_manager=guidance_manager,
+            knowledge_manager=knowledge_manager,
         )
         BaseStateManager.__init__(self)
 

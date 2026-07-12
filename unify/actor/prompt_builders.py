@@ -17,48 +17,64 @@ from unify.actor.prompt_examples import (
 # Static prompt content (inlined rather than wrapped in trivial functions)
 # ---------------------------------------------------------------------------
 
-_FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
-    ### Function & Guidance Library
+_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
+    ### Function, Guidance & Knowledge Library
 
-    You have access to two complementary systems:
+    You have access to three complementary systems:
 
-    * **FunctionManager** (read + write) — stores concrete, reusable function
-      implementations (the building blocks). Search results include a
+    * **FunctionManager** (read + write) — the *what*: concrete, reusable
+      function implementations (the building blocks). Search results include a
       `guidance_ids` field linking to related guidance entries.
-    * **GuidanceManager** (read + write) — stores procedural how-to
+    * **GuidanceManager** (read + write) — the *how*: procedural how-to
       information: step-by-step instructions, standard operating procedures,
       software usage walkthroughs, and strategies for composing functions
       together. Search results include `function_ids` pointing back to
       concrete implementations.
+    * **KnowledgeManager** (read + write) — the *is*: durable sourced claims
+      (facts, policies, definitions, decisions, constraints, insights,
+      preferences) with provenance. Not people, not procedures, not secrets.
 
-    **Discovery index scope:** search indexes **user-stored** entries only.
-    Built-in `primitives.*`, prompt-injected functions, and prompt-injected
-    guidance (unpacked elsewhere in this prompt) are deliberately excluded —
-    they will never appear in search results. Empty discovery therefore does
-    **not** mean they are unavailable; call them by exact name via
-    `execute_function`.
+    **Discovery index scope:** Function/Guidance search indexes **user-stored**
+    entries only. Built-in `primitives.*`, prompt-injected functions, and
+    prompt-injected guidance (unpacked elsewhere in this prompt) are
+    deliberately excluded — they will never appear in search results. Empty
+    discovery therefore does **not** mean they are unavailable; call them by
+    exact name via `execute_function`.
 
-    Always search **both** before deciding how to execute:
+    Always search **FunctionManager, GuidanceManager, and KnowledgeManager**
+    before deciding how to execute (hard discovery-first policy when active).
+    When that policy is active, issue **all present discovery families as
+    parallel tool_calls in your first tool-calling assistant message** — do
+    not serialize them across turns, and do not call `execute_code` /
+    `execute_function` until discovery has unlocked the full tool set:
 
     1. `FunctionManager_search_functions` — find existing implementations
     2. `GuidanceManager_search` — find procedural instructions and
        compositional strategies
-    3. If a relevant function exists, call it via `execute_function`; if
-       relevant guidance exists, follow its procedure
-    4. If neither library has a relevant entry, do **not** treat that as
+    3. `KnowledgeManager_search` — find durable domain claims (facts, policies,
+       definitions, decisions, constraints, insights, preferences)
+    4. Prefer healthy matches (empty `stale_reasons`). Entries with non-empty
+       `stale_reasons` are discoverable but second-class — disclose the debt
+       if you use them, and repair via explicit update/re-link rather than
+       inventing associations.
+    5. If a relevant function exists, call it via `execute_function`; if
+       relevant guidance exists, follow its procedure; if a relevant claim
+       exists, use it (fetch full text with `get_knowledge` when needed)
+    6. If none of the libraries has a relevant entry, do **not** treat that as
        permission to immediately write new code. Search is a discovery step,
        not an execution decision.
-    5. After discovery, choose the minimal correct execution path:
+    7. After discovery, choose the minimal correct execution path:
        - if the request or discovery step already identifies one exact function
          or primitive call, use `execute_function`
        - use `execute_code` only when the task genuinely requires multi-step
          composition, branching, iteration, or combining intermediate results
 
-    Guidance search/filter results carry truncated content previews for
-    long entries. When a discovered entry is actually relevant to the task,
-    fetch its complete procedure with `GuidanceManager_get_guidance` before
-    following it — do not act on a truncated preview. Skip the fetch for
-    entries that are merely near-matches you will not use.
+    Guidance and Knowledge search/filter results carry truncated content
+    previews for long entries. When a discovered entry is actually relevant
+    to the task, fetch the complete body with `GuidanceManager_get_guidance`
+    or `KnowledgeManager_get_knowledge` before relying on it — do not act on
+    a truncated preview. Skip the fetch for entries that are merely
+    near-matches you will not use.
 
     #### Writing Guidance
 
@@ -67,6 +83,15 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
     store them directly via `GuidanceManager_add_guidance`. This is
     appropriate when the *act of persisting the guidance is the task itself*
     (e.g. "remember how to log into X", "here are the steps for Y").
+
+    #### Writing Knowledge
+
+    When the user provides durable non-person, non-procedure, non-secret
+    claims that should be remembered (policies, definitions, org facts),
+    store them via `KnowledgeManager_add_knowledge` after searching for
+    duplicates. Attach `source_refs` when provenance is known. Prefer
+    `supersede_knowledge` / `invalidate_knowledge` over silent overwrite
+    when replacing or withdrawing a claim.
 
     #### Writing Functions
 
@@ -82,8 +107,8 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
 
     For skills discovered *during* execution (reusable patterns from the
     current trajectory), use `store_skills` instead — it triggers a
-    dedicated review that extracts and stores both functions and
-    compositional guidance from the trajectory.
+    dedicated review that extracts and stores functions, compositional
+    guidance, and durable knowledge claims from the trajectory.
 
     #### Function Execution Modes
 
@@ -98,24 +123,43 @@ _FUNCTION_AND_GUIDANCE_LIBRARY = textwrap.dedent("""
 """).strip()
 
 _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
-    ### Discovery-First Policy (Active)
+    ### Discovery-First Policy (Active) — HARD REQUIREMENT
 
-    A tool policy is enforced that **requires** you to call both
-    `FunctionManager_search_functions` and `GuidanceManager_search`
-    before any other tools become available. Until both have been called at
-    least once, only the FunctionManager and GuidanceManager read-only
-    discovery tools are visible to you.
+    A tool policy gates the full toolkit until each present library family has
+    been discovered. Until then, **only** FunctionManager / GuidanceManager /
+    KnowledgeManager discovery tools are available.
 
-    **Call both on your first turn** — they are independent and can be issued
-    as parallel tool calls in a single assistant message. Once both discovery
-    calls complete, the full tool set unlocks automatically — including
-    `execute_function`, `execute_code`, FunctionManager write tools
-    (`FunctionManager_add_functions`, `FunctionManager_delete_function`),
-    and GuidanceManager write tools (`GuidanceManager_add_guidance`,
-    `GuidanceManager_update_guidance`, `GuidanceManager_delete_guidance`).
+    **Your first assistant message that issues any tool call MUST include
+    every present discovery family in that same message as parallel
+    tool_calls.** This is not optional and must not be deferred:
 
-    This policy exists to ensure you always check the existing function and
-    guidance libraries before attempting to solve a task from scratch.
+    - If FunctionManager tools are present → include at least one
+      `FunctionManager_*` discovery call (prefer
+      `FunctionManager_search_functions` with a non-empty `query`)
+    - If GuidanceManager tools are present → include at least one
+      `GuidanceManager_*` discovery call (prefer `GuidanceManager_search`)
+    - If KnowledgeManager tools are present → include at least one
+      `KnowledgeManager_*` discovery call (prefer `KnowledgeManager_search`)
+
+    Call **only** tools that appear in the current tool list. Never invent
+    `KnowledgeManager_*` / `GuidanceManager_*` / `FunctionManager_*` /
+    `execute_code` / `execute_function` names that are not listed for this
+    turn. Never call `FunctionManager_search_functions` with empty
+    arguments — `query` is required.
+
+    **Forbidden before that parallel discovery message:**
+    - Answering in plain text with no tool calls
+    - Calling only one family and waiting for the next turn
+    - Calling `execute_code`, `execute_function`, or any write/mutate tool
+    - Inventing / hallucinating tools that are not in the current tool list
+
+    Once every present gate has been called, the full tool set unlocks
+    automatically — including `execute_function`, `execute_code`, and
+    FunctionManager / GuidanceManager / KnowledgeManager write tools.
+
+    This policy exists to ensure you always check the existing function,
+    guidance, and knowledge libraries before attempting to solve a task
+    from scratch.
 """).strip()
 
 _EXECUTION_RULES = textwrap.dedent("""
@@ -125,7 +169,7 @@ _EXECUTION_RULES = textwrap.dedent("""
 
     | Scenario | Tool |
     |----------|------|
-    | Single primitive call (e.g. `primitives.contacts.ask`, `primitives.web.ask`, `primitives.knowledge.update`) | **`execute_function`** |
+    | Single primitive call (e.g. `primitives.contacts.ask`, `primitives.web.ask`, `primitives.tasks.update`) | **`execute_function`** |
     | Single stored function call (discovered via FunctionManager) | **`execute_function`** |
     | Multi-step composition, conditional logic, loops, or combining multiple calls with intermediate results | **`execute_code`** |
     | Shell commands (`bash`, `zsh`, `sh`, `powershell`) | **`execute_code`** |
@@ -146,7 +190,7 @@ _EXECUTION_RULES = textwrap.dedent("""
     ```python
     # ❌ WRONG: wrapping a single primitive in execute_code just to
     #          call it and print the result.
-    handle = await primitives.knowledge.ask(query="...")
+    handle = await primitives.contacts.ask(text="...")
     result = await handle.result()
     print(result)
     ```
@@ -154,8 +198,8 @@ _EXECUTION_RULES = textwrap.dedent("""
     That is a single primitive call. Use:
 
     ```
-    execute_function(function_name="primitives.knowledge.ask",
-                     call_kwargs={"query": "..."})
+    execute_function(function_name="primitives.contacts.ask",
+                     call_kwargs={"text": "..."})
     ```
 
     The `print()`, the `await handle.result()`, and the temporary
@@ -163,9 +207,14 @@ _EXECUTION_RULES = textwrap.dedent("""
     boilerplate. Wrapping a single primitive in `execute_code` strips
     the outer loop's ability to steer the handle (ask/stop/pause/
     resume) because the handle is shadowed by the `print()`. The same
-    applies to `primitives.web.ask`, `primitives.contacts.ask`,
-    `primitives.transcripts.ask`, etc. — every `primitives.*.ask` /
-    `primitives.*.update` is a single primitive call.
+    applies to `primitives.web.ask`, `primitives.transcripts.ask`,
+    etc. — every `primitives.*.ask` / `primitives.*.update` is a
+    single primitive call.
+
+    Durable knowledge claims are **not** primitives — use the
+    KnowledgeManager JSON tools (`KnowledgeManager_search`,
+    `KnowledgeManager_add_knowledge`, …) directly, not
+    `execute_function` / `execute_code`.
 
     ### Execution Surface: where code runs
 
@@ -201,13 +250,14 @@ _EXECUTION_RULES = textwrap.dedent("""
     natural-language instruction mentions another assistant by name or id.
 
     Do not use current-assistant manager primitives (`primitives.tasks.*`,
-    `primitives.data.*`, `primitives.functions.*`,
-    `primitives.guidance.*`, `primitives.knowledge.*`, etc.) to create,
-    mutate, or "assign" durable artifacts that another assistant must own or
-    execute. If another assistant needs to own or execute the work, use an
-    explicit cross-assistant handoff tool if one is available in your current
-    tool surface. If no such tool is available, explain the limitation or ask
-    for clarification instead of writing misleading ownership fields.
+    `primitives.data.*`, `primitives.functions.*`, etc.) or current-assistant
+    JSON manager tools (FunctionManager / GuidanceManager / KnowledgeManager)
+    to create, mutate, or "assign" durable artifacts that another assistant
+    must own or execute. If another assistant needs to own or execute the
+    work, use an explicit cross-assistant handoff tool if one is available
+    in your current tool surface. If no such tool is available, explain the
+    limitation or ask for clarification instead of writing misleading
+    ownership fields.
 
     For read-only validation, direct SDK reads such as
     `unisdk.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
@@ -547,13 +597,15 @@ _STORAGE_DEFERRED_NOTICE = textwrap.dedent("""
     **Direct writes vs trajectory storage**: If the user explicitly asks to
     remember procedures or how-to information, store it directly via
     `GuidanceManager_add_guidance` as part of the current task. If the user
+    explicitly asks to remember durable facts/policies/definitions, store
+    them via `KnowledgeManager_add_knowledge` (after search). If the user
     explicitly requests adding, updating, or deleting specific function
     implementations, use `FunctionManager_add_functions` or
     `FunctionManager_delete_function` directly. `store_skills` is for
-    extracting reusable function implementations and compositional
-    strategies from the execution trajectory — use it when you recognise
-    patterns worth preserving from what you just did, not for direct
-    user-requested mutations.
+    extracting reusable function implementations, compositional strategies,
+    and durable knowledge claims from the execution trajectory — use it when
+    you recognise patterns worth preserving from what you just did, not for
+    direct user-requested mutations.
 
     **Before compression**: when the context window is approaching capacity,
     `store_skills` and `compress_context` will be the only tools available.
@@ -1048,7 +1100,7 @@ def build_code_act_prompt(
     ----------
     discovery_first_policy:
         When ``True``, appends guidance explaining the discovery-first tool
-        policy (both FM and GM must be called before other tools unlock).
+        policy (FM, GM, and KM must be called before other tools unlock).
     """
     from unify.common.prompt_helpers import render_tools_block
 
@@ -1058,6 +1110,9 @@ def build_code_act_prompt(
     )
     has_gm_tools = bool(
         tools and any(str(k).startswith("GuidanceManager_") for k in tools.keys()),
+    )
+    has_km_tools = bool(
+        tools and any(str(k).startswith("KnowledgeManager_") for k in tools.keys()),
     )
 
     additional_tools_block = _build_additional_tools_block(
@@ -1121,8 +1176,8 @@ def build_code_act_prompt(
         parts.append(_INCREMENTAL_EXECUTION)
         parts.append(_EXTERNAL_APP_INTEGRATION)
 
-        if has_fm_tools or has_gm_tools:
-            parts.append(_FUNCTION_AND_GUIDANCE_LIBRARY)
+        if has_fm_tools or has_gm_tools or has_km_tools:
+            parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
@@ -1149,8 +1204,8 @@ def build_code_act_prompt(
                 f"{guidelines}",
             )
 
-        if has_fm_tools or has_gm_tools:
-            parts.append(_FUNCTION_AND_GUIDANCE_LIBRARY)
+        if has_fm_tools or has_gm_tools or has_km_tools:
+            parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
