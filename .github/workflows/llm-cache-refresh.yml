@@ -367,7 +367,120 @@ jobs:
         echo "Entry count: $(grep -c . .cache.ndjson || true)"
         ls -lh .cache.ndjson
 
+    - name: Analyze cache size composition
+      run: |
+        python3 - <<'PY'
+        import json, re, statistics
+        from collections import Counter
+
+        path = ".cache.ndjson"
+        IMAGE_MARKERS = (
+            "data:image/",
+            '"type": "image_url"',
+            '"type":"image_url"',
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+        )
+        # long base64-ish runs (URL-safe + std)
+        B64_RUN = re.compile(r"[A-Za-z0-9+/_-]{200,}")
+
+        rows = []
+        with open(path, "r", encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                if not line.strip():
+                    continue
+                total = len(line.encode("utf-8"))
+                try:
+                    obj = json.loads(line)
+                except Exception as e:
+                    rows.append({"i": i, "total": total, "err": str(e)})
+                    continue
+                key = obj.get("key") or ""
+                val = obj.get("value") or ""
+                if not isinstance(key, str):
+                    key = json.dumps(key)
+                if not isinstance(val, str):
+                    val = json.dumps(val)
+                key_b = len(key.encode("utf-8"))
+                val_b = len(val.encode("utf-8"))
+                blob = key + "\n" + val
+                has_image_marker = any(m in blob for m in IMAGE_MARKERS)
+                b64_spans = B64_RUN.findall(blob)
+                b64_bytes = sum(len(s) for s in b64_spans)
+                rows.append(
+                    {
+                        "i": i,
+                        "total": total,
+                        "key": key_b,
+                        "val": val_b,
+                        "img": has_image_marker,
+                        "b64": b64_bytes,
+                        "b64_spans": len(b64_spans),
+                        "key_prefix": key[:80],
+                    }
+                )
+
+        n = len(rows)
+        tot = sum(r["total"] for r in rows)
+        key_tot = sum(r.get("key", 0) for r in rows)
+        val_tot = sum(r.get("val", 0) for r in rows)
+        img_rows = [r for r in rows if r.get("img")]
+        img_bytes = sum(r["total"] for r in img_rows)
+        b64_bytes = sum(r.get("b64", 0) for r in rows)
+        # entries where long b64 spans are a large share of the line
+        heavy_b64 = [r for r in rows if r.get("b64", 0) >= 0.5 * r["total"] and r["total"] > 50_000]
+
+        def pct(x):
+            return 100.0 * x / tot if tot else 0.0
+
+        print(f"entries={n}")
+        print(f"total_bytes={tot} ({tot/1e9:.3f} GB)")
+        print(f"key_bytes={key_tot} ({pct(key_tot):.1f}%)")
+        print(f"value_bytes={val_tot} ({pct(val_tot):.1f}%)")
+        print(f"avg_entry_bytes={tot/n:.0f}" if n else "avg=0")
+        sizes = sorted(r["total"] for r in rows)
+        if sizes:
+            def q(p):
+                idx = min(len(sizes)-1, int(p * (len(sizes)-1)))
+                return sizes[idx]
+            print(f"p50={q(0.5)} p90={q(0.9)} p95={q(0.95)} p99={q(0.99)} max={sizes[-1]}")
+        print(f"entries_with_image_markers={len(img_rows)} ({100*len(img_rows)/n:.1f}%) bytes={img_bytes} ({pct(img_bytes):.1f}%)")
+        print(f"sum_long_base64_span_bytes={b64_bytes} ({pct(b64_bytes):.1f}% of file)")
+        print(f"entries_majority_long_base64={len(heavy_b64)} bytes={sum(r['total'] for r in heavy_b64)} ({pct(sum(r['total'] for r in heavy_b64)):.1f}%)")
+
+        # top 15 largest
+        print("\nTOP_15_LARGEST:")
+        for r in sorted(rows, key=lambda x: x["total"], reverse=True)[:15]:
+            print(
+                f"  bytes={r['total']} key={r.get('key',0)} val={r.get('val',0)} "
+                f"img={r.get('img')} b64_span_bytes={r.get('b64',0)} "
+                f"prefix={r.get('key_prefix','')!r}"
+            )
+
+        # size histogram buckets
+        buckets = Counter()
+        for r in rows:
+            b = r["total"]
+            if b < 10_000:
+                buckets["<10KB"] += 1
+            elif b < 100_000:
+                buckets["10-100KB"] += 1
+            elif b < 500_000:
+                buckets["100-500KB"] += 1
+            elif b < 1_000_000:
+                buckets["0.5-1MB"] += 1
+            elif b < 5_000_000:
+                buckets["1-5MB"] += 1
+            else:
+                buckets[">=5MB"] += 1
+        print("\nSIZE_BUCKETS:")
+        for k in ["<10KB", "10-100KB", "100-500KB", "0.5-1MB", "1-5MB", ">=5MB"]:
+            print(f"  {k}: {buckets[k]}")
+        PY
+
     - name: Upload .cache.ndjson for local sync
+      if: ${{ inputs.parallel_run_args != 'SKIP_UPLOAD' }}
       uses: actions/upload-artifact@v4
       with:
         name: cache-ndjson-upstream
