@@ -1350,6 +1350,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule: ScheduleLike = None,
         trigger: TriggerLike = None,
         deadline: Optional[Union[str, datetime]] = None,
+        max_runtime_seconds: Optional[int] = None,
         repeat: RepeatLike = None,
         priority: Priority = Priority.normal,
         response_policy: Optional[str] = None,
@@ -1363,7 +1364,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         Supports optional scheduling (start time, deadline, recurrence),
         event-based triggers, execution mode (agentic vs symbolic via
-        ``entrypoint``), background offline execution, and an enabled flag.
+        ``entrypoint``), background offline execution, an optional per-attempt
+        runtime bound (``max_runtime_seconds``), and an enabled flag.
         Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
         """
 
@@ -1379,6 +1381,7 @@ class TaskScheduler(BaseTaskScheduler):
                     schedule=schedule,
                     trigger=trigger,
                     deadline=deadline,
+                    max_runtime_seconds=max_runtime_seconds,
                     repeat=repeat,
                     priority=priority,
                     response_policy=response_policy,
@@ -1463,6 +1466,7 @@ class TaskScheduler(BaseTaskScheduler):
             schedule=schedule,
             trigger=trigger,
             deadline=deadline,
+            max_runtime_seconds=max_runtime_seconds,
             repeat=repeat,
             priority=priority,
             response_policy=response_policy,
@@ -2496,6 +2500,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
         deadline = payload.pop("deadline", None)
+        max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
@@ -2525,6 +2530,7 @@ class TaskScheduler(BaseTaskScheduler):
             schedule=schedule,
             trigger=trigger,
             deadline=deadline,
+            max_runtime_seconds=max_runtime_seconds,
             repeat=repeat,
             priority=priority,
             response_policy=response_policy,
@@ -2564,6 +2570,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
         deadline = payload.pop("deadline", None)
+        max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
@@ -2614,6 +2621,7 @@ class TaskScheduler(BaseTaskScheduler):
             "schedule": schedule,
             "trigger": trigger,
             "deadline": deadline,
+            "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
         }

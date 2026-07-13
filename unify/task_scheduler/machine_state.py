@@ -117,6 +117,7 @@ class TaskActivationSnapshot:
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
     trigger_recurring: bool = False
     entrypoint: int | None = None
+    max_runtime_seconds: int | None = None
     repeat: list[Any] | None = None
     activation_revision: str | None = None
 
@@ -925,6 +926,7 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
         ),
         trigger_recurring=bool(entries.get("trigger_recurring", False)),
         entrypoint=_coerce_int(entries.get("entrypoint")),
+        max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         repeat=_coerce_list(entries.get("repeat")),
         activation_revision=_coerce_str(entries.get("activation_revision")),
     )
