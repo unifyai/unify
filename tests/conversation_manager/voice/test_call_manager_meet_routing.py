@@ -101,6 +101,14 @@ def _patch_meet_dependencies(
 
     monkeypatch.setattr(call_manager_module.aiohttp, "ClientSession", _session_factory)
 
+    # Socket server the worker "connects" to. ``_start_meet`` now waits for the
+    # worker's IPC client to connect before launching the browser, so the fake
+    # server reports a connected client to signal activation.
+    fake_socket = MagicMock()
+    fake_socket.has_connected_clients = True
+    fake_socket.set_forward_channels = AsyncMock()
+    fake_socket.queue_for_clients = AsyncMock()
+
     async def _noop_ensure_socket():
         return None
 
@@ -118,11 +126,14 @@ def _patch_meet_dependencies(
         subprocess_calls.append(
             (room_name, channel, contact, boss, outbound, extra_env),
         )
+        # Real ``_start_call_subprocess`` spawns the worker and sets ``_call_proc``;
+        # mirror that so the activation wait sees a live worker.
+        cm._call_proc = MagicMock()
 
     monkeypatch.setattr(cm, "_start_call_subprocess", _capture_subprocess)
 
     cm._worker_proc = None
-    cm._socket_server = None
+    cm._socket_server = fake_socket
 
     return {
         "room_creates": room_creates,
@@ -228,6 +239,98 @@ async def test_start_teams_meet_wrapper_delegates_to_start_meet(monkeypatch):
         "boss": _BOSS,
         "display_name": "Custom Name",
     }
+
+
+@pytest.mark.asyncio
+async def test_start_meet_aborts_when_worker_never_activates(monkeypatch):
+    """If no voice worker activates (IPC client never connects), ``_start_meet``
+    must abort before launching the browser so the assistant never joins a
+    brainless call: no agent-service join POST, cleanup run, returns False."""
+    cm = _build_call_manager()
+    captured = _patch_meet_dependencies(monkeypatch, cm)
+    # Worker never connects its IPC client.
+    cm._socket_server.has_connected_clients = False
+    monkeypatch.setattr(
+        call_manager_module,
+        "MEET_WORKER_ACTIVATION_TIMEOUT_S",
+        0.1,
+    )
+
+    cleanup_calls: list = []
+
+    async def _capture_cleanup(channel):
+        cleanup_calls.append(channel)
+
+    monkeypatch.setattr(cm, "_cleanup_meet", _capture_cleanup)
+
+    ok = await cm._start_meet("google_meet", _MEET_URL, _CONTACT, _BOSS)
+
+    assert ok is False
+    assert cm._meet_joining is False
+    assert cleanup_calls == ["google_meet"]
+    # Subprocess worker was attempted, but the browser join was never launched.
+    assert len(captured["subprocess_calls"]) == 1
+    assert captured["http_posts"] == []
+
+
+@pytest.mark.asyncio
+async def test_start_meet_falls_back_to_subprocess_when_dispatch_stalls(monkeypatch):
+    """When the persistent-worker dispatch is created but never activates, the
+    meet path must cancel the stale dispatch and fall back to a per-call
+    subprocess worker, then launch the browser only once that worker connects."""
+    cm = _build_call_manager()
+    captured = _patch_meet_dependencies(monkeypatch, cm)
+    monkeypatch.setattr(
+        call_manager_module,
+        "MEET_WORKER_ACTIVATION_TIMEOUT_S",
+        0.3,
+    )
+
+    # A live persistent worker exists, so dispatch is attempted first.
+    worker_proc = MagicMock()
+    worker_proc.poll.return_value = None
+    cm._worker_proc = worker_proc
+
+    # Dispatch is created (returns True, arms tracking) but the worker never
+    # connects its IPC client — the socket stays "no clients" until the
+    # subprocess fallback spawns and connects.
+    cm._socket_server.has_connected_clients = False
+
+    async def _fake_dispatch(*_args, **_kwargs):
+        cm._active_job = True
+        cm._active_dispatch_id = "disp-1"
+        cm._active_dispatch_room = cm.room_name
+        return True
+
+    monkeypatch.setattr(cm, "_dispatch_job", _fake_dispatch)
+
+    cancel_calls: list = []
+
+    async def _fake_cancel_dispatch():
+        cancel_calls.append((cm._active_dispatch_id, cm._active_dispatch_room))
+        cm._active_dispatch_id = None
+        cm._active_dispatch_room = None
+
+    monkeypatch.setattr(cm, "_cancel_livekit_dispatch", _fake_cancel_dispatch)
+
+    # Subprocess fallback spawns the worker and connects the IPC client.
+    orig_subprocess = cm._start_call_subprocess
+
+    async def _connecting_subprocess(*args, **kwargs):
+        await orig_subprocess(*args, **kwargs)
+        cm._socket_server.has_connected_clients = True
+
+    monkeypatch.setattr(cm, "_start_call_subprocess", _connecting_subprocess)
+
+    ok = await cm._start_meet("google_meet", _MEET_URL, _CONTACT, _BOSS)
+
+    assert ok is True
+    # Stale dispatch was cancelled before falling back.
+    assert cancel_calls == [("disp-1", cm.room_name)]
+    # Subprocess worker was spawned and the browser join then launched.
+    assert len(captured["subprocess_calls"]) == 1
+    assert len(captured["http_posts"]) == 1
+    assert captured["http_posts"][0][0].endswith("/googlemeet/join")
 
 
 @pytest.mark.asyncio
