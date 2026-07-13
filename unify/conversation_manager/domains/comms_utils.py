@@ -720,13 +720,13 @@ async def upload_unify_attachment(
 
     from io import BytesIO
 
-    if _use_local_comms():
-        upload_url = (
-            f"{local_comms_listener_url(SETTINGS.conversation)}"
-            "/local/comms/attachments"
-        )
-    else:
-        upload_url = f"{_gateway_adapters_base_url()}/unify/attachment"
+    # Always use adapters/gateway ``/unify/attachment`` — same contract as
+    # staging/production. Local-comms mode still enables the local ingress for
+    # Twilio/email callbacks, but that ingress's ``/local/comms/attachments``
+    # endpoint only registers pre-built metadata (requires ``id``) and is not
+    # a multipart upload target. Self-host sets ``UNITY_ADAPTERS_URL`` to the
+    # local gateway, which implements the same upload API with disk storage.
+    upload_url = f"{_gateway_adapters_base_url()}/unify/attachment"
 
     LOGGER.debug(
         f"{ICONS['comms_outbound']} Uploading unify attachment: {filename} ({len(file_content)} bytes)",
