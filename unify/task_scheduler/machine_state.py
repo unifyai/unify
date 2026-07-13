@@ -820,8 +820,17 @@ def validate_task_due_activation(
     source_task_log_id: int,
     scheduled_for: str,
     destination: str | None = None,
+    execution_mode: str = "live",
+    source_type: str = "scheduled",
 ) -> tuple[TaskActivationSnapshot | None, str | None]:
-    """Validate that a scheduled due event still matches the current activation."""
+    """Validate that a due event still matches the current activation.
+
+    ``execution_mode`` is the delivery's expectation (live vs offline).
+    ``scheduled_for`` participates in the identity check only for clock-fired
+    (``source_type == "scheduled"``) deliveries: explicit REST-fired
+    deliveries of a scheduled activation legitimately run ahead of the
+    projected occurrence.
+    """
 
     try:
         normalized_destination = ContextRegistry.canonical_destination(destination)
@@ -836,7 +845,7 @@ def validate_task_due_activation(
         return None, "activation_missing"
     if activation.activation_kind != "scheduled":
         return None, "activation_kind_changed"
-    if activation.execution_mode != "live":
+    if activation.execution_mode != execution_mode:
         return None, "execution_mode_changed"
     if activation.activation_revision != activation_revision:
         return None, "activation_revision_mismatch"
@@ -849,9 +858,9 @@ def validate_task_due_activation(
         return None, "destination_membership_revoked"
     if activation.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
-    if _normalize_datetime_string(activation.next_due_at) != _normalize_datetime_string(
-        scheduled_for,
-    ):
+    if source_type == "scheduled" and _normalize_datetime_string(
+        activation.next_due_at,
+    ) != _normalize_datetime_string(scheduled_for):
         return None, "scheduled_for_mismatch"
     return activation, None
 

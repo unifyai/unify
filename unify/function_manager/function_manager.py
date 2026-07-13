@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import builtins
 import dataclasses
 import hashlib
 from contextlib import contextmanager
@@ -4588,11 +4589,17 @@ class FunctionManager(BaseFunctionManager):
         if not annotation_names:
             return
 
-        builtins_obj = namespace.get("__builtins__", {})
+        # exec() installs the real builtins module into the namespace, so real
+        # builtin names (dict, str, list, ...) are always resolvable even when
+        # the caller passes a fresh namespace without __builtins__. Shadowing
+        # them with placeholder classes breaks subscripted annotations like
+        # ``dict[str, Any]`` at def-evaluation time.
+        builtin_names = set(dir(builtins))
+        builtins_obj = namespace.get("__builtins__")
         if isinstance(builtins_obj, dict):
-            builtin_names = set(builtins_obj.keys())
-        else:
-            builtin_names = set(dir(builtins_obj))
+            builtin_names |= set(builtins_obj.keys())
+        elif builtins_obj is not None:
+            builtin_names |= set(dir(builtins_obj))
 
         typing_mod = namespace.get("typing")
         pydantic_mod = namespace.get("pydantic")

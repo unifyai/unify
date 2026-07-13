@@ -125,6 +125,37 @@ def test_search_return_callable_also_returns_metadata():
 
 
 @_handle_project
+def test_fresh_namespace_does_not_shadow_builtin_annotation_names():
+    """Callable injection into a fresh ``{}`` namespace (the symbolic-entrypoint
+    repair snapshot path) must not shadow builtins referenced in annotations.
+
+    A placeholder class named ``dict`` breaks ``dict[str, Any]`` evaluation at
+    def time with ``TypeError: type 'dict' is not subscriptable``.
+    """
+    fm = FunctionManager()
+    fm.add_functions(
+        implementations=(
+            "async def tick(**params: Any) -> dict[str, Any]:\n" "    return {}\n"
+        ),
+    )
+
+    ns: dict = {}
+    res = fm.filter_functions(
+        filter="name == 'tick'",
+        limit=1,
+        _return_callable=True,
+        _namespace=ns,
+        _also_return_metadata=True,
+    )
+
+    assert len(res["callables"]) == 1
+    assert callable(ns["tick"])
+    # Builtins must resolve to the real types, never injected placeholders.
+    assert ns.get("dict", dict) is dict
+    assert ns.get("str", str) is str
+
+
+@_handle_project
 def test_circular_dependency_injection_does_not_loop():
     fm = FunctionManager()
 
