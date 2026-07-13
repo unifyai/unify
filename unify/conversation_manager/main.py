@@ -85,6 +85,9 @@ def _apply_test_mocks(cm: ConversationManager) -> None:
     comms_utils.start_call = _async_mock_success
     cm.call_manager.start_call = _async_mock_success
     cm.call_manager.start_unify_meet = _async_mock_success
+    # start_call is stubbed: expose make_call / make_whatsapp_call without
+    # waiting on LiveKit idle-process prewarm (WORKER_READY_PATH).
+    cm.call_manager._outbound_ready_override = True
     cm.schedule_proactive_speech = _async_mock_success
     assistant_jobs.log_job_startup = _sync_mock_success
     assistant_jobs.mark_job_done = _sync_mock_success
