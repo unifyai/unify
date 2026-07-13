@@ -164,6 +164,8 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
         enable_comms_manager=False,
         apply_test_mocks=True,
     )
+    cm.assistant_email = "assistant@test.com"
+    cm.assistant_email_provider = "google_workspace"
 
     # Initialize managers once. Actor created here is a placeholder; tests override per-test.
     try:

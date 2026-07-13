@@ -138,7 +138,7 @@ async def _boot_entrypoint(monkeypatch):
 
         def on(self, event_name):
             def _decorator(fn):
-                self._events[event_name] = fn
+                self._events.setdefault(event_name, []).append(fn)
                 return fn
 
             return _decorator
@@ -194,6 +194,7 @@ async def _boot_entrypoint(monkeypatch):
             boss_json=json.dumps(boss),
         ),
         assistant=SimpleNamespace(
+            has_managed_desktop=False,
             about="Assistant bio",
             name="Ava",
             first_name="Ava",
@@ -258,11 +259,13 @@ async def _boot_entrypoint(monkeypatch):
     notification_cb = fake_broker.callbacks["app:call:notification"]
 
     def set_user_state(state: str):
-        session._events["user_state_changed"](SimpleNamespace(new_state=state))
+        for callback in session._events["user_state_changed"]:
+            callback(SimpleNamespace(new_state=state))
 
     def set_agent_state(state: str):
         session.agent_state = state
-        session._events["agent_state_changed"](SimpleNamespace(new_state=state))
+        for callback in session._events["agent_state_changed"]:
+            callback(SimpleNamespace(new_state=state))
 
     return session, notification_cb, set_agent_state, set_user_state
 

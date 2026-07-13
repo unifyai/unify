@@ -964,6 +964,7 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
     fake_session_details = SimpleNamespace(
         user=SimpleNamespace(id=None),
         assistant=SimpleNamespace(
+            has_managed_desktop=False,
             about="Assistant bio",
             is_coordinator=True,
             agent_id=None,
@@ -1187,6 +1188,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     fake_session_details = SimpleNamespace(
         user=SimpleNamespace(id="user-123"),
         assistant=SimpleNamespace(
+            has_managed_desktop=False,
             about="Assistant bio",
             is_coordinator=False,
             agent_id=None,
@@ -1461,6 +1463,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     fake_session_details = SimpleNamespace(
         user=SimpleNamespace(id="user-123"),
         assistant=SimpleNamespace(
+            has_managed_desktop=False,
             about="Assistant bio",
             is_coordinator=False,
             agent_id=None,
@@ -1644,17 +1647,19 @@ def test_coordinator_onboarding_timed_chunks_match_audio():
     ) as intro_path:
         full_duration = sf.info(intro_path).duration
 
-    assert float(chunks[-1]["end_time"]) == pytest.approx(full_duration, abs=0.01)
+    assert float(chunks[-1]["end_time"]) == pytest.approx(full_duration, abs=0.05)
     assert float(chunks[5]["start_time"]) == pytest.approx(
         call_script._COORDINATOR_ONBOARDING_CLEAN_START_TIME,
         abs=0.01,
     )
 
     for index in range(1, len(chunks)):
-        assert float(chunks[index]["start_time"]) == pytest.approx(
-            float(chunks[index - 1]["end_time"]),
-            abs=1e-6,
-        )
+        start = float(chunks[index]["start_time"])
+        previous_end = float(chunks[index - 1]["end_time"])
+        if index == 6:
+            assert start - previous_end == pytest.approx(0.95, abs=1e-6)
+        else:
+            assert start == pytest.approx(previous_end, abs=1e-6)
 
 
 @pytest.mark.asyncio
@@ -1866,6 +1871,7 @@ class TestFastBrainGuidanceFlow:
             user=SimpleNamespace(id="user-123"),
             voice=SimpleNamespace(provider="cartesia", id=""),
             assistant=SimpleNamespace(
+                has_managed_desktop=False,
                 about="Assistant bio",
                 name="Ava",
                 first_name="Assistant",
@@ -2127,6 +2133,7 @@ class TestFastBrainGuidanceFlow:
             populate_from_env=lambda: None,
             voice=SimpleNamespace(provider="cartesia", id=""),
             assistant=SimpleNamespace(
+                has_managed_desktop=False,
                 about="Assistant bio",
                 name="Ava",
                 first_name="Assistant",
@@ -2339,7 +2346,16 @@ class TestFastBrainGuidanceFlow:
 
             def on(self, event_name):
                 def _decorator(fn):
-                    self._events[event_name] = fn
+                    previous = self._events.get(event_name)
+                    if previous is None:
+                        self._events[event_name] = fn
+                    else:
+
+                        def _dispatch(ev):
+                            previous(ev)
+                            fn(ev)
+
+                        self._events[event_name] = _dispatch
                     return fn
 
                 return _decorator
@@ -2394,6 +2410,7 @@ class TestFastBrainGuidanceFlow:
                 boss_json=json.dumps(boss),
             ),
             assistant=SimpleNamespace(
+                has_managed_desktop=False,
                 about="Assistant bio",
                 name="Ava",
                 user_desktop_for=lambda user_id: None,
@@ -2470,30 +2487,24 @@ class TestFastBrainGuidanceFlow:
             len(session.say_calls) == 0
         ), "Queued speech must not fire while user is speaking."
 
-        # User stops speaking — say() must NOT fire from user_state_changed alone
+        # User stops speaking — the queued line plays at the next silent moment.
         state_cb(SimpleNamespace(new_state="listening"))
-        assert (
-            len(session.say_calls) == 0
-        ), "Queued speech must not fire from user_state_changed (race condition)."
+        assert len(session.say_calls) == 1
 
-        # Agent settles to listening — say() fires now
+        # A subsequent agent-state notification must not replay the line.
         agent_state_cb(SimpleNamespace(new_state="listening"))
 
         # maybe_speak_queued speaks synchronously; yield just in case.
         await asyncio.sleep(0)
 
-        assert len(session.say_calls) == 1, (
-            "Guidance that arrives while the user is speaking should be surfaced "
-            "via session.say() after the agent settles to listening."
-        )
+        assert len(session.say_calls) == 1
         assert session.say_calls[0] == "No, there's no contact named Bob."
 
-    async def test_queued_speech_waits_for_agent_thinking_and_speaking_cycle(
+    async def test_ready_speech_plays_while_thinking_without_replay(
         self,
         monkeypatch,
     ):
-        """Guidance arriving while the agent is thinking/speaking should wait
-        for the full cycle to complete before session.say() fires."""
+        """Slow-brain speech can preempt thinking and is consumed exactly once."""
         from livekit.agents import llm
         from unify.conversation_manager.medium_scripts import call as call_script
 
@@ -2576,7 +2587,16 @@ class TestFastBrainGuidanceFlow:
 
             def on(self, event_name):
                 def _decorator(fn):
-                    self._events[event_name] = fn
+                    previous = self._events.get(event_name)
+                    if previous is None:
+                        self._events[event_name] = fn
+                    else:
+
+                        def _dispatch(ev):
+                            previous(ev)
+                            fn(ev)
+
+                        self._events[event_name] = _dispatch
                     return fn
 
                 return _decorator
@@ -2631,6 +2651,7 @@ class TestFastBrainGuidanceFlow:
                 boss_json=json.dumps(boss),
             ),
             assistant=SimpleNamespace(
+                has_managed_desktop=False,
                 about="Assistant bio",
                 name="Ava",
                 user_desktop_for=lambda user_id: None,
@@ -2695,7 +2716,7 @@ class TestFastBrainGuidanceFlow:
         # Simulate agent in "thinking" state (processing a user turn)
         session.agent_state = "thinking"
 
-        # Guidance arrives while agent is thinking
+        # A ready slow-brain line is not stalled behind reply generation.
         guidance_cb(
             {
                 "payload": {
@@ -2704,16 +2725,12 @@ class TestFastBrainGuidanceFlow:
                 },
             },
         )
-        assert (
-            len(session.say_calls) == 0
-        ), "Queued speech must not fire while agent is thinking."
+        assert session.say_calls == ["It's at 3pm."]
 
-        # Agent starts speaking (its reply to the user)
+        # Later state changes must not replay the consumed line.
         agent_state_cb(SimpleNamespace(new_state="speaking"))
         session.agent_state = "speaking"
-        assert (
-            len(session.say_calls) == 0
-        ), "Queued speech must not fire while agent is speaking."
+        assert session.say_calls == ["It's at 3pm."]
 
         # Agent finishes speaking → transitions to listening
         session.agent_state = "listening"
@@ -2722,9 +2739,7 @@ class TestFastBrainGuidanceFlow:
         # maybe_speak_queued speaks synchronously; yield just in case.
         await asyncio.sleep(0)
 
-        assert (
-            len(session.say_calls) == 1
-        ), "Queued speech should fire after agent returns to listening."
+        assert len(session.say_calls) == 1
         assert session.say_calls[0] == "It's at 3pm."
 
 

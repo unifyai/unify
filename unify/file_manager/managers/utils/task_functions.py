@@ -22,7 +22,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from unify.file_manager.file_parsers.types.contracts import FileParseResult
-from unify.common.pipeline import InlineRowsHandle, TableInputHandle
+from unify.common.pipeline import InlineRowsHandle, TableInputHandle, run_with_retry
 from unify.file_manager.types.config import (
     FilePipelineConfig,
     TableBusinessContextSpec,
@@ -213,11 +213,28 @@ def execute_create_file_record(
         created_file_record,
     )
 
-    file_id = get_file_id_from_path(
-        data_manager=dm,
-        index_context=file_manager._ctx,
-        file_path=file_path,
-    )
+    file_id = created_file_record.get("details", {}).get("file_id")
+    if file_id is None:
+
+        def _read_created_file_id() -> int:
+            resolved_file_id = get_file_id_from_path(
+                data_manager=dm,
+                index_context=file_manager._ctx,
+                file_path=file_path,
+            )
+            if resolved_file_id is None:
+                raise ConnectionError(
+                    f"File record for {file_path} is not visible after insertion",
+                )
+            return resolved_file_id
+
+        lookup_outcome = run_with_retry(
+            _read_created_file_id,
+            {},
+            retry_config=config.retry,
+            label=f"file_record_lookup({file_path})",
+        )
+        file_id = lookup_outcome.value if lookup_outcome.success else None
 
     logger.info(
         "[TaskFn] get_file_id_from_path(%s, ctx=%s) -> %s",

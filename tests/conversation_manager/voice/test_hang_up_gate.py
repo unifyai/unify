@@ -219,6 +219,7 @@ class TestFastBrainHangUpHandler:
         cm.call_manager.hang_up_gate_reason = "wrap up"
         cm.call_manager.has_active_google_meet = False
         cm.call_manager.has_active_teams_meet = False
+        cm.call_manager.set_hang_up_gate = AsyncMock()
         cm.call_manager.end_call = AsyncMock()
         cm.call_manager.await_ready_for_outbound_call = AsyncMock(return_value=True)
         cm.notifications_bar = MagicMock()
@@ -245,7 +246,7 @@ class TestFastBrainHangUpHandler:
             mock_broker.return_value.publish = AsyncMock()
             await EventHandler.handle_event(event, cm)
 
-        assert cm.call_manager.hang_up_gate_reason is None
+        cm.call_manager.set_hang_up_gate.assert_awaited_once_with(None)
         cm.call_manager.end_call.assert_awaited_once()
         cm.notifications_bar.push_notif.assert_called_once()
 
@@ -262,28 +263,33 @@ async def test_call_ended_clears_hang_up_gate(monkeypatch):
     cm.call_manager.unify_meet_exchange_id = -1
     cm.call_manager.google_meet_exchange_id = -1
     cm.call_manager.teams_meet_exchange_id = -1
+    cm.call_manager.set_hang_up_gate = AsyncMock()
     cm.call_manager.cleanup_call_proc = AsyncMock()
     cm.call_manager.cleanup_google_meet = AsyncMock()
     cm.call_manager.cleanup_teams_meet = AsyncMock()
+    cm.cancel_proactive_speech = AsyncMock()
+    cm.request_llm_run = AsyncMock()
     cm.contact_index = MagicMock()
     cm.contact_index.get_contact.return_value = {
         "contact_id": 1,
         "first_name": "Dan",
         "surname": "Lenton",
+        "phone_number": "+15555550100",
     }
     cm.notifications_bar = MagicMock()
 
     event = PhoneCallEnded(
-        contact={"contact_id": 1, "first_name": "Dan", "surname": "Lenton"},
+        contact={
+            "contact_id": 1,
+            "first_name": "Dan",
+            "surname": "Lenton",
+            "phone_number": "+15555550100",
+        },
     )
-    try:
-        await EventHandler.handle_event(event, cm)
-    except Exception:
-        # Downstream cleanup on a MagicMock CM may fail past the gate reset;
-        # only the gate-clearing contract matters here.
-        pass
+    await EventHandler.handle_event(event, cm)
 
-    assert cm.call_manager.hang_up_gate_reason is None
+    cm.call_manager.set_hang_up_gate.assert_awaited_once_with(None)
+    cm.call_manager.cleanup_call_proc.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
