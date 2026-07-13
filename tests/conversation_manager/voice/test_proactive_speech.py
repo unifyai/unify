@@ -655,7 +655,7 @@ class TestProactiveSpeechDecideIntegration:
         ps = ProactiveSpeech()
 
         with patch(
-            "unify.conversation_manager.domains.proactive_speech.new_llm_client",
+            "unify.conversation_manager.domains.proactive_speech.new_slow_brain_llm_client",
             side_effect=RuntimeError("connection failed"),
         ):
             with pytest.raises(RuntimeError):
