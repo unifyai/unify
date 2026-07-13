@@ -1,59 +1,35 @@
-"""Tests for workspace directory bootstrap in conversation_manager.main."""
+"""Tests for workspace directory bootstrap in conversation_manager."""
 
 import base64
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from unify.conversation_manager.cm_types import ScreenshotEntry
 from unify.conversation_manager.cm_types.screenshot import (
     generate_screenshot_path,
     write_screenshot_to_disk,
 )
+from unify.conversation_manager.workspace import ensure_local_workspace_dirs
 from unify.file_manager.settings import get_local_root
 
 
 class TestWorkspaceBootstrap:
-    """Verify that the workspace directories are set up correctly.
-
-    These tests exercise the directory creation and Outputs/Screenshots
-    clearing logic that runs at the top of run_conversation_manager(),
-    extracted here as a pure filesystem operation so it can be validated
-    without spinning up the full CM.
-    """
-
-    @staticmethod
-    def _bootstrap(root: Path) -> None:
-        """Reproduce the workspace bootstrap logic from main.py."""
-        import shutil
-
-        root.mkdir(parents=True, exist_ok=True)
-        (root / "Attachments").mkdir(exist_ok=True)
-
-        outputs = root / "Outputs"
-        if outputs.exists():
-            shutil.rmtree(outputs)
-        outputs.mkdir(exist_ok=True)
-
-        screenshots = root / "Screenshots"
-        if screenshots.exists():
-            shutil.rmtree(screenshots)
-        (screenshots / "User").mkdir(parents=True, exist_ok=True)
-        (screenshots / "Assistant").mkdir(parents=True, exist_ok=True)
+    """Verify standard local workspace dirs are created and session-cleared."""
 
     def test_creates_workspace_directories(self, tmp_path):
         root = tmp_path / "Unity" / "Local"
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         assert root.is_dir()
         assert (root / "Attachments").is_dir()
         assert (root / "Outputs").is_dir()
         assert (root / "Screenshots" / "User").is_dir()
         assert (root / "Screenshots" / "Assistant").is_dir()
+        assert (root / "Screenshots" / "Webcam").is_dir()
 
     def test_outputs_cleared_between_sessions(self, tmp_path):
         root = tmp_path / "Unity" / "Local"
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         # Simulate a file generated during a previous session.
         stale = root / "Outputs" / "old_report.pdf"
@@ -61,41 +37,46 @@ class TestWorkspaceBootstrap:
         assert stale.exists()
 
         # Second bootstrap (new session) should clear Outputs/.
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         assert not stale.exists()
         assert (root / "Outputs").is_dir()
 
     def test_screenshots_cleared_between_sessions(self, tmp_path):
         root = tmp_path / "Unity" / "Local"
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         # Simulate screenshots from a previous session.
         stale_user = root / "Screenshots" / "User" / "old.png"
         stale_asst = root / "Screenshots" / "Assistant" / "old.png"
+        stale_webcam = root / "Screenshots" / "Webcam" / "old.png"
         stale_user.write_bytes(b"stale")
         stale_asst.write_bytes(b"stale")
+        stale_webcam.write_bytes(b"stale")
         assert stale_user.exists()
         assert stale_asst.exists()
+        assert stale_webcam.exists()
 
-        # Second bootstrap (new session) should clear both.
-        self._bootstrap(root)
+        # Second bootstrap (new session) should clear all screenshot trees.
+        ensure_local_workspace_dirs(root)
 
         assert not stale_user.exists()
         assert not stale_asst.exists()
+        assert not stale_webcam.exists()
         assert (root / "Screenshots" / "User").is_dir()
         assert (root / "Screenshots" / "Assistant").is_dir()
+        assert (root / "Screenshots" / "Webcam").is_dir()
 
     def test_attachments_preserved_between_sessions(self, tmp_path):
         root = tmp_path / "Unity" / "Local"
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         # Simulate an attachment from a previous session.
         attachment = root / "Attachments" / "att-1_invoice.pdf"
         attachment.write_bytes(b"attachment")
 
         # Second bootstrap should NOT clear Attachments/.
-        self._bootstrap(root)
+        ensure_local_workspace_dirs(root)
 
         assert attachment.exists()
 

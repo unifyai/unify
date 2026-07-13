@@ -28,6 +28,7 @@ from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
 from unify.settings import SETTINGS
 from unify.session_details import SESSION_DETAILS
+from unify.conversation_manager.workspace import ensure_local_workspace_dirs
 from unify.conversation_manager import assistant_jobs
 from unify.deploy_runtime import (
     collect_shutdown_diagnostics,
@@ -211,29 +212,8 @@ async def run_conversation_manager(
     from unify.file_manager.settings import get_local_root
 
     _local_root = _P(get_local_root())
-    _local_root.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(ensure_local_workspace_dirs, _local_root)
     os.chdir(_local_root)
-
-    # Ensure standard workspace directories exist.
-    (_local_root / "Attachments").mkdir(exist_ok=True)
-
-    import shutil as _shutil
-
-    # Clear Outputs/ between sessions so generated files don't accumulate.
-    _outputs = _local_root / "Outputs"
-    if _outputs.exists():
-        asyncio.create_task(asyncio.to_thread(_shutil.rmtree, _outputs))
-    else:
-        _outputs.mkdir(exist_ok=True)
-
-    # Clear Screenshots/ between sessions (ephemeral visual context).
-    _screenshots = _local_root / "Screenshots"
-    if _screenshots.exists():
-        asyncio.create_task(asyncio.to_thread(_shutil.rmtree, _screenshots))
-    else:
-        (_screenshots / "User").mkdir(parents=True, exist_ok=True)
-        (_screenshots / "Assistant").mkdir(parents=True, exist_ok=True)
-        (_screenshots / "Webcam").mkdir(parents=True, exist_ok=True)
 
     # Clean up dangling call processes
     if cleanup_call_processes:
