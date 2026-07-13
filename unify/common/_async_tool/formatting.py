@@ -7,6 +7,44 @@ import json
 
 from ..llm_helpers import _dumps, _strip_image_keys, _collect_images
 
+# Cap tool-result text fed back to the LLM. Unbounded shell/grep dumps have
+# blown past provider request-size limits (e.g. OpenRouter 8 MB).
+TOOL_RESULT_TEXT_CHAR_LIMIT = 32_000
+
+
+def _truncate_tool_text(
+    text: str,
+    *,
+    limit: int = TOOL_RESULT_TEXT_CHAR_LIMIT,
+) -> str:
+    """Keep head+tail of oversized tool text with an explicit omission marker."""
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    head = limit // 2
+    tail = limit - head
+    return (
+        f"{text[:head]}\n\n"
+        f"...[{omitted} characters omitted from tool result]...\n\n"
+        f"{text[-tail:]}"
+    )
+
+
+def _truncate_llm_content_blocks(blocks: List[dict]) -> List[dict]:
+    """Truncate text blocks in a multimodal content list in place."""
+    out: List[dict] = []
+    for block in blocks:
+        if (
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ):
+            out.append({**block, "text": _truncate_tool_text(block["text"])})
+        else:
+            out.append(block)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Protocol for tool results that control their own LLM formatting
 # ---------------------------------------------------------------------------
@@ -81,16 +119,18 @@ def serialize_tool_content(
             payload if isinstance(payload, dict) else {"message": str(payload)}
         )
         # Keep the tool name visible for progress/notification placeholders and mark explicitly
-        return _dumps(
-            {"_placeholder": "progress", "tool": tool_name, **content_payload},
-            indent=4,
-            context={"prune_empty": True, "shorthand": True},
+        return _truncate_tool_text(
+            _dumps(
+                {"_placeholder": "progress", "tool": tool_name, **content_payload},
+                indent=4,
+                context={"prune_empty": True, "shorthand": True},
+            ),
         )
 
     # Check if payload implements FormattedToolResult protocol
     # This gives tools full control over their LLM formatting
     if isinstance(payload, FormattedToolResult):
-        return payload.to_llm_content()
+        return _truncate_llm_content_blocks(payload.to_llm_content())
 
     # Pydantic models → dict so the existing dict serialization path handles them.
     try:
@@ -125,6 +165,8 @@ def serialize_tool_content(
         # Fallback: always provide a string for non-structured payloads
         # (e.g., numbers, booleans). Preserve plain strings as-is.
         text_repr = payload if isinstance(payload, str) else str(payload)
+
+    text_repr = _truncate_tool_text(text_repr)
 
     if images:
         content_blocks: list = []
