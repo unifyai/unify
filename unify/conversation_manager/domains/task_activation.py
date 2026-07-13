@@ -24,6 +24,7 @@ from unify.logger import LOGGER
 from unify.manager_registry import ManagerRegistry
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.types.activated_by import ActivatedBy
+from unify.task_scheduler.types.run_source import RunSource
 from unify.task_scheduler.machine_state import (
     TaskActivationSnapshot,
     TaskRunProvenance,
@@ -482,10 +483,15 @@ def _task_trigger_event_from_wake_reason(reason: Any) -> TaskTriggerRequested | 
 
 
 async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> bool:
-    """Validate and surface one due-task event to the notification bar."""
+    """Validate and surface one due-task event to the notification bar.
+
+    ``task_due`` wakes are live-only: offline runs never route through the
+    ConversationManager. Hosted offline runs execute as dedicated one-shot
+    Kubernetes Jobs; local offline runs are fired directly by the local
+    activation scheduler.
+    """
 
     assistant_id = _current_task_assistant_id()
-    execution_mode = str(getattr(event, "execution_mode", "") or "live").lower()
     activation, stale_reason = validate_task_due_activation(
         assistant_id=assistant_id,
         task_id=event.task_id,
@@ -493,8 +499,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         source_task_log_id=event.source_task_log_id,
         scheduled_for=event.scheduled_for,
         destination=event.destination,
-        execution_mode=execution_mode,
-        source_type=str(event.source_type or "scheduled"),
     )
     if stale_reason is not None:
         cm._session_logger.info(
@@ -505,15 +509,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             ),
         )
         return False
-
-    # Offline due tasks stay disconnected from the CM→act chat loop: spawn the
-    # offline_runner subprocess on this same pod (LocalOfflineDispatcher).
-    if execution_mode == "offline" or activation.execution_mode == "offline":
-        return await _handle_offline_scheduled_due(
-            event,
-            cm,
-            activation=activation,
-        )
 
     assistant_id_for_run = assistant_id or activation.assistant_id or ""
     if assistant_id_for_run:
@@ -569,54 +564,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
     return False
 
 
-async def _handle_offline_scheduled_due(
-    event: TaskDue,
-    cm: "ConversationManager",
-    *,
-    activation: "TaskActivationSnapshot",
-) -> bool:
-    """Run an offline due task as a disconnected in-pod subprocess."""
-
-    from unify.task_scheduler.local_scheduler.offline_dispatcher import (
-        LocalOfflineDispatcher,
-    )
-
-    dispatcher = getattr(cm, "_offline_dispatcher", None)
-    if dispatcher is None:
-        dispatcher = LocalOfflineDispatcher()
-        cm._offline_dispatcher = dispatcher
-
-    try:
-        # Reuse the dispatcher-provided run_key when present so the in-pod
-        # runner adopts the task-run row the control plane already created.
-        await dispatcher.dispatch(
-            activation,
-            source_type=str(event.source_type or "scheduled"),
-            run_key=event.run_key or None,
-        )
-    except Exception as exc:
-        error_message = (
-            f"Offline scheduled task '{_task_due_label(event, activation)}' failed "
-            f"to dispatch: {type(exc).__name__}: {exc}"
-        )
-        cm._session_logger.error("task_due", error_message)
-        publish_system_error(
-            error_message,
-            error_type="offline_scheduled_task_dispatch_failed",
-        )
-        return False
-
-    cm._session_logger.info(
-        "task_due",
-        (
-            f"Dispatched offline due task {event.task_id} as disconnected "
-            f"in-pod runner (activation_revision="
-            f"{activation.activation_revision or '-'})"
-        ),
-    )
-    return False
-
-
 async def _handle_task_trigger_requested_event(
     event: TaskTriggerRequested,
     cm: "ConversationManager",
@@ -647,7 +594,7 @@ async def _handle_task_trigger_requested_event(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=event.task_id,
-                source_type="explicit",
+                source_type=RunSource.explicit,
                 execution_mode="live",
                 source_task_log_id=event.source_task_log_id,
                 destination=event.destination,
@@ -767,7 +714,7 @@ def _dispatch_offline_explicit_candidate(
         "source_task_log_id": candidate.source_task_log_id,
         "activation_revision": candidate.activation_revision,
         "execution_mode": "offline",
-        "source_type": "explicit",
+        "source_type": RunSource.explicit,
         "source_ref": source_ref,
         "source_medium": "api",
         "task_name": candidate.task_name or None,
@@ -811,7 +758,7 @@ async def _dispatch_offline_explicit_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type="explicit",
+        source_type=RunSource.explicit,
         source_ref=source_ref,
         source_medium="api",
     )
@@ -826,7 +773,7 @@ async def _dispatch_offline_explicit_candidate_local(
         stderr=_asyncio.subprocess.PIPE,
     )
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, "explicit"),
+        dispatcher._watch(process, candidate, RunSource.explicit),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
@@ -834,7 +781,7 @@ async def _dispatch_offline_explicit_candidate_local(
         "success": True,
         "status": "spawned_local",
         "execution_mode": "offline",
-        "source_type": "explicit",
+        "source_type": RunSource.explicit,
     }
 
 
@@ -1002,7 +949,7 @@ def _dispatch_offline_trigger_candidate(
             "source_task_log_id": candidate.source_task_log_id,
             "activation_revision": candidate.activation_revision,
             "execution_mode": "offline",
-            "source_type": "triggered",
+            "source_type": RunSource.triggered,
             "source_ref": _build_trigger_source_ref(
                 event=event,
                 medium=medium,
@@ -1066,7 +1013,7 @@ async def _dispatch_offline_trigger_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type="triggered",
+        source_type=RunSource.triggered,
         source_ref=source_ref,
         source_medium=medium.value,
         source_contact_id=contact_id,
@@ -1088,7 +1035,7 @@ async def _dispatch_offline_trigger_candidate_local(
     # Adopt the watcher onto the dispatcher's set so cleanup on CM stop
     # cancels it together with other in-flight scheduler watchers.
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, "triggered"),
+        dispatcher._watch(process, candidate, RunSource.triggered),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
@@ -1096,7 +1043,7 @@ async def _dispatch_offline_trigger_candidate_local(
         "success": True,
         "status": "spawned_local",
         "execution_mode": "offline",
-        "source_type": "triggered",
+        "source_type": RunSource.triggered,
     }
 
 
@@ -1200,7 +1147,7 @@ async def _surface_trigger_task_candidates(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=candidate.task_id,
-                source_type="triggered",
+                source_type=RunSource.triggered,
                 execution_mode="live",
                 source_task_log_id=candidate.source_task_log_id,
                 activation_revision=candidate.activation_revision,

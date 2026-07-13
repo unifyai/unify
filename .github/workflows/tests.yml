@@ -24,7 +24,7 @@ on:
         type: string
         default: "."
       confirm_full_matrix:
-        description: "Type FULL_MATRIX_OK to allow test_path='.' or a large matrix"
+        description: "Type FULL_MATRIX_OK to allow test_path='.' (full suite discovery)"
         required: false
         type: string
         default: ""
@@ -198,6 +198,7 @@ jobs:
       test_dirs: ${{ steps.set-matrix.outputs.test_dirs }}
       parallel_run_args: ${{ steps.set-matrix.outputs.parallel_run_args }}
       job_timeout: ${{ steps.set-matrix.outputs.job_timeout }}
+      job_timeout_matrix: ${{ steps.set-matrix.outputs.job_timeout_matrix }}
       # Project deletion flags (handled at workflow level to avoid race conditions)
       delete_on_start: ${{ steps.set-matrix.outputs.delete_on_start }}
       delete_on_exit: ${{ steps.set-matrix.outputs.delete_on_exit }}
@@ -233,7 +234,6 @@ jobs:
         INPUT_ARGS="${{ inputs.parallel_run_args }}"
         CONFIRM_FULL_MATRIX="${{ inputs.confirm_full_matrix }}"
         EVENT_NAME="${{ github.event_name }}"
-        MAX_NORMAL_MATRIX=12
         ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
         ENV_FILE_CONTENT=""
 
@@ -316,7 +316,7 @@ jobs:
           echo "" >&2
           echo "Safe options:" >&2
           echo "  - Target a narrow path, e.g. [parallel_run.sh tests/contact_manager/test_ask.py]" >&2
-          echo "  - For a full matrix, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
+          echo "  - For the full suite, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
           echo "  - For uncached/cache-refresh evals, use the protected LLM Cache Refresh workflow." >&2
           exit 1
         }
@@ -328,10 +328,6 @@ jobs:
 
         if (( ${#RAW_PATHS[@]} == 0 )) && ! $full_matrix_confirmed; then
           cost_policy_fail "no explicit test path was provided, which would discover the full suite"
-        fi
-
-        if (( ${#PATHS[@]} > MAX_NORMAL_MATRIX )) && ! $full_matrix_confirmed; then
-          cost_policy_fail "requested paths expand to ${#PATHS[@]} matrix jobs (limit: $MAX_NORMAL_MATRIX)"
         fi
 
         # tests/flows are live-LLM smoke tests: their conftest forces the brain
@@ -570,6 +566,7 @@ jobs:
         fi
         JOB_TIMEOUT=$((BASE_TIMEOUT + 10))
         echo "job_timeout=$JOB_TIMEOUT" >> "$GITHUB_OUTPUT"
+        echo "job_timeout_matrix=[$JOB_TIMEOUT]" >> "$GITHUB_OUTPUT"
 
   # Setup job: runs ONCE before all pytest jobs (if delete_on_start is true)
   # Handles project deletion at workflow level to avoid race conditions
@@ -627,8 +624,10 @@ jobs:
     name: pytest (${{ matrix.test_path }})
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
-    # Fixed timeout - dynamic timeout from needs.discover.outputs caused silent job creation failure
-    timeout-minutes: 130
+    # Wall-clock cap = timeout_minutes input + 10 min buffer on workflow_dispatch,
+    # else 130 min for push/PR. discover computes job_timeout; matrix.job_timeout
+    # carries it here because needs.discover.outputs and '+' are unusable directly.
+    timeout-minutes: ${{ matrix.job_timeout }}
     # Depend on setup job (it may be skipped, but that's OK - GitHub handles this)
     needs: [should-run-tests, discover, setup]
     if: |
@@ -639,6 +638,7 @@ jobs:
       fail-fast: false
       matrix:
         test_path: ${{ fromJSON(needs.discover.outputs.test_dirs) }}
+        job_timeout: ${{ fromJSON(needs.discover.outputs.job_timeout_matrix) }}
     env:
       # CI project management defaults (explicit, not relying on code defaults)
       UNIFY_TESTS_RAND_PROJ: "false"              # Shared project mode

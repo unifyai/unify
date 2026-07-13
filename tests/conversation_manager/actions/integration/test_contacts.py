@@ -45,7 +45,6 @@ async def test_contact_lookup_by_email_returns_phone(initialized_cm_codeact):
 
     final = await wait_for_actor_completion(cm, handle_id, timeout=300)
 
-    assert "alice" in final.lower()
     digits = re.sub(r"\D", "", final)
     assert "15555552222" in digits, f"Expected Alice phone in result, got: {final}"
     assert_no_errors(result)

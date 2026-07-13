@@ -623,11 +623,32 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     future inbound events, represent that durable intent with the task
     primitives rather than only doing the work once.
 
-    Use `primitives.tasks.update(...)` for requests like:
+    Use `primitives.tasks.update(...)` for **all durable task mutations**,
+    including one-shot creates and edits — not only schedules and triggers:
+    - "Create a task named X with description Y"
+    - "Update the description of the task named X to ..."
     - "Repeat this every Monday at 12:00 UTC"
     - "Send me this report every day"
     - "Whenever Alice emails about invoices, summarize it and draft a reply"
     - "Turn what we just did into a recurring workflow"
+
+    Prefer a single ``execute_function`` call for one create/update/ask:
+
+    ```
+    execute_function(
+        function_name="primitives.tasks.update",
+        call_kwargs={
+            "text": "Create a task named Close loop with Bob "
+            "(integration) with description Reply to Bob with the "
+            "final decision."
+        },
+    )
+    ```
+
+    Never invent a local helper that only prints or returns a fake task object,
+    never shell-`echo` a create command, and never claim a task was created
+    unless `primitives.tasks.update` / `primitives.tasks.ask` confirmed it.
+    Persistence lives exclusively in those primitives.
 
     Natural-language recurring tasks should normally start as description-driven
     tasks with `entrypoint=None`. The future due wake will call
@@ -944,9 +965,19 @@ def _build_system_self_knowledge() -> str:
         {source_table}
 
         Grep and read these with shell or Python in `execute_code` (e.g.
-        `grep -rn "pattern" {grep_example_root}`).  Use the source when
-        the docs are silent or you need precise behavior: exact limits,
-        edge cases, supported providers, wire formats.
+        `grep -rn "pattern" {grep_example_root}`) only when product docs and
+        tool docstrings are silent on a true unknown: exact limits, edge
+        cases, supported providers, wire formats.
+
+        **Hard rule — contracts before archaeology.** Tool docstrings and
+        the Accessible shared teams block are the authoritative contracts for
+        API signatures, parameters (including ``destination`` /
+        ``data_scope``), and ``team:<id>`` routing. When those already answer
+        how to perform a write or tool call, do it — do not grep or read
+        platform source first to rediscover, confirm, or second-guess the
+        contract, and do not delay or refuse the write while searching for
+        schema examples, "expected" call shapes, or a pre-existing object
+        token when the docs say to create under the chosen destination.
 
         **Non-negotiable confidentiality rules.**  The source trees are
         proprietary and are provided for your understanding only:

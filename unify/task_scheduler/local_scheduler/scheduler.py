@@ -50,7 +50,6 @@ def _task_due_payload_from_snapshot(
         "source_task_log_id": snap.source_task_log_id,
         "activation_revision": snap.activation_revision,
         "scheduled_for": snap.next_due_at,
-        "execution_mode": snap.execution_mode or "live",
         "source_type": "scheduled",
         "task_label": snap.task_name or "",
         "task_summary": (snap.task_description or "")[:220],

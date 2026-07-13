@@ -1026,6 +1026,10 @@ class ConversationManagerBrainActionTools:
         agent so the assistant can hear and speak in the meeting.  Never
         attempt to join a Meet URL via ``act``.
 
+        I do not create the meeting: the user hosts it and pastes the link.
+        Wait for a real ``meet.google.com`` link before calling this rather
+        than guessing one.
+
         Args:
             meet_url: The full Google Meet URL (e.g. https://meet.google.com/abc-defg-hij).
             opener: Verbatim spoken line once the meeting is live and someone
@@ -1124,6 +1128,10 @@ class ConversationManagerBrainActionTools:
         devices, establishes the voice pipeline, and dispatches the voice
         agent so the assistant can hear and speak in the meeting.  Never
         attempt to join a Teams meeting URL via ``act``.
+
+        I do not create the meeting: the user hosts it and pastes the link.
+        Wait for a real ``teams.microsoft.com`` / ``teams.live.com`` link
+        before calling this rather than guessing one.
 
         Args:
             meet_url: The full Teams meeting URL (e.g.
@@ -1540,9 +1548,8 @@ class ConversationManagerBrainActionTools:
                 ``gpt-5.6-sol@openai`` at high reasoning effort. Use
                 ``gpt_5_5_low``, ``gpt_5_5_medium``, or ``gpt_5_5_high`` only
                 when the task or the user's wording warrants the GPT-5.5
-                family specifically. If the user explicitly asks you to "use
-                all of your thinking effort", "think as hard as possible", or
-                similar, choose ``gpt_5_5_high``.
+                family specifically. Requests to "use all of your thinking effort"
+                or similar explicitly select ``gpt_5_5_high``.
 
                 Escalate the profile when retrying an action that shows
                 concrete evidence of model/tool-use struggle, rather than

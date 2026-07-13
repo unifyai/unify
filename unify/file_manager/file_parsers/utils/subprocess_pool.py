@@ -143,8 +143,13 @@ def subprocess_parse_single(
 
 
 def _mp_context() -> multiprocessing.context.BaseContext:
-    """Return the multiprocessing context (forkserver on Unix, spawn on Windows)."""
-    if _IS_WINDOWS:
+    """Return the multiprocessing context (forkserver on Linux, spawn elsewhere).
+
+    macOS uses ``spawn`` rather than ``forkserver``: Docling/Torch layout
+    models can SIGSEGV under forkserver CoW when MPS is involved, even for
+    light pure-Python backends that share the preloaded interpreter state.
+    """
+    if _IS_WINDOWS or sys.platform == "darwin":
         return multiprocessing.get_context("spawn")
     ensure_forkserver_preload()
     return multiprocessing.get_context("forkserver")
@@ -170,6 +175,10 @@ def _child_worker(
     new thread`` under resource exhaustion), the child exits with code 2
     so the parent can detect the crash via ``proc.exitcode``.
     """
+    if sys.platform == "darwin":
+        # Layout models build float64 tensors that MPS cannot represent.
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     try:
         result = subprocess_parse_single(request, parse_config)
         result_queue.put(result)

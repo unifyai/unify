@@ -917,11 +917,17 @@ class SimulatedContactManager(BaseContactManager):
         discord_id: Optional[str] = None,
         slack_user_id: Optional[str] = None,
         bio: Optional[str] = None,
+        job_title: Optional[str] = None,
         timezone: Optional[str] = None,
         rolling_summary: Optional[str] = None,
         should_respond: bool = True,
         response_policy: Optional[str] = None,
+        is_system: bool = False,
+        custom_key: Optional[str] = None,
+        custom_hash: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
+        destination: Optional[str] = None,
+        _contact_id: Optional[int] = None,
     ) -> "ToolOutcome":
         """
         Create a new contact in the internal store with a deterministic contact_id.
@@ -932,9 +938,8 @@ class SimulatedContactManager(BaseContactManager):
 
         Parameters match the real ContactManager._create_contact for compatibility.
         """
-        # Assign a new contact_id using the counter
-        contact_id = self._next_contact_id
-        self._next_contact_id += 1
+        contact_id = self._next_contact_id if _contact_id is None else _contact_id
+        self._next_contact_id = max(self._next_contact_id, contact_id + 1)
 
         # Build the contact dict
         contact: Dict[str, Any] = {
@@ -947,10 +952,14 @@ class SimulatedContactManager(BaseContactManager):
             "discord_id": discord_id,
             "slack_user_id": slack_user_id,
             "bio": bio,
+            "job_title": job_title,
             "timezone": timezone,
             "rolling_summary": rolling_summary,
             "should_respond": should_respond,
             "response_policy": response_policy,
+            "is_system": is_system,
+            "custom_key": custom_key,
+            "custom_hash": custom_hash,
         }
 
         # Add any custom fields

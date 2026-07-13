@@ -370,6 +370,68 @@ def collect_functions_from_directories(
     return merged
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Live source resolution (deployment trees are the source of truth)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Directories whose ``@custom_function`` modules are present on this machine.
+# Deployment loaders (client bundles, local deployment trees) register their
+# function dirs here so execution can bind the live module callable instead of
+# exec-ing the stored source copy, which is only a synced cache and can lag
+# the deployed tree between reconciles.
+_LIVE_SOURCE_DIRS: List[Path] = []
+_LIVE_CALLABLE_CACHE: Optional[Dict[str, Callable]] = None
+
+
+def register_live_function_source_dirs(directories: List[Path]) -> None:
+    """Register on-disk ``@custom_function`` source directories.
+
+    Later registrations override earlier ones on name collisions, matching
+    the org -> user -> assistant cascade used by collection.
+    """
+
+    global _LIVE_CALLABLE_CACHE
+    changed = False
+    for directory in directories:
+        path = Path(directory)
+        if path not in _LIVE_SOURCE_DIRS:
+            _LIVE_SOURCE_DIRS.append(path)
+            changed = True
+    if changed:
+        _LIVE_CALLABLE_CACHE = None
+
+
+def resolve_live_custom_callable(name: str) -> Optional[Callable]:
+    """Return the live module callable for one custom function, if present.
+
+    Scans the registered source directories once per process (invalidated by
+    new registrations) and maps function name to the decorated callable from
+    its defining module. Returns ``None`` when no registered tree defines the
+    function — callers then fall back to the stored source copy.
+    """
+
+    global _LIVE_CALLABLE_CACHE
+    if not _LIVE_SOURCE_DIRS:
+        return None
+    if _LIVE_CALLABLE_CACHE is None:
+        cache: Dict[str, Callable] = {}
+        for directory in _LIVE_SOURCE_DIRS:
+            if not directory.exists():
+                continue
+            for py_file in directory.glob("*.py"):
+                if py_file.name.startswith("_"):
+                    continue
+                module = _load_module_from_file(py_file)
+                if module is None:
+                    continue
+                for fn_name, func, _metadata in _extract_functions_from_module(
+                    module,
+                ):
+                    cache[fn_name] = func
+        _LIVE_CALLABLE_CACHE = cache
+    return _LIVE_CALLABLE_CACHE.get(name)
+
+
 def collect_venvs_from_directories(
     directories: List[Path],
 ) -> Dict[str, Dict[str, Any]]:

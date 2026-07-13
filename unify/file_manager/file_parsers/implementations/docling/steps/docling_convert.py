@@ -13,6 +13,7 @@ for certain formats like XLSX).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import sys
 from typing import Optional
 
 from unify.file_manager.file_parsers.settings import FileParserSettings
@@ -39,6 +40,10 @@ def new_docling_converter(*, settings: FileParserSettings):
     """
     try:
         from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.accelerator_options import (
+            AcceleratorDevice,
+            AcceleratorOptions,
+        )
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import PdfPipelineOptions
     except Exception as e:
@@ -50,6 +55,13 @@ def new_docling_converter(*, settings: FileParserSettings):
     pipeline_options.images_scale = 2.0
     pipeline_options.do_ocr = settings.DOCLING_OCR_ENABLED
     pipeline_options.generate_picture_images = settings.PICTURE_DESCRIPTION_ENABLED
+
+    # Docling's layout model constructs float64 positional tensors, which MPS
+    # cannot represent. CPU execution keeps document conversion functional on macOS.
+    if sys.platform == "darwin":
+        pipeline_options.accelerator_options = AcceleratorOptions(
+            device=AcceleratorDevice.CPU,
+        )
 
     # Docling's built-in graceful per-document timeout.  When exceeded the
     # pipeline stops and returns partial results (PARTIAL_SUCCESS) rather

@@ -1,0 +1,27 @@
+{
+  "authored_fields": [
+    "name",
+    "description",
+    "schedule",
+    "trigger",
+    "enabled",
+    "offline",
+    "entrypoint",
+    "priority",
+    "repeat",
+    "deadline",
+    "response_policy",
+    "destination"
+  ],
+  "runtime_fields": [
+    "status",
+    "activated_by",
+    "instance_id"
+  ],
+  "runtime_status_values": [
+    "active",
+    "completed",
+    "cancelled",
+    "failed"
+  ]
+}

@@ -9,7 +9,7 @@ from unify.common.authorship import AuthoredRow
 from .priority import Priority
 from .status import Status
 from .schedule import Schedule
-from .trigger import Trigger
+from .trigger import TaskTrigger
 from .repetition import RepeatPattern
 from .activated_by import ActivatedBy
 from datetime import datetime
@@ -49,13 +49,22 @@ class TaskBase(AuthoredRow):
         description="Optional scheduling information, including ideal start time.",
         json_schema_extra={"unify_type": "dict"},
     )
-    trigger: Optional[Trigger] = Field(
+    trigger: Optional[TaskTrigger] = Field(
         default=None,
         description="Event definition that starts the task (mutually exclusive with *schedule*)",
+        json_schema_extra={"unify_type": "dict"},
     )
     deadline: Optional[datetime] = Field(
         default=None,
         description="Due date/time for the task in ISO-8601 format",
+    )
+    max_runtime_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional bound on a single execution attempt's wall-clock "
+            "runtime, in seconds. None means the run is unbounded. Distinct "
+            "from *deadline*, which is a calendar due date."
+        ),
     )
     repeat: Optional[List[RepeatPattern]] = Field(
         default=None,
@@ -125,6 +134,13 @@ class TaskBase(AuthoredRow):
         description=(
             "Hash of source-defined custom task content for sync detection. "
             "None for runtime-created entries."
+        ),
+    )
+    task_revision: Optional[int] = Field(
+        default=None,
+        description=(
+            "Monotonic authored revision stamped by Orchestra for revision-safe "
+            "provider-event mutations."
         ),
     )
 

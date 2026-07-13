@@ -1046,6 +1046,12 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `your_computer_beat_requested`: the user clicked the Their Computer "
             "demo row — fetch a file from their own linked computer (chat- or "
             "call-native; no ring); mark complete only after confirmed delivery.",
+            "  - `workspace_call_beat_requested`: the user clicked the workspace "
+            "video-call row — I never create the meeting; ask them to start a "
+            "Google Meet or Microsoft Teams call and paste the link, then join "
+            "with `join_google_meet` (meet.google.com) or `join_teams_meet` "
+            "(teams.microsoft.com) and talk live; mark complete only after I have "
+            "actually joined and spoken.",
             "Rules for `onboarding_step_started`:",
             "  A. Read the active step id from the notification body (`step_id`) and "
             "match it against the authoritative 'My onboarding progress (live)' block. "

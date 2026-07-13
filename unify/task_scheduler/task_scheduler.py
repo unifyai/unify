@@ -68,7 +68,6 @@ from .machine_state import (
     build_task_run_key,
     consume_live_task_run_provenance,
     peek_live_task_run_provenance,
-    source_type_from_activation_reason,
 )
 from .prompt_builders import (
     build_ask_prompt,
@@ -77,6 +76,7 @@ from .prompt_builders import (
     build_update_prompt,
 )
 from .storage import TasksStore
+from . import typed_tasks_client
 from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
@@ -91,10 +91,12 @@ from .types.repetition import (
 from .types.schedule import Schedule
 from .types.status import Status, to_status
 from .types.task import Task, TaskBase
-from .types.trigger import Trigger
+from .types.task_row_field import split_provider_event_task_update
+from .types.run_source import RunSource
+from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
-TriggerLike = Optional[Union[Trigger, Dict[str, Any]]]
+TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
 RepeatLike = Optional[List[Union[RepeatPattern, Dict[str, Any]]]]
 ToolsDict = Dict[str, Callable[..., Any]]
 
@@ -1001,11 +1003,9 @@ class TaskScheduler(BaseTaskScheduler):
         # Concurrent instances of the same task_id are allowed. Only block when
         # activation provenance targets an instance that is already active.
         source_type = (
-            "triggered"
+            RunSource.triggered
             if trigger_attempt_token
-            else source_type_from_activation_reason(
-                (_activated_by or ActivatedBy.explicit).value,
-            )
+            else RunSource.from_activation_reason(_activated_by or ActivatedBy.explicit)
         )
         pending_provenance = peek_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
@@ -1040,9 +1040,9 @@ class TaskScheduler(BaseTaskScheduler):
             )
 
         task_run_source_type = (
-            "triggered"
+            RunSource.triggered
             if trigger_attempt_token
-            else source_type_from_activation_reason(reason.value)
+            else RunSource.from_activation_reason(reason)
         )
         task_run_provenance = consume_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
@@ -1075,9 +1075,9 @@ class TaskScheduler(BaseTaskScheduler):
                 else:
                     reason = ActivatedBy.explicit
                 task_run_source_type = (
-                    "triggered"
+                    RunSource.triggered
                     if trigger_attempt_token
-                    else source_type_from_activation_reason(reason.value)
+                    else RunSource.from_activation_reason(reason)
                 )
         self._validate_task_matches_provenance(
             task=task,
@@ -1350,6 +1350,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule: ScheduleLike = None,
         trigger: TriggerLike = None,
         deadline: Optional[Union[str, datetime]] = None,
+        max_runtime_seconds: Optional[int] = None,
         repeat: RepeatLike = None,
         priority: Priority = Priority.normal,
         response_policy: Optional[str] = None,
@@ -1363,7 +1364,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         Supports optional scheduling (start time, deadline, recurrence),
         event-based triggers, execution mode (agentic vs symbolic via
-        ``entrypoint``), background offline execution, and an enabled flag.
+        ``entrypoint``), background offline execution, an optional per-attempt
+        runtime bound (``max_runtime_seconds``), and an enabled flag.
         Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
         """
 
@@ -1379,6 +1381,7 @@ class TaskScheduler(BaseTaskScheduler):
                     schedule=schedule,
                     trigger=trigger,
                     deadline=deadline,
+                    max_runtime_seconds=max_runtime_seconds,
                     repeat=repeat,
                     priority=priority,
                     response_policy=response_policy,
@@ -1425,7 +1428,7 @@ class TaskScheduler(BaseTaskScheduler):
         if schedule is not None and isinstance(schedule, dict):
             schedule = Schedule(**schedule)
         if trigger is not None and isinstance(trigger, dict):
-            trigger = Trigger(**trigger)
+            trigger = parse_task_trigger(trigger)
         if repeat is not None:
             repeat = [
                 RepeatPattern(**item) if isinstance(item, dict) else item
@@ -1463,6 +1466,7 @@ class TaskScheduler(BaseTaskScheduler):
             schedule=schedule,
             trigger=trigger,
             deadline=deadline,
+            max_runtime_seconds=max_runtime_seconds,
             repeat=repeat,
             priority=priority,
             response_policy=response_policy,
@@ -1471,13 +1475,18 @@ class TaskScheduler(BaseTaskScheduler):
             enabled=enabled,
         ).to_post_json()
 
-        log = self._store.log(entries=task_details, new=True)
+        if trigger is not None and isinstance(trigger, ProviderEventTrigger):
+            created = typed_tasks_client.create_task(payload=task_details)
+            task_id = int(created["task_id"])
+        else:
+            log = self._store.log(entries=task_details, new=True)
+            task_id = int(log.entries["task_id"])
         if self._num_tasks_cached is not None:
             self._num_tasks_cached += 1
 
         return {
             "outcome": "task created successfully",
-            "details": {"task_id": int(log.entries["task_id"])},
+            "details": {"task_id": task_id},
         }
 
     def _create_tasks(
@@ -1591,11 +1600,22 @@ class TaskScheduler(BaseTaskScheduler):
                 )
 
         self._ensure_not_active_task(task_id)
+        task = self._get_task_or_raise(task_id)
         log_ids = self._store.get_rows(
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        self._store.delete(logs=log_ids)
+        if self._task_has_provider_event_trigger(task):
+            if task.task_revision is None:
+                raise ValueError(
+                    f"Task {task_id} is missing task_revision; re-read before deleting.",
+                )
+            typed_tasks_client.delete_task(
+                task_id=task_id,
+                expected_task_revision=int(task.task_revision),
+            )
+        else:
+            self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
         if self._num_tasks_cached is not None and removed_count:
             self._num_tasks_cached = max(
@@ -1809,7 +1829,7 @@ class TaskScheduler(BaseTaskScheduler):
         elif trigger is None:
             prospective_trigger = None
         elif isinstance(trigger, dict):
-            prospective_trigger = Trigger(**trigger)
+            prospective_trigger = parse_task_trigger(trigger)
         else:
             prospective_trigger = trigger
 
@@ -1864,7 +1884,7 @@ class TaskScheduler(BaseTaskScheduler):
         if trigger_provided:
             if prospective_trigger is None:
                 entries["trigger"] = None
-            elif isinstance(prospective_trigger, Trigger):
+            elif isinstance(prospective_trigger, BaseModel):
                 entries["trigger"] = prospective_trigger.model_dump(mode="json")
             else:
                 entries["trigger"] = prospective_trigger
@@ -1909,7 +1929,55 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        return self._write_log_entries(logs=log_ids, entries=entries)
+        if self._task_has_provider_event_trigger(task):
+            return self._write_provider_event_task_update(
+                task_id=task_id,
+                task=task,
+                entries=entries,
+            )
+
+        return self._write_log_entries(
+            logs=log_ids,
+            entries=entries,
+        )
+
+    def _write_provider_event_task_update(
+        self,
+        *,
+        task_id: int,
+        task: Task,
+        entries: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Route one provider-event patch across typed API and runtime logs."""
+
+        log_ids = self._store.get_rows(
+            filter=f"task_id == {task_id}",
+            return_ids_only=True,
+        )
+        authored_entries, runtime_entries = split_provider_event_task_update(
+            entries,
+        )
+        if authored_entries and runtime_entries:
+            raise ValueError(
+                "Cannot update authored and runtime provider-event fields in one call.",
+            )
+        if authored_entries:
+            if task.task_revision is None:
+                raise ValueError(
+                    f"Task {task_id} is missing task_revision; re-read before updating.",
+                )
+            typed_tasks_client.patch_task(
+                task_id=task_id,
+                expected_task_revision=int(task.task_revision),
+                updates=authored_entries,
+            )
+            return {"detail": "Provider-event authored update applied."}
+        if runtime_entries:
+            return self._write_log_entries(
+                logs=log_ids,
+                entries=runtime_entries,
+            )
+        return {"detail": "No-op provider-event task update."}
 
     def _update_task_instance(
         self,
@@ -2017,7 +2085,15 @@ class TaskScheduler(BaseTaskScheduler):
     ) -> Dict[str, str]:
         """Centralize task-row writes through the current store."""
 
-        return self._store.update(logs=logs, entries=entries)
+        return self._store.update(
+            logs=logs,
+            entries=entries,
+        )
+
+    @staticmethod
+    def _task_has_provider_event_trigger(task: Task) -> bool:
+        trigger = parse_task_trigger(task.trigger)
+        return isinstance(trigger, ProviderEventTrigger)
 
     def _start_loop(
         self,
@@ -2424,6 +2500,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
         deadline = payload.pop("deadline", None)
+        max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
@@ -2453,6 +2530,7 @@ class TaskScheduler(BaseTaskScheduler):
             schedule=schedule,
             trigger=trigger,
             deadline=deadline,
+            max_runtime_seconds=max_runtime_seconds,
             repeat=repeat,
             priority=priority,
             response_policy=response_policy,
@@ -2492,6 +2570,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedule = payload.pop("schedule", None)
         trigger = payload.pop("trigger", None)
         deadline = payload.pop("deadline", None)
+        max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
@@ -2542,6 +2621,7 @@ class TaskScheduler(BaseTaskScheduler):
             "schedule": schedule,
             "trigger": trigger,
             "deadline": deadline,
+            "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
         }
@@ -2571,11 +2651,28 @@ class TaskScheduler(BaseTaskScheduler):
 
         entries = {key: value for key, value in entries.items() if value is not _UNSET}
 
+        sync_meta = {
+            key: entries[key] for key in ("custom_key", "custom_hash") if key in entries
+        }
+        provider_entries = {
+            key: value for key, value in entries.items() if key not in sync_meta
+        }
+
+        task = self._get_task_or_raise(task_id)
         log_ids = self._store.get_rows(
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
-        self._write_log_entries(logs=log_ids, entries=entries)
+        if self._task_has_provider_event_trigger(task) and provider_entries:
+            self._write_provider_event_task_update(
+                task_id=task_id,
+                task=task,
+                entries=provider_entries,
+            )
+        elif provider_entries:
+            self._write_log_entries(logs=log_ids, entries=provider_entries)
+        if sync_meta:
+            self._write_log_entries(logs=log_ids, entries=sync_meta)
 
     def sync_custom_tasks(
         self,

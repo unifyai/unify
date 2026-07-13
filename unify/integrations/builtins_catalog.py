@@ -692,28 +692,47 @@ def list_catalog_tools(
     *,
     canonical_app_slug: str | None = None,
     tool_id: str | None = None,
-    limit: int = 500,
+    limit: int | None = None,
     project: str | None = None,
 ) -> list[dict[str, Any]]:
+    """Provider-backed tool catalog rows, paginated past the server page cap.
+
+    ``limit`` caps the total number of raw rows fetched; ``None`` fetches the
+    full catalog for the requested scope. The server caps a single read at
+    1000 rows, so large apps (GitHub alone has ~900 tools) require paging —
+    a single capped read silently drops tools past the first page.
+    """
     project = project or builtins_project()
     row_filter = 'metadata["source"] == "provider_backed"'
     if canonical_app_slug:
         row_filter = f'({row_filter}) and metadata["integration"]["app_slug"] == {json.dumps(_normalize_app_slug(canonical_app_slug))}'
     if tool_id:
         row_filter = f'({row_filter}) and metadata["integration"]["tool_id"] == {json.dumps(tool_id)}'
-    rows = unisdk.get_logs(
+    exclude_fields = list_private_fields(
+        BUILTINS_INTEGRATION_TOOLS_CONTEXT,
         project=project,
-        context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
-        filter=row_filter,
-        limit=limit,
-        exclude_fields=list_private_fields(
-            BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+    )
+    page_size = 1000
+    raw_rows: list[dict[str, Any]] = []
+    offset = 0
+    while limit is None or len(raw_rows) < limit:
+        page_limit = page_size
+        if limit is not None:
+            page_limit = min(page_size, limit - len(raw_rows))
+        rows = unisdk.get_logs(
             project=project,
-        ),
-    )
-    return resolve_public_catalog_tools(
-        [dict(row.entries) for row in rows or []],
-    )
+            context=BUILTINS_INTEGRATION_TOOLS_CONTEXT,
+            filter=row_filter,
+            limit=page_limit,
+            offset=offset,
+            exclude_fields=exclude_fields,
+        )
+        batch = [dict(row.entries) for row in rows or []]
+        raw_rows.extend(batch)
+        if len(batch) < page_limit:
+            break
+        offset += len(batch)
+    return resolve_public_catalog_tools(raw_rows)
 
 
 __all__ = [

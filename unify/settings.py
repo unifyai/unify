@@ -14,6 +14,7 @@ from pydantic import Field, field_validator, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from unify.actor.settings import ActorSettings
+from unify.blacklist_manager.settings import BlacklistSettings
 from unify.contact_manager.settings import ContactSettings
 from unify.conversation_manager.settings import ConversationSettings
 from unify.dashboard_manager.settings import DashboardSettings
@@ -214,6 +215,7 @@ class ProductionSettings(BaseSettings):
     # Each manager owns its settings in its own settings.py file.
     # Access via SETTINGS.contact.IMPL, SETTINGS.transcript.IMPL, etc.
     actor: ActorSettings = Field(default_factory=ActorSettings)
+    blacklist: BlacklistSettings = Field(default_factory=BlacklistSettings)
     contact: ContactSettings = Field(default_factory=ContactSettings)
     conversation: ConversationSettings = Field(default_factory=ConversationSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
