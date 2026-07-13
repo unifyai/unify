@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Type
 
 if TYPE_CHECKING:
     from .actor.base import BaseActor
+    from .blacklist_manager.base import BaseBlackListManager
     from .contact_manager.base import BaseContactManager
     from .conversation_manager.base import BaseConversationManagerHandle
     from .dashboard_manager.base import BaseDashboardManager
@@ -375,6 +376,24 @@ class ManagerRegistry:
         )
 
     @classmethod
+    def get_blacklist_manager(
+        cls,
+        *,
+        description: str | None = None,
+        simulation_guidance: str | None = None,
+        _force_new: bool = False,
+        **kwargs: Any,
+    ) -> "BaseBlackListManager":
+        """Get the BlackListManager singleton (respects IMPL settings)."""
+        return cls.get(
+            "blacklist",
+            description=description,
+            simulation_guidance=simulation_guidance,
+            _force_new=_force_new,
+            **kwargs,
+        )
+
+    @classmethod
     def get_contact_manager(
         cls,
         *,
@@ -686,6 +705,7 @@ def _populate_registry() -> None:
     from .settings import SETTINGS
 
     ManagerRegistry.register_settings("actor", lambda: SETTINGS.actor)
+    ManagerRegistry.register_settings("blacklist", lambda: SETTINGS.blacklist)
     ManagerRegistry.register_settings("contacts", lambda: SETTINGS.contact)
     ManagerRegistry.register_settings("transcripts", lambda: SETTINGS.transcript)
     ManagerRegistry.register_settings("tasks", lambda: SETTINGS.task)
@@ -711,6 +731,13 @@ def _populate_registry() -> None:
     ManagerRegistry.register_class("actor", "single_function", SingleFunctionActor)
     ManagerRegistry.register_class("actor", "code_act", CodeActActor)
     ManagerRegistry.register_class("actor", "simulated", SimulatedActor)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # BlackListManager implementations
+    # ─────────────────────────────────────────────────────────────────────────
+    from .blacklist_manager.blacklist_manager import BlackListManager
+
+    ManagerRegistry.register_class("blacklist", "real", BlackListManager)
 
     # ─────────────────────────────────────────────────────────────────────────
     # ContactManager implementations
