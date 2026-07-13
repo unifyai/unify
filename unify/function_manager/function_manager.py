@@ -5730,13 +5730,15 @@ class FunctionManager(BaseFunctionManager):
             if delay:
                 _time.sleep(delay)
             try:
-                return unisdk.get_logs(
+                logs = unisdk.get_logs(
                     context=self._venvs_ctx,
                     filter=filter,
                     limit=limit,
                     exclude_fields=exclude_fields,
                     from_fields=from_fields,
                 )
+                if logs or filter is None:
+                    return logs
             except _UnifyRequestError as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status == 404:

@@ -27,6 +27,17 @@ from ..session_details import (
 from .ops import partition_create_kwargs, partition_update_kwargs
 
 
+def _is_duplicate_contact_error(error: RequestError) -> bool:
+    if error.response is None or error.response.status_code not in (400, 409, 500):
+        return False
+    try:
+        detail = str(error.response.json().get("detail", ""))
+    except Exception:
+        detail = str(getattr(error.response, "text", ""))
+    normalized = detail.lower()
+    return "unique" in normalized or "duplicate composite key" in normalized
+
+
 def _ensure_columns_exist(self, extra_fields: Dict[str, Any]) -> None:
     """Create custom columns for *extra_fields* that are not yet present."""
     existing_cols = self._get_columns()
@@ -325,15 +336,8 @@ def provision_assistant_contact(
             raise RuntimeError("Assistant self contact was created with the wrong id.")
         resolved_contact_id = int(outcome["details"]["contact_id"])
     except RequestError as e:
-        if e.response is not None and e.response.status_code in (400, 500):
-            detail = ""
-            try:
-                detail = str(e.response.json().get("detail", ""))
-            except Exception:
-                detail = str(getattr(e.response, "text", ""))
-            if "unique" in detail.lower():
-                return
-        raise
+        if not _is_duplicate_contact_error(e):
+            raise
     _upsert_personal_contact_membership(
         contact_id=resolved_contact_id,
         relationship=_SELF_RELATIONSHIP,
@@ -531,15 +535,8 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             raise RuntimeError("Boss contact was created with the wrong id.")
         resolved_contact_id = int(outcome["details"]["contact_id"])
     except RequestError as e:
-        if e.response is not None and e.response.status_code in (400, 500):
-            detail = ""
-            try:
-                detail = str(e.response.json().get("detail", ""))
-            except Exception:
-                detail = str(getattr(e.response, "text", ""))
-            if "unique" in detail.lower():
-                return
-        raise
+        if not _is_duplicate_contact_error(e):
+            raise
     _upsert_personal_contact_membership(
         contact_id=resolved_contact_id,
         relationship=_BOSS_RELATIONSHIP,
