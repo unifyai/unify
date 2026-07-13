@@ -99,6 +99,13 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "linked computer now and send it back in chat; works from chat or on a "
         "call."
     ),
+    "workspace_call_beat_requested": (
+        "The user clicked the workspace video-call row — they'll host a Google "
+        "Meet or Microsoft Teams call. Ask them to start the meeting and paste "
+        "the link (I never create it), then join with join_google_meet for a "
+        "meet.google.com link or join_teams_meet for a teams.microsoft.com link "
+        "and talk to them live."
+    ),
 }
 
 
@@ -121,6 +128,7 @@ _SUBTYPE_INTEGRATION_DEMO_CHIP_REQUESTED = "integration_demo_chip_requested"
 _SUBTYPE_LEARNING_BEAT_REQUESTED = "learning_beat_requested"
 _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED = "my_computer_beat_requested"
 _SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED = "your_computer_beat_requested"
+_SUBTYPE_WORKSPACE_CALL_BEAT_REQUESTED = "workspace_call_beat_requested"
 
 _IMMEDIATE_TRIGGER_ACK_GUIDANCE = (
     "Mandatory: the user's checklist click has no visible UI feedback until I "
@@ -155,6 +163,7 @@ _SUBTYPES_WITH_DURABLE_CLICK_TRACE = frozenset(
         _SUBTYPE_LEARNING_BEAT_REQUESTED,
         _SUBTYPE_MY_COMPUTER_BEAT_REQUESTED,
         _SUBTYPE_YOUR_COMPUTER_BEAT_REQUESTED,
+        _SUBTYPE_WORKSPACE_CALL_BEAT_REQUESTED,
         _SUBTYPE_WORKSPACE_DEMO_REQUESTED,
     },
 )
@@ -747,6 +756,26 @@ def _coordinator_onboarding_notification_text(
         framing = _detail_string(details, "framing")
         framing_note = f" Section framing: {framing}" if framing else ""
         text = f"{subtype_hint} {body}{framing_note}".strip()
+        return _append_onboarding_trigger_ack_guidance(text, event.subtype)
+
+    if event.subtype == _SUBTYPE_WORKSPACE_CALL_BEAT_REQUESTED:
+        details = event.details if isinstance(event.details, dict) else {}
+        framing = _detail_string(details, "framing")
+        framing_note = f" Section framing: {framing}" if framing else ""
+        guidance = (
+            "I do NOT create the meeting: ask the user to start a Google Meet or "
+            "Microsoft Teams meeting and paste the link, and wait for it rather "
+            "than guessing. Once I have the link I join it — a meet.google.com "
+            "link with join_google_meet, a teams.microsoft.com link with "
+            "join_teams_meet — passing a short spoken opener, then have a brief "
+            "live exchange. Respect the one-voice-session-at-a-time guard. This "
+            "is a poll, not a request to repeat finished work: if I have already "
+            "joined and spoken I just confirm it. After I have actually joined "
+            "and spoken, mark the step done with "
+            "set_onboarding_task_state('workspace-call', True); if they decline "
+            "or can't host, say so and do not mark it done."
+        )
+        text = f"{subtype_hint} {body}{framing_note} {guidance}".strip()
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_WORKSPACE_DEMO_REQUESTED:
