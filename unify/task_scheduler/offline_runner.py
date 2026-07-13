@@ -53,12 +53,12 @@ from unify.task_scheduler.machine_state import (
     remember_live_task_run_provenance,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.activated_by import ActivatedBy
+from unify.task_scheduler.types.run_source import RunSource
 
 TASK_RUN_UPDATE_PATH = "/task-run/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
-SCHEDULER_MANAGED_SOURCE_TYPES = {"scheduled", "triggered", "explicit"}
+SCHEDULER_MANAGED_SOURCE_TYPES = frozenset(RunSource)
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ class OfflineTaskConfig:
     task_id: int
     function_id: int | None
     request: str
-    source_type: str
+    source_type: RunSource
     source_task_log_id: int
     activation_revision: str
     destination: str | None = None
@@ -120,7 +120,9 @@ def _load_config_from_env() -> OfflineTaskConfig:
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
         request=_require_env("UNITY_OFFLINE_TASK_REQUEST"),
-        source_type=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", "scheduled"),
+        source_type=RunSource.normalize(
+            os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", RunSource.scheduled),
+        ),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
         activation_revision=_require_env("UNITY_OFFLINE_TASK_ACTIVATION_REVISION"),
         destination=destination,
@@ -286,25 +288,15 @@ def _is_scheduler_managed(config: OfflineTaskConfig) -> bool:
     return config.source_type in SCHEDULER_MANAGED_SOURCE_TYPES
 
 
-def _activated_by_for_source_type(source_type: str) -> ActivatedBy:
-    """Map the offline source type onto the scheduler activation reason."""
-
-    if source_type == "triggered":
-        return ActivatedBy.trigger
-    if source_type == "explicit":
-        return ActivatedBy.explicit
-    return ActivatedBy.schedule
-
-
 def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
     """Return the pending-provenance claim token for one triggered run.
 
     Explicit REST offline runs intentionally omit this token so
-    ``TaskScheduler.execute`` keeps ``source_type=explicit`` instead of
-    forcing ``triggered``.
+    ``TaskScheduler.execute`` keeps manual provenance instead of forcing a
+    communication-trigger source type.
     """
 
-    if config.source_type == "triggered":
+    if config.source_type.is_triggered:
         return config.run_key
     return None
 
@@ -488,7 +480,7 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
         handle = await scheduler.execute(
             task_id=config.task_id,
             trigger_attempt_token=_trigger_attempt_token(config),
-            _activated_by=_activated_by_for_source_type(config.source_type),
+            _activated_by=config.source_type.to_activated_by(),
         )
         return await handle.result()
     finally:

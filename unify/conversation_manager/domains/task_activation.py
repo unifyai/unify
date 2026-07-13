@@ -24,6 +24,7 @@ from unify.logger import LOGGER
 from unify.manager_registry import ManagerRegistry
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.types.activated_by import ActivatedBy
+from unify.task_scheduler.types.run_source import RunSource
 from unify.task_scheduler.machine_state import (
     TaskActivationSnapshot,
     TaskRunProvenance,
@@ -593,7 +594,7 @@ async def _handle_task_trigger_requested_event(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=event.task_id,
-                source_type="explicit",
+                source_type=RunSource.explicit,
                 execution_mode="live",
                 source_task_log_id=event.source_task_log_id,
                 destination=event.destination,
@@ -713,7 +714,7 @@ def _dispatch_offline_explicit_candidate(
         "source_task_log_id": candidate.source_task_log_id,
         "activation_revision": candidate.activation_revision,
         "execution_mode": "offline",
-        "source_type": "explicit",
+        "source_type": RunSource.explicit,
         "source_ref": source_ref,
         "source_medium": "api",
         "task_name": candidate.task_name or None,
@@ -757,7 +758,7 @@ async def _dispatch_offline_explicit_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type="explicit",
+        source_type=RunSource.explicit,
         source_ref=source_ref,
         source_medium="api",
     )
@@ -772,7 +773,7 @@ async def _dispatch_offline_explicit_candidate_local(
         stderr=_asyncio.subprocess.PIPE,
     )
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, "explicit"),
+        dispatcher._watch(process, candidate, RunSource.explicit),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
@@ -780,7 +781,7 @@ async def _dispatch_offline_explicit_candidate_local(
         "success": True,
         "status": "spawned_local",
         "execution_mode": "offline",
-        "source_type": "explicit",
+        "source_type": RunSource.explicit,
     }
 
 
@@ -948,7 +949,7 @@ def _dispatch_offline_trigger_candidate(
             "source_task_log_id": candidate.source_task_log_id,
             "activation_revision": candidate.activation_revision,
             "execution_mode": "offline",
-            "source_type": "triggered",
+            "source_type": RunSource.triggered,
             "source_ref": _build_trigger_source_ref(
                 event=event,
                 medium=medium,
@@ -1012,7 +1013,7 @@ async def _dispatch_offline_trigger_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type="triggered",
+        source_type=RunSource.triggered,
         source_ref=source_ref,
         source_medium=medium.value,
         source_contact_id=contact_id,
@@ -1034,7 +1035,7 @@ async def _dispatch_offline_trigger_candidate_local(
     # Adopt the watcher onto the dispatcher's set so cleanup on CM stop
     # cancels it together with other in-flight scheduler watchers.
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, "triggered"),
+        dispatcher._watch(process, candidate, RunSource.triggered),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
@@ -1042,7 +1043,7 @@ async def _dispatch_offline_trigger_candidate_local(
         "success": True,
         "status": "spawned_local",
         "execution_mode": "offline",
-        "source_type": "triggered",
+        "source_type": RunSource.triggered,
     }
 
 
@@ -1146,7 +1147,7 @@ async def _surface_trigger_task_candidates(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=candidate.task_id,
-                source_type="triggered",
+                source_type=RunSource.triggered,
                 execution_mode="live",
                 source_task_log_id=candidate.source_task_log_id,
                 activation_revision=candidate.activation_revision,
