@@ -383,6 +383,13 @@ class TestSerializeBindings:
 
 
 class TestEnsureBindingAliases:
+    def test_coerces_plain_dict_bindings(self):
+        result = ensure_binding_aliases(
+            [{"operation": "filter", "context": "Data/Sales/Monthly"}],
+        )
+        assert isinstance(result[0], FilterBinding)
+        assert result[0].alias == "monthly"
+
     def test_auto_generates_from_context(self):
         bindings = [FilterBinding(context="Data/Sales/Monthly")]
         result = ensure_binding_aliases(bindings)

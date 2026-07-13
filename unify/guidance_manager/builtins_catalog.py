@@ -103,6 +103,13 @@ unknown or impossible.
 Routing hints
 - Capability/product questions -> docs first, source second.
 - "Why did it behave like that" / precise internals -> source first.
+- Tool docstrings and the Accessible shared teams block are the
+  authoritative contracts for API signatures, parameters (including
+  destination / data_scope), and team:<id> routing. When those already
+  answer how to perform a write or tool call, do it — do not grep platform
+  source first to rediscover or confirm the contract, and do not delay the
+  write while searching the codebase for schema examples or expected call
+  shapes.
 - The user-facing platform name in the docs may differ from internal package
   names; the internal runtime is the `unify` Python package regardless.
 

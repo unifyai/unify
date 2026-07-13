@@ -142,9 +142,17 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "-- the actor never writes bridge API calls. Each binding is "
             "auto-validated via the corresponding DataManager method before "
             "the tile is stored. Compose tiles into dashboards with "
-            "create_dashboard(). Live data tiles are essential for production: "
-            "large datasets, joins, aggregation, and frequently updated data. "
-            "Only bake data into HTML for very small static snapshots."
+            "create_dashboard(). ``destination`` chooses which dashboard pool "
+            "stores the tile; ``data_scope`` chooses the live-data root. Keep "
+            "``data_scope='dashboard'`` when data should inherit that pool "
+            "(including shared team dashboards); set ``data_scope='team:<id>'`` "
+            "only when a tile must read a different team's data than where it "
+            "lives. If the user names a team board that is not listed yet under "
+            "that destination, create the dashboard and tile there rather than "
+            "asking for an existing token. Live data tiles are essential for "
+            "production: large datasets, joins, aggregation, and frequently "
+            "updated data. Only bake data into HTML for very small static "
+            "snapshots."
         ),
     ),
     ManagerSpec(

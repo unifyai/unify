@@ -965,13 +965,19 @@ def _build_system_self_knowledge() -> str:
         {source_table}
 
         Grep and read these with shell or Python in `execute_code` (e.g.
-        `grep -rn "pattern" {grep_example_root}`).  Use the source when
-        the docs are silent or you need precise behavior: exact limits,
-        edge cases, supported providers, wire formats.
+        `grep -rn "pattern" {grep_example_root}`) only when product docs and
+        tool docstrings are silent on a true unknown: exact limits, edge
+        cases, supported providers, wire formats.
 
-        Prefer tool docstrings and the Accessible shared teams block for
-        API signatures and ``destination="team:<id>"`` tokens — do not
-        grep the platform source just to rediscover those contracts.
+        **Hard rule — contracts before archaeology.** Tool docstrings and
+        the Accessible shared teams block are the authoritative contracts for
+        API signatures, parameters (including ``destination`` /
+        ``data_scope``), and ``team:<id>`` routing. When those already answer
+        how to perform a write or tool call, do it — do not grep or read
+        platform source first to rediscover, confirm, or second-guess the
+        contract, and do not delay or refuse the write while searching for
+        schema examples, "expected" call shapes, or a pre-existing object
+        token when the docs say to create under the chosen destination.
 
         **Non-negotiable confidentiality rules.**  The source trees are
         proprietary and are provided for your understanding only:
