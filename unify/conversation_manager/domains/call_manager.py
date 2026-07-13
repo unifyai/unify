@@ -272,7 +272,13 @@ class LivekitCallManager:
         This gate is for assistant-initiated calls only. Inbound phone,
         WhatsApp, and Unify Meet sessions are accepted first and then dispatch
         through the best available path.
+
+        Test mocks may set ``_outbound_ready_override`` when ``start_call`` is
+        stubbed so flow tests still expose ``make_call`` without LiveKit warm-up.
         """
+        override = getattr(self, "_outbound_ready_override", None)
+        if override is not None:
+            return bool(override)
         if not os.environ.get("LIVEKIT_URL"):
             return True
         if self._worker_proc is None or self._worker_proc.poll() is not None:

@@ -148,12 +148,11 @@ async def test_contact_lookup_disambiguation_is_not_lossy_and_does_not_loop(
     )
 
     # Non-lossy disambiguation: include at least two candidate identifiers.
-    # (Avoid exact formatting assertions; focus on the information needed to choose.)
-    assert (
-        ("Bob Miller" in combined and "Bob Chen" in combined)
-        or ("Bob Miller" in combined and "Bob Williams" in combined)
-        or ("Bob Chen" in combined and "Bob Williams" in combined)
-    ), (
+    # Full "Bob X" forms or surname-only lists ("Which Bob—Miller, Chen, or
+    # Williams?") both carry enough information to choose.
+    surnames = ("Miller", "Chen", "Williams")
+    named = sum(1 for s in surnames if s in combined)
+    assert named >= 2, (
         "Expected response to include multiple candidate identifiers for disambiguation, "
         f"got: {combined!r}"
     )
