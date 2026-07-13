@@ -625,7 +625,7 @@ jobs:
     # Wall-clock cap = timeout_minutes input + 10 min buffer on workflow_dispatch,
     # else 130 min for push/PR. needs.discover.outputs.job_timeout cannot be used
     # here — it silently prevents matrix jobs from being created (GHA limitation).
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.timeout_minutes) + 10 || 130 }}
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.timeout_minutes || '120') + 10 || 130 }}
     # Depend on setup job (it may be skipped, but that's OK - GitHub handles this)
     needs: [should-run-tests, discover, setup]
     if: |
