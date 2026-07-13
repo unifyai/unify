@@ -482,10 +482,15 @@ def _task_trigger_event_from_wake_reason(reason: Any) -> TaskTriggerRequested | 
 
 
 async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> bool:
-    """Validate and surface one due-task event to the notification bar."""
+    """Validate and surface one due-task event to the notification bar.
+
+    ``task_due`` wakes are live-only: offline runs never route through the
+    ConversationManager. Hosted offline runs execute as dedicated one-shot
+    Kubernetes Jobs; local offline runs are fired directly by the local
+    activation scheduler.
+    """
 
     assistant_id = _current_task_assistant_id()
-    execution_mode = str(getattr(event, "execution_mode", "") or "live").lower()
     activation, stale_reason = validate_task_due_activation(
         assistant_id=assistant_id,
         task_id=event.task_id,
@@ -493,8 +498,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         source_task_log_id=event.source_task_log_id,
         scheduled_for=event.scheduled_for,
         destination=event.destination,
-        execution_mode=execution_mode,
-        source_type=str(event.source_type or "scheduled"),
     )
     if stale_reason is not None:
         cm._session_logger.info(
@@ -505,15 +508,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             ),
         )
         return False
-
-    # Offline due tasks stay disconnected from the CM→act chat loop: spawn the
-    # offline_runner subprocess on this same pod (LocalOfflineDispatcher).
-    if execution_mode == "offline" or activation.execution_mode == "offline":
-        return await _handle_offline_scheduled_due(
-            event,
-            cm,
-            activation=activation,
-        )
 
     assistant_id_for_run = assistant_id or activation.assistant_id or ""
     if assistant_id_for_run:
@@ -565,54 +559,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         cm,
         content=_task_due_fast_brain_context(event, activation),
         source="task_due",
-    )
-    return False
-
-
-async def _handle_offline_scheduled_due(
-    event: TaskDue,
-    cm: "ConversationManager",
-    *,
-    activation: "TaskActivationSnapshot",
-) -> bool:
-    """Run an offline due task as a disconnected in-pod subprocess."""
-
-    from unify.task_scheduler.local_scheduler.offline_dispatcher import (
-        LocalOfflineDispatcher,
-    )
-
-    dispatcher = getattr(cm, "_offline_dispatcher", None)
-    if dispatcher is None:
-        dispatcher = LocalOfflineDispatcher()
-        cm._offline_dispatcher = dispatcher
-
-    try:
-        # Reuse the dispatcher-provided run_key when present so the in-pod
-        # runner adopts the task-run row the control plane already created.
-        await dispatcher.dispatch(
-            activation,
-            source_type=str(event.source_type or "scheduled"),
-            run_key=event.run_key or None,
-        )
-    except Exception as exc:
-        error_message = (
-            f"Offline scheduled task '{_task_due_label(event, activation)}' failed "
-            f"to dispatch: {type(exc).__name__}: {exc}"
-        )
-        cm._session_logger.error("task_due", error_message)
-        publish_system_error(
-            error_message,
-            error_type="offline_scheduled_task_dispatch_failed",
-        )
-        return False
-
-    cm._session_logger.info(
-        "task_due",
-        (
-            f"Dispatched offline due task {event.task_id} as disconnected "
-            f"in-pod runner (activation_revision="
-            f"{activation.activation_revision or '-'})"
-        ),
     )
     return False
 

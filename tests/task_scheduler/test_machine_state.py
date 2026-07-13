@@ -91,70 +91,7 @@ def test_validate_task_due_activation_rejects_invalid_destination():
     assert stale_reason == "invalid_destination"
 
 
-def test_validate_task_due_activation_accepts_offline_execution_mode(monkeypatch):
-    activation = TaskActivationSnapshot(
-        assistant_id="42",
-        activation_key="42:101",
-        task_id=101,
-        source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="offline",
-        next_due_at="2026-04-10T09:00:00+00:00",
-        activation_revision="rev-1",
-    )
-    monkeypatch.setattr(
-        machine_state,
-        "get_task_activation",
-        lambda **_: activation,
-    )
-
-    current_activation, stale_reason = validate_task_due_activation(
-        assistant_id="42",
-        task_id=101,
-        activation_revision="rev-1",
-        source_task_log_id=555,
-        scheduled_for="2026-04-10T09:00:00+00:00",
-        execution_mode="offline",
-    )
-
-    assert current_activation == activation
-    assert stale_reason is None
-
-
-def test_validate_task_due_activation_explicit_skips_scheduled_for(monkeypatch):
-    """Explicit REST-fired deliveries run ahead of the projected occurrence."""
-
-    activation = TaskActivationSnapshot(
-        assistant_id="42",
-        activation_key="42:101",
-        task_id=101,
-        source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="offline",
-        next_due_at="2026-08-31T10:00:00+00:00",
-        activation_revision="rev-1",
-    )
-    monkeypatch.setattr(
-        machine_state,
-        "get_task_activation",
-        lambda **_: activation,
-    )
-
-    current_activation, stale_reason = validate_task_due_activation(
-        assistant_id="42",
-        task_id=101,
-        activation_revision="rev-1",
-        source_task_log_id=555,
-        scheduled_for="",
-        execution_mode="offline",
-        source_type="explicit",
-    )
-
-    assert current_activation == activation
-    assert stale_reason is None
-
-
-def test_validate_task_due_activation_rejects_mode_mismatch(monkeypatch):
+def test_validate_task_due_activation_rejects_offline_activation(monkeypatch):
     activation = TaskActivationSnapshot(
         assistant_id="42",
         activation_key="42:101",

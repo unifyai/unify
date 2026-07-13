@@ -614,7 +614,6 @@ class TestTaskDueFromSnapshot:
         assert event.source_task_log_id == 1007
         assert event.activation_revision == "rev-abc"
         assert event.scheduled_for == "2030-04-10T09:00:00+00:00"
-        assert event.execution_mode == "live"
         assert event.source_type == "scheduled"
         assert event.task_label == "Weekly Status"
         assert event.task_summary.startswith("Send Monday morning")
@@ -669,7 +668,6 @@ class TestFire:
         decoded = json.loads(payload)
         assert decoded["event_name"] == "TaskDue"
         assert decoded["payload"]["task_id"] == 7
-        assert decoded["payload"]["execution_mode"] == "live"
 
     @pytest.mark.asyncio
     async def test_fire_does_nothing_when_stopping(self, monkeypatch):

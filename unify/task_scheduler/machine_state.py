@@ -820,16 +820,12 @@ def validate_task_due_activation(
     source_task_log_id: int,
     scheduled_for: str,
     destination: str | None = None,
-    execution_mode: str = "live",
-    source_type: str = "scheduled",
 ) -> tuple[TaskActivationSnapshot | None, str | None]:
-    """Validate that a due event still matches the current activation.
+    """Validate that a live due event still matches the current activation.
 
-    ``execution_mode`` is the delivery's expectation (live vs offline).
-    ``scheduled_for`` participates in the identity check only for clock-fired
-    (``source_type == "scheduled"``) deliveries: explicit REST-fired
-    deliveries of a scheduled activation legitimately run ahead of the
-    projected occurrence.
+    ``task_due`` deliveries are live-only: offline activations never route
+    through the ConversationManager, so an offline activation here means the
+    task changed execution mode after the delivery was materialized.
     """
 
     try:
@@ -845,7 +841,7 @@ def validate_task_due_activation(
         return None, "activation_missing"
     if activation.activation_kind != "scheduled":
         return None, "activation_kind_changed"
-    if activation.execution_mode != execution_mode:
+    if activation.execution_mode != "live":
         return None, "execution_mode_changed"
     if activation.activation_revision != activation_revision:
         return None, "activation_revision_mismatch"
@@ -858,7 +854,7 @@ def validate_task_due_activation(
         return None, "destination_membership_revoked"
     if activation.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
-    if source_type == "scheduled" and _normalize_datetime_string(
+    if _normalize_datetime_string(
         activation.next_due_at,
     ) != _normalize_datetime_string(scheduled_for):
         return None, "scheduled_for_mismatch"
