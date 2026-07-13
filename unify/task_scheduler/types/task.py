@@ -9,7 +9,7 @@ from unify.common.authorship import AuthoredRow
 from .priority import Priority
 from .status import Status
 from .schedule import Schedule
-from .trigger import Trigger
+from .trigger import TaskTrigger
 from .repetition import RepeatPattern
 from .activated_by import ActivatedBy
 from datetime import datetime
@@ -49,7 +49,7 @@ class TaskBase(AuthoredRow):
         description="Optional scheduling information, including ideal start time.",
         json_schema_extra={"unify_type": "dict"},
     )
-    trigger: Optional[Trigger] = Field(
+    trigger: Optional[TaskTrigger] = Field(
         default=None,
         description="Event definition that starts the task (mutually exclusive with *schedule*)",
     )
