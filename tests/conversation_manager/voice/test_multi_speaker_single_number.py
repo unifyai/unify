@@ -25,6 +25,7 @@ from unify.conversation_manager.events import (
 )
 from unify.conversation_manager.cm_types import Mode
 
+from tests.conversation_manager.cm_helpers import step_voice_user_turn
 from tests.conversation_manager.conftest import BOSS
 
 pytestmark = pytest.mark.eval
@@ -64,7 +65,8 @@ class TestSlowBrainMultiSpeakerAwareness:
         assert initialized_cm.cm.mode == Mode.CALL
 
         initialized_cm.all_tool_calls.clear()
-        result = await initialized_cm.step_until_wait(
+        result = await step_voice_user_turn(
+            initialized_cm,
             InboundPhoneUtterance(
                 contact=boss,
                 content=(
@@ -75,6 +77,7 @@ class TestSlowBrainMultiSpeakerAwareness:
             max_steps=5,
         )
 
+        assert result.llm_ran, "Slow brain should have run for the introduction"
         assert "make_call" not in initialized_cm.all_tool_calls, (
             f"Slow brain tried to call Richard separately!\n"
             f"Tool calls: {initialized_cm.all_tool_calls}\n\n"
@@ -114,7 +117,8 @@ class TestSlowBrainMultiSpeakerAwareness:
 
         # Richard asks a data question (still labeled as boss in the transcript)
         initialized_cm.all_tool_calls.clear()
-        result = await initialized_cm.step_until_wait(
+        result = await step_voice_user_turn(
+            initialized_cm,
             InboundPhoneUtterance(
                 contact=boss,
                 content=(
@@ -165,7 +169,8 @@ class TestSlowBrainMultiSpeakerAwareness:
 
         # Richard speaks (labeled as boss in transcript)
         initialized_cm.all_tool_calls.clear()
-        result = await initialized_cm.step_until_wait(
+        result = await step_voice_user_turn(
+            initialized_cm,
             InboundPhoneUtterance(
                 contact=boss,
                 content=(
@@ -177,6 +182,7 @@ class TestSlowBrainMultiSpeakerAwareness:
             max_steps=5,
         )
 
+        assert result.llm_ran, "Slow brain should have run after the handoff"
         # The key check: the slow brain should NOT have called make_call
         # (would indicate it thinks it needs to contact Richard separately)
         assert "make_call" not in initialized_cm.all_tool_calls, (

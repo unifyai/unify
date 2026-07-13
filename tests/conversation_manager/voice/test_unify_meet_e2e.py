@@ -533,10 +533,20 @@ class TestUnifyMeetSubprocessSpawning:
         """
         captured_args = {}
 
-        async def capture_start_unify_meet(contact, boss, room_name):
+        async def capture_start_unify_meet(
+            contact,
+            boss,
+            room_name,
+            *,
+            opening_config=None,
+            call_session_id=None,
+            **kwargs,
+        ):
             captured_args["contact"] = contact
             captured_args["boss"] = boss
             captured_args["room_name"] = room_name
+            captured_args["opening_config"] = opening_config
+            captured_args["call_session_id"] = call_session_id
 
         with patch.object(
             initialized_cm.cm.call_manager,
@@ -559,12 +569,16 @@ class TestUnifyMeetSubprocessSpawning:
         boss_contact,
     ):
         """
-        UnifyMeetReceived should be ignored if already in voice mode.
+        UnifyMeetReceived should be ignored when a meet is already live with
+        an active voice agent.
 
-        This prevents duplicate subprocess spawns (Ved's fix 88e0d678).
+        Mode.MEET alone is not enough: after a job drop the browser can stay
+        in the room, and a fresh UnifyMeetReceived is allowed to redispatch.
+        The ignore path requires an active call/agent still attached.
         """
-        # Set mode to MEET (simulating an active meet)
         initialized_cm.cm.mode = Mode.MEET
+        # Simulate a live agent so has_active_call is True.
+        initialized_cm.cm.call_manager._call_proc = object()
 
         with patch.object(
             initialized_cm.cm.call_manager,
