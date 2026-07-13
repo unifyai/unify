@@ -969,6 +969,10 @@ def _build_system_self_knowledge() -> str:
         the docs are silent or you need precise behavior: exact limits,
         edge cases, supported providers, wire formats.
 
+        Prefer tool docstrings and the Accessible shared teams block for
+        API signatures and ``destination="team:<id>"`` tokens — do not
+        grep the platform source just to rediscover those contracts.
+
         **Non-negotiable confidentiality rules.**  The source trees are
         proprietary and are provided for your understanding only:
 
