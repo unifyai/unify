@@ -17,6 +17,7 @@ import pytest
 from unify.task_scheduler.offline_runner_contract import (
     build_offline_run_key,
     build_offline_runner_env,
+    build_provider_event_run_key,
     normalize_run_key_component,
 )
 
@@ -238,6 +239,41 @@ class TestBuildOfflineRunKey:
         )
         # Falls through to the default tail.
         assert key.endswith(":once")
+
+    def test_provider_event_run_key_includes_full_hmac_digest(self) -> None:
+        identity = "abcdef0123456789deadbeefcafebabe"  # pragma: allowlist secret
+        key = build_provider_event_run_key(
+            assistant_id="assistant-1",
+            task_id=101,
+            binding_id="binding-1",
+            activation_revision="rev-shared",
+            event_identity_hmac=identity,
+            execution_mode="live",
+        )
+        revision_digest = hashlib.sha256(b"rev-shared").hexdigest()[:12]
+        assert key == (
+            f"live:provider_event:assistant-1:101:binding-1:"
+            f"{revision_digest}:{identity}"
+        )
+
+    def test_provider_event_run_key_prefix_collision_does_not_collide(self) -> None:
+        first = build_provider_event_run_key(
+            assistant_id="assistant-1",
+            task_id=101,
+            binding_id="binding-1",
+            activation_revision="rev-shared",
+            event_identity_hmac="abcdef0123456789aaa111",  # pragma: allowlist secret
+        )
+        second = build_provider_event_run_key(
+            assistant_id="assistant-1",
+            task_id=101,
+            binding_id="binding-1",
+            activation_revision="rev-shared",
+            event_identity_hmac="abcdef0123456789bbb222",  # pragma: allowlist secret
+        )
+        assert first != second
+        assert first.endswith("abcdef0123456789aaa111")  # pragma: allowlist secret
+        assert second.endswith("abcdef0123456789bbb222")  # pragma: allowlist secret
 
 
 # --------------------------------------------------------------------------- #
