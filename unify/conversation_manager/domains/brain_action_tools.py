@@ -1548,9 +1548,8 @@ class ConversationManagerBrainActionTools:
                 ``gpt-5.6-sol@openai`` at high reasoning effort. Use
                 ``gpt_5_5_low``, ``gpt_5_5_medium``, or ``gpt_5_5_high`` only
                 when the task or the user's wording warrants the GPT-5.5
-                family specifically. If the user explicitly asks you to "use
-                all of your thinking effort", "think as hard as possible", or
-                similar, choose ``gpt_5_5_high``.
+                family specifically. Requests to "use all of your thinking effort"
+                or similar explicitly select ``gpt_5_5_high``.
 
                 Escalate the profile when retrying an action that shows
                 concrete evidence of model/tool-use struggle, rather than

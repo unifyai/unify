@@ -36,6 +36,7 @@ def _bare_cm() -> ConversationManager:
     cm.job_name = "job-1"
     cm.voice_provider = ""
     cm.voice_id = ""
+    cm.assistant_has_ms_teams_bot = False
     return cm
 
 

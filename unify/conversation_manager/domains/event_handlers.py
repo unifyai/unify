@@ -1719,6 +1719,7 @@ async def _(
 
     cm.mode = Mode.TEXT
     cm.call_manager.call_contact = None
+    await cm.call_manager.set_hang_up_gate(None)
 
     if isinstance(event, (UnifyMeetEnded, GoogleMeetEnded, TeamsMeetEnded)):
         contact_id = event.contact.get("contact_id")
@@ -1729,7 +1730,7 @@ async def _(
         )
     else:
         contact = cm.contact_index.get_contact(
-            phone_number=event.contact["phone_number"],
+            phone_number=event.contact.get("phone_number"),
         )
 
     if contact is None:
@@ -1785,6 +1786,23 @@ async def _(
     await cm.request_llm_run(
         delay=0,
         triggering_contact_id=contact_id,
+    )
+
+
+@EventHandler.register(FastBrainHangUp)
+async def _(
+    event: FastBrainHangUp,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Disarm the voice close gate and tear down the active call."""
+    await cm.call_manager.set_hang_up_gate(None)
+    await cm.call_manager.end_call()
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"Voice agent ended the call after saying: {event.farewell}",
+        event.timestamp,
     )
 
 

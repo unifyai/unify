@@ -110,7 +110,7 @@ async def test_compress_threshold_exposes_extra_tools_and_compress_is_called():
     with (
         patch(
             "unify.common._async_tool.loop.context_over_threshold",
-            _make_delayed_threshold(trigger_after=2),
+            _make_delayed_threshold(trigger_after=1),
         ),
         patch(
             "unify.actor.code_act_actor._start_proactive_storage_loop",

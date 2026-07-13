@@ -164,7 +164,7 @@ class TestEndToEndCallFlow:
             env = os.environ.copy()
             env[CM_EVENT_SOCKET_ENV] = socket_path
 
-            # Ensure PYTHONPATH includes workspace root so subprocess can find unity
+            # Ensure PYTHONPATH includes workspace root so subprocess can find unify
             workspace_root = str(Path(__file__).parent.parent.parent.parent)
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = (
@@ -296,13 +296,20 @@ class TestEndToEndCallFlow:
         start_unify_meet_called = False
         captured_args = {}
 
-        async def mock_start_unify_meet(contact, boss, room_name):
+        async def mock_start_unify_meet(
+            contact,
+            boss,
+            room_name,
+            opening_config=None,
+            **kwargs,
+        ):
             nonlocal start_unify_meet_called, captured_args
             start_unify_meet_called = True
             captured_args = {
                 "contact": contact,
                 "boss": boss,
                 "room_name": room_name,
+                "opening_config": opening_config,
             }
 
         call_manager.start_unify_meet = mock_start_unify_meet
@@ -533,10 +540,17 @@ class TestRoomNameHandling:
         # Track captured arguments
         captured_args = {}
 
-        async def mock_start_unify_meet(contact, boss, room_name):
+        async def mock_start_unify_meet(
+            contact,
+            boss,
+            room_name,
+            opening_config=None,
+            **kwargs,
+        ):
             captured_args["contact"] = contact
             captured_args["boss"] = boss
             captured_args["room_name"] = room_name
+            captured_args["opening_config"] = opening_config
 
         call_manager.start_unify_meet = mock_start_unify_meet
 
@@ -943,7 +957,7 @@ class TestRealLiveKitIntegration:
         proc = None
         call_py = (
             Path(__file__).parent.parent.parent.parent
-            / "unity"
+            / "unify"
             / "conversation_manager"
             / "medium_scripts"
             / "call.py"
@@ -957,7 +971,7 @@ class TestRealLiveKitIntegration:
             env[CM_EVENT_SOCKET_ENV] = socket_path
             env.update(livekit_env)
 
-            # Ensure PYTHONPATH includes workspace root so subprocess can find unity
+            # Ensure PYTHONPATH includes workspace root so subprocess can find unify
             workspace_root = str(Path(__file__).parent.parent.parent.parent)
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = (
