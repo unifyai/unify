@@ -965,7 +965,7 @@ class LivekitCallManager:
         opener = (self.pending_opener or "").strip()
         meet_opening_config = None
         if opener:
-            meet_opening_config = _simulated_outbound_opening_config(
+            meet_opening_config = _opener_opening_config(
                 opener,
                 source="outbound_meet_opening",
             )
