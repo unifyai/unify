@@ -25,10 +25,12 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from typing import Literal
 
 __all__ = [
     "build_offline_runner_env",
     "build_offline_run_key",
+    "build_provider_event_run_key",
     "normalize_run_key_component",
 ]
 
@@ -166,6 +168,35 @@ def build_offline_run_key(
     tail = "-".join(tail_parts) or "once"
     return (
         f"offline:{source_type}:{assistant_id}:" f"{task_id}:{revision_digest}:{tail}"
+    )
+
+
+def build_provider_event_run_key(
+    *,
+    assistant_id: str,
+    task_id: int,
+    binding_id: str,
+    activation_revision: str,
+    event_identity_hmac: str,
+    execution_mode: Literal["live", "offline"] = "offline",
+) -> str:
+    """Build the deterministic provider-event run key.
+
+    Unlike communication-trigger keys, the provider event identity digest is
+    included in full so two identities that share a 12-hex prefix cannot
+    collide through truncation.
+    """
+
+    revision_digest = hashlib.sha256(
+        str(activation_revision or "").encode("utf-8"),
+    ).hexdigest()[:12]
+    binding_part = normalize_run_key_component(binding_id)
+    identity = str(event_identity_hmac).strip()
+    if not identity:
+        raise ValueError("event_identity_hmac is required")
+    return (
+        f"{execution_mode}:provider_event:{assistant_id}:{task_id}:"
+        f"{binding_part}:{revision_digest}:{identity}"
     )
 
 
