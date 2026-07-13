@@ -317,7 +317,7 @@ gh workflow run tests.yml --repo unifyai/unity --ref my-feature-branch \
 | Flag | Description |
 |------|-------------|
 | `-f test_path="..."` | Path to test folder/file; `.` is rejected unless confirmed |
-| `-f confirm_full_matrix="FULL_MATRIX_OK"` | Allows `test_path="."` or large matrices in normal cached CI |
+| `-f confirm_full_matrix="FULL_MATRIX_OK"` | Allows `test_path="."` (full suite discovery) in normal cached CI |
 | `-f parallel_run_args="..."` | Extra args (see [Parallel Runner Reference](#parallel-runner-reference)) |
 | `-f timeout_minutes="N"` | Timeout in minutes (default: 120) |
 | `--ref <branch>` | Branch to run tests on |

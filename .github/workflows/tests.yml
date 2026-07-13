@@ -24,7 +24,7 @@ on:
         type: string
         default: "."
       confirm_full_matrix:
-        description: "Type FULL_MATRIX_OK to allow test_path='.' or a large matrix"
+        description: "Type FULL_MATRIX_OK to allow test_path='.' (full suite discovery)"
         required: false
         type: string
         default: ""
@@ -233,7 +233,6 @@ jobs:
         INPUT_ARGS="${{ inputs.parallel_run_args }}"
         CONFIRM_FULL_MATRIX="${{ inputs.confirm_full_matrix }}"
         EVENT_NAME="${{ github.event_name }}"
-        MAX_NORMAL_MATRIX=12
         ENV_FILE_CONTENT_RAW="${{ inputs.env_file_content }}"
         ENV_FILE_CONTENT=""
 
@@ -316,7 +315,7 @@ jobs:
           echo "" >&2
           echo "Safe options:" >&2
           echo "  - Target a narrow path, e.g. [parallel_run.sh tests/contact_manager/test_ask.py]" >&2
-          echo "  - For a full matrix, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
+          echo "  - For the full suite, use workflow_dispatch with test_path='.' and confirm_full_matrix='FULL_MATRIX_OK'." >&2
           echo "  - For uncached/cache-refresh evals, use the protected LLM Cache Refresh workflow." >&2
           exit 1
         }
@@ -328,10 +327,6 @@ jobs:
 
         if (( ${#RAW_PATHS[@]} == 0 )) && ! $full_matrix_confirmed; then
           cost_policy_fail "no explicit test path was provided, which would discover the full suite"
-        fi
-
-        if (( ${#PATHS[@]} > MAX_NORMAL_MATRIX )) && ! $full_matrix_confirmed; then
-          cost_policy_fail "requested paths expand to ${#PATHS[@]} matrix jobs (limit: $MAX_NORMAL_MATRIX)"
         fi
 
         # tests/flows are live-LLM smoke tests: their conftest forces the brain
