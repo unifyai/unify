@@ -2724,10 +2724,12 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
         cm.set_details(payload)
 
         # Restart agent-service with the user's API key.
-        # The agent-service is a sibling Node.js process started by entrypoint.sh
-        # with the container's original UNIFY_KEY. set_details() + export_to_env()
-        # update os.environ in this Python process, but the Node.js process still
-        # has the old key. Kill and respawn so auth and LLM billing use the user's key.
+        # The agent-service is a sibling Node.js process the CM spawns in-pod on
+        # localhost:3000 (entrypoint.sh only owns its teardown via
+        # stop_agent_service). It first comes up with the container's original
+        # UNIFY_KEY. set_details() + export_to_env() update os.environ in this
+        # Python process, but the Node.js process still has the old key. Kill and
+        # respawn so auth and LLM billing use the user's key.
         asyncio.create_task(
             asyncio.to_thread(
                 _restart_agent_service_with_key,

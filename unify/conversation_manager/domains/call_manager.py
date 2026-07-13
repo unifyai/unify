@@ -27,7 +27,10 @@ from unify.helpers import (
 if TYPE_CHECKING:
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
 
-from unify.conversation_manager.medium_scripts.common import _resolve_agent_service_url
+from unify.conversation_manager.medium_scripts.common import (
+    _POD_LOCAL_AGENT_SERVICE_URL,
+    _resolve_agent_service_url,
+)
 
 
 def make_room_name(assistant_id: str, medium: str) -> str:
@@ -973,7 +976,13 @@ class LivekitCallManager:
 
         from unify.session_details import SESSION_DETAILS
 
-        base_url = _resolve_agent_service_url()
+        # Browser meets must run on the pod-local agent-service: the fast-brain
+        # voice worker and its MeetAudioBridge open the pod's default PulseAudio
+        # devices (meet_mic/agent_sink from device.sh), so the browser has to
+        # share that same PulseAudio server. Resolving to a managed-desktop VM
+        # here splits browser audio from the bridge and the assistant joins deaf
+        # and mute.
+        base_url = _POD_LOCAL_AGENT_SERVICE_URL
         auth_key = SESSION_DETAILS.unify_key
 
         room_name = make_room_name(self.assistant_id, room_suffix)
@@ -1019,7 +1028,7 @@ class LivekitCallManager:
             "meet_session_id": "",
             "meet_url": meet_url,
             "meet_display_name": display_name,
-            "agent_service_url": _resolve_agent_service_url(),
+            "agent_service_url": _POD_LOCAL_AGENT_SERVICE_URL,
         }
         if meet_opening_config:
             meet_extra["opening_config"] = meet_opening_config
@@ -1110,7 +1119,7 @@ class LivekitCallManager:
         if session_id:
             from unify.session_details import SESSION_DETAILS
 
-            base_url = _resolve_agent_service_url()
+            base_url = _POD_LOCAL_AGENT_SERVICE_URL
             auth_key = SESSION_DETAILS.unify_key
             try:
                 async with aiohttp.ClientSession() as session:
@@ -1156,7 +1165,7 @@ class LivekitCallManager:
         )
 
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _resolve_agent_service_url()
+        base_url = _POD_LOCAL_AGENT_SERVICE_URL
         auth_key = SESSION_DETAILS.unify_key
         try:
             async with aiohttp.ClientSession() as session:
@@ -1190,7 +1199,7 @@ class LivekitCallManager:
         from unify.session_details import SESSION_DETAILS
 
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _resolve_agent_service_url()
+        base_url = _POD_LOCAL_AGENT_SERVICE_URL
         auth_key = SESSION_DETAILS.unify_key
         try:
             async with aiohttp.ClientSession() as session:
