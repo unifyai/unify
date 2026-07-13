@@ -381,6 +381,14 @@ class BaseDashboardManager(BaseStateManager):
             targeted question when the user appears to want a wider audience
             but the target team is ambiguous.
 
+            When the user asks to add a tile to a named team dashboard and
+            ``list_dashboards`` under that ``destination`` is empty, create
+            the dashboard (and tile) under that destination -- do not block
+            the write asking the user for a dashboard token or exact title.
+            For live bindings, use the context names the user supplied (for
+            example ``WorkOrders``); do not refuse the write solely because a
+            separate data-inspection API is unavailable in this session.
+
         data_scope : str, default ``"dashboard"``
             Which root this tile's live-data bindings read from when they
             are resolved. Pass ``"dashboard"`` to inherit the tile row's
@@ -392,9 +400,12 @@ class BaseDashboardManager(BaseStateManager):
 
             Use ``"dashboard"`` when the live data should come from the
             same place the tile lives, including shared team dashboards.
-            Use ``"team:<id>"`` when the tile's audience and data source
-            intentionally differ, for example a private watch tile that
-            reads Patch-1 operations data.
+            Do not restate the row's ``destination`` as ``data_scope`` when
+            they are the same team -- leave ``data_scope="dashboard"`` so
+            the tile inherits its destination root. Use ``"team:<id>"``
+            only when the tile's audience and data source intentionally
+            differ, for example a private watch tile that reads Patch-1
+            operations data.
 
         Returns
         -------
@@ -794,7 +805,8 @@ class BaseDashboardManager(BaseStateManager):
             together with fresh ``data_bindings`` because stored tiles keep
             resolved binding paths rather than an unresolved binding recipe.
             Use ``"dashboard"`` when the tile and data source belong to the
-            same dashboard root; use ``"team:<id>"`` for intentional
+            same dashboard root (do not restate that root as
+            ``"team:<id>"``); use ``"team:<id>"`` for intentional
             cross-root bindings.
 
         Returns
@@ -1187,7 +1199,9 @@ class BaseDashboardManager(BaseStateManager):
             read that block before choosing. Pick personal when in doubt;
             if a clarification channel is available, ask a targeted question
             when the user appears to want a wider audience but the target
-            team is ambiguous.
+            team is ambiguous. When the user names a team board that does
+            not exist yet under that destination, create it rather than
+            asking for a pre-existing token.
 
         Returns
         -------
