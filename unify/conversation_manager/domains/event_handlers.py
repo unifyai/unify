@@ -267,6 +267,32 @@ def _call_not_answered_reason_text(reason: str) -> str:
     )
 
 
+def _meet_join_failure_notif(
+    meet_label: str,
+    join_tool: str,
+    reason: str | None,
+) -> str:
+    """Build the notification text shown when a browser-meet join fails.
+
+    When the agent-service reports a guest-admission block (``*_join_blocked``),
+    the host was almost certainly not present in the meeting to admit the guest,
+    so tell the user exactly that and what to do instead of a bare retry line.
+    """
+
+    reason_text = (reason or "").strip()
+    if "join_blocked" in reason_text:
+        return (
+            f"Couldn't join the {meet_label}: the host wasn't in the meeting to "
+            "let me in, so it turned me away at the door. Ask the user to start "
+            "the meeting and stay in it, then re-share the link and I'll rejoin "
+            f"with {join_tool}."
+        )
+    retry = f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+    if reason_text:
+        return f"{retry} (reason: {reason_text})"
+    return retry
+
+
 class EventHandler:
     """Registry that maps event classes to their async handlers."""
 
@@ -610,7 +636,11 @@ async def _(
         )
         cm.notifications_bar.push_notif(
             "Comms",
-            "Failed to join Google Meet. You may retry by calling join_google_meet again.",
+            _meet_join_failure_notif(
+                "Google Meet",
+                "join_google_meet",
+                cm.call_manager.meet_join_failure_reason,
+            ),
             event.timestamp,
         )
         await cm.request_llm_run(
@@ -689,7 +719,11 @@ async def _(
         )
         cm.notifications_bar.push_notif(
             "Comms",
-            "Failed to join Teams meeting. You may retry by calling join_teams_meet again.",
+            _meet_join_failure_notif(
+                "Teams meeting",
+                "join_teams_meet",
+                cm.call_manager.meet_join_failure_reason,
+            ),
             event.timestamp,
         )
         await cm.request_llm_run(
