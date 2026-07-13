@@ -34,23 +34,26 @@ EXCLUDE_DIRS = {
 }
 
 
-# Directories whose tests take longer than a single CI job's 130-min
-# timeout (i.e. parallel_run.sh can't drain them within the wall-clock
-# budget). Each entry maps the directory path → a list of "bundled"
-# test-file groups, where each group becomes its own matrix entry. Files
-# within a group are run together as a single space-separated
-# parallel_run.sh argument (same format as a Mixed-dir bundle).
+# Directories that overpower a single CI job — either wall-clock
+# (parallel_run.sh cannot drain them within the job timeout) or runner
+# health (hosted runners lose communication under memory/CPU pressure
+# when too many sessions share one VM). Each entry maps the directory
+# path → a list of "bundled" test-file groups, where each group becomes
+# its own matrix entry. Files within a group are run together as a
+# single space-separated parallel_run.sh argument (same format as a
+# Mixed-dir bundle).
 #
 # Why explicit chunking instead of a generic "split if > N files"
-# heuristic: the runtime of a test cluster correlates with LLM-eval
-# count, not file count. test_execute.py has 23 functions but most are
-# parametrized into many tens of cases, each making real LLM calls — a
-# generic "split into N file chunks" would not isolate it. The manual
-# breakdown below keeps the heavy file alone and groups smaller files
-# together.
+# heuristic: the runtime / footprint of a test cluster correlates with
+# LLM-eval count and concurrent session load, not file count.
+# test_execute.py has 23 funcs but many tens of parametrized LLM cases;
+# conversation_manager/core has ~64 files / ~1100 collected tests that
+# OOM the refresh runner when packed into one job. Manual breakdowns
+# keep the heaviest anchors apart and group lighter files around them.
 #
-# Add an entry here when a cluster starts hitting the job timeout and
-# the natural fix is "split it across more matrix slots". Removing or
+# Add an entry here when a cluster starts hitting the job timeout or
+# repeatedly dies with "hosted runner lost communication", and the
+# natural fix is "split it across more matrix slots". Removing or
 # editing entries reshapes the matrix; bumps to the GitHub Actions
 # concurrency directive may also be needed if the matrix grows
 # substantially.
@@ -72,6 +75,96 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
             "test_foreign_keys.py",
             "test_info.py",
             "test_integration_contacts.py",
+        ],
+    ],
+    "tests/conversation_manager/core": [
+        # ~64 files / ~1100 collected tests. Full-suite LLM cache
+        # refresh repeatedly killed the hosted runner mid-shard
+        # ("lost communication") with no pytest artifacts. Six
+        # weight-balanced groups keep the heaviest anchors
+        # (prompt_builders, utils, brain_tools, renderer,
+        # coordinator_tools, event_handlers) on separate VMs.
+        # Group A — prompt_builders anchor
+        [
+            "test_comms_utils.py",
+            "test_deferred_screenshot_registration.py",
+            "test_init_resilience.py",
+            "test_onboarding_outbound_media.py",
+            "test_prompt_builders.py",
+            "test_run_llm_multi_tool.py",
+            "test_slack_email_lookup.py",
+        ],
+        # Group B — utils anchor
+        [
+            "test_assistant_session_assignment.py",
+            "test_assistant_session_k8s.py",
+            "test_container_restart_resilience.py",
+            "test_coordinator_onboarding_handler.py",
+            "test_event_logging.py",
+            "test_initialization_race.py",
+            "test_screenshot_history.py",
+            "test_slow_brain_diagnostics.py",
+            "test_utils.py",
+        ],
+        # Group C — brain_tools anchor
+        [
+            "test_assistant_jobs_api_release.py",
+            "test_brain_tools.py",
+            "test_comms_manager.py",
+            "test_coordinator_persistence_eval.py",
+            "test_idle_to_live_lifecycle.py",
+            "test_local_ingress.py",
+            "test_onboarding_tool_gating.py",
+            "test_reaction_handlers.py",
+            "test_runtime_status.py",
+            "test_task_trigger_offline_rest.py",
+            "test_workspace_setup.py",
+        ],
+        # Group D — renderer anchor
+        [
+            "test_coordinator_chat_intro_delivery.py",
+            "test_coordinator_delegate.py",
+            "test_coordinator_onboarding_narration.py",
+            "test_coordinator_product_literacy_eval.py",
+            "test_cost_attribution.py",
+            "test_implicit_contact_detail_creation.py",
+            "test_inactivity_followup.py",
+            "test_managers_utils.py",
+            "test_renderer.py",
+            "test_screen_share_test_isolation.py",
+            "test_unknown_contact_creation.py",
+            "test_whatsapp_history.py",
+        ],
+        # Group E — coordinator_tools + brain anchors
+        [
+            "test_actor_parent_context_filter.py",
+            "test_assistant_identity_env.py",
+            "test_attachment_ingestion.py",
+            "test_brain.py",
+            "test_context_summarization.py",
+            "test_coordinator_tool_registration.py",
+            "test_coordinator_tools.py",
+            "test_credit_gate.py",
+            "test_error_handling.py",
+            "test_inactivity_lifecycle.py",
+            "test_prose_send_healing.py",
+            "test_pubsub_flow.py",
+            "test_web_act_fast_path.py",
+        ],
+        # Group F — event_handlers + channel/api anchors
+        [
+            "test_api_message_medium.py",
+            "test_assistant_jobs_idle_stop.py",
+            "test_call_manager_rooms.py",
+            "test_debouncer.py",
+            "test_desktop_fast_path.py",
+            "test_event_handlers.py",
+            "test_idle_smalltalk_gate.py",
+            "test_infrastructure_readiness.py",
+            "test_local_comms_settings.py",
+            "test_session_hydration.py",
+            "test_unify_attachments.py",
+            "test_whatsapp_window_guidance.py",
         ],
     ],
     "tests/function_manager/python": [
