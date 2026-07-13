@@ -31,6 +31,7 @@ from unify.common.single_shot import (
 def _make_mock_cm(*, mode=Mode.TEXT, has_call_proc=False, assistant_number="+15550000"):
     cm = MagicMock()
     cm.mode = mode
+    cm.in_voice_session = mode.is_voice or has_call_proc
     cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
@@ -41,6 +42,7 @@ def _make_mock_cm(*, mode=Mode.TEXT, has_call_proc=False, assistant_number="+155
     cm.call_manager = MagicMock()
     cm.call_manager._call_proc = MagicMock() if has_call_proc else None
     cm.call_manager.has_active_call = has_call_proc
+    cm.call_manager.is_ready_for_outbound_call = not has_call_proc
     cm.call_manager.has_active_google_meet = False
     cm.call_manager.has_active_teams_meet = False
     cm.call_manager.has_gmeet_presenting = False

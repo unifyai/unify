@@ -2853,7 +2853,7 @@ class FunctionManager(BaseFunctionManager):
         app_slug: str | None = None,
         connection_id: str | None = None,
         operation: str = "materialize",
-        limit: int = 500,
+        limit: int | None = None,
     ) -> Dict[str, Any]:
         """Materialize active provider-backed tools into the Primitives context.
 
@@ -2889,7 +2889,7 @@ class FunctionManager(BaseFunctionManager):
                 "reason": "integrations_not_in_scope",
                 "apps": [],
             }
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             log_staging_diagnostic(
                 logger,
                 (
@@ -4477,6 +4477,27 @@ class FunctionManager(BaseFunctionManager):
         if not isinstance(func_name, str) or not func_name:
             raise ValueError("func_data missing valid 'name'")
 
+        # Deployment-owned functions (custom_hash set) execute their live
+        # source module when the deployment tree is present on this machine.
+        # The stored implementation is a synced cache that can lag the
+        # deployed tree between reconciles; the on-disk module is the source
+        # of truth and its real globals also make annotation resolution and
+        # sibling imports behave exactly as authored.
+        if func_data.get("custom_hash"):
+            from unify.function_manager.custom_functions import (
+                resolve_live_custom_callable,
+            )
+
+            live_fn = resolve_live_custom_callable(func_name)
+            if live_fn is not None:
+                namespace[func_name] = live_fn
+                return _InProcessFunctionProxy(
+                    function_manager=self,
+                    func_data=func_data,
+                    namespace=namespace,
+                    raw_callable=live_fn,
+                )
+
         implementation = func_data.get("implementation")
         if not isinstance(implementation, str) or not implementation.strip():
             raise ValueError(f"Function '{func_name}' has no implementation")
@@ -5709,13 +5730,15 @@ class FunctionManager(BaseFunctionManager):
             if delay:
                 _time.sleep(delay)
             try:
-                return unisdk.get_logs(
+                logs = unisdk.get_logs(
                     context=self._venvs_ctx,
                     filter=filter,
                     limit=limit,
                     exclude_fields=exclude_fields,
                     from_fields=from_fields,
                 )
+                if logs or filter is None:
+                    return logs
             except _UnifyRequestError as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status == 404:

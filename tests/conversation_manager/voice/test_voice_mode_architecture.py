@@ -117,7 +117,7 @@ class TestVoiceCallFlowIntegration:
             assert msg is not None
             captured = Event.from_json(msg["data"])
             assert isinstance(captured, FastBrainNotification)
-            assert captured.content == "Please ask about their schedule"
+            assert captured.message == "Please ask about their schedule"
 
 
 # =============================================================================

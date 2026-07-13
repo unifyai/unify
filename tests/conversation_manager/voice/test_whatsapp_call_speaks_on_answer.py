@@ -197,6 +197,7 @@ def _install_entrypoint_fakes(monkeypatch, sequence, extra_metadata=None):
     fake_session_details = SimpleNamespace(
         user=SimpleNamespace(id=None),
         assistant=SimpleNamespace(
+            has_managed_desktop=False,
             about="Assistant bio",
             is_coordinator=False,
             agent_id=None,

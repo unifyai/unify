@@ -727,14 +727,23 @@ class TestLocalCommsBackends:
         assert published["event"]["reason"] == "Continuing onboarding on the live call."
 
     @pytest.mark.asyncio
-    async def test_upload_unify_attachment_uses_local_attachment_store(self):
+    async def test_upload_unify_attachment_uses_adapters_url_even_in_local_comms_mode(
+        self,
+    ):
+        """Local-comms mode must still upload via adapters/gateway.
+
+        Self-host enables LOCAL_COMMS_MODE=local for Twilio/email callbacks, but
+        multipart attachment uploads use the same ``/unify/attachment`` contract
+        as staging (gateway/adapters), not the local-ingress metadata registry.
+        """
         mock_session = _mock_aiohttp_session(
             response_json={
-                "success": True,
+                "id": "local-uuid",
                 "filename": "document.pdf",
-                "url": "http://127.0.0.1:8787/local/comms/attachments/document.pdf",
+                "url": "http://gateway:8001/v0/storage/local/document.pdf",
             },
         )
+        adapters_url = "http://gateway:8001"
 
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
@@ -746,23 +755,19 @@ class TestLocalCommsBackends:
                 "unify.conversation_manager.domains.comms_utils.SETTINGS",
             ) as mock_settings,
         ):
-            mock_settings.ADAPTERS_URL = ""
-            mock_settings.COMMS_URL = ""
-            mock_settings.conversation.LOCAL_COMMS_PUBLIC_URL = ""
-            mock_settings.conversation.LOCAL_COMMS_HOST = "127.0.0.1"
-            mock_settings.conversation.LOCAL_COMMS_PORT = 8787
+            mock_settings.conversation.ADAPTERS_URL = adapters_url
+            mock_settings.conversation.COMMS_URL = adapters_url
 
             result = await comms_utils.upload_unify_attachment(
                 file_content=b"local file content",
                 filename="document.pdf",
             )
 
+            assert result["id"] == "local-uuid"
             assert result["filename"] == "document.pdf"
-            assert result["url"].startswith(
-                "http://127.0.0.1:8787/local/comms/attachments/",
-            )
             posted_url = mock_session.post.call_args[0][0]
-            assert posted_url == "http://127.0.0.1:8787/local/comms/attachments"
+            assert posted_url == f"{adapters_url}/unify/attachment"
+            assert "/local/comms/attachments" not in posted_url
 
     @pytest.mark.asyncio
     async def test_add_email_attachments_supports_inline_content(self):

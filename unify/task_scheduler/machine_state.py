@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -26,7 +26,9 @@ from unify.common.context_registry import (
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
-from .storage import TasksStore
+from unify.task_scheduler.storage import TasksStore
+from unify.task_scheduler.types.activated_by import ActivatedBy
+from unify.task_scheduler.types.run_source import RunSource
 
 TASKS_CONTEXT_NAME = "Tasks"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
@@ -116,6 +118,7 @@ class TaskActivationSnapshot:
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
     trigger_recurring: bool = False
     entrypoint: int | None = None
+    max_runtime_seconds: int | None = None
     repeat: list[Any] | None = None
     activation_revision: str | None = None
 
@@ -126,7 +129,7 @@ class TaskRunProvenance:
 
     assistant_id: str
     task_id: int
-    source_type: str
+    source_type: RunSource
     execution_mode: str = "live"
     source_task_log_id: int | None = None
     activation_revision: str | None = None
@@ -289,10 +292,14 @@ def _build_task_machine_context_name(
 def remember_live_task_run_provenance(provenance: TaskRunProvenance) -> None:
     """Remember one pending live-run provenance until the task actually starts."""
 
+    provenance = replace(
+        provenance,
+        source_type=RunSource.normalize(provenance.source_type),
+    )
     normalized_attempt_token = _normalize_pending_trigger_attempt_token(
         provenance.attempt_token,
     )
-    if provenance.source_type == "triggered" and normalized_attempt_token:
+    if provenance.source_type is RunSource.triggered and normalized_attempt_token:
         _PENDING_TRIGGER_LIVE_TASK_RUNS[normalized_attempt_token] = provenance
         return
     _PENDING_LIVE_TASK_RUNS[
@@ -304,14 +311,15 @@ def peek_live_task_run_provenance(
     *,
     assistant_id: str | int | None,
     task_id: int,
-    source_type: str,
+    source_type: RunSource | str,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
 ) -> TaskRunProvenance | None:
     """Return pending provenance for one task without claiming it."""
 
+    source_type = RunSource.normalize(source_type)
     pending: TaskRunProvenance | None
-    if source_type == "triggered":
+    if source_type is RunSource.triggered:
         normalized_attempt_token = _normalize_pending_trigger_attempt_token(
             trigger_attempt_token,
         )
@@ -326,7 +334,7 @@ def peek_live_task_run_provenance(
             matches = [
                 item
                 for item in _PENDING_LIVE_TASK_RUNS.values()
-                if item.task_id == task_id and item.source_type == source_type
+                if item.task_id == task_id and item.source_type is source_type
             ]
             if len(matches) == 1:
                 pending = matches[0]
@@ -344,13 +352,14 @@ def consume_live_task_run_provenance(
     *,
     assistant_id: str | int | None,
     task_id: int,
-    source_type: str,
+    source_type: RunSource | str,
     source_task_log_id: int | None = None,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
 ) -> TaskRunProvenance | None:
     """Claim the pending live-run provenance for one task, or build a fallback."""
 
+    source_type = RunSource.normalize(source_type)
     normalized_assistant_id = _coerce_str(assistant_id)
     pending = _claim_pending_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
@@ -364,7 +373,7 @@ def consume_live_task_run_provenance(
     if not normalized_assistant_id:
         return None
     activation = None
-    if source_type in {"scheduled", "triggered"}:
+    if source_type in {RunSource.scheduled, RunSource.triggered}:
         activation = get_task_activation(
             assistant_id=normalized_assistant_id,
             task_id=task_id,
@@ -383,12 +392,12 @@ def consume_live_task_run_provenance(
         destination=(activation.destination if activation is not None else None),
         scheduled_for=(
             activation.next_due_at
-            if source_type == "scheduled" and activation
+            if source_type is RunSource.scheduled and activation
             else None
         ),
         source_medium=(
             activation.trigger_medium
-            if source_type == "triggered" and activation
+            if source_type is RunSource.triggered and activation
             else None
         ),
         task_name=(activation.task_name if activation is not None else None),
@@ -402,14 +411,15 @@ def _claim_pending_live_task_run_provenance(
     *,
     assistant_id: str | None,
     task_id: int,
-    source_type: str,
+    source_type: RunSource | str,
     destination: str | None,
     trigger_attempt_token: str | None,
 ) -> TaskRunProvenance | None:
     """Claim one pending provenance entry without misattributing another attempt."""
 
+    source_type = RunSource.normalize(source_type)
     pending: TaskRunProvenance | None
-    if source_type == "triggered":
+    if source_type is RunSource.triggered:
         normalized_attempt_token = _normalize_pending_trigger_attempt_token(
             trigger_attempt_token,
         )
@@ -460,15 +470,12 @@ def _normalize_pending_trigger_attempt_token(attempt_token: str | None) -> str |
     return _normalize_run_key_component(attempt_token)
 
 
-def source_type_from_activation_reason(reason: str | None) -> str:
+def source_type_from_activation_reason(
+    reason: ActivatedBy | str | None,
+) -> RunSource:
     """Normalize scheduler activation reasons into the persisted run source type."""
 
-    normalized_reason = _coerce_str(reason) or "explicit"
-    if normalized_reason == "schedule":
-        return "scheduled"
-    if normalized_reason == "trigger":
-        return "triggered"
-    return normalized_reason
+    return RunSource.from_activation_reason(reason)
 
 
 def create_or_adopt_live_task_run(
@@ -820,16 +827,12 @@ def validate_task_due_activation(
     source_task_log_id: int,
     scheduled_for: str,
     destination: str | None = None,
-    execution_mode: str = "live",
-    source_type: str = "scheduled",
 ) -> tuple[TaskActivationSnapshot | None, str | None]:
-    """Validate that a due event still matches the current activation.
+    """Validate that a live due event still matches the current activation.
 
-    ``execution_mode`` is the delivery's expectation (live vs offline).
-    ``scheduled_for`` participates in the identity check only for clock-fired
-    (``source_type == "scheduled"``) deliveries: explicit REST-fired
-    deliveries of a scheduled activation legitimately run ahead of the
-    projected occurrence.
+    ``task_due`` deliveries are live-only: offline activations never route
+    through the ConversationManager, so an offline activation here means the
+    task changed execution mode after the delivery was materialized.
     """
 
     try:
@@ -845,7 +848,7 @@ def validate_task_due_activation(
         return None, "activation_missing"
     if activation.activation_kind != "scheduled":
         return None, "activation_kind_changed"
-    if activation.execution_mode != execution_mode:
+    if activation.execution_mode != "live":
         return None, "execution_mode_changed"
     if activation.activation_revision != activation_revision:
         return None, "activation_revision_mismatch"
@@ -858,7 +861,7 @@ def validate_task_due_activation(
         return None, "destination_membership_revoked"
     if activation.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
-    if source_type == "scheduled" and _normalize_datetime_string(
+    if _normalize_datetime_string(
         activation.next_due_at,
     ) != _normalize_datetime_string(scheduled_for):
         return None, "scheduled_for_mismatch"
@@ -924,6 +927,7 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
         ),
         trigger_recurring=bool(entries.get("trigger_recurring", False)),
         entrypoint=_coerce_int(entries.get("entrypoint")),
+        max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         repeat=_coerce_list(entries.get("repeat")),
         activation_revision=_coerce_str(entries.get("activation_revision")),
     )

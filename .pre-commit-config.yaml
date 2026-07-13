@@ -40,6 +40,7 @@ repos:
         assets/.*|
         scripts/skill_migration/builtins_skills\.lock\.json$|
         unify/guidance_manager/builtins_guidance\.json$|
+        tests/fixtures/task_trigger_contract/.*|
         .*/__pycache__/.*
       )$
 

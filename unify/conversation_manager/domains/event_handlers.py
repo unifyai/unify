@@ -267,6 +267,32 @@ def _call_not_answered_reason_text(reason: str) -> str:
     )
 
 
+def _meet_join_failure_notif(
+    meet_label: str,
+    join_tool: str,
+    reason: str | None,
+) -> str:
+    """Build the notification text shown when a browser-meet join fails.
+
+    When the agent-service reports a guest-admission block (``*_join_blocked``),
+    the host was almost certainly not present in the meeting to admit the guest,
+    so tell the user exactly that and what to do instead of a bare retry line.
+    """
+
+    reason_text = (reason or "").strip()
+    if "join_blocked" in reason_text:
+        return (
+            f"Couldn't join the {meet_label}: the host wasn't in the meeting to "
+            "let me in, so it turned me away at the door. Ask the user to start "
+            "the meeting and stay in it, then re-share the link and I'll rejoin "
+            f"with {join_tool}."
+        )
+    retry = f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+    if reason_text:
+        return f"{retry} (reason: {reason_text})"
+    return retry
+
+
 class EventHandler:
     """Registry that maps event classes to their async handlers."""
 
@@ -610,7 +636,11 @@ async def _(
         )
         cm.notifications_bar.push_notif(
             "Comms",
-            "Failed to join Google Meet. You may retry by calling join_google_meet again.",
+            _meet_join_failure_notif(
+                "Google Meet",
+                "join_google_meet",
+                cm.call_manager.meet_join_failure_reason,
+            ),
             event.timestamp,
         )
         await cm.request_llm_run(
@@ -689,7 +719,11 @@ async def _(
         )
         cm.notifications_bar.push_notif(
             "Comms",
-            "Failed to join Teams meeting. You may retry by calling join_teams_meet again.",
+            _meet_join_failure_notif(
+                "Teams meeting",
+                "join_teams_meet",
+                cm.call_manager.meet_join_failure_reason,
+            ),
             event.timestamp,
         )
         await cm.request_llm_run(
@@ -1685,6 +1719,7 @@ async def _(
 
     cm.mode = Mode.TEXT
     cm.call_manager.call_contact = None
+    await cm.call_manager.set_hang_up_gate(None)
 
     if isinstance(event, (UnifyMeetEnded, GoogleMeetEnded, TeamsMeetEnded)):
         contact_id = event.contact.get("contact_id")
@@ -1695,7 +1730,7 @@ async def _(
         )
     else:
         contact = cm.contact_index.get_contact(
-            phone_number=event.contact["phone_number"],
+            phone_number=event.contact.get("phone_number"),
         )
 
     if contact is None:
@@ -1751,6 +1786,23 @@ async def _(
     await cm.request_llm_run(
         delay=0,
         triggering_contact_id=contact_id,
+    )
+
+
+@EventHandler.register(FastBrainHangUp)
+async def _(
+    event: FastBrainHangUp,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Disarm the voice close gate and tear down the active call."""
+    await cm.call_manager.set_hang_up_gate(None)
+    await cm.call_manager.end_call()
+    cm.notifications_bar.push_notif(
+        "Comms",
+        f"Voice agent ended the call after saying: {event.farewell}",
+        event.timestamp,
     )
 
 

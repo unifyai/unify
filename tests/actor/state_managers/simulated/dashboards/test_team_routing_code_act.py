@@ -1,4 +1,10 @@
-"""CodeActActor evals for dashboard team routing."""
+"""CodeActActor evals for dashboard team routing.
+
+Discovery-first gating is disabled via ``tool_policy=None`` so these evals
+exercise destination/data_scope routing with write tools visible immediately,
+rather than burning the turn budget on library discovery or filesystem
+exploration that can balloon OpenRouter request size.
+"""
 
 from __future__ import annotations
 
@@ -113,6 +119,7 @@ async def test_team_dashboard_routes_to_patch_space():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 (
@@ -149,6 +156,7 @@ async def test_private_dashboard_stays_personal():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 (
@@ -190,6 +198,7 @@ async def test_team_live_tile_routes_to_patch_space_and_inherits_dashboard_scope
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 (
@@ -231,6 +240,7 @@ async def test_private_dashboard_tile_can_bind_to_team_data():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 (
@@ -271,6 +281,7 @@ async def test_executive_overview_tile_routes_to_executive_space():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 (
@@ -312,6 +323,7 @@ async def test_ambiguous_dashboard_request_does_not_publish_to_a_space():
         async with make_code_act_actor(
             impl="simulated",
             exposed_managers={"dashboards"},
+            tool_policy=None,
         ) as (actor, primitives, calls):
             handle = await actor.act(
                 "Make a dashboard for tracking late deliveries.",

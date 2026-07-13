@@ -9,13 +9,15 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Union
 
 import unisdk
+from pydantic import TypeAdapter
 
 from unify.common.context_registry import ContextRegistry
 from unify.common.join_utils import rewrite_join_paths
 from unify.dashboard_manager.types.tile import (
+    DataBinding,
     FilterBinding,
     JoinBinding,
     JoinReduceBinding,
@@ -31,6 +33,34 @@ logger = logging.getLogger(__name__)
 AnyBinding = Union[FilterBinding, ReduceBinding, JoinBinding, JoinReduceBinding]
 
 _JS_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_$][a-zA-Z0-9_$]*$")
+_BINDING_ADAPTER: TypeAdapter[AnyBinding] = TypeAdapter(DataBinding)
+
+
+def coerce_data_bindings(
+    bindings: Sequence[Any] | None,
+) -> List[AnyBinding] | None:
+    """Normalize actor-supplied bindings into typed models.
+
+    CodeAct plans often pass plain dicts; accept those alongside already-
+    constructed binding models so create/update paths do not AttributeError.
+    """
+
+    if bindings is None:
+        return None
+    coerced: List[AnyBinding] = []
+    for binding in bindings:
+        if isinstance(
+            binding,
+            (FilterBinding, ReduceBinding, JoinBinding, JoinReduceBinding),
+        ):
+            coerced.append(binding)
+        elif isinstance(binding, dict):
+            coerced.append(_BINDING_ADAPTER.validate_python(binding))
+        else:
+            raise TypeError(
+                f"Unsupported data binding type: {type(binding)!r}",
+            )
+    return coerced
 
 
 # ---------------------------------------------------------------------------
@@ -150,26 +180,29 @@ def _alias_from_context(context: str) -> str:
     return alias or "binding"
 
 
-def serialize_bindings(bindings: Sequence[AnyBinding]) -> str:
+def serialize_bindings(bindings: Sequence[Any]) -> str:
     """Serialize a list of data bindings to a JSON string."""
+    typed = coerce_data_bindings(bindings) or []
     return json.dumps(
-        [b.model_dump(mode="json") for b in bindings],
+        [b.model_dump(mode="json") for b in typed],
         separators=(",", ":"),
     )
 
 
 def ensure_binding_aliases(
-    bindings: Sequence[AnyBinding],
+    bindings: Sequence[Any],
 ) -> List[AnyBinding]:
     """Return a copy of *bindings* where every binding has an alias.
 
     Auto-generates aliases from the context path (last segment) for
     single-context bindings, or ``binding_{i}`` for joins.  Raises
-    ``ValueError`` on duplicate aliases.
+    ``ValueError`` on duplicate aliases. Plain dict bindings from actor
+    plans are coerced into typed models first.
     """
+    typed = coerce_data_bindings(bindings) or []
     result: List[AnyBinding] = []
     seen: dict[str, int] = {}
-    for i, b in enumerate(bindings):
+    for i, b in enumerate(typed):
         alias = b.alias
         if not alias:
             if isinstance(b, (FilterBinding, ReduceBinding)):

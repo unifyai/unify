@@ -794,6 +794,10 @@ _STORAGE_THREE_STORES = (
     "trial and error), the corrected approach IS worth storing as "
     "guidance — the value is in the insight, not the code "
     "complexity.\n\n"
+    "When the only reusable artifact is one standalone function and its "
+    "docstring fully explains its inputs, behavior, and use, store the "
+    "function only and finish the review. Do not manufacture a wrapper "
+    "procedure that merely restates the function contract.\n\n"
     "Actions:\n"
     "- **Add** guidance for a genuinely non-trivial compositional "
     "workflow (`GuidanceManager_add_guidance`). Include `function_ids` "
@@ -4611,6 +4615,18 @@ class CodeActActor(BaseCodeActActor):
             if isinstance(snapshot_result, dict)
             else snapshot_result
         )
+        # Deployment-synced functions (custom_hash set) are owned by the
+        # client bundle: their bodies are re-synced by deployment reconcile,
+        # and an in-place LLM rewrite would silently diverge from the bundle
+        # and mask the underlying failure. Surface the failure instead.
+        for row in function_snapshot or []:
+            if isinstance(row, dict) and row.get("custom_hash"):
+                raise RuntimeError(
+                    f"Symbolic entrypoint {entrypoint_id} is deployment-owned "
+                    "(custom_hash set); refusing LLM repair. Fix the bundle "
+                    "source and re-sync via deployment reconcile. Original "
+                    f"failure: {type(failure).__name__}: {failure}",
+                ) from failure
         tools = methods_to_tool_dict(
             fm.search_functions,
             fm.filter_functions,

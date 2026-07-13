@@ -24,6 +24,7 @@ from tests.conversation_manager.conftest import BOSS
 from unify.conversation_manager.events import (
     AssistantScreenShareStarted,
     InboundUnifyMeetUtterance,
+    OpenSlowBrainTurn,
     SMSReceived,
     UnifyMeetStarted,
     UnifyMessageReceived,
@@ -103,9 +104,13 @@ async def test_web_search_routes_to_web_act(initialized_cm):
             ),
         )
 
-        assert "web_act" in cm.all_tool_calls or "act" in cm.all_tool_calls, (
-            f"Expected 'web_act' or 'act' for web search request, "
-            f"got: {cm.all_tool_calls}"
+        assert (
+            "web_act" in cm.all_tool_calls
+            or "act" in cm.all_tool_calls
+            or has_steering_tool_call(cm, "interject_")
+        ), (
+            "Expected web_act, act, or steering of the in-flight research "
+            f"session for web search request, got: {cm.all_tool_calls}"
         )
         assert_efficient(result, 5)
     finally:
@@ -144,9 +149,13 @@ async def test_web_navigation_routes_to_web_act(initialized_cm):
             ),
         )
 
-        assert "web_act" in cm.all_tool_calls or "act" in cm.all_tool_calls, (
-            f"Expected 'web_act' or 'act' for web navigation, "
-            f"got: {cm.all_tool_calls}"
+        assert (
+            "web_act" in cm.all_tool_calls
+            or "act" in cm.all_tool_calls
+            or has_steering_tool_call(cm, "interject_")
+        ), (
+            "Expected web_act, act, or steering of the in-flight session "
+            f"for web navigation, got: {cm.all_tool_calls}"
         )
         assert_efficient(result, 5)
     finally:
@@ -324,13 +333,20 @@ async def test_login_with_stored_credentials_routes_to_interject(initialized_cm)
     await cm.step(AssistantScreenShareStarted(), run_llm=False)
 
     # Bootstrap: first instruction triggers act(persist=True)
-    result = await cm.step_until_wait(
+    await cm.step(
         InboundUnifyMeetUtterance(
             contact=BOSS,
             content=(
                 "Let's go through CoStar. Open the browser and navigate "
                 "to costar.com."
             ),
+        ),
+        run_llm=False,
+    )
+    result = await cm.step_until_wait(
+        OpenSlowBrainTurn(
+            origin_run_id="credential-routing-bootstrap",
+            previous_tools=[],
         ),
     )
     assert (
@@ -344,13 +360,20 @@ async def test_login_with_stored_credentials_routes_to_interject(initialized_cm)
 
     try:
         # Credential request — should interject the existing act, not web_act
-        result = await cm.step_until_wait(
+        await cm.step(
             InboundUnifyMeetUtterance(
                 contact=BOSS,
                 content=(
                     "Now log in using the stored credentials — you have the "
                     "username and password saved."
                 ),
+            ),
+            run_llm=False,
+        )
+        result = await cm.step_until_wait(
+            OpenSlowBrainTurn(
+                origin_run_id="credential-routing-followup",
+                previous_tools=[],
             ),
         )
 

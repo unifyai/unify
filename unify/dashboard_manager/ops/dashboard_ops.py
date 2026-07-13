@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, Sequence
 
 from unify.dashboard_manager.types.dashboard import (
     DashboardRecordRow,
@@ -34,9 +34,24 @@ def build_dashboard_record_row(
     )
 
 
-def serialize_layout(tiles: List[TilePosition]) -> str:
+def coerce_tile_positions(tiles: Sequence[Any]) -> List[TilePosition]:
+    """Normalize actor-supplied layout entries into ``TilePosition`` models."""
+
+    coerced: List[TilePosition] = []
+    for tile in tiles:
+        if isinstance(tile, TilePosition):
+            coerced.append(tile)
+        elif isinstance(tile, dict):
+            coerced.append(TilePosition.model_validate(tile))
+        else:
+            raise TypeError(f"Unsupported tile position type: {type(tile)!r}")
+    return coerced
+
+
+def serialize_layout(tiles: Sequence[Any]) -> str:
     """Serialize a list of TilePosition objects to a JSON string."""
-    return json.dumps([t.model_dump() for t in tiles])
+    typed = coerce_tile_positions(tiles)
+    return json.dumps([t.model_dump() for t in typed])
 
 
 def deserialize_layout(json_str: str) -> List[TilePosition]:

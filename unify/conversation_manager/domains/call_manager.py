@@ -73,6 +73,16 @@ OUTBOUND_CALL_READINESS_TIMEOUT_S = 30.0
 # gate, so an unregistered worker should fall back to a per-call subprocess.
 WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 
+# Browser meets (Google Meet / Teams) launch a CPU-heavy headless Chromium.
+# Starting that browser concurrently with a freshly dispatched voice worker
+# starves the worker's activation on constrained pods, so LiveKit never routes
+# the job to a prewarmed child and the assistant joins the call with no brain
+# or audio bridge. We instead wait for the worker's IPC client to connect (the
+# real activation signal) before launching the browser. If a persistent-worker
+# dispatch does not activate within this window, we cancel it and fall back to a
+# per-call subprocess worker (which connects the same IPC socket).
+MEET_WORKER_ACTIVATION_TIMEOUT_S = 20.0
+
 # How long the worker may stay alive-but-unwarmed while the manager is fully
 # idle before the watchdog force-restarts it to recover. Post-job re-warm usually
 # completes in seconds, but a cold container prewarm can take the full LiveKit
@@ -116,6 +126,11 @@ class LivekitCallManager:
         self._call_proc: subprocess.Popen | None = None
         self._worker_proc: subprocess.Popen | None = None
         self._active_job: bool = False
+        # Tracks the in-flight LiveKit dispatch so it can be deleted if it fails
+        # to activate and we fall back to a per-call subprocess (prevents a late
+        # pickup from putting a second agent in the room).
+        self._active_dispatch_id: str | None = None
+        self._active_dispatch_room: str | None = None
         self.conference_name = ""
         self.room_name = ""
         self.call_session_id = ""
@@ -169,6 +184,10 @@ class LivekitCallManager:
         self._meet_session_id: str | None = None
         self._meet_joining: bool = False
         self._meet_presenting: bool = False
+        # Reason string from the most recent failed browser-meet join (agent
+        # service ``reason``/``message``), consumed by the event handler to
+        # tell the user *why* the join failed rather than a generic retry line.
+        self.meet_join_failure_reason: str | None = None
         self.google_meet_start_timestamp = None
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
@@ -253,7 +272,13 @@ class LivekitCallManager:
         This gate is for assistant-initiated calls only. Inbound phone,
         WhatsApp, and Unify Meet sessions are accepted first and then dispatch
         through the best available path.
+
+        Test mocks may set ``_outbound_ready_override`` when ``start_call`` is
+        stubbed so flow tests still expose ``make_call`` without LiveKit warm-up.
         """
+        override = getattr(self, "_outbound_ready_override", None)
+        if override is not None:
+            return bool(override)
         if not os.environ.get("LIVEKIT_URL"):
             return True
         if self._worker_proc is None or self._worker_proc.poll() is not None:
@@ -503,6 +528,113 @@ class LivekitCallManager:
         )
         self._active_job = False
 
+    async def _await_worker_ipc_connected(
+        self,
+        timeout: float,
+        poll_interval: float = 0.25,
+    ) -> bool:
+        """Await until the dispatched/subprocess voice worker activates.
+
+        The real activation signal is the worker's entrypoint opening its IPC
+        client to this manager's socket server (``has_connected_clients``),
+        which happens for both the persistent-worker dispatch path and the
+        per-call subprocess path. Returns True once a client is connected,
+        False if the timeout elapses or no worker is in flight.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            if not self._active_job and self._call_proc is None:
+                return False
+            if self._socket_server and self._socket_server.has_connected_clients:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval)
+
+    async def _cancel_livekit_dispatch(self) -> None:
+        """Delete the tracked LiveKit dispatch so it cannot activate late.
+
+        When a created dispatch fails to activate in time and we fall back to a
+        per-call subprocess, a delayed pickup by the persistent worker would put
+        a second agent in the room. Deleting the dispatch closes that race.
+        """
+        dispatch_id = self._active_dispatch_id
+        room_name = self._active_dispatch_room
+        self._active_dispatch_id = None
+        self._active_dispatch_room = None
+        if not dispatch_id or not room_name:
+            return
+
+        lk = LiveKitAPI(
+            url=os.environ.get("LIVEKIT_URL", ""),
+            api_key=os.environ.get("LIVEKIT_API_KEY", ""),
+            api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
+        )
+        try:
+            await lk.agent_dispatch.delete_dispatch(dispatch_id, room_name)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] Failed to delete stale "
+                f"dispatch {dispatch_id}: {exc}",
+            )
+        finally:
+            await lk.aclose()
+
+    async def _start_meet_worker(
+        self,
+        room_name: str,
+        channel: str,
+        contact: dict,
+        boss: dict,
+        outbound: bool,
+        *,
+        meet_extra: dict,
+        meet_env: dict,
+    ) -> bool:
+        """Bring up the voice worker for a browser meet and confirm activation.
+
+        Prefers the prewarmed persistent worker; if its dispatch does not
+        activate (IPC client connect) within the activation window — typically
+        the browser launch racing the worker for CPU — it cancels the stale
+        dispatch and falls back to a per-call subprocess worker. Returns True
+        only once a worker's IPC client is connected, so the caller never
+        launches the browser into a brainless room.
+        """
+        dispatched = False
+        if self._worker_proc is not None and self._worker_proc.poll() is None:
+            dispatched = await self._dispatch_job(
+                room_name,
+                channel,
+                contact,
+                boss,
+                outbound,
+                extra_metadata=meet_extra,
+            )
+        if dispatched:
+            if await self._await_worker_ipc_connected(
+                MEET_WORKER_ACTIVATION_TIMEOUT_S,
+            ):
+                return True
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} dispatch did "
+                "not activate in time; falling back to subprocess worker",
+            )
+            self._cancel_dispatch_watchdog()
+            self._clear_stale_dispatch_state()
+            await self._cancel_livekit_dispatch()
+
+        await self._start_call_subprocess(
+            room_name,
+            channel,
+            contact,
+            boss,
+            outbound,
+            extra_env=meet_env,
+        )
+        return await self._await_worker_ipc_connected(
+            MEET_WORKER_ACTIVATION_TIMEOUT_S,
+        )
+
     async def _wait_for_worker_registered(
         self,
         worker_proc: subprocess.Popen,
@@ -621,6 +753,8 @@ class LivekitCallManager:
                     ),
                 )
                 self._active_job = True
+                self._active_dispatch_id = dispatch.id
+                self._active_dispatch_room = room_name
                 self._schedule_dispatch_watchdog()
                 LOGGER.info(
                     f"{ICONS['ipc']} [LivekitCallManager] Dispatched job "
@@ -958,6 +1092,7 @@ class LivekitCallManager:
         room_suffix = path_info["room"]
 
         self._meet_joining = True
+        self.meet_join_failure_reason = None
         self._call_channel = channel
         self._disconnect_contact = contact
         self.reset_speaker_engagement(contact, boss)
@@ -965,7 +1100,7 @@ class LivekitCallManager:
         opener = (self.pending_opener or "").strip()
         meet_opening_config = None
         if opener:
-            meet_opening_config = _simulated_outbound_opening_config(
+            meet_opening_config = _opener_opening_config(
                 opener,
                 source="outbound_meet_opening",
             )
@@ -1015,8 +1150,13 @@ class LivekitCallManager:
         finally:
             await lk.aclose()
 
-        # Dispatch fast brain first so it initializes (models, history, greeting)
-        # while the browser navigates the slow LLM-guided join flow.
+        # Bring the fast-brain voice worker up in the room and confirm it has
+        # actually activated (IPC client connected) *before* launching the
+        # CPU-heavy browser join. Launching the browser concurrently with a
+        # freshly dispatched worker starves activation on constrained pods, so
+        # the worker never picks up the job and the assistant joins the meet
+        # deaf, mute, and brainless. Serializing removes that race and lets the
+        # worker fall back to a per-call subprocess if the dispatch stalls.
         await self._ensure_socket_server()
         if self._socket_server:
             await self._socket_server.set_forward_channels(list(_BASE_FORWARD_CHANNELS))
@@ -1033,32 +1173,31 @@ class LivekitCallManager:
         if meet_opening_config:
             meet_extra["opening_config"] = meet_opening_config
 
+        meet_env = dict(meet_extra)
+        if meet_opening_config:
+            meet_env["opening_config"] = json.dumps(meet_opening_config)
+
         self.is_outbound = meet_outbound
 
-        dispatched = False
-        if self._worker_proc is not None and self._worker_proc.poll() is None:
-            dispatched = await self._dispatch_job(
-                room_name,
-                channel,
-                contact,
-                boss,
-                meet_outbound,
-                extra_metadata=meet_extra,
+        worker_ready = await self._start_meet_worker(
+            room_name,
+            channel,
+            contact,
+            boss,
+            meet_outbound,
+            meet_extra=meet_extra,
+            meet_env=meet_env,
+        )
+        if not worker_ready:
+            LOGGER.error(
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} aborted: "
+                "voice worker never activated",
             )
-        if not dispatched:
-            meet_env = dict(meet_extra)
-            if meet_opening_config:
-                meet_env["opening_config"] = json.dumps(meet_opening_config)
-            await self._start_call_subprocess(
-                room_name,
-                channel,
-                contact,
-                boss,
-                meet_outbound,
-                extra_env=meet_env,
-            )
+            self._meet_joining = False
+            await self._cleanup_meet(channel)
+            return False
 
-        # Browser join runs after dispatch — fast brain initializes in parallel.
+        # Worker brain is live in the room; now launch the browser join.
         async with aiohttp.ClientSession() as session:
             resp = await session.post(
                 f"{base_url}/{meet_path}/join",
@@ -1072,6 +1211,7 @@ class LivekitCallManager:
             LOGGER.error(
                 f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: {body}",
             )
+            self.meet_join_failure_reason = body.get("reason") or body.get("message")
             self._meet_joining = False
             await self._cleanup_meet(channel)
             return False
@@ -1450,6 +1590,8 @@ class LivekitCallManager:
         proc = self._call_proc
         self._call_proc = None
         self._active_job = False
+        self._active_dispatch_id = None
+        self._active_dispatch_room = None
         self._cancel_dispatch_watchdog()
         self._whatsapp_call_joining = False
 
