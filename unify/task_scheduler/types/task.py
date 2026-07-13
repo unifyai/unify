@@ -52,6 +52,7 @@ class TaskBase(AuthoredRow):
     trigger: Optional[TaskTrigger] = Field(
         default=None,
         description="Event definition that starts the task (mutually exclusive with *schedule*)",
+        json_schema_extra={"unify_type": "dict"},
     )
     deadline: Optional[datetime] = Field(
         default=None,

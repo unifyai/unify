@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, List, Literal, Optional, Union
 
 from pydantic import BaseModel, BeforeValidator, Field
@@ -88,8 +89,14 @@ class ProviderEventTrigger(BaseModel):
 
 
 def _coerce_trigger_dict(data: Any) -> Any:
-    """Infer communication triggers from legacy rows that omit kind."""
+    """Normalize Orchestra/API trigger payloads into a discriminated dict.
 
+    Orchestra may return nested trigger columns as JSON text (especially when
+    the field was registered as ``str``). Legacy rows may also omit ``kind``.
+    """
+
+    if isinstance(data, str):
+        data = json.loads(data)
     if isinstance(data, dict) and "medium" in data and "kind" not in data:
         return {**data, "kind": "communication"}
     return data
@@ -113,8 +120,8 @@ def parse_task_trigger(
         return None
     if isinstance(value, (CommunicationTrigger, ProviderEventTrigger)):
         return value
-    if isinstance(value, dict):
-        coerced = _coerce_trigger_dict(value)
+    coerced = _coerce_trigger_dict(value)
+    if isinstance(coerced, dict):
         kind = coerced.get("kind")
         if kind == "provider_event":
             return ProviderEventTrigger.model_validate(coerced)

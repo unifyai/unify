@@ -33,6 +33,31 @@ def test_parse_task_trigger_coerces_legacy_medium_only_row() -> None:
     assert trigger.recurring is True
 
 
+def test_parse_task_trigger_accepts_json_string_payload() -> None:
+    payload = _load_fixture("task_trigger.communication.v1.json")
+    trigger = parse_task_trigger(json.dumps(payload))
+    assert isinstance(trigger, CommunicationTrigger)
+    assert trigger.kind == "communication"
+    assert trigger.medium.value == "email"
+
+
+def test_task_model_hydrates_trigger_from_json_string() -> None:
+    from unify.task_scheduler.types.task import TaskBase
+    from unify.task_scheduler.types.status import Status
+    from unify.task_scheduler.types.priority import Priority
+
+    payload = _load_fixture("task_trigger.communication.v1.json")
+    task = TaskBase(
+        name="Invoice follow-up",
+        description="Draft a reply when an invoice email arrives.",
+        status=Status.triggerable,
+        priority=Priority.normal,
+        trigger=json.dumps(payload),
+    )
+    assert isinstance(task.trigger, CommunicationTrigger)
+    assert task.trigger.medium.value == "email"
+
+
 def test_parse_task_trigger_accepts_provider_event_kind() -> None:
     trigger = parse_task_trigger(_load_fixture("task_trigger.provider_event.v1.json"))
     assert isinstance(trigger, ProviderEventTrigger)
