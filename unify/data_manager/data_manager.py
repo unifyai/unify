@@ -1345,21 +1345,35 @@ class DataManager(BaseDataManager):
         except Exception:
             return False
 
-    def _unique_key_for_table(
+    def _table_key_info(
         self,
         context: str,
         destination: str | None,
-    ) -> str:
+    ) -> tuple[str, bool]:
+        """Return the table's primary unique key and whether it is auto-counted.
+
+        Auto-counted keys (the synthetic ``row_id`` default) are assigned by
+        the server and must be stripped from writes. Value keys (``slug``,
+        ``campaign_slug``, …) are real data columns that form the row's
+        composite identity and must be preserved on insert.
+        """
+
         resolved = self._first_successful_read_context(context)
         ctx_info = get_table_impl(resolved)
         keys = ctx_info.get("unique_keys")
         if isinstance(keys, list) and keys:
-            return keys[0]
-        if isinstance(keys, str):
-            return keys
-        if isinstance(keys, dict) and keys:
-            return next(iter(keys))
-        return "row_id"
+            key = str(keys[0])
+        elif isinstance(keys, str) and keys:
+            key = keys
+        elif isinstance(keys, dict) and keys:
+            key = next(iter(keys))
+        else:
+            key = "row_id"
+        auto_counting = ctx_info.get("auto_counting")
+        auto_counted_keys = (
+            set(auto_counting.keys()) if isinstance(auto_counting, dict) else set()
+        )
+        return key, key in auto_counted_keys or key == "row_id"
 
     def _get_custom_rows_for_table(
         self,
@@ -1375,7 +1389,7 @@ class DataManager(BaseDataManager):
             filter="custom_hash != None",
             limit=1000,
         )
-        unique_key = self._unique_key_for_table(context, destination)
+        unique_key, _ = self._table_key_info(context, destination)
         indexed: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             custom_key = row.get("custom_key")
@@ -1412,24 +1426,36 @@ class DataManager(BaseDataManager):
         row_data: Dict[str, Any],
         destination: str | None,
     ) -> None:
-        unique_key = self._unique_key_for_table(context, destination)
-        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        unique_key, auto_counted = self._table_key_info(context, destination)
+        clean = {
+            k: v for k, v in row_data.items() if not (auto_counted and k == unique_key)
+        }
         self.insert_rows(context, [clean], destination=destination)
 
     def _update_custom_row(
         self,
         *,
         context: str,
-        row_id: int,
+        row_filter: str,
         row_data: Dict[str, Any],
         destination: str | None,
     ) -> None:
-        unique_key = self._unique_key_for_table(context, destination)
-        clean = {k: v for k, v in row_data.items() if k != unique_key}
+        """Update one sync-managed row addressed by a caller-supplied filter.
+
+        Sync rows are identified by their sync identity (``custom_key`` for
+        managed rows, the seed column for adoption), never by the storage
+        key: tables may have value unique keys, auto-counted keys, or no
+        unique keys at all.
+        """
+
+        unique_key, auto_counted = self._table_key_info(context, destination)
+        clean = {
+            k: v for k, v in row_data.items() if not (auto_counted and k == unique_key)
+        }
         self.update_rows(
             context,
             updates=clean,
-            filter=f"{unique_key} == {int(row_id)}",
+            filter=row_filter,
             destination=destination,
         )
 
@@ -1519,7 +1545,6 @@ class DataManager(BaseDataManager):
                     )
 
                 db_rows = self._get_custom_rows_for_table(context, destination)
-                unique_key = self._unique_key_for_table(context, destination)
                 processed_keys: Set[str] = set()
                 processed_keys_by_context[context] = processed_keys
 
@@ -1542,7 +1567,10 @@ class DataManager(BaseDataManager):
                             )
                             self._update_custom_row(
                                 context=context,
-                                row_id=int(db_entry[unique_key]),
+                                row_filter=(
+                                    f"custom_key == {custom_key!r} "
+                                    "and custom_hash != None"
+                                ),
                                 row_data=row_data,
                                 destination=destination,
                             )
@@ -1560,7 +1588,10 @@ class DataManager(BaseDataManager):
                             )
                             self._update_custom_row(
                                 context=context,
-                                row_id=int(unmanaged[unique_key]),
+                                row_filter=(
+                                    f"{seed_key} == {seed_value!r} "
+                                    "and custom_hash == None"
+                                ),
                                 row_data=row_data,
                                 destination=destination,
                             )
