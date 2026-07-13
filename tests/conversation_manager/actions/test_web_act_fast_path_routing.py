@@ -149,9 +149,13 @@ async def test_web_navigation_routes_to_web_act(initialized_cm):
             ),
         )
 
-        assert "web_act" in cm.all_tool_calls or "act" in cm.all_tool_calls, (
-            f"Expected 'web_act' or 'act' for web navigation, "
-            f"got: {cm.all_tool_calls}"
+        assert (
+            "web_act" in cm.all_tool_calls
+            or "act" in cm.all_tool_calls
+            or has_steering_tool_call(cm, "interject_")
+        ), (
+            "Expected web_act, act, or steering of the in-flight session "
+            f"for web navigation, got: {cm.all_tool_calls}"
         )
         assert_efficient(result, 5)
     finally:
