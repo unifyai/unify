@@ -1026,6 +1026,10 @@ class ConversationManagerBrainActionTools:
         agent so the assistant can hear and speak in the meeting.  Never
         attempt to join a Meet URL via ``act``.
 
+        I do not create the meeting: the user hosts it and pastes the link.
+        Wait for a real ``meet.google.com`` link before calling this rather
+        than guessing one.
+
         Args:
             meet_url: The full Google Meet URL (e.g. https://meet.google.com/abc-defg-hij).
             opener: Verbatim spoken line once the meeting is live and someone
@@ -1124,6 +1128,10 @@ class ConversationManagerBrainActionTools:
         devices, establishes the voice pipeline, and dispatches the voice
         agent so the assistant can hear and speak in the meeting.  Never
         attempt to join a Teams meeting URL via ``act``.
+
+        I do not create the meeting: the user hosts it and pastes the link.
+        Wait for a real ``teams.microsoft.com`` / ``teams.live.com`` link
+        before calling this rather than guessing one.
 
         Args:
             meet_url: The full Teams meeting URL (e.g.
