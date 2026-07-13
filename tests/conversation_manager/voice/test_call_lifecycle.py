@@ -213,11 +213,11 @@ class TestCallEventSerialization:
         data = json.loads(json_str)
 
         assert data["event_name"] == "FastBrainNotification"
-        assert data["payload"]["content"] == "Please ask about their schedule"
+        assert data["payload"]["message"] == "Please ask about their schedule"
 
         restored = Event.from_json(json_str)
         assert isinstance(restored, FastBrainNotification)
-        assert restored.content == "Please ask about their schedule"
+        assert restored.message == "Please ask about their schedule"
 
     def test_inbound_phone_utterance_serialization(self, sample_contact):
         """InboundPhoneUtterance event serializes correctly."""
@@ -331,6 +331,7 @@ class TestCallSubprocessLifecycle:
         boss_contact,
     ):
         """start_call() passes outbound flag correctly."""
+        call_manager.pending_opener = "Hello, this is a test call."
         with patch(
             "unify.conversation_manager.domains.call_manager.run_script",
         ) as mock_run_script:
@@ -1274,7 +1275,7 @@ class TestCallEventBrokerChannels:
             assert msg is not None
             restored = Event.from_json(msg["data"])
             assert isinstance(restored, FastBrainNotification)
-            assert restored.content == "Ask about their schedule"
+            assert restored.message == "Ask about their schedule"
 
     async def test_phone_utterance_channel(self, event_broker):
         """app:comms:phone_utterance channel receives utterance events."""
