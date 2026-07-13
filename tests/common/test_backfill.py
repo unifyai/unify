@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import unisdk
 from tests.helpers import _handle_project
 from unify.common.backfill import (
@@ -15,38 +17,54 @@ def _count_logs_missing_assistant(logs) -> int:
     return sum(1 for lg in logs if lg.entries.get("_assistant") is None)
 
 
+def _unique_ctx(leaf: str) -> str:
+    """Per-run context path so parallel CI shards cannot collide on shared names."""
+    return f"TestAssistant/{leaf}-{uuid.uuid4().hex[:8]}"
+
+
+def _reset_context(ctx: str, fields: dict[str, str]) -> None:
+    try:
+        unisdk.delete_context(ctx)
+    except Exception:
+        pass
+    unisdk.create_context(ctx)
+    unisdk.create_fields(fields, context=ctx)
+
+
+def _assert_created_logs_visible(ctx: str, created_ids: set[int]) -> None:
+    """Fail fast if Orchestra create succeeded but context read misses rows."""
+    visible = {lg.id for lg in unisdk.get_logs(context=ctx, from_ids=list(created_ids))}
+    assert visible == created_ids, (
+        f"create/read miss for context {ctx!r}: "
+        f"created={sorted(created_ids)} visible={sorted(visible)}"
+    )
+
+
 @_handle_project
 def test_backfill_assistant_field():
     """Backfill should update logs missing _assistant."""
-    ctx = "TestAssistant/TestBackfill"
+    ctx = _unique_ctx("TestBackfill")
+    _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    # Create context with required fields
-    unisdk.delete_context(ctx)
-    unisdk.create_context(ctx)
-    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+    created_ids = {
+        unisdk.log(context=ctx, name=f"item_{i}", new=True).id for i in range(5)
+    }
+    _assert_created_logs_visible(ctx, created_ids)
 
-    # Create logs without _assistant
-    for i in range(5):
-        unisdk.log(context=ctx, name=f"item_{i}", new=True)
-
-    # Verify they don't have _assistant (client-side check)
-    logs = unisdk.get_logs(context=ctx)
+    logs = unisdk.get_logs(context=ctx, from_ids=list(created_ids))
     assert (
         _count_logs_missing_assistant(logs) == 5
     ), f"Expected 5 logs without _assistant, got {_count_logs_missing_assistant(logs)}"
 
-    # Run backfill
     result = backfill_assistant_field(ctx, "TestAssistant")
     assert result["total_updated"] == 5, f"Expected 5 updated, got {result}"
     assert result["context"] == ctx
 
-    # Verify all now have _assistant (client-side check)
-    logs_after = unisdk.get_logs(context=ctx)
+    logs_after = unisdk.get_logs(context=ctx, from_ids=list(created_ids))
     assert (
         _count_logs_missing_assistant(logs_after) == 0
     ), "All logs should now have _assistant"
 
-    # Verify correct value was set
     logs_with = unisdk.get_logs(context=ctx, filter="_assistant == 'TestAssistant'")
     assert len(logs_with) == 5, f"Expected 5 logs with _assistant, got {len(logs_with)}"
 
@@ -54,14 +72,9 @@ def test_backfill_assistant_field():
 @_handle_project
 def test_backfill_assistant_field_empty_context():
     """Backfill should handle empty context gracefully."""
-    ctx = "TestAssistant/TestBackfillEmpty"
+    ctx = _unique_ctx("TestBackfillEmpty")
+    _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    # Create empty context
-    unisdk.delete_context(ctx)
-    unisdk.create_context(ctx)
-    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
-
-    # Run backfill on empty context
     result = backfill_assistant_field(ctx, "TestAssistant")
     assert result["total_updated"] == 0
     assert result["context"] == ctx
@@ -70,22 +83,23 @@ def test_backfill_assistant_field_empty_context():
 @_handle_project
 def test_backfill_assistant_field_with_filter():
     """Backfill should respect additional filter."""
-    ctx = "TestAssistant/TestBackfillFilter"
-
-    unisdk.delete_context(ctx)
-    unisdk.create_context(ctx)
-    unisdk.create_fields(
+    ctx = _unique_ctx("TestBackfillFilter")
+    _reset_context(
+        ctx,
         {"name": "str", "category": "str", "_assistant": "str"},
-        context=ctx,
     )
 
-    # Create logs with different categories
+    created_ids: set[int] = set()
     for i in range(3):
-        unisdk.log(context=ctx, name=f"item_a_{i}", category="A", new=True)
+        created_ids.add(
+            unisdk.log(context=ctx, name=f"item_a_{i}", category="A", new=True).id,
+        )
     for i in range(2):
-        unisdk.log(context=ctx, name=f"item_b_{i}", category="B", new=True)
+        created_ids.add(
+            unisdk.log(context=ctx, name=f"item_b_{i}", category="B", new=True).id,
+        )
+    _assert_created_logs_visible(ctx, created_ids)
 
-    # Backfill only category A
     result = backfill_assistant_field(
         ctx,
         "TestAssistant",
@@ -93,14 +107,12 @@ def test_backfill_assistant_field_with_filter():
     )
     assert result["total_updated"] == 3
 
-    # Verify category A has _assistant
     logs_a = unisdk.get_logs(
         context=ctx,
         filter="category == 'A' and _assistant == 'TestAssistant'",
     )
     assert len(logs_a) == 3
 
-    # Verify category B does not have _assistant (client-side check)
     logs_b = unisdk.get_logs(context=ctx, filter="category == 'B'")
     assert (
         _count_logs_missing_assistant(logs_b) == 2
@@ -110,24 +122,22 @@ def test_backfill_assistant_field_with_filter():
 @_handle_project
 def test_backfill_all_contexts_for_assistant():
     """Backfill should update all contexts for an assistant."""
-    assistant = "TestMultiCtx"
-
-    # Create multiple contexts
+    assistant = f"TestMultiCtx-{uuid.uuid4().hex[:8]}"
     ctx1 = f"{assistant}/ContextOne"
     ctx2 = f"{assistant}/ContextTwo"
 
     for ctx in [ctx1, ctx2]:
-        unisdk.delete_context(ctx)
-        unisdk.create_context(ctx)
-        unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+        _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    # Create logs in each context
-    for i in range(3):
-        unisdk.log(context=ctx1, name=f"ctx1_item_{i}", new=True)
-    for i in range(2):
-        unisdk.log(context=ctx2, name=f"ctx2_item_{i}", new=True)
+    created_ctx1 = {
+        unisdk.log(context=ctx1, name=f"ctx1_item_{i}", new=True).id for i in range(3)
+    }
+    created_ctx2 = {
+        unisdk.log(context=ctx2, name=f"ctx2_item_{i}", new=True).id for i in range(2)
+    }
+    _assert_created_logs_visible(ctx1, created_ctx1)
+    _assert_created_logs_visible(ctx2, created_ctx2)
 
-    # Backfill all contexts
     results = backfill_all_contexts_for_assistant(assistant)
 
     assert ctx1 in results
@@ -139,19 +149,16 @@ def test_backfill_all_contexts_for_assistant():
 @_handle_project
 def test_backfill_idempotent():
     """Running backfill twice should not update already-backfilled logs."""
-    ctx = "TestAssistant/TestBackfillIdempotent"
+    ctx = _unique_ctx("TestBackfillIdempotent")
+    _reset_context(ctx, {"name": "str", "_assistant": "str"})
 
-    unisdk.delete_context(ctx)
-    unisdk.create_context(ctx)
-    unisdk.create_fields({"name": "str", "_assistant": "str"}, context=ctx)
+    created_ids = {
+        unisdk.log(context=ctx, name=f"item_{i}", new=True).id for i in range(3)
+    }
+    _assert_created_logs_visible(ctx, created_ids)
 
-    for i in range(3):
-        unisdk.log(context=ctx, name=f"item_{i}", new=True)
-
-    # First backfill
     result1 = backfill_assistant_field(ctx, "TestAssistant")
     assert result1["total_updated"] == 3
 
-    # Second backfill should find nothing to update
     result2 = backfill_assistant_field(ctx, "TestAssistant")
     assert result2["total_updated"] == 0
