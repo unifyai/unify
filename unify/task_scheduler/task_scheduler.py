@@ -68,7 +68,6 @@ from .machine_state import (
     build_task_run_key,
     consume_live_task_run_provenance,
     peek_live_task_run_provenance,
-    source_type_from_activation_reason,
 )
 from .prompt_builders import (
     build_ask_prompt,
@@ -91,10 +90,11 @@ from .types.repetition import (
 from .types.schedule import Schedule
 from .types.status import Status, to_status
 from .types.task import Task, TaskBase
-from .types.trigger import Trigger
+from .types.run_source import RunSource
+from .types.trigger import TaskTrigger, parse_task_trigger
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
-TriggerLike = Optional[Union[Trigger, Dict[str, Any]]]
+TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
 RepeatLike = Optional[List[Union[RepeatPattern, Dict[str, Any]]]]
 ToolsDict = Dict[str, Callable[..., Any]]
 
@@ -1001,11 +1001,9 @@ class TaskScheduler(BaseTaskScheduler):
         # Concurrent instances of the same task_id are allowed. Only block when
         # activation provenance targets an instance that is already active.
         source_type = (
-            "triggered"
+            RunSource.triggered
             if trigger_attempt_token
-            else source_type_from_activation_reason(
-                (_activated_by or ActivatedBy.explicit).value,
-            )
+            else RunSource.from_activation_reason(_activated_by or ActivatedBy.explicit)
         )
         pending_provenance = peek_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
@@ -1040,9 +1038,9 @@ class TaskScheduler(BaseTaskScheduler):
             )
 
         task_run_source_type = (
-            "triggered"
+            RunSource.triggered
             if trigger_attempt_token
-            else source_type_from_activation_reason(reason.value)
+            else RunSource.from_activation_reason(reason)
         )
         task_run_provenance = consume_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
@@ -1075,9 +1073,9 @@ class TaskScheduler(BaseTaskScheduler):
                 else:
                     reason = ActivatedBy.explicit
                 task_run_source_type = (
-                    "triggered"
+                    RunSource.triggered
                     if trigger_attempt_token
-                    else source_type_from_activation_reason(reason.value)
+                    else RunSource.from_activation_reason(reason)
                 )
         self._validate_task_matches_provenance(
             task=task,
@@ -1425,7 +1423,7 @@ class TaskScheduler(BaseTaskScheduler):
         if schedule is not None and isinstance(schedule, dict):
             schedule = Schedule(**schedule)
         if trigger is not None and isinstance(trigger, dict):
-            trigger = Trigger(**trigger)
+            trigger = parse_task_trigger(trigger)
         if repeat is not None:
             repeat = [
                 RepeatPattern(**item) if isinstance(item, dict) else item
@@ -1809,7 +1807,7 @@ class TaskScheduler(BaseTaskScheduler):
         elif trigger is None:
             prospective_trigger = None
         elif isinstance(trigger, dict):
-            prospective_trigger = Trigger(**trigger)
+            prospective_trigger = parse_task_trigger(trigger)
         else:
             prospective_trigger = trigger
 
@@ -1864,7 +1862,7 @@ class TaskScheduler(BaseTaskScheduler):
         if trigger_provided:
             if prospective_trigger is None:
                 entries["trigger"] = None
-            elif isinstance(prospective_trigger, Trigger):
+            elif isinstance(prospective_trigger, BaseModel):
                 entries["trigger"] = prospective_trigger.model_dump(mode="json")
             else:
                 entries["trigger"] = prospective_trigger

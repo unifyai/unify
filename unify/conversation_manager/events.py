@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from unify.common.context_registry import ContextRegistry
 from unify.common.prompt_helpers import now as prompt_now
+from unify.task_scheduler.types.run_source import RunSource
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -1696,7 +1697,7 @@ class TaskDue(Event):
     activation_revision: str
     scheduled_for: str
     destination: str | None = None
-    source_type: str = "scheduled"
+    source_type: RunSource = RunSource.scheduled
     task_label: str = ""
     task_summary: str = ""
     visibility_policy: str = "silent_by_default"
@@ -1739,9 +1740,18 @@ class TaskDue(Event):
         source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
         activation_revision = str(payload.get("activation_revision") or "")
         scheduled_for = str(payload.get("scheduled_for") or "")
+        source_type = RunSource.normalize(
+            str(payload.get("source_type") or RunSource.scheduled),
+        )
         if task_id is None or source_task_log_id is None:
             return None
-        if not activation_revision or not scheduled_for:
+        if not activation_revision:
+            return None
+        # ``scheduled_for`` is part of the dedupe identity for clock-fired
+        # deliveries only. Explicit (REST-fired) deliveries of a scheduled
+        # task legitimately fire ahead of the projected occurrence and carry
+        # an empty scheduled_for.
+        if source_type is RunSource.scheduled and not scheduled_for:
             return None
         try:
             destination = ContextRegistry.canonical_destination(
@@ -1761,7 +1771,7 @@ class TaskDue(Event):
             activation_revision=activation_revision,
             scheduled_for=scheduled_for,
             destination=destination,
-            source_type=str(payload.get("source_type") or "scheduled"),
+            source_type=source_type,
             task_label=task_label,
             task_summary=str(payload.get("task_summary") or ""),
             visibility_policy=str(
