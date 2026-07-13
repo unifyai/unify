@@ -151,11 +151,14 @@ _FRENCH_MARKERS = [
     # Distinctive short phrases
     "je suis",
     "je vais",
+    "je vous",
     "il y a",
+    "en prie",
     "mise à jour",
     "bien sûr",
     "de rien",
     "avec plaisir",
+    "que cela",
     # Nouns / domain words
     "réunion",
     "monsieur",
@@ -163,7 +166,8 @@ _FRENCH_MARKERS = [
     "journée",
     "besoin",
     "côté",
-    # Accented words (high signal — accents rare in English)
+    "cela",
+    # Accented / conjugated forms (high signal — accents rare in English)
     "terminé",
     "résumé",
     "prêt",
@@ -175,6 +179,9 @@ _FRENCH_MARKERS = [
     "actuellement",
     "malheureusement",
     "rapidement",
+    "aidé",
+    "ravie",
+    "ravi",
     # Filler / discourse markers
     "heureux",
     "heureuse",
@@ -182,6 +189,13 @@ _FRENCH_MARKERS = [
     "plaisir",
     "ça",
 ]
+
+# French diacritics — used with ≥1 marker hit as an escape hatch for short
+# courtesy replies that under-hit the two-marker threshold (e.g. "…aidé").
+# Diacritics alone are not enough (English loanwords like "café").
+_FRENCH_DIACRITIC_RE = re.compile(
+    r"[àâäæçéèêëïîôœùûüÿÀÂÄÆÇÉÈÊËÏÎÔŒÙÛÜŸ]",
+)
 
 _CJK_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
 _ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
@@ -205,7 +219,10 @@ def _has_spanish(text: str) -> bool:
 def _has_french(text: str) -> bool:
     """True if *text* contains clear French language indicators."""
     low = _normalize_apostrophes(text.lower())
-    return sum(1 for w in _FRENCH_MARKERS if w in low) >= 2
+    hits = sum(1 for w in _FRENCH_MARKERS if w in low)
+    # Diacritics alone can appear in English loanwords (café); require a
+    # marker hit alongside them — parallel to Spanish ¿/¡ for short replies.
+    return hits >= 2 or (hits >= 1 and bool(_FRENCH_DIACRITIC_RE.search(text)))
 
 
 def _has_japanese(text: str) -> bool:
