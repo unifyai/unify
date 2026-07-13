@@ -4611,6 +4611,18 @@ class CodeActActor(BaseCodeActActor):
             if isinstance(snapshot_result, dict)
             else snapshot_result
         )
+        # Deployment-synced functions (custom_hash set) are owned by the
+        # client bundle: their bodies are re-synced by deployment reconcile,
+        # and an in-place LLM rewrite would silently diverge from the bundle
+        # and mask the underlying failure. Surface the failure instead.
+        for row in function_snapshot or []:
+            if isinstance(row, dict) and row.get("custom_hash"):
+                raise RuntimeError(
+                    f"Symbolic entrypoint {entrypoint_id} is deployment-owned "
+                    "(custom_hash set); refusing LLM repair. Fix the bundle "
+                    "source and re-sync via deployment reconcile. Original "
+                    f"failure: {type(failure).__name__}: {failure}",
+                ) from failure
         tools = methods_to_tool_dict(
             fm.search_functions,
             fm.filter_functions,

@@ -2538,43 +2538,27 @@ class TestTaskDueEventHandlers:
         mock_cm.request_llm_run.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_explicit_offline_task_due_parses_and_dispatches_in_pod(
-        self,
-        mock_cm,
-    ):
-        """REST-fired offline task_due wake reasons must reach the in-pod runner.
+    async def test_offline_activation_rejects_task_due_delivery(self, mock_cm):
+        """A task_due wake for an offline activation must never reach the CM lane.
 
-        Communication delivers these with ``source_type=explicit`` and an
-        empty ``scheduled_for`` plus the control-plane ``run_key``; the CM
-        must parse the payload, validate against the offline activation, and
-        dispatch with the same run_key so create-or-adopt reuses the run row.
+        Offline runs execute as dedicated one-shot Kubernetes Jobs (hosted) or
+        local-scheduler subprocesses; a stale ``task_due`` delivery for a task
+        that switched to offline execution is rejected as stale by activation
+        validation.
         """
 
         from unify.conversation_manager.domains.task_activation import (
             _handle_task_due_event,
-            _task_due_event_from_wake_reason,
         )
 
-        wake_reason = {
-            "type": "task_due",
-            "task_id": 9,
-            "source_task_log_id": 555,
-            "activation_revision": "rev-1",
-            "scheduled_for": "",
-            "destination": None,
-            "execution_mode": "offline",
-            "source_type": "explicit",
-            "task_label": "GTM stargazer poll",
-            "run_key": "offline:explicit:42:9:abc:api-def",
-            "headless_offline": True,
-        }
-        event = _task_due_event_from_wake_reason(wake_reason)
-        assert event is not None, "explicit offline wake reason must parse"
-        assert event.execution_mode == "offline"
-        assert event.source_type == "explicit"
-        assert event.run_key == "offline:explicit:42:9:abc:api-def"
-
-        activation = TaskActivationSnapshot(
+        event = TaskDue(
+            task_id=9,
+            source_task_log_id=555,
+            activation_revision="rev-1",
+            scheduled_for="2026-04-10T09:00:00+00:00",
+            task_label="GTM stargazer poll",
+        )
+        offline_activation = TaskActivationSnapshot(
             assistant_id="42",
             activation_key="42:9",
             task_id=9,
@@ -2582,26 +2566,26 @@ class TestTaskDueEventHandlers:
             activation_kind="scheduled",
             execution_mode="offline",
             activation_revision="rev-1",
+            next_due_at="2026-04-10T09:00:00+00:00",
         )
-        fake_dispatcher = MagicMock()
-        fake_dispatcher.dispatch = AsyncMock()
-        mock_cm._offline_dispatcher = fake_dispatcher
 
-        with patch(
-            "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
-            return_value=(activation, None),
+        with (
+            patch(
+                "unify.task_scheduler.machine_state.get_task_activation",
+                return_value=offline_activation,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+            ) as mock_start_execution,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
 
         assert should_request_llm is False
-        fake_dispatcher.dispatch.assert_awaited_once()
-        _, dispatch_kwargs = fake_dispatcher.dispatch.await_args
-        assert dispatch_kwargs["source_type"] == "explicit"
-        assert dispatch_kwargs["run_key"] == "offline:explicit:42:9:abc:api-def"
+        mock_start_execution.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_scheduled_task_due_still_requires_scheduled_for(self):
-        """Clock-fired deliveries keep scheduled_for as part of their identity."""
+    async def test_task_due_requires_scheduled_for(self):
+        """scheduled_for is part of every task_due delivery's identity."""
 
         from unify.conversation_manager.domains.task_activation import (
             _task_due_event_from_wake_reason,
@@ -2613,7 +2597,6 @@ class TestTaskDueEventHandlers:
             "source_task_log_id": 555,
             "activation_revision": "rev-1",
             "scheduled_for": "",
-            "execution_mode": "offline",
             "source_type": "scheduled",
         }
         assert _task_due_event_from_wake_reason(wake_reason) is None

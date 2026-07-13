@@ -1,11 +1,10 @@
-"""Local / in-pod subprocess dispatcher for offline-execution tasks.
+"""Local subprocess dispatcher for offline-execution tasks.
 
-Hosted offline work runs on the same AssistantSession pod as live traffic.
-When ConversationManager is already attached, Communication publishes an
-offline ``task_due`` and this dispatcher spawns
-``unify.task_scheduler.offline_runner`` as a disconnected subprocess (same
-contract as a cold headless runner). Local installs use the same path from
-the in-process activation scheduler.
+Local installs run offline tasks as ``unify.task_scheduler.offline_runner``
+subprocesses fired by the in-process activation scheduler (or by an explicit
+REST trigger). This is the local analogue of the hosted lane, where each
+offline run executes as a dedicated one-shot Kubernetes Job; both consume the
+same env contract from ``offline_runner_contract``.
 """
 
 from __future__ import annotations
@@ -44,23 +43,18 @@ class LocalOfflineDispatcher:
         snap: "TaskActivationSnapshot",
         *,
         source_type: str = "scheduled",
-        run_key: str | None = None,
     ) -> asyncio.subprocess.Process:
         """Spawn the offline runner subprocess and return the Process handle.
 
         Caller does not need to await the subprocess: a background watcher
         task is registered to log the exit code when it terminates. Returned
         ``Process`` is exposed so tests can interrogate the spawn arguments
-        and exit status synchronously. A caller-provided ``run_key`` (e.g.
-        from a hosted dispatch that already created the task-run row) takes
-        precedence over the locally derived key so create-or-adopt dedupes
-        onto the same run.
+        and exit status synchronously.
         """
 
         env = _build_local_offline_runner_env(
             snap,
             source_type=source_type,
-            run_key=run_key,
         )
         merged_env = {**os.environ, **env}
         # PYTHONUNBUFFERED so subprocess prints reach our log on demand.
@@ -150,7 +144,6 @@ def _build_local_offline_runner_env(
     snap: "TaskActivationSnapshot",
     *,
     source_type: str,
-    run_key: str | None = None,
     source_ref: str | None = None,
     source_medium: str | None = None,
     source_contact_id: int | None = None,
@@ -171,7 +164,7 @@ def _build_local_offline_runner_env(
     resolved_medium = source_medium or (
         str(snap.trigger_medium) if snap.trigger_medium else None
     )
-    run_key = run_key or _build_local_offline_run_key(
+    run_key = _build_local_offline_run_key(
         snap,
         source_type=source_type,
         source_ref=source_ref,
