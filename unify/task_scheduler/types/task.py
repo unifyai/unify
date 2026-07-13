@@ -57,6 +57,14 @@ class TaskBase(AuthoredRow):
         default=None,
         description="Due date/time for the task in ISO-8601 format",
     )
+    max_runtime_seconds: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional bound on a single execution attempt's wall-clock "
+            "runtime, in seconds. None means the run is unbounded. Distinct "
+            "from *deadline*, which is a calendar due date."
+        ),
+    )
     repeat: Optional[List[RepeatPattern]] = Field(
         default=None,
         description=(

@@ -29,6 +29,7 @@ TASK_SYNC_FIELDS = (
     "schedule",
     "trigger",
     "deadline",
+    "max_runtime_seconds",
     "repeat",
     "priority",
     "response_policy",
@@ -46,6 +47,7 @@ class CustomTaskSourceEntry(BaseModel):
     schedule: Optional[Dict[str, Any]] = None
     trigger: Optional[Dict[str, Any]] = None
     deadline: Optional[str] = None
+    max_runtime_seconds: Optional[int] = None
     repeat: Optional[List[Dict[str, Any]]] = None
     priority: str = "normal"
     response_policy: Optional[str] = None
@@ -191,6 +193,7 @@ def collect_custom_tasks(
             "schedule": entry.schedule,
             "trigger": entry.trigger,
             "deadline": entry.deadline,
+            "max_runtime_seconds": entry.max_runtime_seconds,
             "repeat": entry.repeat,
             "priority": entry.priority,
             "response_policy": entry.response_policy,
