@@ -198,6 +198,7 @@ jobs:
       test_dirs: ${{ steps.set-matrix.outputs.test_dirs }}
       parallel_run_args: ${{ steps.set-matrix.outputs.parallel_run_args }}
       job_timeout: ${{ steps.set-matrix.outputs.job_timeout }}
+      job_timeout_matrix: ${{ steps.set-matrix.outputs.job_timeout_matrix }}
       # Project deletion flags (handled at workflow level to avoid race conditions)
       delete_on_start: ${{ steps.set-matrix.outputs.delete_on_start }}
       delete_on_exit: ${{ steps.set-matrix.outputs.delete_on_exit }}
@@ -565,6 +566,7 @@ jobs:
         fi
         JOB_TIMEOUT=$((BASE_TIMEOUT + 10))
         echo "job_timeout=$JOB_TIMEOUT" >> "$GITHUB_OUTPUT"
+        echo "job_timeout_matrix=[$JOB_TIMEOUT]" >> "$GITHUB_OUTPUT"
 
   # Setup job: runs ONCE before all pytest jobs (if delete_on_start is true)
   # Handles project deletion at workflow level to avoid race conditions
@@ -623,9 +625,9 @@ jobs:
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
     # Wall-clock cap = timeout_minutes input + 10 min buffer on workflow_dispatch,
-    # else 130 min for push/PR. needs.discover.outputs.job_timeout cannot be used
-    # here — it silently prevents matrix jobs from being created (GHA limitation).
-    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.timeout_minutes || '120') + 10 || 130 }}
+    # else 130 min for push/PR. discover computes job_timeout; matrix.job_timeout
+    # carries it here because needs.discover.outputs and '+' are unusable directly.
+    timeout-minutes: ${{ matrix.job_timeout }}
     # Depend on setup job (it may be skipped, but that's OK - GitHub handles this)
     needs: [should-run-tests, discover, setup]
     if: |
@@ -636,6 +638,7 @@ jobs:
       fail-fast: false
       matrix:
         test_path: ${{ fromJSON(needs.discover.outputs.test_dirs) }}
+        job_timeout: ${{ fromJSON(needs.discover.outputs.job_timeout_matrix) }}
     env:
       # CI project management defaults (explicit, not relying on code defaults)
       UNIFY_TESTS_RAND_PROJ: "false"              # Shared project mode
