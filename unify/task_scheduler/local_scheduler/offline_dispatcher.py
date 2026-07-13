@@ -44,16 +44,24 @@ class LocalOfflineDispatcher:
         snap: "TaskActivationSnapshot",
         *,
         source_type: str = "scheduled",
+        run_key: str | None = None,
     ) -> asyncio.subprocess.Process:
         """Spawn the offline runner subprocess and return the Process handle.
 
         Caller does not need to await the subprocess: a background watcher
         task is registered to log the exit code when it terminates. Returned
         ``Process`` is exposed so tests can interrogate the spawn arguments
-        and exit status synchronously.
+        and exit status synchronously. A caller-provided ``run_key`` (e.g.
+        from a hosted dispatch that already created the task-run row) takes
+        precedence over the locally derived key so create-or-adopt dedupes
+        onto the same run.
         """
 
-        env = _build_local_offline_runner_env(snap, source_type=source_type)
+        env = _build_local_offline_runner_env(
+            snap,
+            source_type=source_type,
+            run_key=run_key,
+        )
         merged_env = {**os.environ, **env}
         # PYTHONUNBUFFERED so subprocess prints reach our log on demand.
         merged_env.setdefault("PYTHONUNBUFFERED", "1")
@@ -142,6 +150,7 @@ def _build_local_offline_runner_env(
     snap: "TaskActivationSnapshot",
     *,
     source_type: str,
+    run_key: str | None = None,
     source_ref: str | None = None,
     source_medium: str | None = None,
     source_contact_id: int | None = None,
@@ -162,7 +171,7 @@ def _build_local_offline_runner_env(
     resolved_medium = source_medium or (
         str(snap.trigger_medium) if snap.trigger_medium else None
     )
-    run_key = _build_local_offline_run_key(
+    run_key = run_key or _build_local_offline_run_key(
         snap,
         source_type=source_type,
         source_ref=source_ref,

@@ -1698,6 +1698,7 @@ class TaskDue(Event):
     task_summary: str = ""
     visibility_policy: str = "silent_by_default"
     recurrence_hint: str = "one_off"
+    run_key: str = ""
     reason: str = ""
 
     @classmethod
@@ -1736,9 +1737,16 @@ class TaskDue(Event):
         source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
         activation_revision = str(payload.get("activation_revision") or "")
         scheduled_for = str(payload.get("scheduled_for") or "")
+        source_type = str(payload.get("source_type") or "scheduled")
         if task_id is None or source_task_log_id is None:
             return None
-        if not activation_revision or not scheduled_for:
+        if not activation_revision:
+            return None
+        # ``scheduled_for`` is part of the dedupe identity for clock-fired
+        # deliveries only. Explicit (REST-fired) deliveries of a scheduled
+        # task legitimately fire ahead of the projected occurrence and carry
+        # an empty scheduled_for.
+        if source_type == "scheduled" and not scheduled_for:
             return None
         try:
             destination = ContextRegistry.canonical_destination(
@@ -1759,13 +1767,14 @@ class TaskDue(Event):
             scheduled_for=scheduled_for,
             destination=destination,
             execution_mode=str(payload.get("execution_mode") or "live"),
-            source_type=str(payload.get("source_type") or "scheduled"),
+            source_type=source_type,
             task_label=task_label,
             task_summary=str(payload.get("task_summary") or ""),
             visibility_policy=str(
                 payload.get("visibility_policy") or "silent_by_default",
             ),
             recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
+            run_key=str(payload.get("run_key") or ""),
             reason=resolved_reason,
         )
 

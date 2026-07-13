@@ -485,6 +485,7 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
     """Validate and surface one due-task event to the notification bar."""
 
     assistant_id = _current_task_assistant_id()
+    execution_mode = str(getattr(event, "execution_mode", "") or "live").lower()
     activation, stale_reason = validate_task_due_activation(
         assistant_id=assistant_id,
         task_id=event.task_id,
@@ -492,6 +493,8 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         source_task_log_id=event.source_task_log_id,
         scheduled_for=event.scheduled_for,
         destination=event.destination,
+        execution_mode=execution_mode,
+        source_type=str(event.source_type or "scheduled"),
     )
     if stale_reason is not None:
         cm._session_logger.info(
@@ -505,9 +508,7 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
 
     # Offline due tasks stay disconnected from the CM→act chat loop: spawn the
     # offline_runner subprocess on this same pod (LocalOfflineDispatcher).
-    if str(getattr(event, "execution_mode", "") or "").lower() == "offline" or (
-        activation is not None and activation.execution_mode == "offline"
-    ):
+    if execution_mode == "offline" or activation.execution_mode == "offline":
         return await _handle_offline_scheduled_due(
             event,
             cm,
@@ -586,7 +587,13 @@ async def _handle_offline_scheduled_due(
         cm._offline_dispatcher = dispatcher
 
     try:
-        await dispatcher.dispatch(activation, source_type="scheduled")
+        # Reuse the dispatcher-provided run_key when present so the in-pod
+        # runner adopts the task-run row the control plane already created.
+        await dispatcher.dispatch(
+            activation,
+            source_type=str(event.source_type or "scheduled"),
+            run_key=event.run_key or None,
+        )
     except Exception as exc:
         error_message = (
             f"Offline scheduled task '{_task_due_label(event, activation)}' failed "
