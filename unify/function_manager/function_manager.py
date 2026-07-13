@@ -2853,7 +2853,7 @@ class FunctionManager(BaseFunctionManager):
         app_slug: str | None = None,
         connection_id: str | None = None,
         operation: str = "materialize",
-        limit: int = 500,
+        limit: int | None = None,
     ) -> Dict[str, Any]:
         """Materialize active provider-backed tools into the Primitives context.
 
@@ -2889,7 +2889,7 @@ class FunctionManager(BaseFunctionManager):
                 "reason": "integrations_not_in_scope",
                 "apps": [],
             }
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             log_staging_diagnostic(
                 logger,
                 (
