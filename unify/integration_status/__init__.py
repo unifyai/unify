@@ -323,12 +323,18 @@ def _register_functions(pkg: dict) -> int:
     if function_dir is None:
         return 0
 
-    from unify.function_manager.custom_functions import collect_custom_functions
+    from pathlib import Path
+
+    from unify.function_manager.custom_functions import (
+        collect_custom_functions,
+        register_live_function_source_dirs,
+    )
     from unify.manager_registry import ManagerRegistry
 
     source_fns = collect_custom_functions(directory=function_dir)
     if not source_fns:
         return 0
+    register_live_function_source_dirs([Path(function_dir)])
 
     fm = ManagerRegistry.get_function_manager()
     db_fns = fm._get_custom_functions_from_db()
