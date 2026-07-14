@@ -212,6 +212,18 @@ elif (( _parse_result == 2 )); then
 fi
 unset _parse_result
 
+# Per-session hang guard: in CI, default to 30 minutes per tmux session
+# unless the caller passed --session-timeout (or UNITY_TEST_SESSION_TIMEOUT).
+# Whole-run --timeout alone lets one hung session burn the entire job budget
+# (seen as exit 2 after 7200s with 1–2 sessions still on "r ⏳").
+if (( SESSION_TIMEOUT == 0 )); then
+  if [[ -n "${UNITY_TEST_SESSION_TIMEOUT:-}" && "${UNITY_TEST_SESSION_TIMEOUT}" =~ ^[0-9]+$ && "${UNITY_TEST_SESSION_TIMEOUT}" -ge 1 ]]; then
+    SESSION_TIMEOUT="${UNITY_TEST_SESSION_TIMEOUT}"
+  elif [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    SESSION_TIMEOUT=1800
+  fi
+fi
+
 # For backward compatibility, expose _NUM_CORES (used in some places)
 _NUM_CORES=$DETECTED_CPU_CORES
 
@@ -937,6 +949,25 @@ run_cmd() {
   else
     pytest_cmd=$(printf '%q -m pytest %s %q' "$VENV_PY" "$extra_args" "$target")
   fi
+  # Wrap pytest in GNU/coreutils timeout so a hung session fails in minutes
+  # instead of holding the whole-run --timeout budget. Prefer timeout(1);
+  # fall back to gtimeout on macOS Homebrew. Skip wrapping if neither exists
+  # (local mac without coreutils) — whole-run --timeout remains the backstop.
+  if (( SESSION_TIMEOUT > 0 )); then
+    local timeout_bin=""
+    if command -v timeout >/dev/null 2>&1; then
+      timeout_bin="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+      timeout_bin="gtimeout"
+    fi
+    if [[ -n "$timeout_bin" ]]; then
+      # --foreground: forward signals to pytest (needed for CI cancel).
+      # --kill-after=30s: escalate to SIGKILL if pytest ignores SIGTERM.
+      pytest_cmd=$(printf '%q --foreground --kill-after=30s %q %s' "$timeout_bin" "${SESSION_TIMEOUT}s" "$pytest_cmd")
+    else
+      echo "Warning: --session-timeout $SESSION_TIMEOUT requested but neither timeout nor gtimeout is on PATH; hanging sessions will not be killed per-session." >&2
+    fi
+  fi
   # Build inner command with socket name directly interpolated (not via env var)
   # This ensures tmux commands target the correct isolated server
   # Note: LC_ALL=en_US.UTF-8 is required for Unicode emoji support in tmux session names
@@ -1505,6 +1536,9 @@ elif (( TIMEOUT > 0 )); then
   echo "Created all ${#made_sessions[@]} tmux sessions. $completed_count completed. Waiting for remaining $pending_count to complete (timeout: ${TIMEOUT}s)..."
 else
   echo "Created all ${#made_sessions[@]} tmux sessions. $completed_count completed. Waiting for remaining $pending_count to complete..."
+fi
+if (( SESSION_TIMEOUT > 0 )); then
+  echo "Per-session hang guard: pytest killed after ${SESSION_TIMEOUT}s if still running."
 fi
 
 wait_start=$(date +%s)
