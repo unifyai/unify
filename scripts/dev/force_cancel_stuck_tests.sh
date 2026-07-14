@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Force-cancel Tests workflow runs that ignore ordinary cancel.
 #
+# Agent policy (do not rediscover under pressure):
+#   .cursor/rules/ci-tests-cancel-zombies.mdc
+#
 # Symptom: gh run cancel "succeeds" but cancel_requested_at stays null and
 # jobs remain in_progress on "Run tests" for tens of minutes, holding the
 # tests concurrency group so new staging matrices stay pending forever.
+# That is a GitHub zombie run — NOT if: always() post-step wind-down.
 #
 # GitHub's force-cancel bypasses that stuck state:
 #   https://docs.github.com/en/rest/actions/workflow-runs#force-cancel-a-workflow-run
@@ -25,7 +29,10 @@ if [[ -n "$RUN_ID" ]]; then
 fi
 
 echo "Looking for in_progress Tests runs on ${BRANCH}..."
-mapfile -t RUNS < <(gh run list --workflow=tests.yml --branch="$BRANCH" --status in_progress --limit 20 --json databaseId,url,displayTitle --jq '.[] | "\(.databaseId)\t\(.url)\t\(.displayTitle)"')
+RUNS=()
+while IFS= read -r row; do
+  [[ -n "$row" ]] && RUNS+=("$row")
+done < <(gh run list --workflow=tests.yml --branch="$BRANCH" --status in_progress --limit 20 --json databaseId,url,displayTitle --jq '.[] | "\(.databaseId)\t\(.url)\t\(.displayTitle)"')
 
 if (( ${#RUNS[@]} == 0 )); then
   echo "No in_progress Tests runs on ${BRANCH}."
