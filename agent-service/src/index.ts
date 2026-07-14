@@ -1133,6 +1133,16 @@ async function googleMeetJoinFlow(agent: BrowserAgent, displayName: string): Pro
     return { status: 'error', reason: `meet_page_error: "${errorMsg}" (url=${pageUrl})` };
   }
 
+  // Google turns anonymous guests away with "You can't join this video call"
+  // when no signed-in host is present to admit them. This is terminal (not a
+  // lobby), so classify it distinctly instead of silently reporting 'lobby'.
+  const blockedSelector = "text=/can.?t join this|you can.?t join|not allowed to join|you were not admitted/i";
+  const isBlocked = await page.locator(blockedSelector).first().isVisible({ timeout: 1000 }).catch(() => false);
+  if (isBlocked) {
+    const blockedMsg = await page.locator(blockedSelector).first().textContent().catch(() => 'unknown');
+    return { status: 'error', reason: `meet_join_blocked: "${blockedMsg}" (url=${pageUrl})` };
+  }
+
   const hasJoinBtn = await page.locator(
     'button:has-text("Ask to join"), button:has-text("Join now"), button:has-text("Join")'
   ).first().isVisible({ timeout: 1000 }).catch(() => false);
@@ -1170,7 +1180,7 @@ async function googleMeetPollState(sessionId: string): Promise<void> {
 
       // Check if denied
       const denied = await page.locator(
-        'text=/denied|not allowed|can\'t join/i'
+        'text=/denied|not allowed|can.?t join this|you can.?t join|you were not admitted/i'
       ).first().isVisible({ timeout: 500 }).catch(() => false);
       if (denied) {
         session.status = 'removed';
@@ -3470,6 +3480,15 @@ async function teamsMeetJoinFlow(agent: BrowserAgent, displayName: string): Prom
     return { status: 'error', reason: `teams_page_error: "${errorMsg}" (url=${pageUrl})` };
   }
 
+  // Teams turns unauthenticated guests away when the organizer is not present
+  // to admit them from the lobby. Terminal, so classify it distinctly.
+  const teamsBlockedSelector = "text=/you.?re not allowed to join|not allowed to join|you weren.?t admitted|you were not admitted|weren.?t let in/i";
+  const isBlocked = await page.locator(teamsBlockedSelector).first().isVisible({ timeout: 1000 }).catch(() => false);
+  if (isBlocked) {
+    const blockedMsg = await page.locator(teamsBlockedSelector).first().textContent().catch(() => 'unknown');
+    return { status: 'error', reason: `teams_join_blocked: "${blockedMsg}" (url=${pageUrl})` };
+  }
+
   const hasJoinBtn = await page.locator(
     'button:has-text("Join now"), button:has-text("Join meeting")'
   ).first().isVisible({ timeout: 1000 }).catch(() => false);
@@ -3506,7 +3525,7 @@ async function teamsMeetPollState(sessionId: string): Promise<void> {
       if (admitted) session.status = 'active';
 
       const denied = await page.locator(
-        'text=/not admitted|denied|sorry, but you were not admitted|not let in/i'
+        'text=/not admitted|denied|sorry, but you were not admitted|not let in|you.?re not allowed to join|you weren.?t admitted/i'
       ).first().isVisible({ timeout: 500 }).catch(() => false);
       if (denied) {
         session.status = 'removed';
