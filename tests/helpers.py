@@ -821,17 +821,36 @@ def _acquire_file_lock_with_timeout(
     indefinitely - instead, waiting tests will fail with a clear error.
     """
     start = time.monotonic()
+    last_log = start
+    waiting_logged = False
     while True:
         try:
             _lock_file_nb(lock_file)
+            if waiting_logged:
+                print(
+                    f"[lock] Acquired '{lock_name}' after "
+                    f"{time.monotonic() - start:.1f}s",
+                    flush=True,
+                )
             return  # Successfully acquired lock
         except (BlockingIOError, OSError):
-            elapsed = time.monotonic() - start
+            now = time.monotonic()
+            elapsed = now - start
             if elapsed >= timeout:
                 raise TimeoutError(
                     f"Timeout after {timeout}s waiting for lock '{lock_name}'. "
                     f"Another test process may be hung while holding this lock.",
                 )
+            # Log immediately on first wait, then every 30s so CI logs show
+            # lock starvation instead of a silent session-timeout kill.
+            if (not waiting_logged) or (now - last_log >= 30.0):
+                print(
+                    f"[lock] Waiting for '{lock_name}' "
+                    f"({elapsed:.0f}s / {timeout:.0f}s)...",
+                    flush=True,
+                )
+                waiting_logged = True
+                last_log = now
             time.sleep(0.1)  # Brief sleep before retry
 
 

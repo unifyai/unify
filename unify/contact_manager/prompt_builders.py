@@ -261,6 +261,24 @@ Clarification
         else ""
     )
 
+    human_disambiguation_bullet = (
+        f"• When several existing contacts match a name or description and a human must "
+        f"choose which one to mutate, call `{request_clar_fname}` — do NOT keep calling "
+        f"`{ask_fname}` with the same lookup. One `{ask_fname}` to list the candidates is "
+        f"enough; then either pick a unique match or ask the human.\n"
+        if request_clar_fname
+        else (
+            f"• When several existing contacts match a name or description, use one "
+            f"`{ask_fname}` to list candidates, then pick the best match with an explicit "
+            f"assumption — do NOT repeat the same `{ask_fname}` lookup.\n"
+        )
+    )
+    clar_or_conclude = (
+        f"call `{request_clar_fname}`"
+        if request_clar_fname
+        else "conclude with an explicit best-guess assumption"
+    )
+
     usage_examples_base = f"""
 Tool selection
 --------------
@@ -272,7 +290,7 @@ Ask vs Clarification
 • `{ask_fname}` is ONLY for inspecting/locating contacts that ALREADY EXIST (e.g., to find `contact_id`, verify fields).
 • Do NOT use `{ask_fname}` to ask the human for details about NEW contacts being created/changed in this update request.
 • For human clarifications about prospective/new contacts (e.g., name spelling, missing numbers, preferred channel), call `{request_clar_fname}` when available.
-• If the schema lacks a field the user wants to set, create it with `{create_custom_fname}` (typically `column_type='str'`) before updating.
+{human_disambiguation_bullet}• If the schema lacks a field the user wants to set, create it with `{create_custom_fname}` (typically `column_type='str'`) before updating.
 • Use `{merge_fname}` only when the user explicitly asks to combine two known contacts or when duplicates are clearly identified.
 • Use `{delete_fname}` only on explicit deletion requests. Never delete assistant self or boss system contacts.
 
@@ -335,10 +353,10 @@ Asking Questions
 
 Anti‑patterns to avoid
 ---------------------
-• Repeating the exact same tool call with the same arguments as a means to 'make sure it has completed', just call `ask` to check the latest state of the contacts list
-• Making *any* assumptions about the current state of the contacts list, instead you should make liberal use of the `ask` tool
+• Repeating the exact same tool call with the same arguments (including `{ask_fname}`) — identical repeats are refused by the runtime. Use the prior result, change the arguments, call a different tool, or conclude.
+• Making *any* assumptions about the current state of the contacts list without first locating the target contact when it is ambiguous
 
-(When locating a record by semantics, always do a quick `{ask_fname}` step to resolve `contact_id` before mutating. Prefer updating in place over recreating.)
+(When locating a record by semantics, do a single `{ask_fname}` step to resolve `contact_id` before mutating. Prefer updating in place over recreating. If multiple contacts remain plausible after that lookup, {clar_or_conclude}.)
     """
     usage_examples = textwrap.dedent(usage_examples_base).strip()
     if clarification_block:
