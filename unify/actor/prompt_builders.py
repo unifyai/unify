@@ -645,10 +645,25 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     )
     ```
 
+    When the user quotes an exact task name, copy it **verbatim** into the
+    primitive call — including parenthetical suffixes, ids, and punctuation.
+    Do not shorten or paraphrase names.
+
+    For create-then-read in one user request, prefer two sequential
+    ``execute_function`` calls (update, then ask) rather than wrapping both
+    in ``execute_code``. If you do use ``execute_code``, await each handle's
+    ``.result()`` and return the confirmation string as the last expression.
+
     Never invent a local helper that only prints or returns a fake task object,
+    never build a dict/`json.dumps` "task payload" and treat it as persistence,
     never shell-`echo` a create command, and never claim a task was created
     unless `primitives.tasks.update` / `primitives.tasks.ask` confirmed it.
-    Persistence lives exclusively in those primitives.
+    Persistence lives exclusively in those primitives. If those tools already
+    confirmed the fields, report them — do not claim failure or uncertainty.
+
+    In ``execute_code``, ``primitives`` is already in scope — do not
+    ``import primitives``, ``from primitives import ...``, or wrap calls in
+    ``asyncio.run(...)`` (the runtime is already async; ``asyncio.run`` raises).
 
     Natural-language recurring tasks should normally start as description-driven
     tasks with `entrypoint=None`. The future due wake will call

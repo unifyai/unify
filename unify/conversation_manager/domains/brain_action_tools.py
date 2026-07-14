@@ -2167,50 +2167,6 @@ class ConversationManagerBrainActionTools:
         await handle.stop()
         return {"status": "closed", "session_id": session_id}
 
-    async def set_boss_details(
-        self,
-        *,
-        first_name: str | None = None,
-        surname: str | None = None,
-        phone_number: str | None = None,
-        email_address: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Update the boss contact's details.
-
-        Use this when you learn the boss's name, phone number, or email
-        address during conversation. Only provided fields are updated;
-        omitted fields are left unchanged.
-
-        Updating the boss's email address is especially important — once
-        their email is on file and they create an account at unify.ai,
-        the assistant will be automatically linked to their account.
-
-        Args:
-            first_name: The boss's first name.
-            surname: The boss's surname / last name.
-            phone_number: The boss's phone number.
-            email_address: The boss's email address.
-        """
-        updates = {
-            k: v
-            for k, v in {
-                "first_name": first_name,
-                "surname": surname,
-                "phone_number": phone_number,
-                "email_address": email_address,
-            }.items()
-            if v is not None
-        }
-        if not updates:
-            return {"status": "error", "error": "No fields provided to update."}
-
-        self._cm.contact_index.contact_manager.update_contact(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            **updates,
-        )
-        return {"status": "updated", "updates": updates}
-
     async def deactivate_onboarding(self) -> dict[str, Any]:
         """Pause the global onboarding flow so my boss can use the platform normally.
 
@@ -2693,9 +2649,7 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
-        if SETTINGS.DEMO_MODE:
-            tools["set_boss_details"] = self.set_boss_details
-        elif self._cm.initialized:
+        if self._cm.initialized:
             tools["act"] = self.act
             tools["ask_about_contacts"] = self.ask_about_contacts
             tools["update_contacts"] = self.update_contacts

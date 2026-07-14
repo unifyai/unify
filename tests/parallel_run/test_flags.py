@@ -133,6 +133,42 @@ class TestTimeoutFlag:
         assert result.exit_code == 0, f"Should pass: {result.stderr}"
 
 
+class TestSessionTimeoutFlag:
+    """Tests for --session-timeout (per-tmux-session hang kill)."""
+
+    def test_session_timeout_completes_normally(self, runner):
+        """--session-timeout N should not kill sessions that finish quickly."""
+        result = runner.run(
+            "--session-timeout",
+            "120",
+            runner.fixture_path("test_always_pass.py"),
+        )
+        assert (
+            result.exit_code == 0
+        ), f"Fast tests should pass under session-timeout: {result.stderr}"
+        assert "Per-session hang guard" in result.stdout
+
+    def test_session_timeout_kills_hung_session(self, runner):
+        """--session-timeout N should fail a hung session instead of waiting forever."""
+        result = runner.run(
+            "--session-timeout",
+            "3",
+            "--timeout",
+            "60",
+            runner.fixture_path("test_hang.py"),
+        )
+        # Hung session is killed by timeout(1) → non-zero pytest status → runner exit 1
+        # (not whole-run exit 2, which only fires when sessions are still pending).
+        assert result.exit_code != 0, (
+            f"Hung session should fail under --session-timeout, got 0. "
+            f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r}"
+        )
+        assert result.exit_code != 2, (
+            "Should fail the hung session (exit 1), not burn the whole-run timeout (exit 2). "
+            f"stdout={result.stdout[-500:]!r}"
+        )
+
+
 class TestSerialFlag:
     """Tests for --serial / -s flag."""
 

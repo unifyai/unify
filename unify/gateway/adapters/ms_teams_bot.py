@@ -129,8 +129,26 @@ async def _ensure_pending_install(activity: dict[str, Any]) -> dict[str, Any] | 
     )
 
 
-def _install_welcome_card(connect_url: str) -> dict[str, Any]:
-    """Adaptive Card attachment: a one-tap "Connect to Unify" button."""
+# Plain-text welcome sent alongside the connect card. Teams Store certification
+# requires a visible welcome on add, and some surfaces render only the top-level
+# text (not the card), so the greeting must live in ``text`` too.
+_WELCOME_TEXT = (
+    "Hi! Thanks for adding Unify. I'm your AI teammate here in Teams. "
+    "One quick step to finish setup: connect this workspace to your Unify "
+    "account or organization using the button below. You only do this once. "
+    "You can also say **Hi**, **Hello**, or **Help** anytime."
+)
+
+# Canned reply when a message lands on an install not yet bound to a Unify owner.
+_PENDING_REPLY_TEXT = (
+    "Thanks for the message! This Teams workspace isn't connected to a Unify "
+    "account yet, so I can't act on requests here just yet. Tap **Connect to "
+    "Unify** below to finish setup, then I'll be able to help."
+)
+
+
+def _connect_card(text: str, connect_url: str) -> dict[str, Any]:
+    """Adaptive Card attachment: a message plus a one-tap "Connect to Unify"."""
     return {
         "contentType": "application/vnd.microsoft.card.adaptive",
         "content": {
@@ -142,16 +160,12 @@ def _install_welcome_card(connect_url: str) -> dict[str, Any]:
                     "type": "TextBlock",
                     "size": "Medium",
                     "weight": "Bolder",
-                    "text": "Thanks for adding Unify to Teams",
+                    "text": "Connect Unify to Teams",
                 },
                 {
                     "type": "TextBlock",
                     "wrap": True,
-                    "text": (
-                        "One more step: connect this Teams tenant to your "
-                        "Unify account or organization. Tap Connect below and "
-                        "finish in Console — you only do this once."
-                    ),
+                    "text": text,
                 },
             ],
             "actions": [
@@ -165,31 +179,25 @@ def _install_welcome_card(connect_url: str) -> dict[str, Any]:
     }
 
 
-async def _send_install_welcome(
+async def _send_ms_teams_bot_message(
     activity: dict[str, Any],
     install: dict[str, Any] | None,
+    message: dict[str, Any],
 ) -> None:
-    """Proactively DM the installer a one-click connect link (best-effort).
+    """POST a proactive activity into the inbound conversation (best-effort).
 
-    Mints a Bot Connector token via the shared ``/send`` machinery and posts
-    an Adaptive Card into the install conversation. Any missing piece (an
-    already-bound install with no ``connect_url``, no ``service_url``, no
-    token, or a send failure) is logged and swallowed so it never breaks the
-    webhook.
+    Mints a Bot Connector token via the shared ``/send`` machinery. Any missing
+    piece (no ``service_url``, no ``conversation_id``, no token, or a send
+    failure) is logged and swallowed so it never breaks the webhook.
     """
-    if not install:
-        return
-    connect_url = install.get("connect_url") or ""
-    if not connect_url:
-        return
     conversation = activity.get("conversation") or {}
     conversation_id = conversation.get("id") or ""
     service_url = (
-        activity.get("serviceUrl") or install.get("service_url") or ""
+        activity.get("serviceUrl") or (install or {}).get("service_url") or ""
     ).rstrip("/")
     if not conversation_id or not service_url:
         logger.warning(
-            "ms_teams_bot: welcome DM skipped — missing conversation_id or "
+            "ms_teams_bot: proactive send skipped — missing conversation_id or "
             "service_url",
         )
         return
@@ -198,7 +206,6 @@ async def _send_install_welcome(
     except Exception:
         logger.exception("ms_teams_bot: connector token mint failed")
         return
-    message = {"type": "message", "attachments": [_install_welcome_card(connect_url)]}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
@@ -210,14 +217,49 @@ async def _send_install_welcome(
                 },
             )
     except Exception:
-        logger.exception("ms_teams_bot: welcome DM send transport error")
+        logger.exception("ms_teams_bot: proactive send transport error")
         return
     if resp.status_code >= 400:
         logger.error(
-            "ms_teams_bot: welcome DM send failed: %s %s",
+            "ms_teams_bot: proactive send failed: %s %s",
             resp.status_code,
             resp.text,
         )
+
+
+async def _send_install_welcome(
+    activity: dict[str, Any],
+    install: dict[str, Any] | None,
+) -> None:
+    """Proactively DM the installer a welcome + one-click connect link.
+
+    The caller gates this on the install's ``created`` flag so it fires exactly
+    once per install. The plain-text greeting is always sent; the connect card
+    is attached when Orchestra returned a ``connect_url`` (install still
+    pending). Best-effort — any failure is logged and swallowed.
+    """
+    if not install:
+        return
+    connect_url = install.get("connect_url") or ""
+    message: dict[str, Any] = {"type": "message", "text": _WELCOME_TEXT}
+    if connect_url:
+        message["attachments"] = [_connect_card(_WELCOME_TEXT, connect_url)]
+    await _send_ms_teams_bot_message(activity, install, message)
+
+
+async def _send_pending_reply(
+    activity: dict[str, Any],
+    connect_url: str | None,
+) -> None:
+    """Reply to an inbound message on an unbound (pending) install.
+
+    Keeps the bot responsive rather than silent when someone messages it before
+    the tenant is connected. Includes the connect card when available.
+    """
+    message: dict[str, Any] = {"type": "message", "text": _PENDING_REPLY_TEXT}
+    if connect_url:
+        message["attachments"] = [_connect_card(_PENDING_REPLY_TEXT, connect_url)]
+    await _send_ms_teams_bot_message(activity, None, message)
 
 
 async def resolve_ms_teams_bot_inbound(
@@ -297,28 +339,38 @@ async def ms_teams_bot_messages_webhook(
         if any(member.get("id") == recipient_id for member in members_added):
             # Personal-scope add fires with a live 1:1 conversation reference,
             # so record the install and DM the installer a one-click connect
-            # link (no code to copy).
+            # link. The welcome is gated on ``created`` so it fires exactly once
+            # even though the add also emits an ``installationUpdate``.
             install = await _ensure_pending_install(activity)
-            await _send_install_welcome(activity, install)
+            if install and install.get("created"):
+                await _send_install_welcome(activity, install)
         return {"status": 200}
 
     # ``installationUpdate`` fires for app install/uninstall across scopes.
-    # ``add`` for an org-wide/admin-center install registers the tenant so the
-    # owner can bind it; we do NOT DM here because a personal add already emits
-    # the ``conversationUpdate`` above (avoids a double-DM) and an org install
-    # may have no personal 1:1 to message. ``remove``/``remove-upgrade`` are
-    # teardown signals the local mirror does not act on (no per-tenant token to
-    # revoke at Microsoft).
+    # ``add`` registers the tenant so the owner can bind it. We also welcome
+    # here (gated on ``created``) so an org-wide / admin-center install — which
+    # may never emit the personal ``conversationUpdate`` — still gets the one
+    # welcome DM; ``created`` dedups against the ``conversationUpdate`` add.
+    # ``remove``/``remove-upgrade`` are teardown signals the local mirror does
+    # not act on (no per-tenant token to revoke at Microsoft).
     if activity_type == "installationUpdate":
         if (activity.get("action") or "") == "add":
-            await _ensure_pending_install(activity)
+            install = await _ensure_pending_install(activity)
+            if install and install.get("created"):
+                await _send_install_welcome(activity, install)
         return {"status": 200}
 
     if activity_type != "message":
         return {"status": 200}
 
     data = await resolve_ms_teams_bot_inbound(activity)
-    if data is None or not data.get("handled"):
+    if data is None:
+        return {"status": 200}
+    if not data.get("handled"):
+        # A message on a still-pending (unbound) install must not be dropped
+        # silently — reply with a connect nudge instead of going dark.
+        if data.get("install_state") == "pending":
+            await _send_pending_reply(activity, data.get("connect_url"))
         return {"status": 200}
 
     assistant_id = data.get("assistant_id")

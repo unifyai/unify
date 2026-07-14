@@ -38,6 +38,7 @@ from unify.conversation_manager.domains.self_host_desktop import (
 )
 from unify.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
+    _handle_provider_event_dispatch_requested_event,
     _handle_task_due_event,
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
@@ -566,6 +567,23 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         )
 
 
+def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
+    """Notification + transcript text for a successful browser-meet join.
+
+    A join that lands in the waiting room is still a success — the browser has
+    knocked ("Ask to join") and is waiting for the host to admit it — so word
+    it as waiting to be let in rather than already being in the call. This
+    keeps the LLM from treating a lobby state as a join failure.
+    """
+    if in_lobby:
+        notif = (
+            f"In the {meet_label} waiting room — I've asked to join and am "
+            "waiting for the host to let me in."
+        )
+        return notif, f"<Waiting in the {meet_label} waiting room to be admitted...>"
+    return f"Joining {meet_label}...", f"<Joining {meet_label}...>"
+
+
 @EventHandler.register(GoogleMeetReceived)
 async def _(
     event: GoogleMeetReceived,
@@ -600,16 +618,20 @@ async def _(
     )
 
     if joined:
+        notif_text, thread_text = _meet_join_notif(
+            "Google Meet",
+            cm.call_manager.meet_lobby_waiting,
+        )
         cm.notifications_bar.push_notif(
             "Comms",
-            f"Joining Google Meet...",
+            notif_text,
             event.timestamp,
         )
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
             thread_name=Medium.GOOGLE_MEET,
-            message_content="<Joining Google Meet...>",
+            message_content=thread_text,
             role="assistant",
             timestamp=event.timestamp,
         )
@@ -683,16 +705,20 @@ async def _(
     )
 
     if joined:
+        notif_text, thread_text = _meet_join_notif(
+            "Teams meeting",
+            cm.call_manager.meet_lobby_waiting,
+        )
         cm.notifications_bar.push_notif(
             "Comms",
-            f"Joining Teams meeting...",
+            notif_text,
             event.timestamp,
         )
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
             thread_name=Medium.TEAMS_MEET,
-            message_content="<Joining Teams meeting...>",
+            message_content=thread_text,
             role="assistant",
             timestamp=event.timestamp,
         )
@@ -2759,18 +2785,6 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
                 ),
             )
 
-        # Set demo mode from startup event before initializing managers
-        # Demo mode is derived from the presence of a demo_id
-        if event.demo_id is not None:
-            from unify.settings import SETTINGS
-
-            SETTINGS.DEMO_MODE = True
-            SETTINGS.DEMO_ID = event.demo_id
-            cm._session_logger.debug(
-                "startup",
-                f"Demo mode enabled (demo_id={event.demo_id})",
-            )
-
         payload = event.to_dict()["payload"]
         previous_unify_key = SESSION_DETAILS.unify_key
         cm.set_details(payload)
@@ -2957,6 +2971,17 @@ async def _(
     **kwargs,
 ):
     if await _handle_task_trigger_requested_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(ProviderEventDispatchRequested)
+async def _(
+    event: ProviderEventDispatchRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_provider_event_dispatch_requested_event(event, cm):
         await cm.request_llm_run(delay=0)
 
 

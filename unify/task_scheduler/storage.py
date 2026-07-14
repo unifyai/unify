@@ -8,6 +8,7 @@ reads, writes, and metrics).
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional, Union
 from enum import Enum
@@ -273,14 +274,25 @@ class TasksStore:
             return [TasksStore._with_explicit_task_types(entry) for entry in entries]
         if not isinstance(entries, dict):
             return entries
-        if entries.get("schedule") is None:
-            return entries
         out = dict(entries)
+        # Legacy rows / callers may still pass trigger as JSON text; the field is
+        # registered as dict, so decode before write.
+        trigger = out.get("trigger")
+        if isinstance(trigger, str):
+            out["trigger"] = json.loads(trigger)
         explicit_types = dict(out.get("explicit_types") or {})
-        schedule_types = dict(explicit_types.get("schedule") or {})
-        schedule_types["type"] = "dict"
-        explicit_types["schedule"] = schedule_types
-        out["explicit_types"] = explicit_types
+        # Nested schedule/trigger columns are registered as dict; declare that on
+        # write so Orchestra does not infer a conflicting scalar type.
+        if out.get("schedule") is not None:
+            schedule_types = dict(explicit_types.get("schedule") or {})
+            schedule_types["type"] = "dict"
+            explicit_types["schedule"] = schedule_types
+        if out.get("trigger") is not None:
+            trigger_types = dict(explicit_types.get("trigger") or {})
+            trigger_types["type"] = "dict"
+            explicit_types["trigger"] = trigger_types
+        if explicit_types:
+            out["explicit_types"] = explicit_types
         return out
 
     # ------------------------------- Writes --------------------------------

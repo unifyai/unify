@@ -1624,17 +1624,8 @@ A: The easiest way is to share your screen and I'll walk you through it step by 
 A: I can't be physically present. Everything else a remote worker can do — communicate, research, use software, manage files, handle tasks — I can do."""
 
 
-def _build_demo_boss_details_block(contact_id: int) -> str:
-    """Build boss details block for demo mode without identified boss."""
-    return f"""Boss details
-------------
-My boss (contact_id={contact_id}) has not signed up yet. Their details are unknown at this point and will be learned during conversation. When I learn their name, phone number, or email address, I should update their record using `set_boss_details`.
-
-Updating my boss's email address is critical — once their email is on file and they sign up at unify.ai, I will be automatically linked to their account."""
-
-
 def _build_base_boss_details_block(boss_details: str) -> str:
-    """Build boss details block for normal non-demo sessions."""
+    """Build boss details block."""
     return f"""Boss details
 ------------
 The following are my boss's details:
@@ -1648,32 +1639,6 @@ def _build_tool_call_reasoning_block() -> str:
 Each tool accepts an optional `thoughts` argument: freeform text explaining why I chose that tool. I should use it to justify non-obvious choices. It is never required, and it is never shown to the user."""
 
 
-def _build_demo_output_format(
-    *,
-    voice_output_block: str,
-    comms_tool_listing: str,
-    sms_call_note: str,
-    contact_id: int,
-) -> str:
-    """Build output format block for demo mode."""
-    return f"""{_build_tool_call_reasoning_block()}
-
-{voice_output_block}
-
-All actions are performed by calling the available tools. The tools I have access to include:
-
-**Communication tools:**
-{comms_tool_listing}
-
-**Contact management tools:**
-- `set_boss_details`: Update my boss's name, phone number, or email. Use whenever I learn these details during conversation.
-- `wait(delay=None)`: Wait for more input. Use this instead of sending another message - prefer silence over extra communication. Optionally pass `delay=<seconds>` to wake up after that many seconds for another thinking turn (e.g., to probe a long-running action). Omit `delay` to wait indefinitely until the next event.
-
-For communication tools, provide the contact_id when the contact is in the active conversations.{sms_call_note}
-
-Communication tools can also fill in missing contact details inline (e.g., `make_call(contact_id={contact_id}, phone_number="+1234")` saves the number and places the call in one step). Use this for phone numbers and email addresses. For names, use `set_boss_details`."""
-
-
 def _build_base_output_format(
     *,
     voice_output_block: str,
@@ -1683,7 +1648,7 @@ def _build_base_output_format(
     coordinator_admin_tool_listing: str = "",
     coordinator_knowledge_tool_listing: str = "",
 ) -> str:
-    """Build output format block for non-demo system prompts."""
+    """Build output format block for system prompts."""
     coordinator_admin_section = ""
     if coordinator_admin_tool_listing:
         coordinator_admin_section = f"""
@@ -1720,7 +1685,7 @@ For communication tools, provide the contact_id when the contact is in the activ
 
 
 def _build_base_conversational_restraint_block() -> str:
-    """Build conversational restraint block shared across non-demo sessions."""
+    """Build conversational restraint block for system prompts."""
     return """Conversational restraint
 ------------------------
 CRITICAL: I have a tendency to be over-eager and verbose. I must fight this aggressively.
@@ -1791,7 +1756,7 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
-    """Build action-steering guidance for non-demo mode."""
+    """Build action-steering guidance for system prompts."""
     if computer_fast_path:
         computer_click_example = (
             "the appropriate computer fast-path tool (faster than interjecting)"
@@ -1864,7 +1829,7 @@ The key distinction: `interject_*` is proactive (I'm volunteering information), 
 
 
 def _build_uncertainty_handling_block() -> str:
-    """Build uncertainty-handling guidance for non-demo mode."""
+    """Build uncertainty-handling guidance for system prompts."""
     return f"""Uncertainty handling
 --------------------
 When I am uncertain whether I have the information needed to complete a request, I use the **parallel strategy**: simultaneously ask for clarification AND search for the information.
@@ -1888,7 +1853,7 @@ When I am uncertain whether I have the information needed to complete a request,
 
 
 def _build_direct_specialist_tools_block() -> str:
-    """Build direct specialist-tools guidance for non-demo mode."""
+    """Build direct specialist-tools guidance for system prompts."""
     mutation_strategy_guidance = """**Don't ask before updating.** If the request involves storing, saving, or modifying something, go straight to the mutation tool (`update_contacts` or `act`) — do NOT first call a read tool (`ask_about_contacts`, `query_past_transcripts`) to check existing records. The mutation pathways already check existing state before writing, so a preemptive read is duplicative. Bundle the intent into a single call.
 
 - BAD: `ask_about_contacts("do we have Jane Doe?")` → then → `update_contacts("save Jane Doe's email")`
@@ -1926,7 +1891,7 @@ def _build_act_capabilities_block(
     has_linked_user_desktop: bool = False,
     user_filesys_available: bool = False,
 ) -> str:
-    """Build act-capabilities guidance for non-demo mode.
+    """Build act-capabilities guidance for system prompts.
 
     ``has_linked_user_desktop`` gates *controlling* the user's machine (screen
     + input via ``act``), which works regardless of filesystem sync.
@@ -2171,7 +2136,7 @@ These tools are only available while the desktop is being actively shared."""
 
 
 def _build_persistent_sessions_block(*, computer_fast_path: bool) -> str:
-    """Build persistent-session guidance for non-demo mode."""
+    """Build persistent-session guidance for system prompts."""
     persistent_desktop_note = (
         "\n\nFor atomic computer actions during screen share, "
         'see "Computer fast-path tools" above.'
@@ -2377,49 +2342,6 @@ NOT: first the action, then in a separate response the acknowledgment. That is i
 **Exception:** On a voice call, verbal communication suffices for everything — acknowledgments, results, progress updates. Do not supplement with text messages."""
 
 
-def _build_demo_mode_block(
-    *,
-    contact_id: int,
-    channels_str: str,
-    assistant_has_phone: bool,
-) -> str:
-    """Build demo-mode behavior block."""
-    return f"""Demo mode
----------
-I am currently in **demo mode** — my boss (contact_id={contact_id}) has not yet signed up for an account. I was introduced to them by a colleague from Unify (contact_id=2), who is helping set things up.
-
-**My priorities in demo mode:**
-1. Be warm, capable, and impressive — this is the first experience my future boss has with me.
-2. Converse naturally and handle everything I can with the tools available to me.
-3. When I learn my boss's name, phone number, or email, save them immediately using `set_boss_details`.
-4. When my boss asks me to do a specific task I can't handle in demo mode (research, tasks, browsing, file management, etc.), I warmly explain that those capabilities unlock once they create an account at **unify.ai**. I frame this positively — "Once you're set up at unify.ai, I'll be able to handle all of that for you" — not as a limitation.
-5. When my boss asks how to get started, how to hire me, or what the next steps are — that's the natural moment to direct them to **unify.ai**. I don't force the sign-up link into every response; it should feel organic, not like an advert.
-6. Getting my boss's **email address** on file is especially valuable — once they sign up with that email, I will be automatically linked to their account.
-
-**What I CAN do in demo mode:**
-- Communicate via {channels_str}
-- Update my boss's contact details (name, phone, email) via `set_boss_details`
-- Have natural, engaging conversations that showcase my personality and reliability
-
-**What I CANNOT do in demo mode:**
-- Search knowledge bases, transcripts, web, or files
-- Manage tasks, use software, or access desktop capabilities
-- Any work that requires the `act` tool (unavailable until sign-up)
-
-When asked what I can do, I paint an impressive and honest picture — I'm a capable remote virtual employee who handles communication, research, tasks, software, documents, and more. I let my range speak for itself without forcing a sales pitch. When asked to do a specific thing I can't do yet, I explain warmly and point to **unify.ai**. When asked how to get started or hire me, that's the natural moment for the sign-up link.
-
-**Handling the introduction flow:**
-The Unify colleague (contact_id=2) may call me first to introduce my future boss. During this call, I should:
-- Be personable and make a great first impression
-- Learn and remember my boss's name""" + (
-        f"""
-- When asked to call my boss directly, I need their phone number — ask for it naturally
-- Use `make_call(contact_id={contact_id}, phone_number="...")` to call them, which saves the number automatically"""
-        if assistant_has_phone
-        else ""
-    )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Public builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2438,7 +2360,6 @@ def build_system_prompt(
     on_voice_call: bool = False,
     hang_up_gate_reason: str | None = None,
     outbound_voice_line_ready: bool = True,
-    demo_mode: bool = False,
     computer_fast_path: bool = False,
     assistant_has_phone: bool = True,
     assistant_has_email: bool = True,
@@ -2500,8 +2421,6 @@ def build_system_prompt(
         Whether assistant-initiated phone/WhatsApp calls can start with a
         prepared outbound voice worker. Inbound calls and answered Unify Meet
         sessions do not use this gate.
-    demo_mode : bool
-        Whether the assistant is operating in demo mode (pre-signup).
     computer_fast_path : bool
         Whether computer fast-path tools (``web_act``, ``desktop_act``) are
         currently available.
@@ -2656,7 +2575,7 @@ def build_system_prompt(
     coordinator_console_literacy_block = ""
     coordinator_onboarding_progress_block = ""
     coordinator_act_query_guidance_block = ""
-    if is_coordinator and not demo_mode:
+    if is_coordinator:
         coordinator_admin_tool_listing = _build_coordinator_admin_tool_listing(
             is_org_workspace=coordinator_has_org_context,
         )
@@ -2737,7 +2656,6 @@ def build_system_prompt(
     #   7. Action steering guidelines
     #   8. Tool-usage decision guides — Uncertainty / Direct specialist tools /
     #      Act capabilities / Persistent sessions / Computer fast-path
-    #      (in demo mode, the Demo-mode block occupies this slot instead)
     #   9. Concurrent action and acknowledgment
     #   10. Conversational restraint
     #   11. Communication guidelines + Multilingual
@@ -2785,8 +2703,6 @@ def build_system_prompt(
         parts.add(
             _build_coordinator_authorized_humans_section(authorized_humans_details),
         )
-    elif demo_mode and not first_name:
-        parts.add(_build_demo_boss_details_block(contact_id))
     else:
         parts.add(_build_base_boss_details_block(boss_details))
 
@@ -2812,34 +2728,23 @@ Messages from the current turn have **NEW** tag prepended:
     )
 
     # 6. Output format.
-    if demo_mode:
-        parts.add(
-            _build_demo_output_format(
-                voice_output_block=voice_output_block,
-                comms_tool_listing=comms_tool_listing,
-                sms_call_note=sms_call_note,
-                contact_id=contact_id,
-            ),
-        )
-    else:
-        parts.add(
-            _build_base_output_format(
-                voice_output_block=voice_output_block,
-                comms_tool_listing=comms_tool_listing,
-                action_steering_tool_listing=action_steering_tool_listing,
-                sms_call_note=sms_call_note,
-                coordinator_admin_tool_listing=coordinator_admin_tool_listing,
-                coordinator_knowledge_tool_listing=coordinator_knowledge_tool_listing,
-            ),
-        )
+    parts.add(
+        _build_base_output_format(
+            voice_output_block=voice_output_block,
+            comms_tool_listing=comms_tool_listing,
+            action_steering_tool_listing=action_steering_tool_listing,
+            sms_call_note=sms_call_note,
+            coordinator_admin_tool_listing=coordinator_admin_tool_listing,
+            coordinator_knowledge_tool_listing=coordinator_knowledge_tool_listing,
+        ),
+    )
 
-    # 7. Action steering guidelines (non-demo only).
-    if not demo_mode:
-        parts.add(
-            _build_action_steering_guidelines_block(
-                computer_fast_path=computer_fast_path,
-            ),
-        )
+    # 7. Action steering guidelines.
+    parts.add(
+        _build_action_steering_guidelines_block(
+            computer_fast_path=computer_fast_path,
+        ),
+    )
 
     channels_str = _build_channels_str(
         assistant_has_phone=assistant_has_phone,
@@ -2851,61 +2756,49 @@ Messages from the current turn have **NEW** tag prepended:
         assistant_has_slack=assistant_has_slack,
     )
 
-    # 8. Tool-usage decision guides (or the Demo-mode block in demo mode).
-    if demo_mode:
-        parts.add(
-            _build_demo_mode_block(
-                contact_id=contact_id,
-                channels_str=channels_str,
-                assistant_has_phone=assistant_has_phone,
-            ),
-        )
-    else:
-        parts.add(_build_uncertainty_handling_block())
-        parts.add(_build_direct_specialist_tools_block())
-        parts.add(
-            _build_act_capabilities_block(
-                has_linked_user_desktop=has_linked_user_desktop,
-                user_filesys_available=user_filesys_available,
-            ),
-        )
-        parts.add(
-            _build_conversational_vs_programmatic_comms_block(
-                is_coordinator=is_coordinator,
-            ),
-        )
-        parts.add(_build_external_resources_act_block())
-        user_machine_access_block = _build_user_machine_access_block(
+    # 8. Tool-usage decision guides.
+    parts.add(_build_uncertainty_handling_block())
+    parts.add(_build_direct_specialist_tools_block())
+    parts.add(
+        _build_act_capabilities_block(
             has_linked_user_desktop=has_linked_user_desktop,
-            user_filesys_consented=user_filesys_consented,
             user_filesys_available=user_filesys_available,
-            acting_user_id=acting_user_id,
-        )
-        if user_machine_access_block:
-            parts.add(user_machine_access_block)
-        if coordinator_act_query_guidance_block:
-            parts.add(coordinator_act_query_guidance_block)
-        parts.add(
-            _build_persistent_sessions_block(computer_fast_path=computer_fast_path),
-        )
-        if computer_fast_path:
-            parts.add(_build_computer_fast_path_block())
-            parts.add(_build_choosing_fast_path_target_block())
+        ),
+    )
+    parts.add(
+        _build_conversational_vs_programmatic_comms_block(
+            is_coordinator=is_coordinator,
+        ),
+    )
+    parts.add(_build_external_resources_act_block())
+    user_machine_access_block = _build_user_machine_access_block(
+        has_linked_user_desktop=has_linked_user_desktop,
+        user_filesys_consented=user_filesys_consented,
+        user_filesys_available=user_filesys_available,
+        acting_user_id=acting_user_id,
+    )
+    if user_machine_access_block:
+        parts.add(user_machine_access_block)
+    if coordinator_act_query_guidance_block:
+        parts.add(coordinator_act_query_guidance_block)
+    parts.add(
+        _build_persistent_sessions_block(computer_fast_path=computer_fast_path),
+    )
+    if computer_fast_path:
+        parts.add(_build_computer_fast_path_block())
+        parts.add(_build_choosing_fast_path_target_block())
 
-    # 9. Concurrent action and acknowledgment (non-demo only — actions are
-    #    not dispatched at all in demo mode).
-    if not demo_mode:
-        parts.add(
-            _build_base_concurrent_action_ack_block(
-                contact_id=contact_id,
-                ack_tools=outbound_ack_tool_names,
-            ),
-        )
+    # 9. Concurrent action and acknowledgment.
+    parts.add(
+        _build_base_concurrent_action_ack_block(
+            contact_id=contact_id,
+            ack_tools=outbound_ack_tool_names,
+        ),
+    )
 
     # Coordinator-only reactive narration rules for the gradual
-    # onboarding flow. Empty string for non-coordinator sessions and
-    # demo mode (the builder already skipped construction in those
-    # cases) so this becomes a structural no-op there.
+    # onboarding flow. Empty string for non-coordinator sessions
+    # so this becomes a structural no-op there.
     if coordinator_onboarding_narration_block:
         parts.add(coordinator_onboarding_narration_block)
 
@@ -2918,7 +2811,7 @@ Messages from the current turn have **NEW** tag prepended:
     # Companion UI reference describing the onboarding view layout
     # and step contents — used to answer the user's "what do I
     # do next?" / "where do I click?" questions. Same gating as the
-    # narration block above (Coordinator, non-demo).
+    # narration block above (Coordinator).
     if coordinator_onboarding_flow_reference_block:
         parts.add(coordinator_onboarding_flow_reference_block)
 
@@ -3060,13 +2953,13 @@ When contacts communicate in a non-English language, I match their language in m
 {outbound_language_note}""",
     )
 
-    # 12. Proactive meeting offers (non-voice, non-demo only).
-    if not demo_mode and not is_voice_call:
+    # 12. Proactive meeting offers (non-voice only).
+    if not is_voice_call:
         parts.add(_build_base_proactive_meeting_offers_block())
 
-    # 13. Console knowledge (non-demo only; Coordinator uses literacy block).
+    # 13. Console knowledge (Coordinator uses literacy block).
     #     Omitted with no Console front-end (public local install).
-    if not demo_mode and not is_coordinator and console_ui_present:
+    if not is_coordinator and console_ui_present:
         parts.add(console_ui.build_base_console_knowledge_block())
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
@@ -3212,7 +3105,6 @@ def build_voice_agent_prompt(
     contact_bio: str | None = None,
     contact_rolling_summary: str | None = None,
     participants: list[dict] | None = None,
-    demo_mode: bool = False,
     channel: str = "phone",
     has_linked_user_desktop: bool = False,
     is_coordinator: bool = False,
@@ -3263,8 +3155,6 @@ def build_voice_agent_prompt(
         For multi-party calls (e.g. Unify Meet), a list of participant dicts.
         Each dict should have 'first_name', 'surname', and optionally 'bio'.
         When provided, these are shown instead of the single contact block.
-    demo_mode : bool
-        Whether the assistant is operating in demo mode (pre-signup).
     channel : str
         Voice session medium: ``"phone"`` for a regular phone call,
         ``"unify_meet"`` for a Unify Meet video call,
@@ -3310,27 +3200,15 @@ def build_voice_agent_prompt(
     if is_boss_user:
         caller_name = boss_full_name
         caller_relationship = "Boss"
-        if demo_mode:
-            caller_description = "my boss (who I am meeting for the first time)"
-        else:
-            caller_description = f"my boss, {caller_name}" if caller_name else "my boss"
+        caller_description = f"my boss, {caller_name}" if caller_name else "my boss"
     else:
         caller_name = contact_full_name
-        caller_relationship = (
-            "Unify colleague introducing my future boss"
-            if demo_mode
-            else "One of my boss's contacts"
+        caller_relationship = "One of my boss's contacts"
+        caller_description = (
+            f"{caller_name}, one of my boss's contacts"
+            if caller_name
+            else "one of my boss's contacts"
         )
-        if demo_mode:
-            caller_description = (
-                "a colleague from Unify who is introducing me to my future boss"
-            )
-        else:
-            caller_description = (
-                f"{caller_name}, one of my boss's contacts"
-                if caller_name
-                else "one of my boss's contacts"
-            )
 
     # Build name intro for context section
     name_intro = f"I'm {assistant_name}, on" if assistant_name else "I'm on"
@@ -3422,16 +3300,11 @@ When my boss introduces a third party on the call ("I'm here with Maria — Mari
     # all substantive speech, spoken verbatim). This prompt now only seeds the
     # opening-greeting sidecar, so the reply-time data-handling rules (deferral,
     # notification relay, answer allowlist) are gone — only tone guidance remains.
-    style_suffix = (
-        " Be impressive and personable — this is a first impression."
-        if demo_mode
-        else ""
-    )
     parts.add(
         "Style\n"
         "-----\n"
         "**Style:** Concise, conversational, and human. Friendly but not chatty. "
-        f"One thought at a time.{style_suffix}",
+        "One thought at a time.",
     )
 
     # Platform knowledge. The Coordinator's bio already carries the live
@@ -3451,13 +3324,7 @@ Under the hood (for my own reference when actually guiding someone through a scr
         )
 
     # Boss details
-    if demo_mode and not boss_details:
-        parts.add(
-            """Boss details
-------------
-My boss has not signed up yet. I am meeting them for the first time during this demo. I should learn and remember their name during our conversation. I should be warm, personable, and make a great first impression.""",
-        )
-    elif boss_details:
+    if boss_details:
         parts.add(
             f"""Boss details
 ------------
@@ -3656,9 +3523,8 @@ conversation.""",
         )
 
     # Participant comms: on all calls (not just boss)
-    if not demo_mode:
-        parts.add(
-            """Messages from the caller
+    parts.add(
+        """Messages from the caller
 ------------------------
 If the person I'm speaking with (or anyone else on this call) sends an SMS, email, or Unify message while we're talking, it appears in my context as a tagged message — for example:
 - `[SMS from Marcus] Running 10 minutes late, stuck in traffic.`
@@ -3668,10 +3534,10 @@ If the person I'm speaking with (or anyone else on this call) sends an SMS, emai
 These are real messages sent by a call participant through a different channel. They are background context — I do not proactively mention them. If the caller asks about a recent message or references it, I can use this context to respond naturally. I never mention tags, channels, or internal systems.
 
 **Messages I sent.** When I see `[You messaged ...]` or `[You texted ...]`, it means a message was just sent in the chat or via text on the caller's behalf. I briefly acknowledge this — e.g., "I've just put that in the chat for you" or "Check the chat, I sent the details there." I do not read the full content unless asked.""",
-        )
+    )
 
     # System event visibility for internal calls
-    if is_boss_user and not demo_mode:
+    if is_boss_user:
         parts.add(
             """Full event visibility
 ---------------------

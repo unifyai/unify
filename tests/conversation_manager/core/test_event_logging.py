@@ -161,8 +161,10 @@ async def cm_with_eventbus():
     # Apply our custom mocks that only mock external services, not EventBus
     _apply_comms_only_mocks(cm)
 
-    # Initialize managers with SimulatedActor
-    actor = SimulatedActor(steps=3, log_mode="log", emit_notifications=False)
+    # Initialize managers with SimulatedActor. steps=0: this fixture never
+    # drives simulate_step()/trigger_completion(); a positive budget would
+    # hang any caller that awaits actor.result() without stopping.
+    actor = SimulatedActor(steps=0, log_mode="log", emit_notifications=False)
     await managers_utils.init_conv_manager(cm, actor=actor)
 
     # Start the operations listener that processes EventBus publishing

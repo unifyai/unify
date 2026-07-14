@@ -1699,12 +1699,6 @@ async def update_session_contacts(
     session details change.
 
     Called when an AssistantUpdateEvent is received.
-
-    Note: In demo mode, we skip updating the boss contact because
-    the user_* fields contain the demoer's details, not the prospect's. The
-    prospect's details are either:
-    - Set during initialization from demo metadata (prospect_* fields), or
-    - Updated dynamically via set_boss_details during the demo
     """
     if cm.contact_manager is None:
         LOGGER.info(
@@ -1757,24 +1751,6 @@ async def update_session_contacts(
         # backend sync helper, which is a no-op when the value matches).
         assistant_job_title,
     )
-
-    # In demo mode:
-    # - Skip updating boss contact - prospect details come from Orchestra meta
-    # - Update demoer contact (contact_id=2) with user_* fields (initially created in _init_managers)
-    if SETTINGS.DEMO_MODE:
-        LOGGER.info(
-            f"{ICONS['managers_worker']} [ManagersWorker] Demo mode: skipping boss contact, "
-            "updating demoer contact (contact_id=2)",
-        )
-        await _update_contact(
-            2,
-            user_first_name,
-            user_surname,
-            user_number,
-            user_email,
-            user_whatsapp_number,
-        )
-        return
 
     await _update_contact(
         SESSION_DETAILS.boss_contact_id,
@@ -1936,69 +1912,6 @@ def _init_managers(
         asyncio.to_thread(_sync_manual_voice_enrollment),
         loop,
     )
-    # In demo mode, ensure the boss contact is always visible
-    # in active_conversations so the slow brain can use inline details on
-    # communication tools and set_boss_details can use inline details.
-    if SETTINGS.DEMO_MODE:
-        cm.contact_index.get_or_create_conversation(SESSION_DETAILS.boss_contact_id)
-        # Start the boss contact sparse in demo mode; details can be provided
-        # later via set_boss_details or demo prospect metadata.
-        cm.contact_manager.update_contact(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            first_name="",
-            surname="",
-            email_address="",
-            phone_number="",
-            should_respond=True,
-        )
-        # If we have a demo_id, fetch prospect details from Orchestra and apply
-        # them to the boss contact.
-        if SETTINGS.DEMO_ID is not None:
-            try:
-                from unify.demo_meta import (
-                    fetch_demo_meta,
-                    apply_prospect_to_boss_contact,
-                )
-
-                # Run async fetch_demo_meta on the event loop from this sync context
-                future = asyncio.run_coroutine_threadsafe(
-                    fetch_demo_meta(SETTINGS.DEMO_ID),
-                    loop,
-                )
-                prospect = future.result(timeout=10.0)  # 10 second timeout
-                if prospect and prospect.has_any_details():
-                    apply_prospect_to_boss_contact(cm.contact_manager, prospect)
-                    LOGGER.info(
-                        f"{ICONS['managers_worker']} [ManagersWorker] Applied prospect details from demo_id={SETTINGS.DEMO_ID}",
-                    )
-            except Exception as e:
-                LOGGER.error(
-                    f"{ICONS['managers_worker']} [ManagersWorker] Failed to fetch/apply demo prospect details: {e}",
-                )
-
-        # Create demoer contact (contact_id=2) with the user's details
-        # In demo mode, SESSION_DETAILS.user contains the demoer's info
-        # Note: We don't add to active_conversations as the demoer isn't someone
-        # the assistant would typically interact with (call/email)
-        try:
-            demoer_first = SESSION_DETAILS.user.first_name
-            demoer_last = SESSION_DETAILS.user.surname
-            # Use _create_contact since contact_id=2 doesn't exist yet
-            cm.contact_manager._create_contact(
-                first_name=demoer_first,
-                surname=demoer_last,
-                phone_number=SESSION_DETAILS.user.number or "",
-                email_address=SESSION_DETAILS.user.email or "",
-                should_respond=True,
-                is_system=True,
-            )
-            LOGGER.info(
-                f"{ICONS['managers_worker']} [ManagersWorker] Created demoer contact (id=2): {demoer_first} {demoer_last}",
-            )
-        except Exception as e:
-            LOGGER.error(
-                f"{ICONS['managers_worker']} [ManagersWorker] Failed to create demoer contact: {e}",
-            )
     _contact_dur = perf_counter() - local_start_time
     LOGGER.info(
         f"{ICONS['managers_worker']} [ManagersWorker] ContactManager ({type(cm.contact_manager).__name__}) initialized in "
