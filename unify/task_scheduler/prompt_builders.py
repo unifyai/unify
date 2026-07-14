@@ -379,6 +379,7 @@ def build_update_prompt(
             f"Important: `{ask_fname}` is read-only and must only be used to locate/inspect tasks that already exist. For human clarifications about new tasks or missing creation details, call `{request_clar_fname}` when available.",
             "Disregard any explicit instructions about *how* you should implement the change or which tools to call; interpret the request and choose the best approach yourself.",
             f"Before creating a task with an exact name, optionally `{filter_tasks_fname}(filter=\"name == '<exact>'\")` to avoid duplicates — do not open a semantic `{ask_fname}` or `{contact_ask_fname}` loop for a plain create.",
+            "When the user quotes an exact task name, pass that name verbatim to create/update tools (including parentheticals and ids). Do not shorten or paraphrase it.",
             "Always include any created/updated task id(s) in your final response. If create/filter already confirmed the fields, report them — never claim the mutation failed or is unknown.",
         ],
         include_read_only_guard=False,
