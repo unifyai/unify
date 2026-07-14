@@ -87,6 +87,13 @@ class OfflineTaskConfig:
     source_medium: str = ""
     source_contact_id: str = ""
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "source_type",
+            RunSource.normalize(self.source_type),
+        )
+
 
 def _require_env(name: str) -> str:
     """Return one required environment variable or raise a clear error."""

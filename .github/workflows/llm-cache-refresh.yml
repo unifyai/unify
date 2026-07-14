@@ -314,8 +314,18 @@ jobs:
         trap "kill $XVFB_PID 2>/dev/null" EXIT
 
         echo "Running protected LLM shard with UNILLM_CACHE=$UNILLM_CACHE path=$TEST_PATH"
+        # Uncached LLM sessions can legitimately exceed the normal CI 30m
+        # per-session default; cap at 60m (or just under the job budget).
+        SESSION_TIMEOUT=3600
+        if (( SESSION_TIMEOUT >= TIMEOUT )); then
+          if (( TIMEOUT > 60 )); then
+            SESSION_TIMEOUT=$(( TIMEOUT - 60 ))
+          else
+            SESSION_TIMEOUT=$TIMEOUT
+          fi
+        fi
         # shellcheck disable=SC2086
-        tests/parallel_run.sh --timeout "$TIMEOUT" $TEST_PATH $EXTRA_ARGS
+        tests/parallel_run.sh --timeout "$TIMEOUT" --session-timeout "$SESSION_TIMEOUT" $TEST_PATH $EXTRA_ARGS
         TEST_EXIT_CODE=$?
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE

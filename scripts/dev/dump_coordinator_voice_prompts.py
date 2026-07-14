@@ -46,7 +46,6 @@ from unify.conversation_manager.prompt_builders import (
     build_voice_agent_prompt,
 )
 from unify.session_details import SESSION_DETAILS, TeamSummary
-from unify.settings import SETTINGS
 
 # Sample boss/roster stand-ins — production fills these from contacts and
 # CoordinatorManager.get_org_members().
@@ -105,7 +104,6 @@ def _build_slow_brain_system_prompt(
     assistant_has_phone: bool,
     assistant_has_email: bool,
     is_org_workspace: bool,
-    demo_mode: bool,
     authorized_humans: list[dict] | None,
     team_summaries: list[TeamSummary],
 ) -> str:
@@ -128,7 +126,6 @@ def _build_slow_brain_system_prompt(
         email_address=boss.get("email_address"),
         is_voice_call=True,
         is_internal_call=False,
-        demo_mode=demo_mode,
         computer_fast_path=False,
         assistant_has_phone=assistant_has_phone,
         assistant_has_email=assistant_has_email,
@@ -152,7 +149,6 @@ def _build_fast_brain_system_prompt(
     assistant_bio: str,
     assistant_name: str,
     is_org_workspace: bool,
-    demo_mode: bool,
     channel: str,
 ) -> str:
     """Mirror ``unify/conversation_manager/medium_scripts/call.py`` entrypoint."""
@@ -172,7 +168,6 @@ def _build_fast_brain_system_prompt(
         contact_bio=boss.get("bio") or None,
         is_boss_user=True,
         contact_rolling_summary="",
-        demo_mode=demo_mode,
         channel=channel,
         is_coordinator=is_coordinator,
         is_org_workspace=is_org_workspace,
@@ -261,16 +256,6 @@ def main() -> int:
         help="Voice channel for fast brain (default: phone)",
     )
     parser.add_argument(
-        "--demo",
-        action="store_true",
-        help=f"Enable demo mode (default: {SETTINGS.DEMO_MODE})",
-    )
-    parser.add_argument(
-        "--no-demo",
-        action="store_true",
-        help="Force demo mode off",
-    )
-    parser.add_argument(
         "--include-sample-state",
         action="store_true",
         help="Also render a minimal slow-brain state snapshot (user message)",
@@ -309,15 +294,6 @@ def main() -> int:
     assistant_name = args.assistant_name or defaults["name"]
     assistant_job_title = args.assistant_job_title or defaults["job_title"]
 
-    if args.demo and args.no_demo:
-        parser.error("Use at most one of --demo and --no-demo")
-
-    demo_mode = SETTINGS.DEMO_MODE
-    if args.demo:
-        demo_mode = True
-    elif args.no_demo:
-        demo_mode = False
-
     is_org_workspace = args.workspace == "org"
     authorized_humans = (
         DEFAULT_AUTHORIZED_HUMANS
@@ -327,10 +303,7 @@ def main() -> int:
     if args.write_dir is not None:
         args.write_dir.mkdir(parents=True, exist_ok=True)
 
-    meta = (
-        f"persona={persona} workspace={args.workspace} demo_mode={demo_mode} "
-        f"channel={args.channel}"
-    )
+    meta = f"persona={persona} workspace={args.workspace} channel={args.channel}"
     print(f"# Voice prompts ({meta})\n")
 
     label_prefix = persona
@@ -344,7 +317,6 @@ def main() -> int:
             assistant_has_phone=bool(defaults["phone"]),
             assistant_has_email=bool(defaults["email"]),
             is_org_workspace=is_org_workspace,
-            demo_mode=demo_mode,
             authorized_humans=authorized_humans,
             team_summaries=[],
         )
@@ -371,7 +343,6 @@ def main() -> int:
             assistant_bio=assistant_bio,
             assistant_name=assistant_name,
             is_org_workspace=is_org_workspace,
-            demo_mode=demo_mode,
             channel=args.channel,
         )
         _write_or_print(

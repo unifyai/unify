@@ -116,23 +116,12 @@ def _resolve_user_details(self) -> Dict[str, Any]:
     When SESSION_DETAILS has not been initialized (e.g., during tests),
     returns default user info to avoid calling real APIs.
 
-    In DEMO_MODE, returns empty details because the boss is the prospect being
-    demoed to. Their details are unknown at startup and will be learned
-    organically during the demo conversation.
-
     Returns
     -------
     dict
         User info dict with first_name, last_name, email, and optionally phone_number.
     """
     from ..session_details import SESSION_DETAILS
-    from ..settings import SETTINGS
-
-    # In demo mode, there is no real user account backing the boss contact.
-    # The prospect's details will be populated during the demo via
-    # set_boss_details / inline communication tools.
-    if SETTINGS.DEMO_MODE:
-        return {}
 
     # If SESSION_DETAILS hasn't been initialized, use defaults.
     # This ensures tests don't call real APIs for user info.
@@ -351,60 +340,10 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
 
     Creates or updates the user (boss) contact using details resolved from
     SESSION_DETAILS, the Unify API, or default values.
-
-    In DEMO_MODE, the boss contact is the prospect being demoed to. If the
-    contact already exists (from a previous session), we preserve whatever
-    details were set during the demo (name, phone, email) and only warm
-    the local cache. If it doesn't exist yet, we create a minimal placeholder
-    with should_respond=True so communication tools work immediately.
     """
-    from ..settings import SETTINGS
     from ..session_details import SESSION_DETAILS
 
     resolved_contact_id = int(contact_id or SESSION_DETAILS.boss_contact_id)
-
-    if SETTINGS.DEMO_MODE:
-        if user_log is not None:
-            # Contact already exists — preserve all details set during the demo.
-            # Only ensure is_system is True (warm cache either way).
-            try:
-                entries = user_log.entries
-                if entries.get("is_system") is not True:
-                    self.update_contact(
-                        contact_id=resolved_contact_id,
-                        _log_id=user_log.id,
-                        is_system=True,
-                    )
-                else:
-                    self._data_store.put(entries)
-            except Exception:
-                pass
-            return
-        # No existing contact — create a minimal placeholder.
-        try:
-            outcome = self._create_contact(
-                **partition_create_kwargs(
-                    {
-                        "contact_id": resolved_contact_id,
-                        "should_respond": True,
-                        "is_system": True,
-                        "response_policy": self.USER_MANAGER_RESPONSE_POLICY,
-                        "timezone": "UTC",
-                    },
-                ),
-            )
-            if int(outcome["details"]["contact_id"]) != resolved_contact_id:
-                raise RuntimeError("Boss contact was created with the wrong id.")
-            resolved_contact_id = int(outcome["details"]["contact_id"])
-        except (ValueError, RequestError):
-            pass
-        _upsert_personal_contact_membership(
-            contact_id=resolved_contact_id,
-            relationship=_BOSS_RELATIONSHIP,
-            response_policy=self.USER_MANAGER_RESPONSE_POLICY,
-            can_edit=True,
-        )
-        return
 
     user_info = _resolve_user_details(self)
 

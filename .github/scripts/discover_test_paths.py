@@ -80,10 +80,12 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
     "tests/conversation_manager/core": [
         # ~64 files / ~1100 collected tests. Full-suite LLM cache
         # refresh repeatedly killed the hosted runner mid-shard
-        # ("lost communication") with no pytest artifacts. Six
+        # ("lost communication") with no pytest artifacts. Seven
         # weight-balanced groups keep the heaviest anchors
         # (prompt_builders, utils, brain_tools, renderer,
-        # coordinator_tools, event_handlers) on separate VMs.
+        # coordinator_tools, channel/api, event_handlers) on
+        # separate VMs; event_handlers is solo because it alone
+        # is ~174 collected tests.
         # Group A — prompt_builders anchor
         [
             "test_comms_utils.py",
@@ -151,14 +153,15 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
             "test_pubsub_flow.py",
             "test_web_act_fast_path.py",
         ],
-        # Group F — event_handlers + channel/api anchors
+        # Group F — channel/api anchors (event_handlers peeled to G;
+        # that file alone is ~174 collected tests and was the residual
+        # overweight risk after the original six-way split).
         [
             "test_api_message_medium.py",
             "test_assistant_jobs_idle_stop.py",
             "test_call_manager_rooms.py",
             "test_debouncer.py",
             "test_desktop_fast_path.py",
-            "test_event_handlers.py",
             "test_idle_smalltalk_gate.py",
             "test_infrastructure_readiness.py",
             "test_local_comms_settings.py",
@@ -166,6 +169,8 @@ SPLIT_DIRS: dict[str, list[list[str]]] = {
             "test_unify_attachments.py",
             "test_whatsapp_window_guidance.py",
         ],
+        # Group G — event_handlers alone (heaviest single core file)
+        ["test_event_handlers.py"],
     ],
     "tests/function_manager/python": [
         # 193 collected tests across 15 files; many do real venv

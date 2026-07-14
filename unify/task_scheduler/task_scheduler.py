@@ -65,12 +65,16 @@ from .custom_tasks import (
 )
 from .machine_state import (
     TaskRunProvenance,
+    TaskRunReference,
     build_task_run_key,
     consume_live_task_run_provenance,
     peek_live_task_run_provenance,
+    remember_live_task_run_provenance,
+    update_task_run_record,
 )
 from .prompt_builders import (
     build_ask_prompt,
+    build_provider_event_run_guidelines,
     build_task_execution_request,
     build_task_run_guidelines,
     build_update_prompt,
@@ -94,6 +98,8 @@ from .types.task import Task, TaskBase
 from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
+
+_PROVIDER_EVENT_OPERATION_INFO_PREFIX = "provider_event_operation:"
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -1144,6 +1150,197 @@ class TaskScheduler(BaseTaskScheduler):
         )
 
         return handle
+
+    async def start_provider_event_instance(
+        self,
+        *,
+        request: "ProviderEventDispatchRequest",
+        captured_task_revision: int,
+        provider_event_context: dict[str, Any],
+    ) -> SteerableToolHandle:
+        """Start one captured-revision instance for a provider-event dispatch.
+
+        Creates a separate task instance keyed by the dispatch operation without
+        consuming, re-arming, or mutating the authored definition. Validates the
+        accepted receipt authorization carried on ``request`` rather than current
+        trigger state. Event content must arrive as structured untrusted data.
+        """
+
+        from unify.task_scheduler.provider_event_dispatch import (
+            ProviderEventDispatchRequest,
+            ProviderEventDispatchValidationError,
+        )
+
+        if not isinstance(request, ProviderEventDispatchRequest):
+            raise TypeError("request must be a ProviderEventDispatchRequest")
+        if request.dispatch_mode != "live":
+            raise ProviderEventDispatchValidationError("invalid_dispatch_mode")
+        if str(request.source_type) != RunSource.provider_event.value:
+            raise ProviderEventDispatchValidationError("run_source_type_mismatch")
+
+        definition = self._get_provider_event_definition(task_id=request.task_id)
+        if not definition.enabled:
+            raise ProviderEventDispatchValidationError("task_disabled")
+        if not self._task_has_provider_event_trigger(definition):
+            raise ProviderEventDispatchValidationError("task_trigger_mismatch")
+
+        instance = self._create_provider_event_captured_instance(
+            definition=definition,
+            operation_id=request.operation_id,
+            captured_task_revision=captured_task_revision,
+        )
+        source_task_log_id = self._get_log_by_task_instance(
+            task_id=instance.task_id,
+            instance_id=instance.instance_id,
+        ).id
+
+        provenance = TaskRunProvenance(
+            assistant_id=str(request.assistant_id),
+            task_id=request.task_id,
+            source_type=RunSource.provider_event,
+            execution_mode="live",
+            source_task_log_id=int(source_task_log_id),
+            activation_revision=request.accepted_activation_revision,
+            destination=instance.destination,
+            source_ref=request.receipt_id,
+            attempt_token=request.operation_id,
+            task_name=instance.name,
+            task_description=instance.description,
+        )
+        remember_live_task_run_provenance(provenance)
+
+        # Adopt the Orchestra-precreated run by its exact run_key. Do not let
+        # ActiveTask rebuild a different key from provenance and create a second
+        # run — provider-event live dispatch is adopt-only.
+        task_run_reference = TaskRunReference(
+            assistant_id=str(request.assistant_id),
+            run_key=request.run_key,
+            source_task_log_id=int(source_task_log_id),
+        )
+        update_task_run_record(
+            task_run_reference,
+            {
+                "state": "running",
+                "source_task_log_id": int(source_task_log_id),
+                "activation_revision": request.accepted_activation_revision,
+            },
+        )
+
+        fallback_actor = self._actor_for_task_run()
+        if fallback_actor is None and current_task_execution_delegate.get() is None:
+            raise RuntimeError(
+                "Provider-event live dispatch requires a run-scoped actor "
+                "delegate or an explicit actor.",
+            )
+
+        reason = ActivatedBy.explicit
+        entrypoint_kwargs = self._build_entrypoint_kwargs(
+            task=instance,
+            reason=reason,
+            source_type=RunSource.provider_event,
+            task_run_provenance=provenance,
+        )
+        entrypoint_kwargs["provider_event_context"] = provider_event_context
+        entrypoint_kwargs["operation_id"] = request.operation_id
+        entrypoint_kwargs["receipt_id"] = request.receipt_id
+        entrypoint_kwargs["binding_id"] = request.binding_id
+        entrypoint_kwargs["run_id"] = request.run_id
+        entrypoint_kwargs["run_key"] = request.run_key
+        entrypoint_kwargs["accepted_activation_revision"] = (
+            request.accepted_activation_revision
+        )
+        entrypoint_kwargs["captured_task_revision"] = captured_task_revision
+        # Prefer the authoritative precreated run key over provenance rebuild.
+        if isinstance(entrypoint_kwargs.get("task_execution_context"), dict):
+            entrypoint_kwargs["task_execution_context"]["run_key"] = request.run_key
+
+        with self._use_task_destination(instance.destination):
+            self._update_task_status_instance(
+                task_id=instance.task_id,
+                instance_id=instance.instance_id,
+                new_status=Status.active,
+                activated_by=reason,
+            )
+
+        return await ActiveTask.create(
+            fallback_actor,
+            task_description=build_task_execution_request(instance),
+            task_id=instance.task_id,
+            instance_id=instance.instance_id,
+            scheduler=self,
+            entrypoint=instance.entrypoint,
+            entrypoint_kwargs=entrypoint_kwargs,
+            entrypoint_repair_attempts=1 if instance.entrypoint is not None else 0,
+            entrypoint_repair_context=(
+                {
+                    "task_run_context": entrypoint_kwargs.get(
+                        "task_execution_context",
+                        {},
+                    ),
+                    "task_request": build_task_execution_request(instance),
+                }
+                if instance.entrypoint is not None
+                else None
+            ),
+            destination=instance.destination,
+            task_run_reference=task_run_reference,
+            task_run_provenance=provenance,
+            task_guidelines=build_provider_event_run_guidelines(instance),
+        )
+
+    def _get_provider_event_definition(self, *, task_id: int) -> Task:
+        """Return the authored definition row for one provider-event task.
+
+        Concurrent captured instances must not be mistaken for the definition.
+        Prefer the lowest ``instance_id`` that still carries the provider-event
+        trigger and is not an operation-scoped captured row.
+        """
+
+        from unify.task_scheduler.provider_event_dispatch import (
+            ProviderEventDispatchValidationError,
+        )
+
+        rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
+        if not rows:
+            raise ValueError(f"No task found with id={task_id}")
+        definitions = [
+            row
+            for row in rows
+            if self._task_has_provider_event_trigger(row)
+            and not str(row.info or "").startswith(
+                _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
+            )
+        ]
+        if not definitions:
+            raise ProviderEventDispatchValidationError("task_trigger_mismatch")
+        return sorted(definitions, key=lambda row: row.instance_id)[0]
+
+    def _create_provider_event_captured_instance(
+        self,
+        *,
+        definition: Task,
+        operation_id: str,
+        captured_task_revision: int,
+    ) -> Task:
+        """Materialize one execution instance without re-arming the definition."""
+
+        clone_payload = definition.model_dump(
+            exclude={"instance_id", "activated_by", "info"},
+            mode="json",
+        )
+        clone_payload["status"] = Status.triggerable
+        clone_payload["task_id"] = definition.task_id
+        clone_payload["task_revision"] = captured_task_revision
+        clone_payload["info"] = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
+        with self._use_task_destination(definition.destination):
+            created = self._store.log(entries=clone_payload, new=True)
+        if self._num_tasks_cached is not None:
+            self._num_tasks_cached += 1
+        entries = dict(created.entries or {})
+        entries.setdefault("destination", definition.destination)
+        entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
+        sanitized = self._sanitize_activation(entries)
+        return Task(**sanitized)
 
     def create_task(
         self,

@@ -376,7 +376,7 @@ class TestPromptSectionOwnershipMatrix:
     def test_system_prompt_section_ownership_matrix(self):
         cases = (
             {
-                "name": "regular_non_demo_no_org",
+                "name": "regular_no_org",
                 "kwargs": {},
                 "present": (
                     "Act capabilities\n----------------",
@@ -389,7 +389,7 @@ class TestPromptSectionOwnershipMatrix:
                 ),
             },
             {
-                "name": "regular_non_demo_with_org",
+                "name": "regular_with_org",
                 "kwargs": {},
                 "present": (
                     "Act capabilities\n----------------",
@@ -403,34 +403,7 @@ class TestPromptSectionOwnershipMatrix:
                 ),
             },
             {
-                "name": "regular_demo_no_org",
-                "kwargs": {"demo_mode": True},
-                "present": ("Demo mode\n---------",),
-                "absent": (
-                    "**T-W1N admin tools:**",
-                    "Authorized humans\n-----------------",
-                    "Act capabilities\n----------------",
-                    "Concurrent action and acknowledgment\n------------------------------------",
-                ),
-            },
-            {
-                "name": "regular_demo_with_org",
-                "kwargs": {
-                    "demo_mode": True,
-                },
-                "present": (
-                    "Demo mode\n---------",
-                    "T-W1N identity\n--------------",
-                ),
-                "absent": (
-                    "**T-W1N admin tools:**",
-                    "Authorized humans\n-----------------",
-                    "Act capabilities\n----------------",
-                    "Concurrent action and acknowledgment\n------------------------------------",
-                ),
-            },
-            {
-                "name": "coordinator_non_demo_with_org",
+                "name": "coordinator_with_org",
                 "kwargs": {
                     "is_coordinator": True,
                 },
@@ -452,25 +425,7 @@ class TestPromptSectionOwnershipMatrix:
                 ),
             },
             {
-                "name": "coordinator_demo_with_org",
-                "kwargs": {
-                    "is_coordinator": True,
-                    "demo_mode": True,
-                },
-                "present": (
-                    "T-W1N\n----",
-                    "My identity\n-----------",
-                    "Authorized humans\n-----------------",
-                    "Demo mode\n---------",
-                ),
-                "absent": (
-                    "**T-W1N admin tools:**",
-                    "Act capabilities\n----------------",
-                    "Concurrent action and acknowledgment\n------------------------------------",
-                ),
-            },
-            {
-                "name": "coordinator_non_demo_personal_workspace",
+                "name": "coordinator_personal_workspace",
                 "kwargs": {
                     "is_coordinator": True,
                     "is_org_workspace": False,
@@ -739,10 +694,6 @@ class TestExternalAppIntegration:
         assert "**External apps & services**" in prompt
         assert "stored credentials and the service's Python SDK" in prompt
 
-    def test_act_capabilities_absent_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "**External apps & services**" not in prompt
-
 
 class TestExternalResourcesActBlock:
     """External-resource work must go through ``act`` (not conversational mail)."""
@@ -756,10 +707,6 @@ class TestExternalResourcesActBlock:
         assert "programmatic mailbox/workspace automation" in prompt
         # Conversational inbox monitoring must not be blanket-forced into act.
         assert "API, inbox," not in prompt
-
-    def test_external_resources_block_absent_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "External resources (use ``act``)" not in prompt
 
 
 class TestConversationalVsProgrammaticComms:
@@ -775,10 +722,6 @@ class TestConversationalVsProgrammaticComms:
     def test_workspace_ownership_for_coordinator(self):
         prompt = _build(is_coordinator=True)
         assert "Connected Google/Microsoft Workspace is **my boss's**" in prompt
-
-    def test_split_absent_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "Conversational messaging vs programmatic workspace" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -884,10 +827,6 @@ class TestProactiveMeetingOffers:
         assert "Proactive meeting offers" in prompt
         assert "screen sharing" in prompt.lower()
 
-    def test_proactive_meeting_absent_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "Proactive meeting offers" not in prompt
-
     def test_proactive_meeting_absent_for_coordinator(self):
         prompt = _build(is_coordinator=True)
         assert "Proactive meeting offers" in prompt
@@ -912,43 +851,6 @@ class TestConsoleKnowledge:
         assert "open the **Integrations** tab" in prompt
         assert "⋮ → **Contact Details**" in prompt
         assert "profile menu" in prompt
-
-    def test_console_knowledge_absent_in_demo_mode(self):
-        prompt = _build(demo_mode=True)
-        assert "Console knowledge" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# Tests – demo mode adapts
-# ---------------------------------------------------------------------------
-
-
-class TestDemoModeAdapts:
-    """Demo mode section adjusts available channel listing."""
-
-    def test_demo_lists_all_channels(self):
-        prompt = _build(
-            demo_mode=True,
-            assistant_has_phone=True,
-            assistant_has_email=True,
-        )
-        assert "SMS, emails, unify messages, calls" in prompt
-
-    def test_demo_omits_phone_channels(self):
-        prompt = _build(
-            demo_mode=True,
-            assistant_has_phone=False,
-            assistant_has_email=True,
-        )
-        assert "SMS" not in prompt.split("CAN do")[1].split("CANNOT do")[0]
-
-    def test_demo_omits_email_channel(self):
-        prompt = _build(
-            demo_mode=True,
-            assistant_has_phone=True,
-            assistant_has_email=False,
-        )
-        assert "emails" not in prompt.split("CAN do")[1].split("CANNOT do")[0]
 
 
 # ---------------------------------------------------------------------------

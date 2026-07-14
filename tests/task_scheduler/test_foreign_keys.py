@@ -50,10 +50,11 @@ def test_entrypoint_valid_reference():
         entrypoint=func_id,
     )
 
-    # Verify task was created with entrypoint
+    # Verify task was created with entrypoint. Avoid projecting only the FK
+    # column in from_fields — nullable/FK projections can omit rows.
     tasks = unisdk.get_logs(
         context=ts._ctx,
-        from_fields=["task_id", "name", "entrypoint"],
+        filter="name == 'Process Task'",
     )
     assert len(tasks) == 1
     assert tasks[0].entries["entrypoint"] == func_id
@@ -243,11 +244,12 @@ def test_entrypoint_clone_after_set_null():
     # Clone the task
     ts._clone_task_instance(task_obj)
 
-    # Verify clone was created with null entrypoint
+    # Verify clone was created with null entrypoint. Fetch full rows rather than
+    # projecting the nullable FK column — from_fields including null FKs can
+    # under-count instances after SET NULL.
     all_instances = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
-        from_fields=["task_id", "instance_id", "entrypoint"],
     )
     assert len(all_instances) == 2  # Original + clone
 
