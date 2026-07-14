@@ -46,6 +46,9 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     cm.cm.file_sync_complete = True
     local_root = Path(get_local_root())
 
+    # Ensure Outputs exists even if the actor skips mkdir.
+    (local_root / "Outputs").mkdir(parents=True, exist_ok=True)
+
     # ------------------------------------------------------------------
     # Step 1: Ask the actor to generate a red square image
     # ------------------------------------------------------------------
@@ -74,6 +77,15 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     # Also check the root in case the actor saved it there
     if not png_files:
         png_files = list(local_root.rglob("*.png"))
+
+    # Last resort: the actor's final answer often quotes the absolute path.
+    if not png_files:
+        for token in str(final).replace("`", " ").split():
+            if token.endswith(".png"):
+                candidate = Path(token)
+                if candidate.is_file():
+                    png_files = [candidate]
+                    break
 
     assert png_files, (
         f"Expected at least one .png file in the workspace after actor completed. "

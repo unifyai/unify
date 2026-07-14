@@ -384,7 +384,7 @@ def log_manager_call(
             finally:
                 _PENDING_LOOP_SUFFIX.reset(suffix_token)
 
-            return wrap_handle_with_logging(
+            wrapped = wrap_handle_with_logging(
                 handle,
                 call_id,
                 manager_name,
@@ -392,6 +392,14 @@ def log_manager_call(
                 display_label=resolved_label,
                 hierarchy=hierarchy,
             )
+            # Track handles spawned inside an in-process CodeAct sandbox so
+            # fire-and-forget mutations (no await handle.result(), handle not
+            # returned as last expression) still complete before execute_code
+            # returns. See register_sandbox_spawned_handle.
+            from unify.actor.execution.session import register_sandbox_spawned_handle
+
+            register_sandbox_spawned_handle(wrapped)
+            return wrapped
 
         return _wrapper
 
