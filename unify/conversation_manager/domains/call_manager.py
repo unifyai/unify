@@ -169,6 +169,12 @@ class LivekitCallManager:
         self._meet_session_id: str | None = None
         self._meet_joining: bool = False
         self._meet_presenting: bool = False
+        # True while the browser is admitted-pending: it has knocked on the
+        # meeting (clicked "Ask to join") and is sitting in the waiting room
+        # for the host to let it in. This is a *successful* join in progress,
+        # not a failure — the event handler uses it to tell the user we're in
+        # the lobby rather than that we're already in the call.
+        self._meet_lobby_waiting: bool = False
         self.google_meet_start_timestamp = None
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
@@ -924,6 +930,16 @@ class LivekitCallManager:
         return self.has_active_meet("teams_meet")
 
     @property
+    def meet_lobby_waiting(self) -> bool:
+        """Whether the browser meet is admitted-pending in the waiting room.
+
+        True after a successful join that landed in the lobby (host has not
+        yet let us in). Distinguishes "present, waiting to be admitted" from
+        "already in the call" for user-facing messaging.
+        """
+        return self._meet_lobby_waiting
+
+    @property
     def has_meet_presenting(self) -> bool:
         return self._meet_presenting
 
@@ -1079,14 +1095,21 @@ class LivekitCallManager:
                 f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: {body}",
             )
             self._meet_joining = False
+            self._meet_lobby_waiting = False
             await self._cleanup_meet(channel)
             return False
 
+        # The agent-service returns 200 for both ``active`` (already in the
+        # call) and ``lobby`` (knocked, waiting for host admission). Both are
+        # successful joins; only the wording differs downstream, so record
+        # which one so the event handler can say "in the lobby" vs "joined".
         self._meet_session_id = body.get("sessionId")
+        self._meet_lobby_waiting = body.get("status") == "lobby"
         self._meet_joining = False
         LOGGER.info(
             f"{ICONS['ipc']} [LivekitCallManager] {channel} joined "
-            f"(session={self._meet_session_id})",
+            f"(session={self._meet_session_id}, "
+            f"status={body.get('status')})",
         )
 
         if self._socket_server and self._meet_session_id:
@@ -1114,6 +1137,7 @@ class LivekitCallManager:
         room_name = self.room_name
         self._meet_session_id = None
         self._meet_joining = False
+        self._meet_lobby_waiting = False
         self._meet_presenting = False
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
