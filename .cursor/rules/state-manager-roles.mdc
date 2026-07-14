@@ -30,7 +30,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - Time‑sensitive/web ("today/latest/now") → `primitives.web.ask`
   - About a specific received file (filename known) → `primitives.files.ask`
 - **Mutations (create/edit/delete/merge)**
-  - Tasks/queues/ordering → `primitives.tasks.update` or `TaskScheduler.update`
+  - Tasks → `primitives.tasks.update` or `TaskScheduler.update`
   - Contacts → `primitives.contacts.update`
   - Knowledge claims → `KnowledgeManager_add_knowledge` / `KnowledgeManager_update_knowledge` / `KnowledgeManager_invalidate_knowledge` / `KnowledgeManager_supersede_knowledge` / `KnowledgeManager_delete_knowledge` (top-level JSON tool calls)
   - Guidance → `GuidanceManager_add_guidance` / `GuidanceManager_update_guidance` / `GuidanceManager_delete_guidance` (top-level JSON tool calls)
@@ -64,7 +64,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### TaskScheduler
 - **Role**: Owner of durable tasks and their execution.
-- **Scope**: ask (read‑only about tasks), update (create/edit/delete/reorder tasks), execute (start tasks; returns live handle).
+- **Scope**: ask (read‑only about tasks), update (create/edit/delete tasks), execute (start tasks; returns live handle). Tasks are independent — there is no queue chaining or ordering between them.
 - **Edge**: Never use `update` to "start" work; always start via `execute` (after any needed updates).
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.tasks.*`); `ConversationManager` (for direct task management).
