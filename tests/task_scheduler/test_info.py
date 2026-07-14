@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from tests.helpers import _handle_project
@@ -7,7 +8,8 @@ from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.actor.simulated import SimulatedActor, SimulatedActorHandle
 from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.active_task import ActiveTask
-from unify.task_scheduler.types.repetition import Frequency
+from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
+from unify.task_scheduler.types.schedule import Schedule
 
 # Define a predictable summary string for mocked LLM calls
 MOCK_SUMMARY = "Mock summary: Task completed important steps."
@@ -117,10 +119,9 @@ async def test_summary_on_stop_cancel(monkeypatch):
     """
     Verify info is populated when a task is stopped with cancel=True.
     """
-    # steps=0: this test stops the task without driving simulate_step();
-    # a positive step budget would hang forever waiting for work that
-    # never arrives (same class of hang as the natural-completion cases).
-    actor = SimulatedActor(steps=0)
+    # Stay live until stop(): steps=0 would auto-complete before cancel,
+    # and a positive step budget would hang waiting for simulate_step().
+    actor = SimulatedActor(steps=None, duration=None)
     ts = create_test_scheduler(actor)
 
     monkeypatch.setattr(
@@ -386,10 +387,17 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
         update_instance_spy,
     )
 
+    # Clone-on-execute requires repeat *and* schedule_start_at (same as
+    # test_repetition clone/rearm coverage).
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        hours=1,
+    )
     task_create_outcome = ts._create_task(
         name="Recurring Test Task",
         description="A task that repeats",
-        repeat=[{"frequency": Frequency.DAILY}],
+        status=Status.scheduled,
+        schedule=Schedule(start_at=initial_start.isoformat()),
+        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
     task_id = task_create_outcome["details"]["task_id"]
 
