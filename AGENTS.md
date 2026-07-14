@@ -89,6 +89,18 @@ Each Cursor agent (or terminal) gets an **isolated tmux server automatically**, 
 3. **Add temporary debug logs via `CURSOR_DEBUG_LOG`** — the only permitted logging mechanism for debugging. Grep for it (`rg CURSOR_DEBUG_LOG`) to find the project's util, then import and use it. Remove all calls before finalizing the fix.
 4. **Clean up failed sessions** with `tests/kill_failed.sh` (or `tests/kill_server.sh` for everything).
 
+### When CI is "stuck cancelling" / new matrices stay pending
+
+Ordinary `gh run cancel` can no-op while jobs stay on `Run tests` for an hour+
+and hold the Tests concurrency group. That is a **zombie run**, not
+`if: always()` wind-down. Force-cancel immediately:
+
+```bash
+bash scripts/dev/force_cancel_stuck_tests.sh staging
+```
+
+Full decision tree: `.cursor/rules/ci-tests-cancel-zombies.mdc`.
+
 ### Pre-commit
 
 Install the hooks once per checkout (they run automatically on commit; CI runs the same pinned hooks):
