@@ -1081,14 +1081,31 @@ class LivekitCallManager:
             )
 
         # Browser join runs after dispatch — fast brain initializes in parallel.
-        async with aiohttp.ClientSession() as session:
-            resp = await session.post(
-                f"{base_url}/{meet_path}/join",
-                json={"meetUrl": meet_url, "displayName": display_name},
-                headers={"authorization": f"Bearer {auth_key}"},
-                timeout=aiohttp.ClientTimeout(total=300),
+        # The join can be slow (headless-browser cold start + LLM-guided
+        # click-through, then a possible wait in the meeting lobby), so it runs
+        # under a generous ceiling. A timeout or transport error here must not
+        # escape into the event loop: an unhandled exception in the meet-join
+        # handler leaves ``_meet_joining`` stuck True with no teardown and shows
+        # up as "Unhandled error processing GoogleMeetReceived". Catch it, tear
+        # down, and return a clean failure the handler can retry.
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.post(
+                    f"{base_url}/{meet_path}/join",
+                    json={"meetUrl": meet_url, "displayName": display_name},
+                    headers={"authorization": f"Bearer {auth_key}"},
+                    timeout=aiohttp.ClientTimeout(total=300),
+                )
+                body = await resp.json()
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            LOGGER.error(
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} join request "
+                f"failed: {exc!r}",
             )
-            body = await resp.json()
+            self._meet_joining = False
+            self._meet_lobby_waiting = False
+            await self._cleanup_meet(channel)
+            return False
 
         if resp.status != 200:
             LOGGER.error(
