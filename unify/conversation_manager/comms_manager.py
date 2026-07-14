@@ -268,6 +268,18 @@ def _task_trigger_event_from_payload(
     return TaskTriggerRequested.from_dict(payload, reason=reason)
 
 
+def _provider_event_dispatch_event_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> "ProviderEventDispatchRequested | None":
+    """Build a live provider-event dispatch event from a comms Pub/Sub payload."""
+
+    from unify.conversation_manager.events import ProviderEventDispatchRequested
+
+    return ProviderEventDispatchRequested.from_dict(payload, reason=reason)
+
+
 def _assistant_turn_injected_from_payload(
     payload: dict[str, Any],
     *,
@@ -1041,6 +1053,12 @@ class CommsManager:
                     "task_trigger": lambda r: _task_trigger_event_from_payload(
                         event,
                         reason=r,
+                    ),
+                    "provider_event_dispatch": lambda r: (
+                        _provider_event_dispatch_event_from_payload(
+                            event,
+                            reason=r,
+                        )
                     ),
                     "coordinator_delegate": lambda r: _coordinator_delegate_event_from_payload(
                         event,

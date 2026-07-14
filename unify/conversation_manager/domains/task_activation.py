@@ -16,6 +16,7 @@ from unify.conversation_manager.domains.comms_utils import publish_system_error
 from unify.conversation_manager.events import (
     ActorHandleStarted,
     FastBrainNotification,
+    ProviderEventDispatchRequested,
     TaskDue,
     TaskTriggerRequested,
 )
@@ -632,6 +633,104 @@ async def _handle_task_trigger_requested_event(
         content=_task_trigger_fast_brain_context(event),
         source="task_trigger",
     )
+    return False
+
+
+async def _handle_provider_event_dispatch_requested_event(
+    event: ProviderEventDispatchRequested,
+    cm: "ConversationManager",
+) -> bool:
+    """Adopt one live provider-event dispatch and start a captured-revision instance."""
+
+    from datetime import datetime
+
+    from unify.common.task_execution_context import current_task_execution_delegate
+    from unify.task_scheduler.provider_event_dispatch import (
+        ProviderEventDispatchRequest,
+        ProviderEventDispatchValidationError,
+    )
+    from unify.task_scheduler.provider_event_dispatch_inbox import (
+        ProviderEventInboxMismatchError,
+    )
+    from unify.task_scheduler.provider_event_execution import (
+        handle_provider_event_live_dispatch,
+    )
+
+    try:
+        issued_at = datetime.fromisoformat(event.issued_at.replace("Z", "+00:00"))
+        request = ProviderEventDispatchRequest(
+            contract_version=event.contract_version,  # type: ignore[arg-type]
+            operation_id=event.operation_id,
+            run_id=event.run_id,
+            run_key=event.run_key,
+            assistant_id=event.assistant_id,
+            task_id=event.task_id,
+            binding_id=event.binding_id,
+            receipt_id=event.receipt_id,
+            accepted_activation_revision=event.accepted_activation_revision,
+            source_type=event.source_type,  # type: ignore[arg-type]
+            dispatch_mode=event.dispatch_mode,  # type: ignore[arg-type]
+            event_context_ref=event.event_context_ref,
+            issued_at=issued_at,
+            audience=event.audience,
+        )
+    except Exception as exc:
+        cm._session_logger.error(
+            "provider_event_dispatch",
+            f"Rejected malformed provider-event dispatch: {type(exc).__name__}: {exc}",
+        )
+        return False
+
+    actor = getattr(cm, "actor", None)
+    token = None
+    if actor is not None:
+        token = current_task_execution_delegate.set(
+            _ConversationTaskExecutionDelegate(actor),
+        )
+    try:
+        outcome = await handle_provider_event_live_dispatch(request)
+    except (
+        ProviderEventDispatchValidationError,
+        ProviderEventInboxMismatchError,
+    ) as exc:
+        reason = getattr(exc, "reason_code", str(exc))
+        cm._session_logger.info(
+            "provider_event_dispatch",
+            f"Rejected provider-event dispatch {event.operation_id}: {reason}",
+        )
+        return False
+    except Exception as exc:
+        error_message = (
+            f"Provider-event dispatch {event.operation_id} failed to start: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        cm._session_logger.error("provider_event_dispatch", error_message)
+        publish_system_error(
+            error_message,
+            error_type="provider_event_dispatch_start_failed",
+        )
+        return False
+    finally:
+        if token is not None:
+            current_task_execution_delegate.reset(token)
+
+    cm._session_logger.info(
+        "provider_event_dispatch",
+        (
+            f"Provider-event dispatch {outcome.operation_id} "
+            f"status={outcome.status} adopted_only={outcome.adopted_only} "
+            f"captured_task_revision={outcome.captured_task_revision}"
+        ),
+    )
+    if not outcome.adopted_only and outcome.status == "started":
+        cm.notifications_bar.push_notif(
+            "Tasks",
+            (
+                f"Provider event started task {event.task_id} "
+                f"(operation {event.operation_id})."
+            ),
+            event.timestamp,
+        )
     return False
 
 

@@ -38,6 +38,7 @@ from unify.conversation_manager.domains.self_host_desktop import (
 )
 from unify.conversation_manager.domains.task_activation import (
     _consume_startup_wake_reasons,
+    _handle_provider_event_dispatch_requested_event,
     _handle_task_due_event,
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
@@ -2982,6 +2983,17 @@ async def _(
     **kwargs,
 ):
     if await _handle_task_trigger_requested_event(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(ProviderEventDispatchRequested)
+async def _(
+    event: ProviderEventDispatchRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    if await _handle_provider_event_dispatch_requested_event(event, cm):
         await cm.request_llm_run(delay=0)
 
 
