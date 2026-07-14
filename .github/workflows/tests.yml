@@ -260,7 +260,7 @@ jobs:
               # It's a flag - collect it and its value if needed
               FLAGS+=("$token")
               LAST_FLAG="$token"
-            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "-e" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" || "$LAST_FLAG" == "--repeat" ]]; then
+            elif [[ "$LAST_FLAG" == "--env" || "$LAST_FLAG" == "-e" || "$LAST_FLAG" == "--tags" || "$LAST_FLAG" == "-j" || "$LAST_FLAG" == "--jobs" || "$LAST_FLAG" == "-t" || "$LAST_FLAG" == "--timeout" || "$LAST_FLAG" == "--session-timeout" || "$LAST_FLAG" == "--repeat" ]]; then
               # Previous token was a flag that takes a value
               FLAGS+=("$token")
               LAST_FLAG=""
@@ -1131,8 +1131,9 @@ jobs:
         # Note: TEST_PATH must come before EXTRA_ARGS because EXTRA_ARGS may contain
         # "-- pytest-args" and everything after -- is treated as pytest arguments
         # TEST_PATH is unquoted to allow word splitting for bundled multi-file entries
-        echo "Running: parallel_run.sh --timeout $TIMEOUT $TEST_PATH $EXTRA_ARGS"
-        tests/parallel_run.sh --timeout "$TIMEOUT" $TEST_PATH $EXTRA_ARGS
+        echo "Running: parallel_run.sh --timeout $TIMEOUT --session-timeout 1800 $TEST_PATH $EXTRA_ARGS"
+        # shellcheck disable=SC2086
+        tests/parallel_run.sh --timeout "$TIMEOUT" --session-timeout 1800 $TEST_PATH $EXTRA_ARGS
         TEST_EXIT_CODE=$?
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE

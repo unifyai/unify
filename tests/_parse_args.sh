@@ -10,7 +10,7 @@
 #   parse_test_args "$@"
 #
 # After calling parse_test_args, these variables are populated:
-#   SERIAL, TIMEOUT, NAME_PATTERN, EVAL_ONLY, SYMBOLIC_ONLY,
+#   SERIAL, TIMEOUT, SESSION_TIMEOUT, NAME_PATTERN, EVAL_ONLY, SYMBOLIC_ONLY,
 #   REPEAT_COUNT, OVERWRITE_SCENARIOS, MAX_JOBS, ENV_OVERRIDES[],
 #   TAGS[], PYTEST_EXTRA_ARGS[], PYTEST_COLLECTION_ARGS[],
 #   POSITIONAL_ARGS[]
@@ -37,6 +37,7 @@ parse_test_args() {
   # Initialize/reset all variables
   SERIAL=0
   TIMEOUT=0
+  SESSION_TIMEOUT=0
   NAME_PATTERN=""
   EVAL_ONLY=0
   SYMBOLIC_ONLY=0
@@ -57,6 +58,15 @@ parse_test_args() {
           shift 2
         else
           echo "Error: --timeout requires a positive integer (seconds)." >&2
+          return 2
+        fi
+        ;;
+      --session-timeout)
+        if [[ -n "${2-}" && "$2" =~ ^[0-9]+$ && "$2" -ge 1 ]]; then
+          SESSION_TIMEOUT="$2"
+          shift 2
+        else
+          echo "Error: --session-timeout requires a positive integer (seconds)." >&2
           return 2
         fi
         ;;
@@ -231,6 +241,7 @@ reconstruct_parallel_run_args() {
 
   (( SERIAL )) && args="$args -s"
   (( TIMEOUT > 0 )) && args="$args --timeout $TIMEOUT"
+  (( SESSION_TIMEOUT > 0 )) && args="$args --session-timeout $SESSION_TIMEOUT"
   [[ -n "$NAME_PATTERN" ]] && args="$args -m $(printf '%q' "$NAME_PATTERN")"
   (( EVAL_ONLY )) && args="$args --eval-only"
   (( SYMBOLIC_ONLY )) && args="$args --symbolic-only"
@@ -272,7 +283,10 @@ Run pytest tests in parallel tmux sessions.
 Always blocks until all tests complete (or timeout).
 
 Options:
-  -t, --timeout N      Abort if tests don't complete within N seconds
+  -t, --timeout N      Abort the whole run if any sessions remain after N seconds
+  --session-timeout N  Kill each tmux session's pytest if it exceeds N seconds
+                       (CI defaults to 1800 when unset; prevents one hang from
+                       burning the whole job budget)
   -s, --serial         One session per file (default: one per test)
   -m, --match PATTERN  Filter files by glob pattern
   -e, --env KEY=VALUE  Set environment variable (repeatable)
@@ -288,7 +302,8 @@ ${HELP_EXTRA_OPTIONS:-}
 Examples:
   $script_name tests/                    # Run all tests
   $script_name tests/foo.py             # Run one file
-  $script_name --timeout 300 tests/     # 5-minute timeout
+  $script_name --timeout 300 tests/     # 5-minute whole-run timeout
+  $script_name --session-timeout 600 tests/  # 10-minute per-session kill
   $script_name -s tests/                # Serial mode (per-file)
   $script_name -j 8 tests/              # Limit to 8 concurrent
   $script_name --eval-only tests/       # Only eval tests
