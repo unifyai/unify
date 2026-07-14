@@ -1,0 +1,9 @@
+{
+  "assistant_id": "assistant-7",
+  "task_id": 3,
+  "run_id": 42,
+  "receipt_id": "receipt-b",
+  "event_context_ref": "blob-ctx-1",
+  "audience": "orchestra:event-context",
+  "issued_at": "2026-07-13T12:00:00+00:00"
+}
