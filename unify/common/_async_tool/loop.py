@@ -76,6 +76,110 @@ class ToolLoopRuntimeState:
     step_index: int = 0
     consecutive_failures: int = 0
     message_count_offset: int = 0
+    # Cross-turn identical tool-call guard: signature of the most recently
+    # completed base tool, per-signature execution counts, and how many times
+    # the loop has refused an identical re-request.
+    last_completed_tool_sig: Optional[tuple[str, str]] = None
+    tool_sig_execution_counts: Dict[tuple[str, str], int] = field(default_factory=dict)
+    tool_sig_refusal_counts: Dict[tuple[str, str], int] = field(default_factory=dict)
+
+
+# Allow one completed execution of (name, args); refuse an immediate consecutive
+# repeat. Also hard-cap total executions of the same signature per loop so
+# ask→mutate→ask→mutate ping-pong cannot run unbounded.
+_MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS = 1
+_MAX_TOTAL_IDENTICAL_TOOL_CALLS = 3
+_MAX_IDENTICAL_TOOL_REFUSALS = 3
+
+_IDENTICAL_TOOL_GUARD_EXEMPT_NAMES = frozenset(
+    {
+        "final_response",
+        "send_response",
+        "compress_context",
+        "request_clarification",
+        "ask_user_clarification",
+    },
+)
+
+
+def tool_call_signature(name: str, args: Any) -> tuple[str, str]:
+    """Canonical (name, args_json) signature for cross-turn identical-call detection."""
+    if isinstance(args, str):
+        try:
+            parsed = json.loads(args)
+        except Exception:
+            return (name, args)
+        args = parsed
+    if not isinstance(args, dict):
+        args = {} if args is None else {"_value": args}
+    return (name, json.dumps(args, sort_keys=True, default=str))
+
+
+def is_identical_tool_call_exempt(name: str) -> bool:
+    """Return True for loop infrastructure / response tools that may repeat."""
+    if name in _IDENTICAL_TOOL_GUARD_EXEMPT_NAMES:
+        return True
+    # Dynamic steering helpers are generated per in-flight call id.
+    # Nested manager tools keep the bare name ``ask`` and are NOT exempt.
+    for prefix in ("check_status_", "stop_", "pause_", "resume_", "interject_"):
+        if name.startswith(prefix):
+            return True
+    if name.startswith("ask_"):
+        return True
+    return False
+
+
+def should_refuse_identical_tool_call(
+    runtime_state: ToolLoopRuntimeState,
+    sig: tuple[str, str],
+) -> Optional[str]:
+    """
+    Decide whether to refuse scheduling ``sig``.
+
+    Returns a refusal message when the call is an immediate consecutive repeat
+    of the last completed tool, or when the same signature has already been
+    executed too many times in this loop. Returns None when the call may run.
+    """
+    name, _args = sig
+    if is_identical_tool_call_exempt(name):
+        return None
+
+    total = runtime_state.tool_sig_execution_counts.get(sig, 0)
+    if total >= _MAX_TOTAL_IDENTICAL_TOOL_CALLS:
+        return (
+            f"Refused: tool '{name}' was already executed {total} time(s) with "
+            f"identical arguments in this loop (cap "
+            f"{_MAX_TOTAL_IDENTICAL_TOOL_CALLS}). Do not repeat this call. Use "
+            f"the prior tool result, choose different arguments, call a "
+            f"different tool, or conclude."
+        )
+
+    if (
+        runtime_state.last_completed_tool_sig == sig
+        and total >= _MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS
+    ):
+        return (
+            f"Refused: tool '{name}' was just completed with identical "
+            f"arguments. Repeating the same call will not produce new "
+            f"information. Use the prior result, change the arguments, call a "
+            f"different tool (e.g. request_clarification when a human must "
+            f"disambiguate), or conclude."
+        )
+    return None
+
+
+def record_completed_tool_signature(
+    runtime_state: ToolLoopRuntimeState,
+    sig: tuple[str, str],
+) -> None:
+    """Record a successfully scheduled+completed base tool signature."""
+    name, _args = sig
+    if is_identical_tool_call_exempt(name):
+        return
+    runtime_state.last_completed_tool_sig = sig
+    runtime_state.tool_sig_execution_counts[sig] = (
+        runtime_state.tool_sig_execution_counts.get(sig, 0) + 1
+    )
 
 
 def _parse_tool_policy_result(
@@ -1296,6 +1400,23 @@ async def async_tool_loop_inner(
             logger.info(f"Early exit – {reason}", prefix=ICONS["early_exit"])
         return notice["content"]
 
+    async def _process_completed_and_record(task: asyncio.Task) -> bool:
+        """Process a finished tool task and record its signature for the identical-call guard."""
+        info = tools_data.info.get(task)
+        sig: Optional[tuple[str, str]] = None
+        if info is not None:
+            sig = tool_call_signature(info.name, info.llm_arguments)
+        needs_turn = await tools_data.process_completed_task(
+            task=task,
+            consecutive_failures=consecutive_failures,
+            outer_handle_container=outer_handle_container,
+            assistant_meta=assistant_meta,
+            msg_dispatcher=_msg_dispatcher,
+        )
+        if needs_turn and sig is not None:
+            record_completed_tool_signature(runtime_state, sig)
+        return needs_turn
+
     # ── small local helpers to dedupe repeated logic ─────────────────────────
     def _pretty(tool_name: str, payload: Any) -> str:
         return ToolsData._pretty_tool_payload(tool_name, payload)
@@ -1545,13 +1666,7 @@ async def async_tool_loop_inner(
                         done & tools_data.pending,
                         tools_data,
                     ):
-                        await tools_data.process_completed_task(
-                            task=t,
-                            consecutive_failures=consecutive_failures,
-                            outer_handle_container=outer_handle_container,
-                            assistant_meta=assistant_meta,
-                            msg_dispatcher=_msg_dispatcher,
-                        )
+                        await _process_completed_and_record(t)
                     if cancel_event.is_set():
                         # Cancellation requested – rely on mirrored stop to have
                         # already reached children; abort loop gracefully.
@@ -2018,13 +2133,7 @@ async def async_tool_loop_inner(
                     _completed_tools,
                     tools_data,
                 ):
-                    if await tools_data.process_completed_task(
-                        task=task,
-                        consecutive_failures=consecutive_failures,
-                        outer_handle_container=outer_handle_container,
-                        assistant_meta=assistant_meta,
-                        msg_dispatcher=_msg_dispatcher,
-                    ):
+                    if await _process_completed_and_record(task):
                         needs_turn = True
 
                 # Other tools may still be running.
@@ -2323,13 +2432,7 @@ async def async_tool_loop_inner(
             for task in list(tools_data.pending):
                 if task.done():
                     with suppress(Exception):
-                        await tools_data.process_completed_task(
-                            task=task,
-                            consecutive_failures=consecutive_failures,
-                            outer_handle_container=outer_handle_container,
-                            assistant_meta=assistant_meta,
-                            msg_dispatcher=_msg_dispatcher,
-                        )
+                        await _process_completed_and_record(task)
 
             dynamic_tool_factory = DynamicToolFactory(tools_data)
             dynamic_tool_factory.generate()
@@ -2530,13 +2633,7 @@ async def async_tool_loop_inner(
                         done & pending_snapshot,
                         tools_data,
                     ):
-                        if await tools_data.process_completed_task(
-                            task=task,
-                            consecutive_failures=consecutive_failures,
-                            outer_handle_container=outer_handle_container,
-                            assistant_meta=assistant_meta,
-                            msg_dispatcher=_msg_dispatcher,
-                        ):
+                        if await _process_completed_and_record(task):
                             needs_turn = True
 
                     # …then restart the main loop so the model sees the new info
@@ -2720,6 +2817,7 @@ async def async_tool_loop_inner(
             # where we wait for the **first** task / cancel / interjection.
             _persist_response_emitted = False
             _persist_response_content = None  # captured by send_response for surfacing
+            _identical_guard_abort_reason: Optional[str] = None
 
             if msg["tool_calls"]:
                 # ── De-duplicate tool calls (optional) ────────────────────────
@@ -2748,6 +2846,8 @@ async def async_tool_loop_inner(
                     await _msg_dispatcher.append_msgs([sys_notice])
 
                 for idx, call in enumerate(msg["tool_calls"]):  # capture index
+                    if _identical_guard_abort_reason is not None:
+                        break
                     name = call["function"]["name"]
                     runtime_state.called_tools.append(name)
 
@@ -3661,6 +3761,47 @@ async def async_tool_loop_inner(
                             )
                             continue
 
+                        # Cross-turn identical tool-call guard: refuse consecutive
+                        # or over-cap repeats of the same (name, args) signature.
+                        _sig = tool_call_signature(name, args)
+                        _refuse_msg = should_refuse_identical_tool_call(
+                            runtime_state,
+                            _sig,
+                        )
+                        if _refuse_msg is not None:
+                            runtime_state.tool_sig_refusal_counts[_sig] = (
+                                runtime_state.tool_sig_refusal_counts.get(_sig, 0) + 1
+                            )
+                            tool_msg = create_tool_call_message(
+                                name=name,
+                                call_id=call["id"],
+                                content=f"⚠️ {_refuse_msg}",
+                            )
+                            await insert_tool_message_after_assistant(
+                                assistant_meta,
+                                msg,
+                                tool_msg,
+                                client,
+                                _msg_dispatcher,
+                            )
+                            if log_steps:
+                                logger.info(
+                                    f"Refused identical tool call '{name}' "
+                                    f"(refusal "
+                                    f"#{runtime_state.tool_sig_refusal_counts[_sig]})",
+                                    prefix=ICONS.get("early_exit", "🔚"),
+                                )
+                            if (
+                                runtime_state.tool_sig_refusal_counts[_sig]
+                                >= _MAX_IDENTICAL_TOOL_REFUSALS
+                            ):
+                                _identical_guard_abort_reason = (
+                                    f"identical tool call '{name}' refused "
+                                    f"{runtime_state.tool_sig_refusal_counts[_sig]} "
+                                    f"times"
+                                )
+                            continue
+
                         # Use shared helper for base tools
                         await tools_data.schedule_base_tool_call(
                             msg,
@@ -3673,6 +3814,13 @@ async def async_tool_loop_inner(
                             assistant_meta=assistant_meta,
                             initial_paused=not pause_event.is_set(),
                         )
+
+                if _identical_guard_abort_reason is not None:
+                    if raise_on_limit:
+                        raise RuntimeError(
+                            f"Aborted: {_identical_guard_abort_reason}",
+                        )
+                    return await _handle_limit_reached(_identical_guard_abort_reason)
 
                 if _persist_response_emitted:
                     pass  # fall through to section F → persist wait
