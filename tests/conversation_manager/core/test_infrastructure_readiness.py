@@ -21,6 +21,7 @@ from tests.conversation_manager.cm_helpers import (
     filter_events_by_type,
 )
 from tests.conversation_manager.conftest import BOSS
+from unify.common.prompt_helpers import now as prompt_now
 from unify.conversation_manager.events import (
     ActorHandleStarted,
     FileSyncComplete,
@@ -28,13 +29,47 @@ from unify.conversation_manager.events import (
     UnifyMessageReceived,
     UnifyMessageSent,
 )
+from unify.session_details import SESSION_DETAILS
 
 pytestmark = pytest.mark.eval
+
+_MANAGED_DESKTOP_URL = "https://unity-pool-ubuntu-1.vm.unify.ai"
+
+
+@pytest.fixture
+def managed_desktop_entitled():
+    """Entitle managed desktop so VM/sync readiness XML appears in snapshots.
+
+    ``Renderer.render_infrastructure_state`` gates ``vm_pending`` /
+    ``sync_pending`` on ``has_managed_desktop``. Managed desktop is opt-in
+    (``desktop_mode`` defaults to ``none``), so these evals must enable it
+    or the brain never sees the deferral signal.
+    """
+    assistant = SESSION_DETAILS.assistant
+    previous = (
+        assistant.desktop_mode,
+        assistant.managed_desktop_status,
+        assistant.desktop_url,
+    )
+    assistant.desktop_mode = "ubuntu"
+    assistant.managed_desktop_status = "active"
+    assistant.desktop_url = _MANAGED_DESKTOP_URL
+    try:
+        yield
+    finally:
+        (
+            assistant.desktop_mode,
+            assistant.managed_desktop_status,
+            assistant.desktop_url,
+        ) = previous
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_brain_defers_computer_action_when_vm_not_ready(initialized_cm):
+async def test_brain_defers_computer_action_when_vm_not_ready(
+    initialized_cm,
+    managed_desktop_entitled,
+):
     """When vm_ready=False the brain should not call act for a computer task.
 
     Instead it should reply to the user acknowledging the request and
@@ -63,7 +98,10 @@ async def test_brain_defers_computer_action_when_vm_not_ready(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_brain_defers_file_access_when_sync_not_complete(initialized_cm):
+async def test_brain_defers_file_access_when_sync_not_complete(
+    initialized_cm,
+    managed_desktop_entitled,
+):
     """When file_sync_complete=False the brain should not call act to read files.
 
     Instead it should reply explaining that files from previous sessions
@@ -101,13 +139,16 @@ async def test_brain_defers_file_access_when_sync_not_complete(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_brain_acts_on_computer_task_after_vm_ready(initialized_cm):
+async def test_brain_acts_on_computer_task_after_vm_ready(
+    initialized_cm,
+    managed_desktop_entitled,
+):
     """After deferring a computer task, the brain acts once VM + sync are ready.
 
     Phase 1: user asks for a desktop task, brain defers (vm not ready).
-    Phase 2: VM becomes ready and sync completes (FileSyncComplete event),
-    the brain gets a thinking turn and should now call act and inform the
-    user it is proceeding.
+    Phase 2: the desktop-ready System notification arrives and sync
+    completes (FileSyncComplete), the brain gets a thinking turn and
+    should now call act and inform the user it is proceeding.
     """
     cm = initialized_cm
     assert cm.cm.vm_ready is False
@@ -122,8 +163,15 @@ async def test_brain_acts_on_computer_task_after_vm_ready(initialized_cm):
     assert "act" not in cm.all_tool_calls
     cm.all_tool_calls.clear()
 
-    # Phase 2: VM ready + file sync complete (event triggers brain turn)
+    # Phase 2: VM ready (same System notification production pushes) + file
+    # sync complete. The vm_pending snapshot tells the brain to wait for the
+    # desktop-ready notification — FileSyncComplete alone is not that signal.
     cm.cm.vm_ready = True
+    cm.cm.notifications_bar.push_notif(
+        "System",
+        "Desktop VM is ready — computer actions are now available.",
+        prompt_now(as_string=False),
+    )
     result = await cm.step_until_wait(FileSyncComplete())
 
     assert_act_triggered(
@@ -136,7 +184,10 @@ async def test_brain_acts_on_computer_task_after_vm_ready(initialized_cm):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_brain_acts_on_file_request_after_sync_complete(initialized_cm):
+async def test_brain_acts_on_file_request_after_sync_complete(
+    initialized_cm,
+    managed_desktop_entitled,
+):
     """After deferring a file request, the brain acts once sync completes.
 
     Phase 1: user asks about a historical attachment, brain defers (sync pending).
