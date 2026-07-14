@@ -43,6 +43,48 @@ event_broker = get_event_broker()
 _pre_hire_exchange_id: int | None = None
 
 
+def _reset_boss_contact_sparse(contact_manager) -> None:
+    """Clear boss identity fields so a demo session starts sparse.
+
+    ``ContactManager.update_contact`` treats empty strings as omit so unique
+    fields (email/phone) are never written as duplicate ``""`` values. That
+    makes ``first_name=""`` a no-op, which cannot establish the sparse demo
+    boss. Overwrite the identity fields with null via the logs API instead,
+    then refresh the local store.
+    """
+    import unisdk
+
+    boss_id = SESSION_DETAILS.boss_contact_id
+    ctx = contact_manager._ctx
+    log_ids = unisdk.get_logs(
+        context=ctx,
+        filter=f"contact_id == {boss_id}",
+        return_ids_only=True,
+    )
+    if not log_ids:
+        return
+    unisdk.update_logs(
+        logs=log_ids,
+        context=ctx,
+        entries={
+            "first_name": None,
+            "surname": None,
+            "email_address": None,
+            "phone_number": None,
+            "should_respond": True,
+        },
+        overwrite=True,
+    )
+    rows = unisdk.get_logs(
+        context=ctx,
+        filter=f"contact_id == {boss_id}",
+        limit=1,
+        from_fields=contact_manager._allowed_fields(),
+    )
+    if rows:
+        contact_manager._data_store.put(rows[0].entries)
+
+
 def ensure_runtime_context(*, strict: bool = False) -> str:
     """Rebind runtime context in this task and refresh ContextRegistry base."""
     from unify.common.runtime_context import bind_runtime_context_root
@@ -1943,14 +1985,7 @@ def _init_managers(
         cm.contact_index.get_or_create_conversation(SESSION_DETAILS.boss_contact_id)
         # Start the boss contact sparse in demo mode; details can be provided
         # later via set_boss_details or demo prospect metadata.
-        cm.contact_manager.update_contact(
-            contact_id=SESSION_DETAILS.boss_contact_id,
-            first_name="",
-            surname="",
-            email_address="",
-            phone_number="",
-            should_respond=True,
-        )
+        _reset_boss_contact_sparse(cm.contact_manager)
         # If we have a demo_id, fetch prospect details from Orchestra and apply
         # them to the boss contact.
         if SETTINGS.DEMO_ID is not None:
