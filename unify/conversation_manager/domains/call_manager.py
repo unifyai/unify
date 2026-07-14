@@ -184,6 +184,10 @@ class LivekitCallManager:
         # not a failure — the event handler uses it to tell the user we're in
         # the lobby rather than that we're already in the call.
         self._meet_lobby_waiting: bool = False
+        # Reason string from the most recent failed browser-meet join (agent
+        # service ``reason``/``message``), consumed by the event handler to
+        # tell the user *why* the join failed rather than a generic retry line.
+        self.meet_join_failure_reason: str | None = None
         self.google_meet_start_timestamp = None
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
@@ -989,6 +993,7 @@ class LivekitCallManager:
         room_suffix = path_info["room"]
 
         self._meet_joining = True
+        self.meet_join_failure_reason = None
         self._call_channel = channel
         self._disconnect_contact = contact
         self.reset_speaker_engagement(contact, boss)
@@ -1120,6 +1125,7 @@ class LivekitCallManager:
             LOGGER.error(
                 f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: {body}",
             )
+            self.meet_join_failure_reason = body.get("reason") or body.get("message")
             self._meet_joining = False
             self._meet_lobby_waiting = False
             await self._cleanup_meet(channel)
