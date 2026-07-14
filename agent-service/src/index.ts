@@ -1064,11 +1064,6 @@ async function openMeetSettings(page: any): Promise<boolean> {
   }
 }
 
-const MEET_AUDIO_TAB_TASK =
-  `You are in the Google Meet Settings dialog.\n` +
-  `Click the "Audio" tab on the left side of the dialog.\n` +
-  `Do NOT close the dialog.`;
-
 const MEET_SELECT_MIC_TASK = (micLabel: string) =>
   `You are in the Google Meet Settings dialog, on the Audio tab.\n` +
   `Click the Microphone dropdown and select the option containing "${micLabel}".\n` +
@@ -1096,13 +1091,10 @@ async function googleMeetJoinFlow(agent: BrowserAgent, displayName: string): Pro
   console.log('[googlemeet/join] Phase 1b: opening Settings for audio device selection...');
   const settingsOpened = await openMeetSettings(page);
   if (settingsOpened) {
-    console.log('[googlemeet/join] Phase 1b-i: navigating to Audio tab...');
-    await runMagnitudeLoop(agent, MEET_AUDIO_TAB_TASK, MEET_AUDIO_MAX_ITERATIONS, 'googlemeet/audio-tab');
-
-    console.log('[googlemeet/join] Phase 1b-ii: selecting microphone...');
+    console.log('[googlemeet/join] Phase 1b-i: selecting microphone...');
     await runMagnitudeLoop(agent, MEET_SELECT_MIC_TASK('agent_sink'), MEET_AUDIO_MAX_ITERATIONS, 'googlemeet/select-mic');
 
-    console.log('[googlemeet/join] Phase 1b-iii: selecting speaker + closing...');
+    console.log('[googlemeet/join] Phase 1b-ii: selecting speaker + closing...');
     await runMagnitudeLoop(agent, MEET_SELECT_SPEAKER_TASK('meet_sink'), MEET_AUDIO_MAX_ITERATIONS, 'googlemeet/select-speaker');
   } else {
     console.log('[googlemeet/join] Phase 1b: Could not open Settings — using default devices');
