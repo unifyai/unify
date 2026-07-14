@@ -1,4 +1,10 @@
-"""Durable provider-event dispatch inbox for Unity live execution."""
+"""Provider-event dispatch inbox for Unity live execution.
+
+Temporary SQLite-backed launch-claim store for the initial live provider-event
+slice. It is container-local and not shared across Unity instances. Replace it
+with Orchestra-backed downstream adoption once dispatch convergence is wired,
+then remove this module and any callers that read local adoption state.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +29,11 @@ class LiveDispatchInboxRecord:
 
 
 class ProviderEventLiveDispatchInbox:
-    """SQLite-backed inbox that owns live task-instance launch."""
+    """Container-local SQLite inbox for owner-only live task-instance launch.
+
+    Interim implementation only. Delete once Orchestra owns cross-instance
+    adoption state for provider-event dispatch operations.
+    """
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
