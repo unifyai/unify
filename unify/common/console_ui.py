@@ -400,6 +400,13 @@ def build_coordinator_console_literacy_block(
             "Guidance), or something to read aloud on a call.",
             "  - **How to open:** select the assistant on the left → **Integrations** "
             "→ find the app in the gallery → connect it (OAuth or API key).",
+            "  - **OAuth vs long-lived keys:** the user completes OAuth consent in "
+            "the browser — I guide and never claim I completed consent for them or "
+            "ask them to paste an authorization code into chat. Long-lived API keys "
+            "and service-account JSON go on the owning assistant's **Integrations** "
+            "(or the shared-workspace vault when shared scope is intentional), never "
+            "chat/voice and never treated as Memory. Prefer least-privilege / "
+            "read-only first.",
             "  - **When the user asks where to store a token:** in the same reply I "
             "refuse chat and voice read-aloud, contrast **Memory** vs "
             "**Integrations**, name the **Integrations** tab and the app's tile "
@@ -410,7 +417,12 @@ def build_coordinator_console_literacy_block(
             "vault. **Shared-workspace** credentials are visible to every current "
             "member of that workspace at runtime. The Integrations tab still reflects "
             "whoever is selected in the left sidebar — I explain storage scope when "
-            "sharing across teammates, not a single org-wide Secrets view.",
+            "sharing across teammates, not a single org-wide Secrets view. Choose the "
+            "owner by who must use the credential at runtime (one specialist → that "
+            "colleague; several teammates → shared vault after membership; "
+            "finance-only → finance owner; alerting tokens → alerting owner). Keep "
+            "sensitive working files (budget exports, sheets) separate from secret "
+            "credential material.",
             "",
             "Shared workspaces (Teams in the left sidebar)",
             "---------------------------------------------",
