@@ -1,0 +1,137 @@
+# Diagnostic only — not part of the normal test matrix.
+# Purpose: empirically measure GitHub cancel latency under patterns that
+# mirror (or isolate) our Tests "Run tests" step, so we can pick a fix
+# we know works before changing tests.yml / parallel_run.sh.
+#
+# Experiments:
+#   A — bare `sleep` (GitHub cancel baseline)
+#   B — detached tmux + wait loop, no trap (does kill-tree reap tmux?)
+#   C — same as B, but trap runs `tmux kill-server` (hard cleanup)
+#   D — parallel_run-style trap (TERM pane pgid → kill-session, no kill-server)
+#   E — bare sleep + `if: always()` 120s step (post-cancel wind-down cost)
+#
+# Procedure: dispatch → wait until Hang steps are in_progress →
+# `gh run cancel` → measure time-to-cancelled per job from logs/API.
+name: Cancel Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: cancel-smoke-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  A_baseline_sleep:
+    name: "A: baseline sleep"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_A start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        # Heartbeat so logs prove the step was alive pre-cancel
+        while true; do
+          echo "SMOKE_A heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 10
+        done
+
+  B_tmux_no_trap:
+    name: "B: tmux wait, no trap"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_B start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_b "bash -c 'while true; do echo tmux_b \$(date -u +%H:%M:%S); sleep 10; done'"
+        # Parent waits on the session — mirrors parallel_run's wait loop
+        while tmux has-session -t smoke_b 2>/dev/null; do
+          echo "SMOKE_B heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_B session ended unexpectedly"
+
+  C_tmux_kill_server_trap:
+    name: "C: tmux + kill-server trap"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        cleanup() {
+          echo "SMOKE_C caught signal $(date -u +%Y-%m-%dT%H:%M:%SZ) — kill-server"
+          tmux kill-server 2>/dev/null || true
+          exit 143
+        }
+        trap cleanup INT TERM
+        echo "SMOKE_C start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_c "bash -c 'while true; do echo tmux_c \$(date -u +%H:%M:%S); sleep 10; done'"
+        while tmux has-session -t smoke_c 2>/dev/null; do
+          echo "SMOKE_C heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_C session ended unexpectedly"
+
+  D_parallel_run_style_trap:
+    name: "D: parallel_run-style trap"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        # Mirrors tests/parallel_run.sh _cleanup_sessions (TERM pane pgid,
+        # brief sleep, kill-session) — does NOT kill-server.
+        cleanup() {
+          local sig="${1:-TERM}"
+          echo "SMOKE_D caught signal ${sig} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          tmux list-panes -t smoke_d -F '#{pane_pid}' 2>/dev/null | while read -r pid; do
+            if [[ -n "$pid" ]]; then
+              kill -TERM "-$pid" 2>/dev/null || true
+            fi
+          done
+          sleep 0.1
+          tmux kill-session -t smoke_d 2>/dev/null || true
+          echo "SMOKE_D cleanup complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          exit 143
+        }
+        trap 'cleanup INT' INT
+        trap 'cleanup TERM' TERM
+        echo "SMOKE_D start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_d "bash -c 'while true; do echo tmux_d \$(date -u +%H:%M:%S); sleep 10; done'"
+        while tmux has-session -t smoke_d 2>/dev/null; do
+          echo "SMOKE_D heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_D session ended unexpectedly"
+
+  E_always_slow_cleanup:
+    name: "E: always() 120s after hang"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_E hang start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        while true; do
+          echo "SMOKE_E heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 10
+        done
+    - name: Slow always cleanup
+      if: always()
+      run: |
+        echo "SMOKE_E always-start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sleep 120
+        echo "SMOKE_E always-done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    - name: Cancel-only cleanup
+      if: cancelled()
+      run: echo "SMOKE_E cancelled-cleanup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
