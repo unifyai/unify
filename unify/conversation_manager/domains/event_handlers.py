@@ -540,6 +540,23 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         )
 
 
+def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
+    """Notification + transcript text for a successful browser-meet join.
+
+    A join that lands in the waiting room is still a success — the browser has
+    knocked ("Ask to join") and is waiting for the host to admit it — so word
+    it as waiting to be let in rather than already being in the call. This
+    keeps the LLM from treating a lobby state as a join failure.
+    """
+    if in_lobby:
+        notif = (
+            f"In the {meet_label} waiting room — I've asked to join and am "
+            "waiting for the host to let me in."
+        )
+        return notif, f"<Waiting in the {meet_label} waiting room to be admitted...>"
+    return f"Joining {meet_label}...", f"<Joining {meet_label}...>"
+
+
 @EventHandler.register(GoogleMeetReceived)
 async def _(
     event: GoogleMeetReceived,
@@ -574,16 +591,20 @@ async def _(
     )
 
     if joined:
+        notif_text, thread_text = _meet_join_notif(
+            "Google Meet",
+            cm.call_manager.meet_lobby_waiting,
+        )
         cm.notifications_bar.push_notif(
             "Comms",
-            f"Joining Google Meet...",
+            notif_text,
             event.timestamp,
         )
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
             thread_name=Medium.GOOGLE_MEET,
-            message_content="<Joining Google Meet...>",
+            message_content=thread_text,
             role="assistant",
             timestamp=event.timestamp,
         )
@@ -653,16 +674,20 @@ async def _(
     )
 
     if joined:
+        notif_text, thread_text = _meet_join_notif(
+            "Teams meeting",
+            cm.call_manager.meet_lobby_waiting,
+        )
         cm.notifications_bar.push_notif(
             "Comms",
-            f"Joining Teams meeting...",
+            notif_text,
             event.timestamp,
         )
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
             thread_name=Medium.TEAMS_MEET,
-            message_content="<Joining Teams meeting...>",
+            message_content=thread_text,
             role="assistant",
             timestamp=event.timestamp,
         )
