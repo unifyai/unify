@@ -850,7 +850,13 @@ class AsyncToolLoopHandle(SteerableToolHandle):
 
             if self._response_format is not None and isinstance(raw, str):
                 try:
-                    return self._response_format.model_validate_json(raw)
+                    from unify.common._async_tool.response_format import (
+                        try_normalize_response_format,
+                    )
+
+                    normalized = try_normalize_response_format(self._response_format)
+                    if normalized is not None:
+                        return normalized.parse_result(raw)
                 except Exception:
                     pass
             return raw
