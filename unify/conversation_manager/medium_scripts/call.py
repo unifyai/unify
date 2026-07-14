@@ -1439,9 +1439,29 @@ async def entrypoint(ctx: agents.JobContext):
         pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
-        _log.warning(
-            "No job metadata — falling back to env-based config (IPC disabled)",
+        # Per-call subprocess path: no LiveKit job metadata, but the CM still
+        # exports its IPC socket via CM_EVENT_SOCKET. Connect to it so this
+        # worker is a real IPC client — steerable (hang-up gate, guide_voice_agent)
+        # and, crucially, counted by the CM's socket server. The CM's
+        # last-client-disconnect fallback (_on_ipc_client_disconnected) is what
+        # publishes the synthetic *-Ended event; without this connection the meet
+        # has no client of its own, so an unrelated client disconnecting is treated
+        # as the last one and tears the live meet down with a spurious end.
+        from unify.conversation_manager.domains.ipc_socket import (
+            CM_EVENT_SOCKET_ENV,
+            init_socket_for_job,
         )
+
+        ipc_path = os.environ.get(CM_EVENT_SOCKET_ENV, "")
+        if ipc_path:
+            init_socket_for_job(ipc_path)
+            event_broker.reinit_socket()
+            _log.info(f"IPC socket initialised from env: {ipc_path}")
+        else:
+            _log.warning(
+                "No job metadata and no CM_EVENT_SOCKET — env-based config "
+                "(IPC disabled)",
+            )
         SESSION_DETAILS.populate_from_env()
         voice_provider = SESSION_DETAILS.voice.provider
         voice_id = SESSION_DETAILS.voice.id
