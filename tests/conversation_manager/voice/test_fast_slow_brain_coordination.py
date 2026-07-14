@@ -79,9 +79,12 @@ from unify.conversation_manager.events import (
     UnifyMeetReceived,
     UnifyMeetStarted,
     FastBrainNotification,
+    FastBrainTurnCompleted,
+    FAST_BRAIN_TURN_DEFER,
 )
 from unify.conversation_manager.cm_types import Medium, Mode
 
+from tests.conversation_manager.cm_helpers import step_voice_user_turn
 from tests.conversation_manager.conftest import BOSS, TEST_CONTACTS
 from tests.helpers import _handle_project
 
@@ -440,7 +443,8 @@ class TestRapidUtteranceHandling:
         - User is on a voice call
         - User speaks rapidly (multiple utterances while LLM is thinking)
         - LLM takes ~10-15 seconds per thinking step (realistic timing)
-        - Each utterance triggers the slow brain via handle_voice_user_turn()
+        - Each utterance wakes the slow brain via FastBrainTurnCompleted
+          (engaged inbound utterances are transcript-only)
 
         THE BUG (without queue-of-2):
         - Each new utterance cancels the in-flight LLM run
@@ -513,11 +517,17 @@ class TestRapidUtteranceHandling:
         from unify.conversation_manager.domains.event_handlers import EventHandler
 
         for i, text in enumerate(utterances):
-            event = InboundPhoneUtterance(contact=boss_contact, content=text)
-
-            # Handle the event (triggers handle_voice_user_turn -> request_llm_run)
+            utterance = InboundPhoneUtterance(contact=boss_contact, content=text)
+            # Transcript-only; slow brain wakes after the Voice Agent turn.
+            await EventHandler.handle_event(utterance, cm)
             await EventHandler.handle_event(
-                event,
+                FastBrainTurnCompleted(
+                    contact=boss_contact,
+                    turn_id=i + 1,
+                    user_content=text,
+                    classification=FAST_BRAIN_TURN_DEFER,
+                    intended_speech="",
+                ),
                 cm,
             )
 
@@ -650,7 +660,8 @@ class TestFastBrainNotificationSpeakMode:
         try:
             # Simulate a user question that should trigger the slow brain
             # to produce guidance with the result
-            result = await initialized_cm.step_until_wait(
+            result = await step_voice_user_turn(
+                initialized_cm,
                 InboundPhoneUtterance(
                     contact=boss,
                     content="What's the weather like in San Francisco today?",
@@ -757,7 +768,8 @@ class TestSymbolicForwardingAndSpeechGating:
 
         cm.all_tool_calls.clear()
 
-        await cm.step_until_wait(
+        await step_voice_user_turn(
+            cm,
             InboundUnifyMeetUtterance(
                 contact=BOSS,
                 content=(
@@ -848,8 +860,11 @@ class TestSlowBrainGuidanceDeliveryPrompt:
         assert "[You @ ...]" in prompt
         assert "definitely spoken" in prompt
         assert "never repeat" in prompt.lower()
-        # Re-asking is explicitly not a reason to answer again.
-        assert "re-asking" in prompt.lower()
+        # Caller re-asks / recall is the only carve-out for repeating a line.
+        low = prompt.lower()
+        assert (
+            "asked me to surface it again" in low or "explicitly asks for recall" in low
+        )
         # The legacy "unconfirmed / not proof" framing is gone.
         assert "(unconfirmed)" not in prompt
         assert "NOT proof the user heard it" not in prompt
@@ -1047,7 +1062,8 @@ class TestSlowBrainSpeaksViaGuideVoiceAgent:
 
         cm.all_tool_calls.clear()
 
-        await cm.step_until_wait(
+        await step_voice_user_turn(
+            cm,
             InboundUnifyMeetUtterance(
                 contact=BOSS,
                 content="How did the email check go? How many unread do I have?",
@@ -1189,7 +1205,8 @@ class TestSlowBrainSpeechPassthroughInSpeechFlow:
         try:
             cm.all_tool_calls.clear()
 
-            await cm.step_until_wait(
+            await step_voice_user_turn(
+                cm,
                 InboundUnifyMeetUtterance(
                     contact=BOSS,
                     content="What did you find for Italian restaurants?",

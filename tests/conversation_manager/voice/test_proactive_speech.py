@@ -125,6 +125,7 @@ def mock_cm(mock_session_logger, mock_event_broker, sample_contacts):
     cm.call_manager._meet_joining = False
     cm.call_manager._whatsapp_call_joining = False
     cm.call_manager.hang_up_gate_reason = None
+    cm.call_manager.set_hang_up_gate = AsyncMock()
     cm.assistant_has_teams = False
 
     # Create SimulatedContactManager and populate with sample contacts
