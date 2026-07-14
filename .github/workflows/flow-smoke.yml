@@ -26,7 +26,7 @@ on:
         type: number
         default: 30
       confirm_llm_spend:
-        description: "Type LLM_SPEND_OK to acknowledge this calls paid LLM APIs"
+        description: "LLM_SPEND_OK for live flows; CANCEL_SMOKE_OK for cancel-latency diagnostics (no LLM)"
         required: true
         type: string
   push:
@@ -48,14 +48,132 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Cancel-latency diagnostics (no LLM). Dispatch with confirm_llm_spend=
+  # CANCEL_SMOKE_OK. Uses this workflow because it already exists on main
+  # (required for workflow_dispatch) and has a concurrency group independent
+  # of the Tests matrix — so hung Tests runs cannot block these experiments.
+  # ---------------------------------------------------------------------------
+  cancel-smoke-A:
+    name: "A: baseline sleep"
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_A start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        while true; do
+          echo "SMOKE_A heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 10
+        done
+
+  cancel-smoke-B:
+    name: "B: tmux wait, no trap"
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_B start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_b "bash -c 'while true; do echo tmux_b \$(date -u +%H:%M:%S); sleep 10; done'"
+        while tmux has-session -t smoke_b 2>/dev/null; do
+          echo "SMOKE_B heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_B session ended unexpectedly"
+
+  cancel-smoke-C:
+    name: "C: tmux + kill-server trap"
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        cleanup() {
+          echo "SMOKE_C caught signal $(date -u +%Y-%m-%dT%H:%M:%SZ) — kill-server"
+          tmux kill-server 2>/dev/null || true
+          exit 143
+        }
+        trap cleanup INT TERM
+        echo "SMOKE_C start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_c "bash -c 'while true; do echo tmux_c \$(date -u +%H:%M:%S); sleep 10; done'"
+        while tmux has-session -t smoke_c 2>/dev/null; do
+          echo "SMOKE_C heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_C session ended unexpectedly"
+
+  cancel-smoke-D:
+    name: "D: parallel_run-style trap"
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        cleanup() {
+          local sig="${1:-TERM}"
+          echo "SMOKE_D caught signal ${sig} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          tmux list-panes -t smoke_d -F '#{pane_pid}' 2>/dev/null | while read -r pid; do
+            if [[ -n "$pid" ]]; then
+              kill -TERM "-$pid" 2>/dev/null || true
+            fi
+          done
+          sleep 0.1
+          tmux kill-session -t smoke_d 2>/dev/null || true
+          echo "SMOKE_D cleanup complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          exit 143
+        }
+        trap 'cleanup INT' INT
+        trap 'cleanup TERM' TERM
+        echo "SMOKE_D start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        tmux new-session -d -s smoke_d "bash -c 'while true; do echo tmux_d \$(date -u +%H:%M:%S); sleep 10; done'"
+        while tmux has-session -t smoke_d 2>/dev/null; do
+          echo "SMOKE_D heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 5
+        done
+        echo "SMOKE_D session ended unexpectedly"
+
+  cancel-smoke-E:
+    name: "E: always() 120s after hang"
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Hang
+      run: |
+        set -u
+        echo "SMOKE_E hang start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        while true; do
+          echo "SMOKE_E heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sleep 10
+        done
+    - name: Slow always cleanup
+      if: always()
+      run: |
+        echo "SMOKE_E always-start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        sleep 120
+        echo "SMOKE_E always-done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    - name: Cancel-only cleanup
+      if: cancelled()
+      run: echo "SMOKE_E cancelled-cleanup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
   flows:
     name: Flow smoke
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
     timeout-minutes: 60
-    # Run on: manual dispatch, a [run-flows] push, or a staging -> main PR.
+    # Run on: manual LLM_SPEND_OK dispatch, a [run-flows] push, or a staging -> main PR.
+    # CANCEL_SMOKE_OK dispatches are handled by the cancel-smoke-* jobs above.
     if: |
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'LLM_SPEND_OK') ||
       (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-flows]')) ||
       (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'staging')
     env:

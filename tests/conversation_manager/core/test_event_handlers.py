@@ -115,6 +115,9 @@ def mock_call_manager():
     manager.start_call = AsyncMock()
     manager.start_unify_meet = AsyncMock()
     manager.cleanup_call_proc = AsyncMock()
+    manager.cleanup_google_meet = AsyncMock()
+    manager.cleanup_teams_meet = AsyncMock()
+    manager.set_hang_up_gate = AsyncMock()
     manager.has_active_call = False
     manager.has_active_google_meet = False
     manager.has_active_teams_meet = False

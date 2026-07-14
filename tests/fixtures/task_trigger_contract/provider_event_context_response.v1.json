@@ -1,0 +1,18 @@
+{
+  "receipt_id": "receipt-b",
+  "run_id": 42,
+  "event_context_ref": "blob-ctx-1",
+  "envelope": {
+    "event_slug": "github.issue_created",
+    "delivery_id": "gh-fixture-1"
+  },
+  "curated_projection": {
+    "title": "Fixture issue",
+    "author": "octocat"
+  },
+  "source_body": {
+    "action": "opened",
+    "number": 1
+  },
+  "expires_at": "2026-08-12T12:00:00+00:00"
+}

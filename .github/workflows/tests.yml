@@ -55,12 +55,19 @@ on:
     - '**'    # All branches
 
 # Debouncer semantics (same model as the slow-brain Debouncer): one running
-# matrix per branch, one pending slot that newer runs replace. Push and
-# workflow_dispatch never cancel a matrix already in flight — manual
-# validation runs complete even when staging keeps landing commits.
+# matrix per branch, one pending slot that newer runs replace.
 #
-# Pull requests still use cancel-in-progress so outdated PR matrices are
-# dropped once a newer commit pushes to the branch.
+# cancel-in-progress is true for pull_request AND workflow_dispatch so a
+# superseded manual matrix (or a GitHub "zombie" run that ignores ordinary
+# cancel) does not hold the concurrency group hostage. Push events still
+# let an in-flight matrix finish — landing commits must not amputate a
+# validation run mid-flight.
+#
+# If a run stays in_progress after ordinary cancel (cancel_requested_at
+# stays null; jobs stuck on "Run tests" for tens of minutes), ordinary
+# cancel is a no-op — use force-cancel:
+#   gh api --method POST repos/unifyai/unify/actions/runs/<id>/force-cancel
+#   # or: bash scripts/dev/force_cancel_stuck_tests.sh
 #
 # Without a shared group, a staging push triggers BOTH a `push`-event run
 # AND (when the perpetual staging→main PR exists) a `pull_request`-event
@@ -71,7 +78,7 @@ on:
 # Different branches still parallelise.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
   # Determine if tests should run based on trigger and commit/PR message
