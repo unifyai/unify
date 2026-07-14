@@ -61,6 +61,10 @@ from .context_compression import (
     _COMPRESSION_SIGNAL,
     context_over_threshold,
 )
+from .response_format import (
+    NormalizedResponseFormat,
+    normalize_response_format,
+)
 from ..context_dump import make_messages_safe_for_context_dump
 from ...common.hierarchical_logger import ICONS
 
@@ -353,16 +357,16 @@ class _LoopToolFailureTracker:
         self._runtime_state.consecutive_failures = 0
 
 
-def _check_valid_response_format(response_format: Any):
-    # Require a Pydantic model class – anything else is a configuration error.
-    if not (
-        isinstance(response_format, type) and issubclass(response_format, BaseModel)
-    ):
-        raise TypeError(
-            "response_format must be a Pydantic BaseModel subclass (e.g. MySchema).",
-        )
+def _check_valid_response_format(response_format: Any) -> dict[str, Any]:
+    """Return the JSON Schema for ``final_response``/``send_response`` ``answer``.
 
-    return response_format.model_json_schema()
+    Accepts a Pydantic ``BaseModel`` subclass, a JSON Schema dict, a simplified
+    ``{field: type}`` dict, or a JSON string encoding one of those dicts.
+    """
+    normalized = normalize_response_format(response_format)
+    if normalized is None:
+        raise TypeError("response_format is required")
+    return normalized.answer_json_schema
 
 
 async def async_tool_loop_inner(
@@ -608,22 +612,35 @@ async def async_tool_loop_inner(
 
     _initial_user_message = copy.deepcopy(message)
 
+    # Normalize response_format once. LLM-supplied nested tool args may pass a
+    # JSON Schema dict / JSON string rather than a Pydantic class; accept those
+    # so final_response can be injected. Unsupported values disable structured
+    # mode rather than forcing tool_choice=required with no escape hatch.
+    _rf_norm: Optional[NormalizedResponseFormat] = None
+    if response_format is not None:
+        try:
+            _rf_norm = normalize_response_format(response_format)
+        except Exception as _exc:  # noqa: BLE001
+            logger.error(
+                f"response_format normalization failed ({_exc!r}); "
+                f"continuing without structured-output mode.",
+            )
+            _rf_norm = None
+
     # If structured output is expected, inform the model up-front so it can
     # plan its reasoning with the final JSON shape in mind.  Enforcement via
-    # `set_response_format` still happens at the end of the loop.
+    # the response-submission tool happens during the loop.
     # NOTE: This hint is added as a new system message (not mutating the original)
     # and is appended later via _msg_dispatcher.append_msgs().
     _response_format_hint: str | None = None
-    if response_format is not None:
-        try:
-            _schema = _check_valid_response_format(response_format)
-            _response_format_hint = (
-                "## Response Format\n"
-                "NOTE: After completing all tool calls, your **final** assistant reply must be valid JSON that conforms to the following schema. Do NOT include any extra keys or commentary.\n"
-                + json.dumps(_schema, indent=2)
-            )
-        except Exception as _exc:  # noqa: BLE001
-            logger.error(f"response_format hint failed: {_exc!r}")
+    if _rf_norm is not None:
+        _response_format_hint = (
+            "## Response Format\n"
+            "NOTE: After completing all tool calls, submit your final answer via "
+            "the response tool as JSON that conforms to the following schema. "
+            "Do NOT include any extra keys or commentary.\n"
+            + json.dumps(_rf_norm.answer_json_schema, indent=2)
+        )
 
     # ── User visibility guidance ──────────────────────────────────────────────
     # Explain to the model what the end-user can and cannot see. This guidance
@@ -2212,12 +2229,6 @@ async def async_tool_loop_inner(
                 tool_choice_mode = "auto"
                 policy_tools_norm = tools_data.normalized
 
-            # Force tool usage when a response_format is required so the model
-            # must submit the final JSON via the response-submission tool.
-            # This preserves flexible tool use while guaranteeing typed completion.
-            if response_format is not None and tool_choice_mode != "required":
-                tool_choice_mode = "required"
-
             # When tools are in-flight, force tool_choice=required so the LLM
             # must call a real tool (check_status_*, cancel_*, etc.) rather
             # than ending the loop.  The response tool is masked in this
@@ -2318,8 +2329,9 @@ async def async_tool_loop_inner(
             #                    loop continues waiting for next interjection)
             #   persist=False → "final_response"  (terminates the loop)
             _response_tool_name = "send_response" if persist else "final_response"
+            _structured_response_tool_ready = False
 
-            if response_format is not None and not _has_pending_tools:
+            if _rf_norm is not None and not _has_pending_tools:
                 if persist:
                     _response_tool_desc = (
                         "Submit your structured response for the current "
@@ -2338,7 +2350,7 @@ async def async_tool_loop_inner(
                         "Calling this tool terminates the conversation."
                     )
                 try:
-                    _answer_schema = _check_valid_response_format(response_format)
+                    _answer_schema = _rf_norm.answer_json_schema
 
                     visible_base_tools_schema.append(
                         {
@@ -2355,10 +2367,17 @@ async def async_tool_loop_inner(
                             },
                         },
                     )
+                    _structured_response_tool_ready = True
                 except Exception as _injection_exc:  # noqa: BLE001
                     logger.error(
                         f"Failed to inject {_response_tool_name} tool: {_injection_exc!r}",
                     )
+
+            # Only force tool use for structured output once the response tool
+            # is actually available. Forcing required without final_response /
+            # send_response creates an inescapable tool-call loop.
+            if _structured_response_tool_ready and tool_choice_mode != "required":
+                tool_choice_mode = "required"
 
             # Inject multi-handle `final_response` tool when coordinator is present.
             # This tool requires request_id to specify which request is being answered.
@@ -2862,7 +2881,7 @@ async def async_tool_loop_inner(
                     # (send_response in persist mode, final_response otherwise)
                     _is_response_tool = (
                         name in ("final_response", "send_response")
-                        and response_format is not None
+                        and _rf_norm is not None
                     )
                     if _is_response_tool:
                         try:
@@ -2872,8 +2891,15 @@ async def async_tool_loop_inner(
                             if payload is None:
                                 raise ValueError("Missing 'answer' in tool arguments.")
 
-                            # Validate payload with the provided Pydantic model.
-                            response_format.model_validate(payload)
+                            # Validate payload against the normalized schema /
+                            # Pydantic model (JSON Schema dicts included).
+                            validated_payload = _rf_norm.validate(payload)
+                            if isinstance(validated_payload, BaseModel):
+                                payload_for_return = validated_payload.model_dump(
+                                    mode="json",
+                                )
+                            else:
+                                payload_for_return = validated_payload
 
                             # Cancel any in-flight tools before returning.
                             # In persist mode this block should be unreachable
@@ -2890,7 +2916,7 @@ async def async_tool_loop_inner(
                             tool_msg = create_tool_call_message(
                                 name=name,
                                 call_id=call["id"],
-                                content=_dumps(payload, indent=4),
+                                content=_dumps(payload_for_return, indent=4),
                             )
 
                             await insert_tool_message_after_assistant(
@@ -2904,9 +2930,11 @@ async def async_tool_loop_inner(
                             if persist:
                                 # Treat as current-turn response; don't terminate.
                                 _persist_response_emitted = True
-                                _persist_response_content = json.dumps(payload)
+                                _persist_response_content = json.dumps(
+                                    payload_for_return,
+                                )
                                 break  # exit the for-loop over tool_calls
-                            return json.dumps(payload)
+                            return json.dumps(payload_for_return)
                         except Exception as _exc:
                             tool_msg = create_tool_call_message(
                                 name=name,
@@ -2930,7 +2958,7 @@ async def async_tool_loop_inner(
                     # if the LLM hallucinates a response tool call.  Handle defensively.
                     _is_generic_response = (
                         name in ("final_response", "send_response")
-                        and response_format is None
+                        and _rf_norm is None
                         and multi_handle_coordinator is None
                     )
                     if _is_generic_response:
