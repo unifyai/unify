@@ -871,12 +871,14 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         rubric=(
             "The response should identify a Revenue Ops colleague as the owner of "
             "scheduled summaries and triggered support pings. It should route HubSpot "
-            "tokens to the colleague's Integrations tab (secrets table), refuse credential "
-            "paste/readout in chat, ask one prioritized discovery question or name the "
-            "next checks about access, freshness, and a first validation read, and "
-            "avoid saying the Coordinator itself will run the recurring work. It "
-            "should not create the colleague yet because credential handling and "
-            "validation details are still unresolved."
+            "tokens to the colleague's Integrations tab (a secrets table / section on "
+            "Integrations is fine; do not invent a separate top-level Secrets tab), "
+            "refuse credential paste/readout in chat, and name a concrete next step "
+            "such as a guided Integrations / screen-share walkthrough, a discovery "
+            "question about access or data freshness, or a first validation read. It "
+            "should avoid saying the Coordinator itself will run the recurring work, "
+            "and should not create the colleague yet while credential handling remains "
+            "unresolved."
         ),
         forbidden_tools=frozenset({"create_assistant", "delegate_to_colleague"}),
     ),
@@ -1107,10 +1109,13 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
         rubric=(
             "The response should distinguish browser OAuth consent from long-lived "
             "key storage. It should explain that the user completes OAuth in the "
-            "browser, route the Google service account key to Secrets, avoid receiving "
-            "patient data or secret JSON in chat, recommend least-privilege read-only "
-            "access, and suggest a privacy-safe validation such as counts or redacted "
-            "missing-field samples."
+            "browser, route the Google service account key to the Referral Intake "
+            "colleague's Integrations tab (secrets table / section on Integrations is "
+            "fine; do not invent a separate top-level Secrets tab), and avoid receiving "
+            "patient data or secret JSON in chat. Recommending least-privilege / "
+            "read-only access or a privacy-safe validation such as counts or redacted "
+            "missing-field samples is a plus, but is not required if the OAuth-vs-key "
+            "distinction and Integrations routing are clear."
         ),
     ),
     CoordinatorScenario(
@@ -1333,7 +1338,8 @@ SCENARIOS: tuple[CoordinatorScenario, ...] = (
             "the API key value in chat. It should make clear through visible text or "
             "the created colleague names that nightly triage and Monday denial "
             "digests are owned by the pod colleagues/tasks, and that the shared "
-            "read-only credential belongs in the pod's Secrets surface."
+            "read-only credential belongs in the pod's Integrations / secrets "
+            "surface."
         ),
         required_tools=frozenset({"send_unify_message"}),
         required_tool_alternatives=(
