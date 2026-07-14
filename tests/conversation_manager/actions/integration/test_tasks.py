@@ -254,7 +254,7 @@ async def test_single_message_task_create_then_query(initialized_cm_codeact):
     row = verify_task_in_db(
         cm,
         task_id,
-        expected_fields={"description": ...},
+        expected_fields={"description": ..., "name": ...},
     )
     desc = str(row.get("description") or "")
     name = str(row.get("name") or "")
