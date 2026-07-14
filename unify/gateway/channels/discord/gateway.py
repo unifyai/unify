@@ -192,7 +192,6 @@ async def _ensure_job_running(
                         assistant_data.get("user_desktops") or [],
                     ),
                     "is_coordinator": _s("is_coordinator", "false"),
-                    "demo_id": _s("demo_id"),
                     "team_ids": json.dumps(assistant_data.get("team_ids") or []),
                     "team_summaries": json.dumps(
                         assistant_data.get("team_summaries") or [],

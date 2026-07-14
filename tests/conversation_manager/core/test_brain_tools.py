@@ -2418,7 +2418,6 @@ class TestOnboardingToggleTools:
         mock_cm.coordinator_onboarding_active = True
         with patch("unify.settings.SETTINGS") as settings:
             settings.UNITY_CONSOLE_UI = True
-            settings.DEMO_MODE = False
             tools = self._action_tools(mock_cm).as_tools()
         assert "deactivate_onboarding" in tools
         assert "set_onboarding_task_state" in tools
@@ -2432,7 +2431,6 @@ class TestOnboardingToggleTools:
         mock_cm.coordinator_onboarding_active = False
         with patch("unify.settings.SETTINGS") as settings:
             settings.UNITY_CONSOLE_UI = True
-            settings.DEMO_MODE = False
             tools = self._action_tools(mock_cm).as_tools()
         assert "activate_onboarding" in tools
         assert "deactivate_onboarding" not in tools
@@ -2446,7 +2444,6 @@ class TestOnboardingToggleTools:
         mock_cm.coordinator_onboarding_active = True
         with patch("unify.settings.SETTINGS") as settings:
             settings.UNITY_CONSOLE_UI = False
-            settings.DEMO_MODE = False
             tools = self._action_tools(mock_cm).as_tools()
         assert "deactivate_onboarding" not in tools
         assert "set_onboarding_task_state" not in tools
@@ -2459,7 +2456,6 @@ class TestOnboardingToggleTools:
         try:
             with patch("unify.settings.SETTINGS") as settings:
                 settings.UNITY_CONSOLE_UI = True
-                settings.DEMO_MODE = False
                 tools = self._action_tools(mock_cm).as_tools()
         finally:
             SESSION_DETAILS.is_coordinator = previous

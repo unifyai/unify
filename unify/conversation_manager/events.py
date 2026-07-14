@@ -1390,9 +1390,6 @@ class _SessionConfigBase(Event):
     is_coordinator: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
-    # Demo assistant metadata ID. If set, this is a demo session.
-    # Unity derives demo_mode from (demo_id is not None).
-    demo_id: int | None = None
 
 
 @dataclass
