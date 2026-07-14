@@ -58,10 +58,20 @@ async def demo_cm_factory():
         # Save original settings
         original_demo_mode = SETTINGS.DEMO_MODE
         original_demo_id = SETTINGS.DEMO_ID
+        original_demo_mode_env = os.environ.get("DEMO_MODE")
+        original_demo_id_env = os.environ.get("DEMO_ID")
 
-        # Configure demo mode
-        SETTINGS.DEMO_MODE = demo_id is not None
+        # Configure demo mode on the SETTINGS singleton and env (env is what
+        # any SETTINGS re-creation / subprocess would read).
+        demo_enabled = demo_id is not None
+        SETTINGS.DEMO_MODE = demo_enabled
         SETTINGS.DEMO_ID = demo_id
+        if demo_enabled:
+            os.environ["DEMO_MODE"] = "true"
+            os.environ["DEMO_ID"] = str(demo_id)
+        else:
+            os.environ.pop("DEMO_MODE", None)
+            os.environ.pop("DEMO_ID", None)
 
         reset_event_broker()
 
@@ -123,17 +133,39 @@ async def demo_cm_factory():
                         raise RuntimeError("ConversationManager failed to initialize")
 
         # Store for cleanup and return
-        created_cms.append((cm, original_demo_mode, original_demo_id))
+        created_cms.append(
+            (
+                cm,
+                original_demo_mode,
+                original_demo_id,
+                original_demo_mode_env,
+                original_demo_id_env,
+            ),
+        )
         return cm
 
     yield _create_cm
 
     # Cleanup
-    for cm, original_demo_mode, original_demo_id in created_cms:
+    for (
+        cm,
+        original_demo_mode,
+        original_demo_id,
+        original_demo_mode_env,
+        original_demo_id_env,
+    ) in created_cms:
         await stop_async()
         reset_event_broker()
         SETTINGS.DEMO_MODE = original_demo_mode
         SETTINGS.DEMO_ID = original_demo_id
+        if original_demo_mode_env is None:
+            os.environ.pop("DEMO_MODE", None)
+        else:
+            os.environ["DEMO_MODE"] = original_demo_mode_env
+        if original_demo_id_env is None:
+            os.environ.pop("DEMO_ID", None)
+        else:
+            os.environ["DEMO_ID"] = original_demo_id_env
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,8 +366,12 @@ class TestDemoProspectInitialization:
         # Save and set demo mode
         original_demo_mode = SETTINGS.DEMO_MODE
         original_demo_id = SETTINGS.DEMO_ID
+        original_demo_mode_env = os.environ.get("DEMO_MODE")
+        original_demo_id_env = os.environ.get("DEMO_ID")
         SETTINGS.DEMO_MODE = True
         SETTINGS.DEMO_ID = 999
+        os.environ["DEMO_MODE"] = "true"
+        os.environ["DEMO_ID"] = "999"
 
         try:
             reset_event_broker()
@@ -386,3 +422,11 @@ class TestDemoProspectInitialization:
             reset_event_broker()
             SETTINGS.DEMO_MODE = original_demo_mode
             SETTINGS.DEMO_ID = original_demo_id
+            if original_demo_mode_env is None:
+                os.environ.pop("DEMO_MODE", None)
+            else:
+                os.environ["DEMO_MODE"] = original_demo_mode_env
+            if original_demo_id_env is None:
+                os.environ.pop("DEMO_ID", None)
+            else:
+                os.environ["DEMO_ID"] = original_demo_id_env
