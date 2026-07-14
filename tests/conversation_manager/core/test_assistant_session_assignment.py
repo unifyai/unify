@@ -95,6 +95,7 @@ async def test_poll_for_assignment_bootstraps_from_assistant_session():
         ) as mark_ready,
     ):
         session.assistant.agent_id = None
+        session.assistant.has_ms_teams_bot = False
         session.assistant.email = "ada@example.com"
         session.user.first_name = "Grace"
         session.user.surname = "Hopper"
@@ -162,6 +163,7 @@ async def test_poll_for_assignment_waits_for_current_binding_after_rollover():
         ) as sleep_mock,
     ):
         session.assistant.agent_id = None
+        session.assistant.has_ms_teams_bot = False
 
         cm = CommsManager(event_broker)
         cm.subscribe_to_topic = MagicMock()
@@ -217,6 +219,7 @@ async def test_poll_for_assignment_waits_for_secret_owned_by_current_activation(
         ) as sleep_mock,
     ):
         session.assistant.agent_id = None
+        session.assistant.has_ms_teams_bot = False
 
         cm = CommsManager(event_broker)
         cm.subscribe_to_topic = MagicMock()
