@@ -1834,6 +1834,95 @@ class TaskTriggerRequested(Event):
 
 
 @dataclass
+class ProviderEventDispatchRequested(Event):
+    """Orchestra asked Unity to adopt one live provider-event dispatch.
+
+    Communication publishes this as a ``unity_system_event``. Unity validates
+    the immutable accepted receipt authorization, adopts its local dispatch
+    inbox, creates one captured-revision task instance, and returns
+    adopted/started/terminal status by operation id without consuming or
+    re-arming the authored task definition.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:provider_event_dispatch"
+
+    operation_id: str
+    run_id: int
+    run_key: str
+    assistant_id: str
+    task_id: int
+    binding_id: str
+    receipt_id: str
+    accepted_activation_revision: str
+    event_context_ref: str
+    issued_at: str
+    contract_version: str = "1"
+    source_type: str = "provider_event"
+    dispatch_mode: str = "live"
+    audience: str = "unity:provider-event-dispatch"
+    reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "ProviderEventDispatchRequested | None":
+        """Build a live provider-event dispatch event from a Pub/Sub payload."""
+
+        if not isinstance(payload, _Mapping):
+            return None
+        extra = payload.get("extra_event_fields")
+        fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+        operation_id = str(fields.get("operation_id") or "")
+        run_key = str(fields.get("run_key") or "")
+        assistant_id = str(fields.get("assistant_id") or "")
+        binding_id = str(fields.get("binding_id") or "")
+        receipt_id = str(fields.get("receipt_id") or "")
+        accepted_activation_revision = str(
+            fields.get("accepted_activation_revision") or "",
+        )
+        event_context_ref = str(fields.get("event_context_ref") or "")
+        issued_at = str(fields.get("issued_at") or "")
+        run_id = _coerce_int(fields.get("run_id"))
+        task_id = _coerce_int(fields.get("task_id"))
+        if (
+            not operation_id
+            or run_id is None
+            or not run_key
+            or not assistant_id
+            or task_id is None
+            or not binding_id
+            or not receipt_id
+            or not accepted_activation_revision
+            or not event_context_ref
+            or not issued_at
+        ):
+            return None
+        return cls(
+            operation_id=operation_id,
+            run_id=run_id,
+            run_key=run_key,
+            assistant_id=assistant_id,
+            task_id=task_id,
+            binding_id=binding_id,
+            receipt_id=receipt_id,
+            accepted_activation_revision=accepted_activation_revision,
+            event_context_ref=event_context_ref,
+            issued_at=issued_at,
+            contract_version=str(fields.get("contract_version") or "1"),
+            source_type=str(fields.get("source_type") or "provider_event"),
+            dispatch_mode=str(fields.get("dispatch_mode") or "live"),
+            audience=str(
+                fields.get("audience") or "unity:provider-event-dispatch",
+            ),
+            reason=reason
+            or f"Provider-event dispatch {operation_id} for task {task_id}.",
+        )
+
+
+@dataclass
 class AssistantPresenceObserved(Event):
     """Console observed the user viewing or interacting with this assistant.
 
