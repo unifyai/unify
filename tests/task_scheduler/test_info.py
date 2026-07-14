@@ -26,7 +26,9 @@ async def test_summary_on_natural_completion(monkeypatch):
     """
     Verify info is populated when a task completes normally via result().
     """
-    actor = SimulatedActor(steps=1)
+    # steps=0 completes immediately; steps>=1 waits for tool calls that never
+    # happen in this mocked path and would hang await handle.result() forever.
+    actor = SimulatedActor(steps=0)
     ts = create_test_scheduler(actor)
 
     monkeypatch.setattr(
@@ -328,7 +330,9 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
     Verify info is populated for the CORRECT instance_id when a
     recurring task completes multiple times.
     """
-    actor = SimulatedActor(steps=1)
+    # steps=0 completes immediately; steps>=1 waits for tool calls that never
+    # happen in this mocked path and would hang await handle.result() forever.
+    actor = SimulatedActor(steps=0)
     ts = create_test_scheduler(actor)
 
     monkeypatch.setattr(
