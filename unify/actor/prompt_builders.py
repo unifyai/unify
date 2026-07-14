@@ -645,6 +645,10 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     )
     ```
 
+    When the user quotes an exact task name, copy it **verbatim** into the
+    primitive call — including parenthetical suffixes, ids, and punctuation.
+    Do not shorten or paraphrase names.
+
     For create-then-read in one user request, prefer two sequential
     ``execute_function`` calls (update, then ask) rather than wrapping both
     in ``execute_code``. If you do use ``execute_code``, await each handle's

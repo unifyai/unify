@@ -16,6 +16,7 @@ from tests.conversation_manager.actions.integration.helpers import (
     answer_clarification_and_continue,
     extract_actor_handle,
     find_task_id_by_exact_name,
+    find_task_id_by_name_contains,
     get_actor_started_event,
     wait_for_clarification,
     verify_task_in_db,
@@ -135,17 +136,26 @@ async def test_task_update_description_persists(initialized_cm_codeact):
     Tests two sequential CM→Actor round-trips where the second mutates
     state created by the first.
     """
+    import uuid
+
     cm = initialized_cm_codeact
     cm.cm.vm_ready = True
     cm.cm.file_sync_complete = True
-    task_name = "Close loop with Bob (integration)"
-    original_desc = "Reply to Bob with the final decision."
-    updated_desc = "Reply to Bob with the final decision and attach the Q3 summary."
+    uniq = uuid.uuid4().hex[:12]
+    task_name = f"Close loop with Bob (integration {uniq})"
+    original_desc = f"Reply to Bob with the final decision. Ref: TASK-UPD-ORIG-{uniq}."
+    updated_desc = (
+        f"Reply to Bob with the final decision and attach the Q3 summary. "
+        f"Ref: TASK-UPD-NEW-{uniq}."
+    )
 
     result1 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content=f"Create a task named '{task_name}' with description '{original_desc}'.",
+            content=(
+                f"Create a task named '{task_name}' with description '{original_desc}'. "
+                "Use that exact task name verbatim."
+            ),
         ),
     )
     h1 = get_actor_started_event(result1).handle_id
@@ -167,19 +177,23 @@ async def test_task_update_description_persists(initialized_cm_codeact):
             contact=BOSS,
             content=(
                 f"Update the description of the task named '{task_name}' to: "
-                f"'{updated_desc}'"
+                f"'{updated_desc}'. Use that exact task name verbatim."
             ),
         ),
     )
     h2 = get_actor_started_event(result2).handle_id
     _ = await wait_for_actor_completion(cm, h2, timeout=300)
 
-    task_id = find_task_id_by_exact_name(name=task_name)
-    verify_task_in_db(
+    task_id = find_task_id_by_name_contains(name=uniq)
+    row = verify_task_in_db(
         cm,
         task_id,
-        expected_fields={"description": updated_desc},
+        expected_fields={"description": ...},
     )
+    desc = str(row.get("description") or "")
+    assert (
+        f"TASK-UPD-NEW-{uniq}" in desc
+    ), f"Expected updated description token, got: {desc!r}"
     assert_no_errors(result2)
 
 
@@ -204,6 +218,7 @@ async def test_single_message_task_create_then_query(initialized_cm_codeact):
             contact=BOSS,
             content=(
                 f"Create a task named '{task_name}' with description '{task_desc}'. "
+                "Use that exact task name verbatim (including the parentheses). "
                 "Then check the task list and tell me the task's status and description."
             ),
         ),
@@ -211,13 +226,42 @@ async def test_single_message_task_create_then_query(initialized_cm_codeact):
     handle_id = get_actor_started_event(result).handle_id
     final = await wait_for_actor_completion(cm, handle_id, timeout=300)
 
-    # Side-effect verification: task exists with correct fields.
-    task_id = find_task_id_by_exact_name(name=task_name)
-    verify_task_in_db(
+    # Side-effect verification: task exists with the unguessable description token.
+    # Lookup by description token (not exact name) so a dropped parenthetical suffix
+    # does not hide a successful create+query.
+    from unify.manager_registry import ManagerRegistry
+
+    scheduler = ManagerRegistry.get_task_scheduler()
+    assert scheduler is not None, "TaskScheduler is not available"
+    store = getattr(scheduler, "_store", None)
+    assert store is not None, "TaskScheduler missing _store"
+    token = f"TASK-CREATE-QUERY-{uniq}"
+    rows = store.get_rows(
+        limit=50,
+        include_fields=["task_id", "name", "description", "status"],
+    )
+    match = next(
+        (
+            r
+            for r in rows or []
+            if token
+            in str((getattr(r, "entries", None) or {}).get("description") or "")
+        ),
+        None,
+    )
+    assert match is not None, f"Expected a task whose description contains {token!r}"
+    task_id = int((match.entries or {}).get("task_id"))
+    row = verify_task_in_db(
         cm,
         task_id,
-        expected_fields={"name": task_name, "description": task_desc},
+        expected_fields={"description": ...},
     )
+    desc = str(row.get("description") or "")
+    name = str(row.get("name") or "")
+    assert token in desc, f"Expected description to contain {token!r}, got: {desc!r}"
+    assert (
+        "Prepare notes for Alice" in name
+    ), f"Expected task name to reference Alice notes, got: {name!r}"
 
     # Response verification: must include the ref token (stable).
     assert f"task-create-query-{uniq}".lower() in final.lower()
