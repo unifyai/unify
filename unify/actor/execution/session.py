@@ -38,6 +38,78 @@ if TYPE_CHECKING:
     from unify.actor.environments.base import BaseEnvironment
     from unify.function_manager.function_manager import FunctionManager
 
+# Handles spawned by manager primitives during an in-process sandbox
+# ``execute`` call.  When the LLM fire-and-forgets a steerable handle
+# (awaits the call that *returns* the handle but never ``await
+# handle.result()`` and does not return the handle as the last
+# expression), the outer loop never adopts it and the mutation is
+# cancelled when ``execute_code`` returns.  Draining this bucket at the
+# end of ``execute`` awaits those orphans so side effects land.
+_SANDBOX_SPAWNED_HANDLES: contextvars.ContextVar[list[Any] | None] = (
+    contextvars.ContextVar("_SANDBOX_SPAWNED_HANDLES", default=None)
+)
+
+
+def register_sandbox_spawned_handle(handle: Any) -> None:
+    """Record a steerable handle created inside an active sandbox execute."""
+    bucket = _SANDBOX_SPAWNED_HANDLES.get()
+    if bucket is not None:
+        bucket.append(handle)
+
+
+def _collect_handles(obj: Any) -> set[Any]:
+    """Collect ``SteerableToolHandle`` instances reachable from *obj*."""
+    from unify.common.async_tool_loop import SteerableToolHandle
+
+    found: set[Any] = set()
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, SteerableToolHandle):
+            found.add(node)
+            return
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+            return
+        if isinstance(node, (list, tuple, set)):
+            for v in node:
+                _walk(v)
+            return
+        try:
+            from pydantic import BaseModel
+
+            if isinstance(node, BaseModel):
+                for field_name in node.model_fields:
+                    _walk(getattr(node, field_name))
+        except Exception:
+            return
+
+    _walk(obj)
+    return found
+
+
+async def _await_orphan_sandbox_handles(
+    *,
+    spawned: list[Any],
+    result: Any,
+) -> None:
+    """Await steerable handles spawned in-sandbox that were not returned."""
+    if not spawned:
+        return
+    returned = _collect_handles(result)
+    for handle in spawned:
+        if handle in returned:
+            continue
+        try:
+            done = handle.done()
+            if asyncio.iscoroutine(done) or asyncio.isfuture(done):
+                done = await done
+            if done:
+                continue
+        except Exception:
+            pass
+        await handle.result()
+
 
 logger = logging.getLogger(__name__)
 
@@ -649,6 +721,8 @@ class PythonExecutionSession:
                         _parent_chat_context=_pcc,
                     )
 
+                spawned_handles: list[Any] = []
+                spawned_token = _SANDBOX_SPAWNED_HANDLES.set(spawned_handles)
                 try:
                     exec(async_code, self.global_state)
                     execution = self.global_state["__exec_wrapper"]()
@@ -656,7 +730,12 @@ class PythonExecutionSession:
                         result = await execution
                     else:
                         result = await asyncio.wait_for(execution, timeout=timeout)
+                    await _await_orphan_sandbox_handles(
+                        spawned=spawned_handles,
+                        result=result,
+                    )
                 finally:
+                    _SANDBOX_SPAWNED_HANDLES.reset(spawned_token)
                     if _orig_prims is not None:
                         self.global_state["primitives"] = _orig_prims
 
