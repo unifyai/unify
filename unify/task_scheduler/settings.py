@@ -79,6 +79,12 @@ class TaskSettings(BaseSettings):
     SIM_ACTOR_DURATION: float = 20.0
     LOCAL_SCHEDULER_ENABLED: bool = _derive_local_scheduler_default()
     LOCAL_SCHEDULER_POLL_INTERVAL_SECONDS: float = 60.0
+    # TODO: Remove UNITY_TASK_PROVIDER_EVENT_DISPATCH_INBOX_PATH once Orchestra
+    # owns downstream adoption for provider-event operations (no local SQLite).
+    PROVIDER_EVENT_DISPATCH_INBOX_PATH: str = (
+        "/var/lib/unity/provider-event-live-dispatch-inbox.sqlite3"
+    )
+    PROVIDER_EVENT_DISPATCH_REQUEST_TTL_SECONDS: int = 300
 
     model_config = SettingsConfigDict(
         env_prefix="UNITY_TASK_",
