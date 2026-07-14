@@ -1,4 +1,9 @@
-"""Live provider-event dispatch handler for Unity."""
+"""Live provider-event dispatch handler for Unity.
+
+Prototype handler for the initial live slice. It is not wired into Unity's
+authenticated dispatch path, event-context fetch, or captured-revision execution.
+Replace this module once the real live dispatch endpoint lands.
+"""
 
 from __future__ import annotations
 
