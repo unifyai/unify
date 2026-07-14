@@ -649,10 +649,23 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     primitive call — including parenthetical suffixes, ids, and punctuation.
     Do not shorten or paraphrase names.
 
+    When the user quotes an exact task **description** (or any substring they
+    marked as a reference token such as ``Ref: TASK-…``), copy that description
+    **verbatim** into the create/update text as well. Do not drop trailing
+    reference tokens, truncate the description, or rewrite it into a shorter
+    paraphrase — verification and later lookups depend on those exact strings.
+
     For create-then-read in one user request, prefer two sequential
     ``execute_function`` calls (update, then ask) rather than wrapping both
-    in ``execute_code``. If you do use ``execute_code``, await each handle's
+    in ``execute_code``. If create already returned ``task_id`` / name /
+    description / status, report those fields directly — do not open a
+    ``TaskScheduler.ask`` loop that re-discovers the same row, and never
+    route through ContactManager merely because the task title contains a
+    person-like token. If you do use ``execute_code``, await each handle's
     ``.result()`` and return the confirmation string as the last expression.
+    Never start a ``primitives.tasks.update`` / ``.ask`` handle and continue
+    without awaiting ``handle.result()`` — fire-and-forget leaves the mutation
+    incomplete.
 
     Never invent a local helper that only prints or returns a fake task object,
     never build a dict/`json.dumps` "task payload" and treat it as persistence,

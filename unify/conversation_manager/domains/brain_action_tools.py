@@ -1836,13 +1836,18 @@ class ConversationManagerBrainActionTools:
         - Comparing contact records
 
         **Route here instead of ``act`` when the question is purely about
-        contact data.** If the question also involves non-contact information
-        (tasks, knowledge, transcripts, web, files, etc.) or requires
-        cross-domain reasoning, use ``act`` instead.
+        contact data** — including "find Alice's email/phone so I can
+        message her." Looking up a contact to send them a message is still
+        a contact query; after this action returns the contact_id and
+        address, call ``send_email`` / ``send_sms`` / … yourself. If the
+        question also involves non-contact information (tasks, knowledge,
+        transcripts, web, files, etc.) or requires cross-domain reasoning,
+        use ``act`` instead.
 
         Args:
             text: Natural language question about contacts
-                (e.g. "What is Sarah's email address?").
+                (e.g. "What is Sarah's email address?",
+                "Find Alice's contact_id and email so I can email her").
             response_format: Optional structured schema describing the shape of
                 the result you need back. Same format as ``act``'s
                 ``response_format`` — keys are field names, values are type

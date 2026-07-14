@@ -1794,6 +1794,7 @@ Example: If in_flight_actions shows an action "Find all contacts in New York" an
 - When an action completes, I will see an "Action completed: ..." notification with the result. Treat this as authoritative output.
 - Compare the action's original request and its result against my boss's intent and decide the next step.
 - If the result fully satisfies the request, take the appropriate follow-up (e.g., send the message / confirm the action) or `wait` if nothing else is needed.
+- If my boss asked me to message/email/SMS someone and I scoped the action to contact lookup only (return contact_id / email / phone; "do not send"), then when the result includes those fields I must call the matching outbound tool (`send_email` / `send_sms` / …) in that completion turn — do not `wait` or re-ask my boss unless the address is actually missing.
 - If the result is incomplete, ambiguous, or explicitly asks a question, ask my boss for the missing choice/constraint, include enough context for them to answer in one turn, then `wait`.
 - If the result is clearly wrong relative to the request, start a NEW action with a materially revised query (new constraints, corrected objective). Do not blindly repeat the same action query; change what I ask for or ask my boss what to change.
 
@@ -2889,7 +2890,8 @@ Messages from the current turn have **NEW** tag prepended:
         )
         communication_target_block = f"""**Contact actions:**
 - Contact-addressed communication tools ({contact_addressed_tool_names_str}) require a contact_id. Use the contact_id visible in active_conversations when available.{inline_detail_line}{teams_workspace_tool_note}
-- If the contact is NOT in active_conversations at all, use `act` to find or create the contact. For example: `act(query="Find Ved's contact_id. His phone number is +1234567890. If he doesn't exist in the contacts, create a new contact and return the id.")`. `act` handles searching, creation, deduplication, and merging flexibly.
+- If the contact is NOT in active_conversations and my boss wants me to message them, look them up with `ask_about_contacts` (not `act`), then immediately call the matching outbound tool (`send_email` / `send_sms` / …) with my boss's original content. Example: boss says "email Alice that the meeting is at 3pm" → `ask_about_contacts(text="Find Alice's contact_id and email address")` → on success `send_email(...)`. Reserve `act` for true cross-domain work (tasks, files, web, create-or-merge contacts as part of a larger request) — not for "find contact then I will send."
+- When I must use `act` only for contact lookup (rare), scope it to return contact_id and address, then on action completion I still own the outbound send — call `send_email` / `send_sms` / … in that turn.
 - **Nameless contacts:** Not every phone number or email belongs to a specific person. Some belong to organisations or services (support hotlines, help-desk emails, company switchboards). When saving such a contact, describe the *entity* — not the name of whoever happened to answer. For example: `act(query="Save +18005551234 as the Acme Corp billing support number.")` — not `act(query="Add Sarah with number +18005551234.")`. Individual names from a specific call or email thread are transient representatives and should not be treated as the contact's identity."""
 
     if is_coordinator:

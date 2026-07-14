@@ -145,8 +145,9 @@ def build_ask_prompt(
         "--------",
         "",
         "- Tool selection (read carefully) -",
-        f"For ANY semantic question over free-form text (e.g., name/description), ALWAYS use `{search_tasks_fname}`. Never try to approximate meaning with brittle substring filters.",
-        f"Use `{filter_tasks_fname}` only for exact/boolean logic over structured fields (ids, status, priority, timestamps) or for narrow, constrained text checks.",
+        f"When the user quotes an **exact task name** (or asks for status/description/fields of a named task), use `{filter_tasks_fname}` with `name == '…'` — do **not** open `{search_tasks_fname}` or `{contact_ask_fname}`. A person's name inside that exact title is part of the task name, not a contact lookup.",
+        f"For ANY other semantic question over free-form text (e.g., fuzzy name/description meaning), ALWAYS use `{search_tasks_fname}`. Never try to approximate meaning with brittle substring filters.",
+        f"Use `{filter_tasks_fname}` for exact/boolean logic over structured fields (ids, status, priority, timestamps, exact name) or for narrow, constrained text checks.",
         f"For questions about how to communicate with a specific person/role (tone, formality, how to address them, what wording to use), ALWAYS call `{contact_ask_fname}` to retrieve that contact's communication preferences/response policy. Do not guess.",
         "",
         "- Semantic search across tasks (ranked by cosine distance) -",
@@ -154,6 +155,7 @@ def build_ask_prompt(
         f"Look for tasks involving renewal: `{search_tasks_fname}(references={{'description': 'contract renewal'}}, k=3)`",
         "",
         "- Filtering (exact/boolean; not semantic) -",
+        f"Exact named task: `{filter_tasks_fname}(filter=\"name == 'Prepare notes for Alice (single msg 123)'\")`",
         f"All scheduled high-priority tasks: `{filter_tasks_fname}(filter=\"status == 'scheduled' and priority == 'high'\")`",
         f"Tasks due this month: `{filter_tasks_fname}(filter=\"deadline >= '2024-08-01T00:00:00' and deadline < '2024-09-01T00:00:00'\")`",
         "",
@@ -168,6 +170,7 @@ def build_ask_prompt(
         "Avoid re-querying the same tables or managers just to reconfirm what a prior tool call has already established with clear, specific evidence; reuse the earlier result and proceed.",
         "Do not immediately run a filter call after a successful semantic search unless you genuinely need an exact, structured constraint that the search did not capture.",
         f"Avoid calling `{contact_ask_fname}` repeatedly in the same reasoning loop when earlier calls have already identified the relevant contacts and no new ambiguity has been introduced.",
+        f"Do not call `{contact_ask_fname}` merely because a task title contains a person-like token (e.g. 'notes for Alice') when the user already gave that exact task name.",
         "",
         "- Communication style (contact-driven) -",
         "Question: When we email our <role/person>, should we be formal or casual?",
@@ -189,7 +192,10 @@ def build_ask_prompt(
     positioning_lines: list[str] = [
         "Please always mention the relevant task id(s) in your response.",
         (
-            f"If the question refers to another person (e.g., comms-oriented tasks), call `{contact_ask_fname}` first for context. If a task refers to one or more contact_id values (e.g., in a trigger), also query `{contact_ask_fname}` to learn more about those contacts."
+            f"Call `{contact_ask_fname}` only for communication-style / preference questions "
+            f"about a person, or when a task trigger/assignee explicitly references a "
+            f"contact_id. Do **not** call it first when the user already gave an exact "
+            f"task name and only wants that task's fields (status, description, etc.)."
             if contact_ask_fname
             else ""
         ),
