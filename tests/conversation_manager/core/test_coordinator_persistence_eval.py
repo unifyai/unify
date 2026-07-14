@@ -484,8 +484,9 @@ async def test_coordinator_persists_confirmed_shared_team_guidance():
         team_id = int(team["team_id"])
         for assistant in (revenue, support):
             unisdk.add_team_member(
+                organization.organization_id,
                 team_id,
-                int(assistant["agent_id"]),
+                assistant_id=int(assistant["agent_id"]),
                 api_key=organization.api_key,
             )
 
