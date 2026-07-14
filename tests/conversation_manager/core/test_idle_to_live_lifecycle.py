@@ -532,6 +532,7 @@ class TestActBeforeInitialization:
         mock_cm.in_flight_actions = {}
         mock_cm._current_state_snapshot = None
         mock_cm._current_snapshot_state = None
+        mock_cm.suppress_duplicate_commissioning_tool = MagicMock(return_value=None)
         mock_cm.actor.act = AsyncMock(return_value=MagicMock())
 
         with patch(

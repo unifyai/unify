@@ -167,6 +167,7 @@ def mock_session_details():
     with patch("unify.conversation_manager.comms_manager.SESSION_DETAILS") as mock:
         mock.assistant.agent_id = 42
         mock.assistant.email = "assistant@test.com"
+        mock.assistant.has_ms_teams_bot = False
         mock.user.first_name = "Test User"
         mock.user.surname = ""
         mock.user.number = "+15555550000"
