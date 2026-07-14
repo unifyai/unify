@@ -176,22 +176,25 @@ class ImageHandle:
             # Best-effort; if mutation fails, leave as-is
             pass
 
-    def _update_images_in_handle_context(self, payload: Dict[str, Any]) -> None:
+    def _update_images_in_handle_context(self, payload: Dict[str, Any]) -> List[int]:
         """Persist handle metadata in the root where the handle was loaded."""
 
         if self._context == self._manager._ctx:
-            self._manager.update_images([payload])
-        else:
-            self._manager.update_images([payload], _context=self._context)
+            return self._manager.update_images([payload])
+        return self._manager.update_images([payload], _context=self._context)
 
     async def _persist_deferred_updates(self, resolved_id: int) -> None:
-        """Flush pending metadata updates after a handle receives its backend id."""
+        """Flush pending metadata updates after a handle receives its backend id.
 
-        while True:
+        Only drops coalesced fields after ``update_images`` confirms a write.
+        Retries briefly when the backend row is not visible yet (common right
+        after an async upload future resolves under concurrent load).
+        """
+
+        for _ in range(40):
             try:
                 with self._deferred_lock:
                     pending_updates = dict(self._deferred_updates)
-                    self._deferred_updates.clear()
             except Exception:
                 pending_updates = {}
 
@@ -205,11 +208,20 @@ class ImageHandle:
 
             payload: Dict[str, Any] = {"image_id": int(resolved_id), **payload_body}
             try:
-                self._update_images_in_handle_context(payload)
+                updated = self._update_images_in_handle_context(payload) or []
             except Exception:
-                pass
+                updated = []
 
-            await asyncio.sleep(0)
+            if updated:
+                with self._deferred_lock:
+                    for key, value in payload_body.items():
+                        if self._deferred_updates.get(key) == value:
+                            del self._deferred_updates[key]
+                # Newer updates may have arrived while we were writing.
+                await asyncio.sleep(0)
+                continue
+
+            await asyncio.sleep(0.05)
 
     def update_metadata(
         self,
@@ -1014,6 +1026,15 @@ class ImageManager(BaseImageManager):
             except Exception:
                 pass
             return -1
+
+        # Re-read immediately before create so metadata updates applied while
+        # the upload job was queued are included in the initial backend row.
+        try:
+            latest = data_store.get(int(pending_id))
+            if isinstance(latest, dict):
+                row = latest
+        except Exception:
+            pass
 
         payload = {
             "timestamp": row.get("timestamp") or datetime.utcnow(),
