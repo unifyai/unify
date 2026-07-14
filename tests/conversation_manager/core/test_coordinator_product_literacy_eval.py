@@ -1499,6 +1499,7 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         assistant_discord_bot_id="",
         assistant_slack_bot_user_id="",
         assistant_has_teams=False,
+        assistant_has_ms_teams_bot=False,
         team_summaries=list(scenario.team_summaries),
         coordinator_onboarding_active=False,
         coordinator_onboarding_render=None,

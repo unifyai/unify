@@ -113,6 +113,7 @@ def mock_cm():
     cm.call_manager.set_hang_up_gate = AsyncMock()
     cm.in_voice_session = False
     cm.assistant_has_teams = False
+    cm.assistant_has_ms_teams_bot = False
     # Set up SimulatedContactManager (starts with system contacts 0 and 1)
     cm.contact_manager = _setup_mock_contacts(cm.contact_index, [])
     return cm

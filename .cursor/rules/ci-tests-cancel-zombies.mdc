@@ -1,0 +1,86 @@
+---
+description: Diagnose GitHub Actions Tests cancel hangs — zombie runs vs always() wind-down; force-cancel escape hatch
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# CI Tests Cancel: Zombies vs Wind-Down
+
+When a Tests matrix run on staging/main seems "stuck cancelling" or blocks new
+`workflow_dispatch` / matrices behind concurrency, **do not** assume our
+`parallel_run` trap or `if: always()` post-steps are the cause until the job
+step API says so.
+
+## Two different failure modes (do not conflate)
+
+### A — Ordinary cancel is a no-op (the hostage / zombie)
+
+**Symptoms**
+
+- `gh run cancel <id>` prints success, but the run stays `in_progress` for
+  **tens of minutes to an hour+**
+- API: `cancel_requested_at` stays `null`
+- Stuck jobs show active step **`Run tests`** (sometimes a later Post-* step)
+- New Tests runs on the same branch sit `pending` / `queued` behind concurrency
+  group `tests-Tests-<branch>`
+
+**Cause**
+
+GitHub stuck-run class: the runner/job stops responding to ordinary cancel.
+This is **not** explained by `if: always()` uploads (those steps never start
+while Hang/`Run tests` is still active).
+
+**Fix (immediate)**
+
+```bash
+bash scripts/dev/force_cancel_stuck_tests.sh staging
+# or a specific run:
+gh api --method POST repos/unifyai/unify/actions/runs/<id>/force-cancel
+```
+
+Verified: force-cancel flips the run to `completed/cancelled` in seconds and
+frees the concurrency group. Prefer the script so agents do not re-discover
+the REST endpoint under pressure.
+
+**Do not**
+
+- Poll for 30+ minutes hoping ordinary cancel will land
+- Spend the session tuning `parallel_run` traps or `always()` as the
+  explanation for this symptom set
+- Start another large matrix and wait — it will stay pending until the zombie
+  is force-cancelled (unless `cancel-in-progress` already replaced it)
+
+### B — Cancel worked; post-steps add ~tens of seconds to a few minutes
+
+**Symptoms**
+
+- Hang / `Run tests` **ends** within ~10–20s of cancel
+- Job then runs `if: always()` steps (upload logs, stop orchestra, …)
+- Job-level lag ≈ sum of those post-steps (empirically ~15–20s typical; can be
+  longer if uploads are huge)
+
+**Cause**
+
+`if: always()` is true on cancel, so cleanup/upload still runs after the test
+step dies. Separate from zombies.
+
+**Fix (design)**
+
+Skip heavy uploads on cancel (`if: success() || failure()`); keep a short
+`if: cancelled()` kill (`tests/kill_server.sh --all`, orchestra stop).
+
+## Decision checklist (agents)
+
+1. `gh run view <id> --json status,jobs` — is any job still on **`Run tests`**?
+2. `gh api repos/unifyai/unify/actions/runs/<id> --jq .cancel_requested_at`
+   — still null after cancel? → **zombie → force-cancel**
+3. Only if Hang already completed and post-steps are active → wind-down /
+   `always()` discussion
+
+## Related knobs
+
+- Tests concurrency: `cancel-in-progress` is on for `pull_request` and
+  `workflow_dispatch` (see `.github/workflows/tests.yml`). Push events still
+  let an in-flight matrix finish.
+- Cancel-latency smoke (A–E): Flow Smoke dispatch with
+  `confirm_llm_spend=CANCEL_SMOKE_OK` / `scripts/dev/run_cancel_smoke.sh`

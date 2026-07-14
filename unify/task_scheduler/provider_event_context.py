@@ -7,6 +7,7 @@ and task instruction channels; it cannot grant tools or override authorization.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 import requests
@@ -26,6 +27,20 @@ _ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 _HTTP_TIMEOUT_SECONDS = 30
 
 
+class ProviderEventContextRequest(BaseModel):
+    """Ownership-scoped Orchestra request for one provider-event context read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    assistant_id: str
+    task_id: int
+    run_id: int
+    receipt_id: str
+    event_context_ref: str
+    audience: str
+    issued_at: datetime
+
+
 class ProviderEventContext(BaseModel):
     """Matched event context delivered to a live provider-event instance.
 
@@ -40,7 +55,8 @@ class ProviderEventContext(BaseModel):
     event_context_ref: str
     envelope: dict[str, Any] = Field(default_factory=dict)
     curated_projection: dict[str, Any] = Field(default_factory=dict)
-    source_body: dict[str, Any] | list[Any] | str | None = None
+    source_body: Any = None
+    expires_at: datetime | None = None
 
 
 def _orchestra_headers() -> dict[str, str]:
@@ -59,6 +75,24 @@ def _orchestra_url(path: str) -> str:
     if not base:
         raise ProviderEventDispatchValidationError("orchestra_url_missing")
     return f"{base}{path}"
+
+
+def build_provider_event_context_request(
+    request: ProviderEventDispatchRequest,
+    *,
+    issued_at: datetime | None = None,
+) -> ProviderEventContextRequest:
+    """Shape one Orchestra event-context fetch from a live dispatch envelope."""
+
+    return ProviderEventContextRequest(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        run_id=request.run_id,
+        receipt_id=request.receipt_id,
+        event_context_ref=request.event_context_ref,
+        audience=PROVIDER_EVENT_CONTEXT_AUDIENCE,
+        issued_at=issued_at or datetime.now(timezone.utc),
+    )
 
 
 def verify_precreated_provider_event_run(
@@ -102,17 +136,11 @@ def fetch_provider_event_context(
 ) -> ProviderEventContext:
     """Fetch authorized event context for one live dispatch operation."""
 
+    context_request = build_provider_event_context_request(request)
     response = requests.post(
         _orchestra_url(_EVENT_CONTEXT_PATH),
         headers=_orchestra_headers(),
-        json={
-            "assistant_id": request.assistant_id,
-            "task_id": request.task_id,
-            "run_id": request.run_id,
-            "receipt_id": request.receipt_id,
-            "event_context_ref": request.event_context_ref,
-            "audience": PROVIDER_EVENT_CONTEXT_AUDIENCE,
-        },
+        json=context_request.model_dump(mode="json"),
         timeout=_HTTP_TIMEOUT_SECONDS,
     )
     if response.status_code in {401, 403, 404}:
@@ -138,6 +166,7 @@ def fetch_provider_event_context(
         envelope=dict(payload.get("envelope") or {}),
         curated_projection=dict(payload.get("curated_projection") or {}),
         source_body=source_body,
+        expires_at=payload.get("expires_at"),
     )
 
 
