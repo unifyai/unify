@@ -1975,7 +1975,6 @@ async def entrypoint(ctx: agents.JobContext):
         contact_bio=contact.get("bio") or None,
         is_boss_user=bool(contact.get("is_system", False)),
         contact_rolling_summary=contact.get("rolling_summary", ""),
-        demo_mode=SETTINGS.DEMO_MODE,
         channel=channel,
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,

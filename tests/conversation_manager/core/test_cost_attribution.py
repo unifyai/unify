@@ -579,7 +579,6 @@ class TestContactProvisioningUserId:
             patch("unify.session_details.SESSION_DETAILS") as mock_sd,
             patch("unify.settings.SETTINGS") as mock_settings,
         ):
-            mock_settings.DEMO_MODE = False
             mock_settings.ORCHESTRA_URL = "http://127.0.0.1:8000/v0"
             mock_sd.is_initialized = True
             mock_sd.user.id = "boss_platform_uid"
@@ -630,7 +629,6 @@ class TestContactProvisioningUserId:
             patch("unify.session_details.SESSION_DETAILS") as mock_sd,
             patch("unify.settings.SETTINGS") as mock_settings,
         ):
-            mock_settings.DEMO_MODE = False
             mock_sd.is_initialized = False
             mock_sd.user.id = "default"
 

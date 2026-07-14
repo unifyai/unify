@@ -192,8 +192,6 @@ class ProductionSettings(BaseSettings):
     FIRST_ASK_TOOL_IS_SEARCH: bool = False
     FIRST_MUTATION_TOOL_IS_ASK: bool = False
     DEPLOY_ENV: Literal["production", "staging"] = "production"
-    DEMO_MODE: bool = False
-    DEMO_ID: int | None = None  # Demo assistant metadata ID (if DEMO_MODE is True)
     # Whether a Console web UI / onboarding front-end is present for this
     # deployment. Hosted and self-host run with a Console (default True); the
     # public local install runs against hosted Orchestra with no Console and
@@ -237,7 +235,6 @@ class ProductionSettings(BaseSettings):
     @field_validator(
         "UNITY_TERMINAL_LOG",
         "UNITY_ASYNCIO_DEBUG",
-        "DEMO_MODE",
         "EVENTBUS_PUBLISHING_ENABLED",
         "EVENTBUS_PUBSUB_STREAMING",
         "PYTEST_LOG_TO_FILE",

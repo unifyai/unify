@@ -2785,18 +2785,6 @@ async def _(event: StartupEvent, cm: "ConversationManager", *args, **kwargs):
                 ),
             )
 
-        # Set demo mode from startup event before initializing managers
-        # Demo mode is derived from the presence of a demo_id
-        if event.demo_id is not None:
-            from unify.settings import SETTINGS
-
-            SETTINGS.DEMO_MODE = True
-            SETTINGS.DEMO_ID = event.demo_id
-            cm._session_logger.debug(
-                "startup",
-                f"Demo mode enabled (demo_id={event.demo_id})",
-            )
-
         payload = event.to_dict()["payload"]
         previous_unify_key = SESSION_DETAILS.unify_key
         cm.set_details(payload)

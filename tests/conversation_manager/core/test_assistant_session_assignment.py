@@ -58,7 +58,6 @@ def _secret_record(
             "desktop_mode": "ubuntu",
             "team_ids": [],
             "org_id": None,
-            "demo_id": None,
             "self_contact_id": 0,
             "boss_contact_id": 1,
         },

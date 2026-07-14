@@ -222,7 +222,6 @@ def build_brain_spec(
         on_voice_call=cm.in_voice_session,
         hang_up_gate_reason=cm.call_manager.hang_up_gate_reason,
         outbound_voice_line_ready=cm.call_manager.is_ready_for_outbound_call,
-        demo_mode=SETTINGS.DEMO_MODE,
         computer_fast_path=cm.computer_fast_path_eligible,
         assistant_has_phone=bool(cm.assistant_number),
         assistant_has_email=bool(cm.assistant_email),
