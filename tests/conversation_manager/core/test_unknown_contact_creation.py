@@ -73,13 +73,11 @@ def mock_session_details():
         mock.assistant.agent_id = 42
         mock.assistant.email = "assistant@test.com"
         mock.user.name = "Test User"
-        # _get_local_contact() reads user.first_name / user.surname /
-        # user.whatsapp_number and builds a dict that downstream code
-        # JSON-serializes. Without these explicit string values they
-        # default to MagicMock instances, which fail JSON encoding with
-        # "Object of type MagicMock is not JSON serializable" — the
-        # error surfaced in handle_message → silent contact-creation
-        # failure → test asserts 0 == 1.
+        # _get_local_contact() builds a dict that BackupContactsEvent
+        # JSON-serializes. Unset MagicMock attrs (including
+        # boss_contact_id → contact_id) fail encoding and abort the
+        # handler before unknown-contact creation can run.
+        mock.boss_contact_id = 1
         mock.user.first_name = "Test"
         mock.user.surname = "User"
         mock.user.whatsapp_number = "+15555550000"
