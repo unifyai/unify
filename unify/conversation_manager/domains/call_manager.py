@@ -73,6 +73,15 @@ OUTBOUND_CALL_READINESS_TIMEOUT_S = 30.0
 # gate, so an unregistered worker should fall back to a per-call subprocess.
 WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 
+# Wall-clock ceiling for a browser-meet (Google Meet / Teams) join request to
+# the agent-service. Joining a browser meeting is far slower than a phone/SMS
+# session: it cold-starts a headless Chromium, runs an LLM-guided click-through
+# of the pre-join screen, and may then sit in the meeting waiting room. Five
+# minutes is a deliberate special case for these browser meets (ordinary comms
+# requests use much tighter timeouts) so a legitimately slow join is given room
+# to reach the lobby rather than being cut off mid-join.
+MEET_JOIN_HTTP_TIMEOUT_S = 300.0
+
 # How long the worker may stay alive-but-unwarmed while the manager is fully
 # idle before the watchdog force-restarts it to recover. Post-job re-warm usually
 # completes in seconds, but a cold container prewarm can take the full LiveKit
@@ -1094,7 +1103,7 @@ class LivekitCallManager:
                     f"{base_url}/{meet_path}/join",
                     json={"meetUrl": meet_url, "displayName": display_name},
                     headers={"authorization": f"Bearer {auth_key}"},
-                    timeout=aiohttp.ClientTimeout(total=300),
+                    timeout=aiohttp.ClientTimeout(total=MEET_JOIN_HTTP_TIMEOUT_S),
                 )
                 body = await resp.json()
         except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
