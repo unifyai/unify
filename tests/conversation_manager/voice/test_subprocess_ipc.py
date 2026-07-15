@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,6 +34,12 @@ from unify.conversation_manager.in_memory_event_broker import (
 # Path to the minimal test subprocess script
 TEST_SUBPROCESS_SCRIPT = Path(__file__).parent / "ipc_test_subprocess.py"
 
+# Cold-importing unify in a fresh child can take several seconds under a loaded
+# CI shard; keep budgets generous and fail with child stdout/stderr attached.
+_READY_TIMEOUT_S = 30.0
+_ACK_TIMEOUT_S = 30.0
+_POLL_INTERVAL_S = 0.05
+
 
 @pytest_asyncio.fixture
 async def event_broker():
@@ -46,12 +51,30 @@ async def event_broker():
     reset_in_memory_event_broker()
 
 
+async def _drain_stream(
+    stream: asyncio.StreamReader | None,
+    chunks: list[bytes],
+) -> None:
+    """Read a subprocess stream to completion so PIPE buffers cannot stall the child."""
+    if stream is None:
+        return
+    while True:
+        data = await stream.read(65536)
+        if not data:
+            return
+        chunks.append(data)
+
+
+def _decode_chunks(chunks: list[bytes]) -> str:
+    return b"".join(chunks).decode(errors="replace")
+
+
 class TestRealSubprocessIPC:
     """
     Integration tests that spawn REAL subprocesses to verify IPC works.
 
     These tests do NOT mock:
-    - subprocess.Popen (real process spawning)
+    - process spawning (real asyncio subprocess)
     - Unix sockets (real socket communication)
     - IPC protocol (real message passing)
 
@@ -85,7 +108,7 @@ class TestRealSubprocessIPC:
         This single test would have caught that bug because step 4 would
         have timed out - the subprocess would never receive the guidance.
         """
-        received_from_child = []
+        received_from_child: list[tuple[str, str]] = []
 
         async def on_event(channel: str, event_json: str):
             received_from_child.append((channel, event_json))
@@ -95,7 +118,32 @@ class TestRealSubprocessIPC:
             on_event=on_event,
             forward_channels=["app:call:*"],
         )
-        proc = None
+        proc: asyncio.subprocess.Process | None = None
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        drain_tasks: list[asyncio.Task] = []
+
+        def child_output() -> str:
+            return (
+                f"returncode={proc.returncode if proc else None}, "
+                f"stdout={_decode_chunks(stdout_chunks)!r}, "
+                f"stderr={_decode_chunks(stderr_chunks)!r}"
+            )
+
+        async def wait_for_channel(channel: str, timeout_s: float) -> str | None:
+            """Wait for a child event, failing fast if the subprocess exits early."""
+            deadline = asyncio.get_running_loop().time() + timeout_s
+            while asyncio.get_running_loop().time() < deadline:
+                for ch, event_json in received_from_child:
+                    if ch == channel:
+                        return event_json
+                if proc is not None and proc.returncode is not None:
+                    raise AssertionError(
+                        f"Subprocess exited before {channel!r} "
+                        f"(exit={proc.returncode}). {child_output()}",
+                    )
+                await asyncio.sleep(_POLL_INTERVAL_S)
+            return None
 
         try:
             socket_path = await server.start()
@@ -103,7 +151,7 @@ class TestRealSubprocessIPC:
             env = os.environ.copy()
             env[CM_EVENT_SOCKET_ENV] = socket_path
 
-            # Ensure PYTHONPATH includes workspace root so subprocess can find unity
+            # Ensure PYTHONPATH includes workspace root so the child can import unify
             workspace_root = str(Path(__file__).parent.parent.parent.parent)
             existing_pythonpath = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = (
@@ -112,26 +160,24 @@ class TestRealSubprocessIPC:
                 else workspace_root
             )
 
-            # Spawn subprocess that does full roundtrip
-            proc = subprocess.Popen(
-                [sys.executable, str(TEST_SUBPROCESS_SCRIPT), "full_roundtrip"],
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(TEST_SUBPROCESS_SCRIPT),
+                "full_roundtrip",
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            drain_tasks = [
+                asyncio.create_task(_drain_stream(proc.stdout, stdout_chunks)),
+                asyncio.create_task(_drain_stream(proc.stderr, stderr_chunks)),
+            ]
 
-            # Wait for subprocess to send "ready"
-            ready_received = False
-            for _ in range(50):
-                await asyncio.sleep(0.1)
-                for channel, _ in received_from_child:
-                    if channel == "app:call:ready":
-                        ready_received = True
-                        break
-                if ready_received:
-                    break
-
-            assert ready_received, "Subprocess never sent 'ready' event"
+            ready_event = await wait_for_channel("app:call:ready", _READY_TIMEOUT_S)
+            assert ready_event is not None, (
+                f"Subprocess never sent 'ready' event within {_READY_TIMEOUT_S:.0f}s. "
+                f"{child_output()}"
+            )
 
             # Clear and send guidance (using production channel name)
             received_from_child.clear()
@@ -146,36 +192,25 @@ class TestRealSubprocessIPC:
                 ).to_json(),
             )
 
-            # Wait for acknowledgment
-            ack_received = False
-            for _ in range(50):
-                await asyncio.sleep(0.1)
-                for channel, event_json in received_from_child:
-                    if channel == "app:call:ack":
-                        data = json.loads(event_json)
-                        assert (
-                            data["received_message"] == "Ask about their day"
-                        ), f"Subprocess received wrong message: {data}"
-                        ack_received = True
-                        break
-                if ack_received:
-                    break
-
-            # Get subprocess output for debugging
-            proc.terminate()
-            stdout, stderr = proc.communicate(timeout=2)
-
-            assert ack_received, (
-                f"Full roundtrip failed - subprocess didn't acknowledge guidance. "
-                f"This means parent→child IPC is broken. "
-                f"stdout: {stdout.decode()}, stderr: {stderr.decode()}"
+            ack_event = await wait_for_channel("app:call:ack", _ACK_TIMEOUT_S)
+            assert ack_event is not None, (
+                f"Full roundtrip failed - subprocess didn't acknowledge guidance "
+                f"within {_ACK_TIMEOUT_S:.0f}s. This means parent→child IPC is broken. "
+                f"{child_output()}"
             )
+            data = json.loads(ack_event)
+            assert (
+                data["received_message"] == "Ask about their day"
+            ), f"Subprocess received wrong message: {data}. {child_output()}"
 
         finally:
-            if proc and proc.poll() is None:
+            if proc is not None and proc.returncode is None:
                 proc.terminate()
                 try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
                     proc.kill()
+                    await proc.wait()
+            if drain_tasks:
+                await asyncio.gather(*drain_tasks, return_exceptions=True)
             await server.stop()
