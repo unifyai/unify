@@ -1,10 +1,4 @@
-"""Helpers for CodeActActor provider-trigger task tools.
-
-Foundational pieces (revision conflicts, connection redaction) stay with the
-actor control plane. GitHub-slice helpers in this module are interim until the
-curated catalog and registry-owned resource policy generalize beyond
-``github.issue_created``.
-"""
+"""Helpers for CodeActActor provider-trigger task tools."""
 
 from __future__ import annotations
 
@@ -30,10 +24,6 @@ CONNECTION_SUMMARY_KEYS = frozenset(
     },
 )
 
-# TODO: Purge/Replace — derive eligible backends from the curated catalog entry
-# for the requested event_slug instead of a GitHub-only allowlist.
-_GITHUB_ISSUE_CREATED_BACKENDS = frozenset({"composio", "pipedream"})
-
 
 def task_revision_conflict_outcome(
     exc: TaskRevisionConflictError,
@@ -54,15 +44,24 @@ def task_revision_conflict_outcome(
 
 def list_eligible_provider_trigger_connections(
     *,
+    event_slug: str,
+    schema_version: str = "1",
     backend_id: str | None = None,
-    canonical_app_slug: str = "github",
+    catalog_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return assistant-scoped connections suitable for one curated provider event.
+    """Return assistant-scoped connections suitable for one curated provider event."""
 
-    TODO: Purge/Replace — require event_slug (or catalog row) and resolve
-    ``canonical_app_slug`` plus eligible backends from the registry instead of
-    defaulting to GitHub and ``_GITHUB_ISSUE_CREATED_BACKENDS``.
-    """
+    event = _find_catalog_event(
+        events=catalog_events or [],
+        event_slug=event_slug,
+        schema_version=schema_version,
+    )
+    if event is None:
+        raise ValueError(
+            f"Unsupported provider event {event_slug!r} schema {schema_version!r}.",
+        )
+    canonical_app_slug = str(event.get("canonical_app_slug") or "")
+    eligible_backends = set(event.get("backends") or [])
 
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
@@ -85,10 +84,7 @@ def list_eligible_provider_trigger_connections(
         resolved_backend = str(connection.get("backend_id") or "")
         if backend_id is not None and resolved_backend != backend_id:
             continue
-        if (
-            backend_id is None
-            and resolved_backend not in _GITHUB_ISSUE_CREATED_BACKENDS
-        ):
+        if backend_id is None and resolved_backend not in eligible_backends:
             continue
         if connection.get("status") not in {"connected", "active"}:
             continue
@@ -121,25 +117,17 @@ def describe_provider_trigger_resource_contract(
         raise ValueError(
             f"Unsupported provider event {event_slug!r} schema {schema_version!r}.",
         )
-    # TODO: Purge/Replace — read resource_kind, id format, and selection contract
-    # from the curated registry / TriggerProviderAdapter instead of branching on
-    # github.issue_created.
-    if event_slug == "github.issue_created":
-        return {
-            "event_slug": event_slug,
-            "schema_version": schema_version,
-            "resource_kind": "github_repository",
-            "resource_id_format": "owner/name",
-            "selection_contract": (
-                "Provide the exact repository as a repository filter using "
-                "operator 'is' and value 'owner/name'. v1 does not browse the "
-                "full GitHub catalog; provisioning validates access for that "
-                "repository through the selected connection."
-            ),
-            "filters": event.get("filters") or [],
-            "backends": event.get("backends") or [],
-        }
-    raise ValueError(f"Resource contract is unavailable for event {event_slug!r}.")
+    return {
+        "event_slug": event_slug,
+        "schema_version": schema_version,
+        "resource_kind": event.get("resource_kind"),
+        "resource_id_format": event.get("resource_id_format"),
+        "resource_filter_field": event.get("resource_filter_field"),
+        "resource_filter_operator": event.get("resource_filter_operator"),
+        "selection_contract": event.get("selection_contract"),
+        "filters": event.get("filters") or [],
+        "backends": event.get("backends") or [],
+    }
 
 
 def _find_catalog_event(
