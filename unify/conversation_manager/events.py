@@ -1044,6 +1044,10 @@ class UnifyMessageReceived(Event):
     # the room must pass this team_id back to ``send_unify_message``.
     team_id: int | None = None
     team_name: str = ""
+    # Set when the message was posted in an org chat group (non-team room).
+    # Same reply routing as team_id: pass group_id back to
+    # ``send_unify_message`` to reply in the room.
+    group_id: int | None = None
 
 
 @dataclass
@@ -1243,6 +1247,10 @@ class UnifyMessageSent(Event):
     content: str
     # List of attachment dicts with full metadata.
     attachments: list[dict] = field(default_factory=list)
+    # When set, the outbound message was posted into a team or org chat
+    # group room rather than a 1:1 Console thread.
+    team_id: int | None = None
+    group_id: int | None = None
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None

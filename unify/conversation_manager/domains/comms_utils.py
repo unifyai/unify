@@ -315,11 +315,46 @@ def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
         return {"success": False, "error": str(exc)}
 
 
+def _post_group_message_to_orchestra(group_id: int, content: str) -> dict:
+    """Persist + publish one org chat-group reply via Orchestra's API.
+
+    Org chat-group replies do not go to the assistant's own topic (that is
+    the 1:1 Console thread); Orchestra appends them to the group's GroupChat
+    context and publishes them on the per-organization topic so every
+    member's Console sees them. Orchestra never fans assistant replies out
+    to other runtimes, so AI messages cannot cascade.
+    """
+    base_url = SETTINGS.ORCHESTRA_URL or ""
+    unify_key = SESSION_DETAILS.unify_key or ""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if not base_url or not unify_key or agent_id is None:
+        return {"success": False, "error": "orchestra config missing"}
+    try:
+        from unisdk.utils import http
+
+        response = http.post(
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/groups/{int(group_id)}/messages",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            json={"content": content},
+            timeout=15,
+        )
+        if 200 <= response.status_code < 300:
+            return {"success": True}
+        return {
+            "success": False,
+            "error": f"orchestra returned {response.status_code}: "
+            f"{getattr(response, 'text', '')}",
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 async def send_unify_message(
     content: str,
     contact_id: int = 1,
     attachment: dict | None = None,
     team_id: int | None = None,
+    group_id: int | None = None,
 ) -> dict:
     """
     Send a unify message to a contact, optionally with an attachment.
@@ -333,11 +368,31 @@ async def send_unify_message(
             - url: Signed URL to download the file
         team_id: When set, the message is posted into that team's group chat
             (via Orchestra) instead of the contact's 1:1 Console thread.
+        group_id: When set, the message is posted into that org chat group
+            (via Orchestra) instead of the contact's 1:1 Console thread.
+            Preferred over ``team_id`` if both are set.
 
     Returns:
         dict with "success" key indicating delivery status.
     """
     content = normalize_outbound_plain_text(content)
+
+    if group_id is not None:
+        result = await asyncio.to_thread(
+            _post_group_message_to_orchestra,
+            group_id,
+            content,
+        )
+        if result.get("success"):
+            LOGGER.debug(
+                f"{ICONS['comms_outbound']} Group chat message posted to group {group_id}",
+            )
+        else:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error posting group chat message: "
+                f"{result.get('error')}",
+            )
+        return result
 
     if team_id is not None:
         result = await asyncio.to_thread(

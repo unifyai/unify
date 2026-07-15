@@ -750,11 +750,15 @@ class ConversationManagerBrainActionTools:
         content: str,
         contact_id: int | str,
         attachment_filepath: str | None = None,
+        team_id: int | None = None,
+        group_id: int | None = None,
     ) -> dict[str, Any]:
         return await self._comms.send_unify_message(
             content=content,
             contact_id=contact_id,
             attachment_filepath=attachment_filepath,
+            team_id=team_id,
+            group_id=group_id,
         )
 
     @slow_brain_direct_comms
