@@ -133,6 +133,62 @@ def escape_single_quotes(text: str) -> str:
     return text.replace("'", "\\'")
 
 
+# Page size for coverage scans / backfills. Matches ingest embedding batches.
+_LOG_ID_PAGE_SIZE = 1000
+
+
+def _iter_log_ids(
+    context: str,
+    *,
+    filter: str | None = None,
+    project: str | None = None,
+    page_size: int = _LOG_ID_PAGE_SIZE,
+) -> list[int]:
+    """Return all log IDs in ``context`` matching ``filter`` (paginated)."""
+    ids: list[int] = []
+    offset = 0
+    while True:
+        batch = unisdk.get_logs(
+            context=context,
+            filter=filter,
+            return_ids_only=True,
+            limit=page_size,
+            offset=offset,
+            project=project,
+        )
+        if not batch:
+            break
+        ids.extend(int(x) for x in batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return ids
+
+
+def _chunked(items: list[int], size: int = _LOG_ID_PAGE_SIZE) -> list[list[int]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _backfill_derived_for_ids(
+    context: str,
+    key: str,
+    equation: str,
+    *,
+    from_ids: list[int],
+    project: str | None = None,
+) -> None:
+    """Create/refill derived values for ``from_ids`` in batches."""
+    for chunk in _chunked(from_ids):
+        ensure_derived_column(
+            context=context,
+            key=key,
+            equation=equation,
+            derived=True,
+            from_ids=chunk,
+            project=project,
+        )
+
+
 def ensure_derived_column(
     context: str,
     key: str,
@@ -237,10 +293,13 @@ def ensure_vector_column(
     async_embeddings: bool = False,
     from_ids: list[int] | None = None,
     project: str | None = None,
-) -> None:
+) -> bool:
     """
-    Ensure that a vector column exists in the given context. If it does not,
-    create a derived column using the embed() function with the defined embedding model.
+    Ensure that a vector column exists and is populated for the given context.
+
+    If the embedding field is registered but values are missing (e.g. after a
+    context rollback that preserved schema while dropping derived rows), missing
+    rows are backfilled. Field presence alone is not treated as coverage.
 
     Args:
         context (str): The Unify context (e.g., "Knowledge/table_name" or "ContextName").
@@ -249,33 +308,102 @@ def ensure_vector_column(
         derived_expr Optional(str): An optional expression to dynamically derive the source column
             (in case it's not already present) (eg: "str({name}) + ' || ' + str({description})")
         async_embeddings (bool): Whether to generate embeddings asynchronously.
+
+    Returns:
+        True if the column was created or any rows were backfilled; False if
+        the column was already fully covered (or a targeted ``from_ids`` call
+        completed without needing a full-context create).
     """
-    # If a derived expression was provided for the source, ensure the source column exists.
-    if derived_expr is not None:
+    created_or_backfilled = False
+    scoped_derived_expr = derived_expr
+    if scoped_derived_expr is not None:
         # Scope placeholder references to the local logs alias
-        derived_expr = derived_expr.replace("{", "{lg:")
+        scoped_derived_expr = scoped_derived_expr.replace("{", "{lg:")
         ensure_derived_column(
             context=context,
             key=source_column,
-            equation=derived_expr,
+            equation=scoped_derived_expr,
             derived=True,
             from_ids=from_ids,
             project=project,
         )
+        # Schema can survive rollback while derived source values do not.
+        # When not doing a targeted from_ids write, refill orphaned sources.
+        if from_ids is None:
+            existing_src = unisdk.get_fields(context=context, project=project)
+            if source_column in existing_src:
+                missing_src = _iter_log_ids(
+                    context,
+                    filter=f"{source_column} == None",
+                    project=project,
+                )
+                if missing_src:
+                    logger.info(
+                        "Backfilling orphaned derived source context=%s key=%s "
+                        "missing=%s",
+                        context,
+                        source_column,
+                        len(missing_src),
+                    )
+                    _backfill_derived_for_ids(
+                        context,
+                        source_column,
+                        scoped_derived_expr,
+                        from_ids=missing_src,
+                        project=project,
+                    )
+                    created_or_backfilled = True
 
-    # Early return if the embedding column already exists and
-    # we are not doing targetted derived logs creation using from_ids
+    embed_expr = (
+        f"embed({{lg:{source_column}}}, model='{EMBED_MODEL}', "
+        f"async_embeddings={async_embeddings})"
+    )
+
+    # Targeted vectorize path (caller supplies row ids).
+    if from_ids is not None:
+        ensure_derived_column(
+            context=context,
+            key=embed_column,
+            equation=embed_expr,
+            derived=True,
+            from_ids=from_ids,
+            project=project,
+        )
+        return True
+
     existing = unisdk.get_fields(context=context, project=project)
-    if embed_column in existing and not from_ids:
-        return
+    if embed_column not in existing:
+        ensure_derived_column(
+            context=context,
+            key=embed_column,
+            equation=embed_expr,
+            derived=True,
+            from_ids=None,
+            project=project,
+        )
+        return True
 
-    # Define the embedding equation with explicit lg scoping and ensure the embedding column.
-    embed_expr = f"embed({{lg:{source_column}}}, model='{EMBED_MODEL}', async_embeddings={async_embeddings})"
-    ensure_derived_column(
-        context=context,
-        key=embed_column,
-        equation=embed_expr,
-        derived=True,
-        from_ids=from_ids,
+    # Field exists: only backfill rows that have source text but no embedding.
+    # This self-heals schema-only leftovers after context rollback.
+    missing_emb = _iter_log_ids(
+        context,
+        filter=f"({embed_column} == None) and ({source_column} != None)",
         project=project,
     )
+    if not missing_emb:
+        return created_or_backfilled
+
+    logger.info(
+        "Backfilling orphaned embeddings context=%s key=%s missing=%s",
+        context,
+        embed_column,
+        len(missing_emb),
+    )
+    _backfill_derived_for_ids(
+        context,
+        embed_column,
+        embed_expr,
+        from_ids=missing_emb,
+        project=project,
+    )
+    return True
