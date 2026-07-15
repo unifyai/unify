@@ -909,15 +909,29 @@ class SimulatedDataManager(BaseDataManager):
         rows: List[Dict[str, Any]],
         *,
         batched: bool = True,
+        on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
+        del batched, destination
         if not rows:
             return []
 
         resolved = self._resolve_context(context)
+        unique_keys = self._unique_keys.get(resolved) or {}
+        skip_duplicates = on_duplicate == "skip" and bool(unique_keys)
+        existing_keys: set[tuple[Any, ...]] = set()
+        if skip_duplicates:
+            key_cols = tuple(unique_keys.keys())
+            for existing in self._tables.get(resolved, []):
+                existing_keys.add(tuple(existing.get(col) for col in key_cols))
 
         inserted_ids: List[int] = []
         for row in rows:
+            if skip_duplicates:
+                key = tuple(row.get(col) for col in unique_keys.keys())
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
             log_id = self._next_log_id
             self._next_log_id += 1
             row_with_id = {**row, "_log_id": log_id}

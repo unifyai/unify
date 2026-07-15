@@ -28,6 +28,7 @@ def insert_rows_impl(
     rows: List[Dict[str, Any]],
     *,
     batched: bool = True,
+    on_duplicate: Optional[str] = None,
     ignore_duplicate_composite_key_errors: bool = False,
 ) -> List[int]:
     """Insert rows into a context via bulk creation.
@@ -35,7 +36,9 @@ def insert_rows_impl(
     Uniqueness enforcement belongs at the **schema level** (``unique_keys``
     on the context), not at insert time.  Use ``create_table(unique_keys=…)``
     or ``ingest(unique_keys=…)`` to declare which columns form the natural
-    key; the backend rejects duplicate keys server-side.
+    key; the backend rejects duplicate keys server-side unless
+    ``on_duplicate="skip"`` asks Orchestra to insert only non-conflicting
+    rows.
 
     Parameters
     ----------
@@ -45,6 +48,12 @@ def insert_rows_impl(
         Row dictionaries to insert.
     batched : bool, default True
         When True, uses batched log creation for better performance.
+    on_duplicate : str | None, default None
+        Forwarded to Orchestra ``create_logs``. ``"skip"`` inserts
+        non-conflicting rows and reports collisions in the response
+        ``failed`` list (returned ids are successful inserts only).
+        ``"error"`` / ``None`` keep Orchestra's reject-on-collision default.
+        Only applied on the batched path.
     ignore_duplicate_composite_key_errors : bool, default False
         Treat backend duplicate-key rejections as already-committed rows.
         This is reserved for deployment ingest paths that populate a
@@ -59,15 +68,24 @@ def insert_rows_impl(
     if not rows:
         return []
 
-    logger.debug("Inserting %d rows into %s (batched=%s)", len(rows), context, batched)
+    logger.debug(
+        "Inserting %d rows into %s (batched=%s, on_duplicate=%s)",
+        len(rows),
+        context,
+        batched,
+        on_duplicate,
+    )
 
     try:
-        result = unify_create_logs(
-            context=context,
-            entries=rows,
-            stamp_authoring=is_shared_authored_context(context),
-            batched=batched,
-        )
+        create_kwargs: Dict[str, Any] = {
+            "context": context,
+            "entries": rows,
+            "stamp_authoring": is_shared_authored_context(context),
+            "batched": batched,
+        }
+        if on_duplicate is not None:
+            create_kwargs["on_duplicate"] = on_duplicate
+        result = unify_create_logs(**create_kwargs)
     except RequestError as exc:
         if (
             ignore_duplicate_composite_key_errors
