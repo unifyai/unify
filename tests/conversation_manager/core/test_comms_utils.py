@@ -436,6 +436,114 @@ class TestSendUnifyMessage:
             published_data = json.loads(call_args[0][1].decode("utf-8"))
             assert published_data["event"]["attachments"] == [attachment]
 
+    @pytest.mark.asyncio
+    async def test_send_with_team_id_posts_to_orchestra_team_path(self):
+        """Team chat replies post to Orchestra's assistant team messages path."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.text = ""
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = await comms_utils.send_unify_message(
+                content="Hello team",
+                contact_id=1,
+                team_id=7,
+            )
+
+            assert result["success"] is True
+            mock_post.assert_called_once()
+            assert (
+                mock_post.call_args[0][0]
+                == "http://orchestra.test/v0/assistant/42/teams/7/messages"
+            )
+            assert mock_post.call_args[1]["json"] == {"content": "Hello team"}
+
+    @pytest.mark.asyncio
+    async def test_send_with_group_id_posts_to_orchestra_group_path(self):
+        """Org chat-group replies post to Orchestra's assistant group messages path."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.text = ""
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = await comms_utils.send_unify_message(
+                content="Hello group",
+                contact_id=1,
+                group_id=9,
+            )
+
+            assert result["success"] is True
+            mock_post.assert_called_once()
+            assert (
+                mock_post.call_args[0][0]
+                == "http://orchestra.test/v0/assistant/42/groups/9/messages"
+            )
+            assert mock_post.call_args[1]["json"] == {"content": "Hello group"}
+
+    @pytest.mark.asyncio
+    async def test_group_id_preferred_over_team_id(self):
+        """When both room ids are set, group_id wins."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.text = ""
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = await comms_utils.send_unify_message(
+                content="Prefer group",
+                contact_id=1,
+                team_id=7,
+                group_id=9,
+            )
+
+            assert result["success"] is True
+            assert "/groups/9/messages" in mock_post.call_args[0][0]
+            assert "/teams/" not in mock_post.call_args[0][0]
+
 
 class TestSendEmailViaAddress:
     """Tests for send_email_via_address function with attachments."""

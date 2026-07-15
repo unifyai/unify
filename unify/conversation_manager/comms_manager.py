@@ -471,13 +471,13 @@ def _get_or_create_team_chat_sender_contact(
     sender_email: str,
     sender_assistant_id: int | str | None = None,
 ) -> dict | None:
-    """Resolve a team-chat sender to a contact, provisioning one if needed.
+    """Resolve a team/org-group chat sender to a contact, provisioning if needed.
 
-    Team group-chat fan-out can carry messages from senders the receiving
-    assistant has never talked to: another member's assistant, or an org
-    member whose contact row was never provisioned. Assistant senders are
-    keyed on their stable ``agent_id`` (provisioned into teammate contacts at
-    startup), so resolution works even when the sender has no provisioned
+    Team and org-group chat fan-out can carry messages from senders the
+    receiving assistant has never talked to: another member's assistant, or
+    an org member whose contact row was never provisioned. Assistant senders
+    are keyed on their stable ``agent_id`` (provisioned into teammate contacts
+    at startup), so resolution works even when the sender has no provisioned
     email; email is the fallback identity. Teammates are known, trusted
     collaborators — unlike arbitrary unknown inbound senders — so resolution
     is not gated by the blacklist-check flag and the created contact is a
@@ -1260,16 +1260,18 @@ class CommsManager:
                             ),
                             None,
                         )
-                    # Team chat fan-out: the sender may be another org member
-                    # or a fellow team assistant rather than this assistant's
-                    # owner, in which case the adapters layer cannot resolve a
-                    # per-assistant contact id. Assistant senders resolve by
-                    # their stable agent_id (teammate contacts are provisioned
-                    # at startup); humans resolve by email — the identity
-                    # org-member contacts are stored under. Either way a
-                    # teammate contact is provisioned on first message if the
-                    # startup sync has not covered the sender yet.
-                    if contact is None and team_id:
+                    group_id = event.get("group_id")
+                    # Team / org-group chat fan-out: the sender may be another
+                    # org member or a fellow assistant rather than this
+                    # assistant's owner, in which case the adapters layer
+                    # cannot resolve a per-assistant contact id. Assistant
+                    # senders resolve by their stable agent_id (teammate
+                    # contacts are provisioned at startup); humans resolve by
+                    # email — the identity org-member contacts are stored
+                    # under. Either way a teammate contact is provisioned on
+                    # first message if the startup sync has not covered the
+                    # sender yet.
+                    if contact is None and (team_id or group_id):
                         contact = _get_or_create_team_chat_sender_contact(
                             str(event.get("sender_name") or ""),
                             str(event.get("sender_email") or ""),
@@ -1279,7 +1281,7 @@ class CommsManager:
                         LOGGER.error(
                             f"{DEFAULT_ICON} Error: could not resolve sender contact "
                             f"for unify_message (contact_id={target_contact_id}, "
-                            f"team_id={team_id}), skipping message",
+                            f"team_id={team_id}, group_id={group_id}), skipping message",
                         )
                         ack_now()
                         return
@@ -1293,6 +1295,7 @@ class CommsManager:
                             attachments=attachments,
                             team_id=int(team_id) if team_id else None,
                             team_name=str(event.get("team_name") or ""),
+                            group_id=int(group_id) if group_id else None,
                         ).to_json(),
                     )
 

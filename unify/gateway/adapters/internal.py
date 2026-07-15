@@ -222,20 +222,33 @@ async def unify_org_chat_webhook(
     if isinstance(message, str):
         message = parse_json_field(message)
 
-    if kind not in {"team", "dm"}:
-        return Response(status_code=400, content="kind must be 'team' or 'dm'")
+    if kind not in {"team", "dm", "group"}:
+        return Response(
+            status_code=400,
+            content="kind must be 'team', 'dm', or 'group'",
+        )
     if not organization_id:
         return Response(status_code=400, content="organization_id is required")
     if not message:
         return Response(status_code=400, content="message is required")
 
-    thread = "team_message" if kind == "team" else "dm_message"
+    if kind == "team":
+        thread = "team_message"
+    elif kind == "group":
+        thread = "group_message"
+    else:
+        thread = "dm_message"
     attributes = {"thread": thread, "organization_id": str(organization_id)}
     if kind == "team":
         team_id = payload.get("team_id") or message.get("team_id")
         if not team_id:
             return Response(status_code=400, content="team_id is required")
         attributes["team_id"] = str(team_id)
+    elif kind == "group":
+        group_id = payload.get("group_id") or message.get("group_id")
+        if not group_id:
+            return Response(status_code=400, content="group_id is required")
+        attributes["group_id"] = str(group_id)
     else:
         user_ids = message.get("user_ids") or []
         if len(user_ids) != 2:
@@ -260,52 +273,59 @@ async def unify_org_chat_webhook(
     if isinstance(assistant_event, str):
         assistant_event = parse_json_field(assistant_event)
 
-    # Team chat fan-out rides the standard unify_message thread — every team
-    # assistant receives a copy, like a large email CC chain. When the sender
-    # is this assistant's owner we can resolve contact_id here; otherwise the
-    # runtime resolves the sender by email against its Contacts table.
+    # Team / org-group chat fan-out rides the standard unify_message thread —
+    # every listed assistant receives a copy, like a large email CC chain.
+    # When the sender is this assistant's owner we can resolve contact_id
+    # here; otherwise the runtime resolves the sender by email against its
+    # Contacts table. assistant_event may include team_id/team_name or
+    # group_id depending on kind.
     fanout_errors: list[str] = []
-    for raw_assistant_id in fanout_assistant_ids:
-        try:
-            assistant_data, contacts = await build_internal_context(
-                context,
-                assistant_id=str(raw_assistant_id),
-                reason="unify_message",
-            )
-            assistant_id = str(assistant_data["assistant_id"])
-            event: dict[str, Any] = {
-                **assistant_event,
-                "assistant_id": assistant_id,
-                "contacts": contacts,
-            }
-            sender_user_id = str(assistant_event.get("sender_user_id") or "")
-            if sender_user_id and sender_user_id == str(
-                assistant_data.get("user_id") or "",
-            ):
-                event["contact_id"] = required_contact_id(
-                    assistant_data,
-                    "boss_contact_id",
+    if kind in {"team", "group"}:
+        for raw_assistant_id in fanout_assistant_ids:
+            try:
+                assistant_data, contacts = await build_internal_context(
+                    context,
+                    assistant_id=str(raw_assistant_id),
+                    reason="unify_message",
                 )
-            await publish_runtime_event(
-                context,
-                assistant_id=assistant_id,
-                thread="unify_message",
-                event=event,
-            )
-        except Exception as exc:
-            fanout_errors.append(str(raw_assistant_id))
-            import logging
+                assistant_id = str(assistant_data["assistant_id"])
+                event: dict[str, Any] = {
+                    **assistant_event,
+                    "assistant_id": assistant_id,
+                    "contacts": contacts,
+                }
+                sender_user_id = str(assistant_event.get("sender_user_id") or "")
+                if sender_user_id and sender_user_id == str(
+                    assistant_data.get("user_id") or "",
+                ):
+                    event["contact_id"] = required_contact_id(
+                        assistant_data,
+                        "boss_contact_id",
+                    )
+                await publish_runtime_event(
+                    context,
+                    assistant_id=assistant_id,
+                    thread="unify_message",
+                    event=event,
+                )
+            except Exception as exc:
+                fanout_errors.append(str(raw_assistant_id))
+                import logging
 
-            logging.getLogger("unify").warning(
-                "team chat fan-out failed for assistant %s: %s",
-                raw_assistant_id,
-                exc,
-            )
+                logging.getLogger("unify").warning(
+                    "org chat fan-out failed for assistant %s: %s",
+                    raw_assistant_id,
+                    exc,
+                )
 
     return _json_response(
         {
             "published": True,
-            "fanned_out": len(fanout_assistant_ids) - len(fanout_errors),
+            "fanned_out": (
+                len(fanout_assistant_ids) - len(fanout_errors)
+                if kind in {"team", "group"}
+                else 0
+            ),
             "fanout_errors": fanout_errors,
         },
     )
