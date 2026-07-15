@@ -597,13 +597,32 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         )
 
 
+def _meet_join_ack(meet_label: str) -> tuple[str, str]:
+    """Proactive acknowledgement pushed the moment a browser-meet join starts.
+
+    The browser join is slow (headless Chromium cold start + LLM-guided
+    click-through of the pre-join screen, then a possible wait in the lobby),
+    and the success/lobby notification only lands once all of that completes.
+    Without an immediate ack the user who just shared the link is left staring
+    at nothing, unsure anything is happening. This tells them the assistant is
+    on its way in so they are not left in a confused state.
+    """
+    notif = (
+        f"Getting into the {meet_label} now — give me a moment, joining can "
+        "take a little while."
+    )
+    return notif, f"<Joining the {meet_label} now...>"
+
+
 def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
     """Notification + transcript text for a successful browser-meet join.
 
     A join that lands in the waiting room is still a success — the browser has
     knocked ("Ask to join") and is waiting for the host to admit it — so word
     it as waiting to be let in rather than already being in the call. This
-    keeps the LLM from treating a lobby state as a join failure.
+    keeps the LLM from treating a lobby state as a join failure. The "joining"
+    ack has already been sent when the attempt started, so the non-lobby case
+    reports arrival ("I'm in") rather than repeating "joining".
     """
     if in_lobby:
         notif = (
@@ -611,7 +630,7 @@ def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
             "waiting for the host to let me in."
         )
         return notif, f"<Waiting in the {meet_label} waiting room to be admitted...>"
-    return f"Joining {meet_label}...", f"<Joining {meet_label}...>"
+    return f"I'm in the {meet_label} now.", f"<Joined the {meet_label}.>"
 
 
 @EventHandler.register(GoogleMeetReceived)
@@ -640,6 +659,21 @@ async def _(
 
     contact_id = contact.get("contact_id") if contact else boss_contact_id
     sender_name = _get_sender_name(contact)
+
+    # Acknowledge immediately, before the slow join: the browser cold-start +
+    # click-through can take a minute, and the success/lobby notif only fires
+    # once that completes. Tell the user the assistant is on its way in so they
+    # are not left wondering whether anything is happening.
+    ack_notif, ack_thread = _meet_join_ack("Google Meet")
+    cm.notifications_bar.push_notif("Comms", ack_notif, event.timestamp)
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=Medium.GOOGLE_MEET,
+        message_content=ack_thread,
+        role="assistant",
+        timestamp=event.timestamp,
+    )
 
     joined = await cm.call_manager.start_google_meet(
         meet_url=event.meet_url,
@@ -727,6 +761,18 @@ async def _(
 
     contact_id = contact.get("contact_id") if contact else boss_contact_id
     sender_name = _get_sender_name(contact)
+
+    # Acknowledge immediately, before the slow join (see Google Meet handler).
+    ack_notif, ack_thread = _meet_join_ack("Teams meeting")
+    cm.notifications_bar.push_notif("Comms", ack_notif, event.timestamp)
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=Medium.TEAMS_MEET,
+        message_content=ack_thread,
+        role="assistant",
+        timestamp=event.timestamp,
+    )
 
     joined = await cm.call_manager.start_teams_meet(
         meet_url=event.meet_url,
