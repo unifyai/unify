@@ -9,6 +9,7 @@ from tests.helpers import (
     _handle_project,
     _assert_blocks_while_paused,
     DEFAULT_TIMEOUT,
+    _unique_token,
 )
 from unify.function_manager.function_manager import FunctionManager
 
@@ -67,20 +68,30 @@ async def test_stateful_memory_serial_asks():
     """
     Two consecutive activities should share the same stateful LLM context.
     We exercise this by asking questions via the handle's ask() method.
+
+    Seed a unique token in the first ask and require the second ask to recall
+    it, rather than asking the model to invent a codename.
     """
     actor = SimulatedActor()
 
+    token = _unique_token("MARKER")
     h1 = await actor.act("Start some new research.")
     ask_handle1 = await h1.ask(
-        "Invent a unique codename. Reply with only the codename.",
+        "Acknowledge the research start in one short sentence. "
+        f"Include this exact marker verbatim: {token}",
     )
-    code = (await ask_handle1.result()).strip()
-    assert code, "Codename should not be empty"
+    first_answer = (await ask_handle1.result()).strip()
+    assert first_answer, "First answer should not be empty"
 
     h2 = await actor.act("Continue the research.")
-    ask_handle2 = await h2.ask("What codename did you just suggest? ")
-    answer2 = (await ask_handle2.result()).lower()
-    assert code.lower().split(" ")[-1] in answer2
+    ask_handle2 = await h2.ask(
+        "What exact marker did you include earlier? Quote it verbatim.",
+    )
+    answer2 = await ask_handle2.result()
+    assert (
+        isinstance(answer2, str) and answer2.strip()
+    ), "Second answer should be non-empty"
+    assert token in answer2, "LLM should recall the previously mentioned marker"
 
     # Explicitly complete both handles
     h1.trigger_completion()

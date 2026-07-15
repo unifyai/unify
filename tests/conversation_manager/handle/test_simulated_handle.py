@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 import pytest
 import functools
-import re
 from pydantic import BaseModel, Field
 from unify.conversation_manager.simulated import SimulatedConversationManagerHandle
 from tests.helpers import (
     _handle_project,
     _assert_blocks_while_paused,
     DEFAULT_TIMEOUT,
+    _unique_token,
 )
 
 
@@ -76,26 +76,31 @@ async def test_stateful_memory_serial_asks():
     """
     Two consecutive .ask() calls should share the same conversation context
     via the stateful LLM.
+
+    Seed a unique token in the first turn and require the second turn to
+    recall it, rather than asking the model to invent a value.
     """
     cm_handle = SimulatedConversationManagerHandle(
         assistant_id="test_assistant",
         contact_id="test_contact",
     )
 
-    # 1) Ask for a unique favorite color
+    token = _unique_token("MARKER")
     h1 = await cm_handle.ask(
-        "Please tell me your favorite color. Respond with only the color and nothing else.",
+        "Please give a one-sentence status note. "
+        f"Ensure the note includes this exact marker verbatim: {token}",
     )
-    color = await h1.result()
-    color = re.sub(r"\\W+", "", color.strip().lower())
-    assert color, "Color should not be empty"
+    first_answer = (await h1.result()).strip()
+    assert first_answer, "First answer should not be empty"
 
-    # 2) Ask what color was suggested
-    h2 = await cm_handle.ask("Great. What was the favorite color you just mentioned?")
-    answer2 = (await h2.result()).lower()
-    answer2 = re.sub(r"\\W+", "", answer2.strip().lower())
-
-    assert color in answer2, "LLM should recall the previous favorite color"
+    h2 = await cm_handle.ask(
+        "What exact marker did you include earlier? Quote it verbatim.",
+    )
+    answer2 = await h2.result()
+    assert (
+        isinstance(answer2, str) and answer2.strip()
+    ), "Second answer should be non-empty"
+    assert token in answer2, "LLM should recall the previously mentioned marker"
 
 
 # ────────────────────────────────────────────────────────────────────────────
