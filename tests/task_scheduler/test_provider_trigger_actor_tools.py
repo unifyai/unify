@@ -111,6 +111,7 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
     assert contract["details"]["filters"]
 
     connections = scheduler._list_provider_trigger_connections(
+        event_slug="github.issue_created",
         backend_id="composio",
     )
     assert connections["outcome"] == "provider trigger connections listed"

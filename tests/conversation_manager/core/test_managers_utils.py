@@ -196,6 +196,72 @@ async def test_log_message_uses_resolved_self_contact_for_inbound_messages(
 
 
 @pytest.mark.asyncio
+async def test_log_message_unify_meet_expands_receiver_ids_from_roster(
+    monkeypatch,
+):
+    """Unify Meet stamps 1 sender + N receivers when contact_ids are present."""
+    monkeypatch.setattr(managers_utils.SESSION_DETAILS, "self_contact_id", 10)
+    cm = _make_cm_for_log_message()
+    cm.contact_index.get_contact = MagicMock(
+        return_value={"contact_id": 2, "first_name": "Ada", "surname": "Owner"},
+    )
+
+    outbound = OutboundUnifyMeetUtterance(
+        contact={"contact_id": 2, "first_name": "Ada", "surname": "Owner"},
+        content="Hello everyone",
+        participant_contact_ids=[2, 3, 4],
+    )
+    inbound = InboundUnifyMeetUtterance(
+        contact={"contact_id": 2, "first_name": "Ada", "surname": "Owner"},
+        content="Hi back",
+        participant_contact_ids=[2, 3, 4],
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, outbound)
+        await managers_utils.log_message(cm, inbound)
+
+    out_logged = cm.transcript_manager._sim_messages[-2]
+    in_logged = cm.transcript_manager._sim_messages[-1]
+    assert out_logged.sender_id == 10
+    assert out_logged.receiver_ids == [2, 3, 4]
+    assert in_logged.sender_id == 2
+    assert in_logged.receiver_ids == [3, 4, 10]
+
+
+@pytest.mark.asyncio
+async def test_log_message_unify_meet_preserves_one_to_one_without_roster(
+    monkeypatch,
+):
+    """Classic 1:1 Unify Meet keeps single-receiver attribution."""
+    monkeypatch.setattr(managers_utils.SESSION_DETAILS, "self_contact_id", 10)
+    cm = _make_cm_for_log_message()
+    cm.contact_index.get_contact = MagicMock(
+        return_value={"contact_id": 1, "first_name": "Boss", "surname": "User"},
+    )
+
+    event = OutboundUnifyMeetUtterance(
+        contact={"contact_id": 1, "first_name": "Boss", "surname": "User"},
+        content="Just us",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, event)
+
+    logged = cm.transcript_manager._sim_messages[-1]
+    assert logged.sender_id == 10
+    assert logged.receiver_ids == [1]
+
+
+@pytest.mark.asyncio
 async def test_log_message_caches_unify_meet_exchange_id_synchronously():
     """
     Regression test for the exchange_id race condition.

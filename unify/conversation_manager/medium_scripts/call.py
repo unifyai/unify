@@ -1511,6 +1511,18 @@ async def entrypoint(ctx: agents.JobContext):
         if meta
         else os.environ.get("CALL_SESSION_ID", "").strip()
     )
+    unify_meet_roster: list[dict] = []
+    if meta:
+        raw_roster = meta.get("participants") or []
+        if isinstance(raw_roster, list):
+            unify_meet_roster = [p for p in raw_roster if isinstance(p, dict)]
+    else:
+        raw_roster_env = os.environ.get("UNIFY_MEET_PARTICIPANTS", "").strip()
+        if raw_roster_env:
+            loaded = json.loads(raw_roster_env)
+            if isinstance(loaded, list):
+                unify_meet_roster = [p for p in loaded if isinstance(p, dict)]
+    _unify_meet_active_identity: str | None = None
 
     _log.config(
         f"voice_provider={voice_provider} voice_id={voice_id} outbound={outbound} channel={channel} opening_mode={opening_config['mode']}",
@@ -1720,14 +1732,91 @@ async def entrypoint(ctx: agents.JobContext):
             return True
         return engaged_speakers.is_engaged(speaker_tracker.resolve(sid))
 
+    def _user_id_from_livekit_identity(identity: str) -> str | None:
+        """Parse ``user-{userId}-{suffix}`` LiveKit identities from Console tokens."""
+        if not identity.startswith("user-"):
+            return None
+        rest = identity[len("user-") :]
+        if not rest:
+            return None
+        # Suffix is a short random token without hyphens; user ids may contain them.
+        if "-" not in rest:
+            return rest
+        return rest.rsplit("-", 1)[0] or None
+
+    def _roster_member_for_user_id(user_id: str) -> dict | None:
+        for member in unify_meet_roster:
+            if member.get("kind") == "human" and str(
+                member.get("user_id") or "",
+            ) == str(
+                user_id,
+            ):
+                return member
+        return None
+
+    def _contact_from_roster_member(member: dict) -> dict:
+        display = (member.get("display_name") or "").strip()
+        first, _, surname = display.partition(" ")
+        return {
+            "contact_id": member.get("contact_id"),
+            "first_name": first or display,
+            "surname": surname.strip(),
+            "is_system": True,
+        }
+
+    def _merge_unify_meet_roster_from_identity(identity: str) -> None:
+        """Append a human roster entry discovered via LiveKit when missing."""
+        user_id = _user_id_from_livekit_identity(identity)
+        if not user_id or _roster_member_for_user_id(user_id) is not None:
+            return
+        unify_meet_roster.append(
+            {
+                "kind": "human",
+                "user_id": user_id,
+                "assistant_id": None,
+                "display_name": identity,
+                "contact_id": None,
+                "email": None,
+            },
+        )
+
+    def _unify_meet_stamp(
+        *,
+        exclude_contact_id: int | None = None,
+    ) -> tuple[list[str] | None, list[int] | None]:
+        """Names + contact_ids for Unify Meet transcript receiver expansion."""
+        if channel != "unify_meet" or not unify_meet_roster:
+            return None, None
+        names: list[str] = []
+        ids: list[int] = []
+        for member in unify_meet_roster:
+            cid = member.get("contact_id")
+            if cid is not None:
+                cid_int = int(cid)
+                if exclude_contact_id is not None and cid_int == int(
+                    exclude_contact_id,
+                ):
+                    continue
+                ids.append(cid_int)
+            name = (member.get("display_name") or "").strip()
+            if name:
+                names.append(name)
+        # Also surface LiveKit remotes not yet in the wake roster.
+        remotes = getattr(ctx.room, "remote_participants", {}) or {}
+        for participant in remotes.values():
+            identity = getattr(participant, "identity", "") or ""
+            _merge_unify_meet_roster_from_identity(identity)
+        return (names or None), (ids or None)
+
     def _resolve_speaker() -> tuple[dict, str | None, str | None, bool, bool]:
         """Resolve the current speaker.
 
         Returns (contact_dict, display_name, speaker_id, voice_verified,
         engaged). Signals in priority order:
         1. Voice-embedding match against enrolled contact profiles (all channels).
-        2. Diarization speaker_id → DOM correlation mapping (browser meets).
-        3. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
+        2. LiveKit identity → org-call roster (Unify Meet multi-party).
+        3. Diarization speaker_id → DOM correlation mapping (browser meets).
+        4. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
         """
         sid = _meet_last_speaker_id
         engaged = _speaker_is_engaged(sid)
@@ -1745,6 +1834,17 @@ async def entrypoint(ctx: agents.JobContext):
                     # Confidently a different, unenrolled voice: keep the call
                     # contact for routing but surface the anonymous label.
                     return contact, resolution.label, sid, False, engaged
+
+        if channel == "unify_meet" and unify_meet_roster:
+            identity = _unify_meet_active_identity
+            if identity:
+                user_id = _user_id_from_livekit_identity(identity)
+                if user_id:
+                    member = _roster_member_for_user_id(user_id)
+                    if member is not None and member.get("contact_id") is not None:
+                        resolved = _contact_from_roster_member(member)
+                        label = (member.get("display_name") or "").strip() or None
+                        return resolved, label, sid, False, engaged
 
         if channel not in ("google_meet", "teams_meet"):
             return contact, None, sid, False, engaged
@@ -2249,6 +2349,14 @@ async def entrypoint(ctx: agents.JobContext):
                 content=text,
                 participant_names=_get_meet_participant_names() or None,
             )
+        elif channel == "unify_meet":
+            names, cids = _unify_meet_stamp()
+            event = OutboundUnifyMeetUtterance(
+                contact=contact,
+                content=text,
+                participant_names=names,
+                participant_contact_ids=cids,
+            )
         else:
             event = assistant_utterance_event(contact, content=text)
         await event_broker.publish(
@@ -2281,6 +2389,20 @@ async def entrypoint(ctx: agents.JobContext):
                 diarization_speaker_id=sid,
                 voice_verified=False,
                 engaged=False,
+            )
+        elif channel == "unify_meet":
+            names, cids = _unify_meet_stamp(
+                exclude_contact_id=contact.get("contact_id"),
+            )
+            event = InboundUnifyMeetUtterance(
+                contact=contact,
+                content=text,
+                speaker_label=label,
+                diarization_speaker_id=sid,
+                voice_verified=False,
+                engaged=False,
+                participant_names=names,
+                participant_contact_ids=cids,
             )
         else:
             event = user_utterance_event(
@@ -2628,6 +2750,21 @@ async def entrypoint(ctx: agents.JobContext):
                         voice_verified=voice_verified,
                         engaged=speaker_engaged,
                     )
+                elif channel == "unify_meet":
+                    names, cids = _unify_meet_stamp(
+                        exclude_contact_id=resolved_contact.get("contact_id"),
+                    )
+                    event = InboundUnifyMeetUtterance(
+                        contact=resolved_contact,
+                        content=text,
+                        turn_id=turn_id,
+                        speaker_label=speaker_label,
+                        diarization_speaker_id=dia_sid,
+                        voice_verified=voice_verified,
+                        engaged=speaker_engaged,
+                        participant_names=names,
+                        participant_contact_ids=cids,
+                    )
                 else:
                     event = user_utterance_event(
                         resolved_contact,
@@ -2793,6 +2930,7 @@ async def entrypoint(ctx: agents.JobContext):
     def on_status(data: dict) -> None:
         """Handle status events (call_answered, stop, meet_session_id)."""
         nonlocal explicit_stop_requested, meet_session_id, speech_gate_open
+        nonlocal _unify_meet_active_identity
         event_type = data.get("type", "")
         _log.call_status(event_type)
 
@@ -2815,6 +2953,16 @@ async def entrypoint(ctx: agents.JobContext):
                 _log.info("Hang-up gate disarmed")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
+        elif event_type == "unify_meet_roster":
+            incoming = data.get("participants") or []
+            if isinstance(incoming, list):
+                unify_meet_roster.clear()
+                unify_meet_roster.extend(
+                    [p for p in incoming if isinstance(p, dict)],
+                )
+                _log.info(
+                    f"Unify Meet roster refreshed ({len(unify_meet_roster)} members)",
+                )
         elif event_type == "stop":
             explicit_stop_requested = True
             if channel == "unify_meet":
@@ -2824,8 +2972,23 @@ async def entrypoint(ctx: agents.JobContext):
 
     @ctx.room.on("participant_connected")
     def _on_room_participant_connected(participant):
+        identity = getattr(participant, "identity", "") or ""
+        if channel == "unify_meet":
+            _merge_unify_meet_roster_from_identity(identity)
         if joined_gate_required and not outbound:
             _mark_user_joined("participant_connected")
+
+    @ctx.room.on("active_speakers_changed")
+    def _on_active_speakers_changed(speakers):
+        nonlocal _unify_meet_active_identity
+        if channel != "unify_meet":
+            return
+        for speaker in speakers or []:
+            identity = getattr(speaker, "identity", "") or ""
+            if identity.startswith("user-"):
+                _unify_meet_active_identity = identity
+                _merge_unify_meet_roster_from_identity(identity)
+                return
 
     def _is_pipeline_quiescent() -> bool:
         """True when the voice pipeline is completely idle (no speech in flight)."""
@@ -3843,22 +4006,31 @@ if __name__ == "__main__":
         ],
     )
 
+    # Org multi-party rooms share one LiveKit room; each subprocess must
+    # register a distinct agent_name (never the shared org room name).
+    call_session_id = os.environ.get("CALL_SESSION_ID", "").strip()
+    agent_name = room_name
+    if call_session_id:
+        aid = SESSION_DETAILS.assistant.agent_id
+        agent_name = f"unity_{aid}" if aid else f"unity_meet_{os.getpid()}"
+
     if should_dispatch_livekit_agent():
-        _log.dispatch(f"Dispatching LiveKit agent {room_name}")
+        _log.dispatch(f"Dispatching LiveKit agent {agent_name} into room {room_name}")
         dispatch_livekit_agent(
             room_name,
             record=True,
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             user_id=SESSION_DETAILS.user.id,
+            agent_name=agent_name,
         )
-        _log.dispatch(f"LiveKit agent {room_name} dispatched")
+        _log.dispatch(f"LiveKit agent {agent_name} dispatched")
 
     # Run the agent using the standard CLI - this is the natural way to run LiveKit agents.
     # The process will be terminated via SIGTERM when cleanup_call_proc() is called.
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name=room_name,
+            agent_name=agent_name,
             prewarm_fnc=prewarm,
             initialize_process_timeout=60,
         ),
