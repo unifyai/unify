@@ -61,6 +61,31 @@ async def _wait_for_tool_request(
     await _wait_for_condition(_predicate, poll=poll, timeout=timeout)
 
 
+def _is_bare_pending_tool_placeholder(msg: dict) -> bool:
+    """True for the early ``{"_placeholder": "pending"}`` insert only.
+
+    Progress / nested-start placeholders (which also carry ``_placeholder``)
+    are *not* bare-pending: tests often sync on those intermediate contents
+    (e.g. labeled ``h0`` sentinels or partial payload fields).
+    """
+    if msg.get("role") != "tool":
+        return False
+    content = msg.get("content")
+    if not isinstance(content, str):
+        return False
+    try:
+        import json as _json
+
+        parsed = _json.loads(content)
+    except Exception:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("_placeholder") != "pending":
+        return False
+    return all(k == "_placeholder" or str(k).startswith("meta:") for k in parsed)
+
+
 async def _wait_for_tool_result(
     client: "unillm.AsyncUnify",
     tool_name: str | None = None,
@@ -74,6 +99,9 @@ async def _wait_for_tool_result(
     If *tool_name* is given, only results **whose ``name`` matches exactly**
     are counted.  This mirrors the behaviour required by several tests that
     must synchronise with a tool finishing before proceeding.
+
+    Bare ``pending`` placeholders written at schedule time are ignored so
+    callers do not race ahead of nested-handle adoption / progress rewrites.
     """
 
     async def _predicate():
@@ -83,6 +111,7 @@ async def _wait_for_tool_result(
             for m in msgs
             if m.get("role") == "tool"
             and (tool_name is None or m.get("name") == tool_name)
+            and not _is_bare_pending_tool_placeholder(m)
         )
         return n_seen >= min_results
 

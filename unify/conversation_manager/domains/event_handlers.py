@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 
 _AGENT_SERVICE_PID_FILE = Path("/tmp/agent-service.pid")
 _AGENT_SERVICE_LOG = Path("/var/log/unity/agent-service.log")
+# Upper bound on how long a restart waits for the respawned Node process to bind
+# port 3000 before returning. Closes the race where a meet-join POST arrives in
+# the cold-start window and is refused. Runs in a worker thread, so a blocking
+# poll is fine.
+_AGENT_SERVICE_READY_TIMEOUT_S = 30.0
 _CALL_NOT_ANSWERED_REASON_DISPLAY = {
     "no-answer": "did not answer",
     "busy": "was busy",
@@ -206,6 +211,31 @@ def _restart_agent_service_with_key(api_key: str) -> None:
         LOGGER.info(
             f"[agent-service-restart] Restarted agent-service (PID: {proc.pid})",
         )
+
+        # 5. Block until the respawned process is actually listening on 3000
+        # (LISTEN state) before returning, so a meet-join POST that fires right
+        # after this restart doesn't hit a dead socket. Bounded so a wedged
+        # start surfaces rather than hanging.
+        deadline = time.monotonic() + _AGENT_SERVICE_READY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if _find_pid_on_port(3000) is not None:
+                LOGGER.info(
+                    "[agent-service-restart] agent-service listening on 3000 "
+                    f"(PID: {proc.pid})",
+                )
+                break
+            if proc.poll() is not None:
+                LOGGER.warning(
+                    "[agent-service-restart] agent-service exited during startup "
+                    f"(code {proc.returncode})",
+                )
+                break
+            time.sleep(0.2)
+        else:
+            LOGGER.warning(
+                "[agent-service-restart] agent-service not listening on 3000 "
+                f"within {_AGENT_SERVICE_READY_TIMEOUT_S:.0f}s",
+            )
     except Exception as e:
         LOGGER.info(f"[agent-service-restart] Failed (non-fatal): {e}")
 
@@ -268,30 +298,49 @@ def _call_not_answered_reason_text(reason: str) -> str:
     )
 
 
-def _meet_join_failure_notif(
+def _meet_join_failure_texts(
     meet_label: str,
     join_tool: str,
     reason: str | None,
-) -> str:
-    """Build the notification text shown when a browser-meet join fails.
+) -> tuple[str, str]:
+    """Build (user_text, llm_text) for a failed browser-meet join.
+
+    ``user_text`` is a first-person, user-facing chat message (no tool names),
+    sent so the person who shared the link isn't left in silence after the
+    "joining now" ack and can ask for a retry. ``llm_text`` carries the
+    machine detail (failure reason + the exact retry tool) into the transcript
+    the brain reads, so it can retry with the right tool.
 
     When the agent-service reports a guest-admission block (``*_join_blocked``),
-    the host was almost certainly not present in the meeting to admit the guest,
-    so tell the user exactly that and what to do instead of a bare retry line.
+    the host was almost certainly not present to admit the guest, so say exactly
+    that and what to do instead of a bare retry line.
     """
 
     reason_text = (reason or "").strip()
     if "join_blocked" in reason_text:
-        return (
+        user_text = (
+            f"Couldn't get into the {meet_label} — the host wasn't in the "
+            "meeting to let me in, so I was turned away at the door. Start the "
+            "meeting and stay in it, then re-share the link and I'll rejoin."
+        )
+        llm_text = (
             f"Couldn't join the {meet_label}: the host wasn't in the meeting to "
             "let me in, so it turned me away at the door. Ask the user to start "
             "the meeting and stay in it, then re-share the link and I'll rejoin "
             f"with {join_tool}."
         )
-    retry = f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+        return user_text, llm_text
+
+    user_text = (
+        f"I couldn't get into the {meet_label}. Re-share the link and I'll try "
+        "again."
+    )
+    llm_text = (
+        f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+    )
     if reason_text:
-        return f"{retry} (reason: {reason_text})"
-    return retry
+        llm_text = f"{llm_text} (reason: {reason_text})"
+    return user_text, llm_text
 
 
 class EventHandler:
@@ -567,13 +616,33 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         )
 
 
+def _meet_join_ack(meet_label: str) -> str:
+    """User-facing acknowledgement sent the moment a browser-meet join starts.
+
+    The browser join is slow (headless Chromium cold start + LLM-guided
+    click-through of the pre-join screen, then a possible wait in the lobby),
+    and the success/lobby message only lands once all of that completes.
+    Without an immediate ack the user who just shared the link is left staring
+    at nothing, unsure anything is happening. The handler owns this message and
+    sends it deterministically for every assistant (general or coordinator), so
+    the LLM must not announce the join itself — that split ownership produced a
+    duplicate "joining" reply for general assistants and none for coordinators.
+    """
+    return (
+        f"Getting into the {meet_label} now — give me a moment, joining can "
+        "take a little while."
+    )
+
+
 def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
     """Notification + transcript text for a successful browser-meet join.
 
     A join that lands in the waiting room is still a success — the browser has
     knocked ("Ask to join") and is waiting for the host to admit it — so word
     it as waiting to be let in rather than already being in the call. This
-    keeps the LLM from treating a lobby state as a join failure.
+    keeps the LLM from treating a lobby state as a join failure. The "joining"
+    ack has already been sent when the attempt started, so the non-lobby case
+    reports arrival ("I'm in") rather than repeating "joining".
     """
     if in_lobby:
         notif = (
@@ -581,7 +650,7 @@ def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
             "waiting for the host to let me in."
         )
         return notif, f"<Waiting in the {meet_label} waiting room to be admitted...>"
-    return f"Joining {meet_label}...", f"<Joining {meet_label}...>"
+    return f"I'm in the {meet_label} now.", f"<Joined the {meet_label}.>"
 
 
 @EventHandler.register(GoogleMeetReceived)
@@ -611,6 +680,24 @@ async def _(
     contact_id = contact.get("contact_id") if contact else boss_contact_id
     sender_name = _get_sender_name(contact)
 
+    # Acknowledge immediately, before the slow join: the browser cold-start +
+    # click-through can take a minute, and the success/lobby message only fires
+    # once that completes. The handler sends this deterministically (not the
+    # LLM) so every assistant acknowledges exactly once — see _meet_join_ack.
+    from unify.conversation_manager.domains import comms_utils
+
+    ack_msg = _meet_join_ack("Google Meet")
+    await comms_utils.send_unify_message(content=ack_msg, contact_id=contact_id)
+    cm.notifications_bar.push_notif("Comms", ack_msg, event.timestamp)
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=Medium.GOOGLE_MEET,
+        message_content=ack_msg,
+        role="assistant",
+        timestamp=event.timestamp,
+    )
+
     joined = await cm.call_manager.start_google_meet(
         meet_url=event.meet_url,
         contact=contact,
@@ -621,6 +708,10 @@ async def _(
         notif_text, thread_text = _meet_join_notif(
             "Google Meet",
             cm.call_manager.meet_lobby_waiting,
+        )
+        await comms_utils.send_unify_message(
+            content=notif_text,
+            contact_id=contact_id,
         )
         cm.notifications_bar.push_notif(
             "Comms",
@@ -656,14 +747,26 @@ async def _(
             sender_name=sender_name,
             timestamp=event.timestamp,
         )
-        cm.notifications_bar.push_notif(
-            "Comms",
-            _meet_join_failure_notif(
-                "Google Meet",
-                "join_google_meet",
-                cm.call_manager.meet_join_failure_reason,
-            ),
-            event.timestamp,
+        # Surface the failure as a real outbound chat (not just the internal
+        # notifications bar) so the user sees it after the "Joining now…" ack
+        # and can request a retry — mirrors the ack/success paths above.
+        user_text, llm_text = _meet_join_failure_texts(
+            "Google Meet",
+            "join_google_meet",
+            cm.call_manager.meet_join_failure_reason,
+        )
+        await comms_utils.send_unify_message(
+            content=user_text,
+            contact_id=contact_id,
+        )
+        cm.notifications_bar.push_notif("Comms", user_text, event.timestamp)
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=Medium.GOOGLE_MEET,
+            message_content=llm_text,
+            role="assistant",
+            timestamp=event.timestamp,
         )
         await cm.request_llm_run(
             delay=0,
@@ -698,6 +801,21 @@ async def _(
     contact_id = contact.get("contact_id") if contact else boss_contact_id
     sender_name = _get_sender_name(contact)
 
+    # Acknowledge immediately, before the slow join (see Google Meet handler).
+    from unify.conversation_manager.domains import comms_utils
+
+    ack_msg = _meet_join_ack("Teams meeting")
+    await comms_utils.send_unify_message(content=ack_msg, contact_id=contact_id)
+    cm.notifications_bar.push_notif("Comms", ack_msg, event.timestamp)
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=Medium.TEAMS_MEET,
+        message_content=ack_msg,
+        role="assistant",
+        timestamp=event.timestamp,
+    )
+
     joined = await cm.call_manager.start_teams_meet(
         meet_url=event.meet_url,
         contact=contact,
@@ -708,6 +826,10 @@ async def _(
         notif_text, thread_text = _meet_join_notif(
             "Teams meeting",
             cm.call_manager.meet_lobby_waiting,
+        )
+        await comms_utils.send_unify_message(
+            content=notif_text,
+            contact_id=contact_id,
         )
         cm.notifications_bar.push_notif(
             "Comms",
@@ -743,14 +865,26 @@ async def _(
             sender_name=sender_name,
             timestamp=event.timestamp,
         )
-        cm.notifications_bar.push_notif(
-            "Comms",
-            _meet_join_failure_notif(
-                "Teams meeting",
-                "join_teams_meet",
-                cm.call_manager.meet_join_failure_reason,
-            ),
-            event.timestamp,
+        # Surface the failure as a real outbound chat (not just the internal
+        # notifications bar) so the user sees it after the "Joining now…" ack
+        # and can request a retry — mirrors the ack/success paths above.
+        user_text, llm_text = _meet_join_failure_texts(
+            "Teams meeting",
+            "join_teams_meet",
+            cm.call_manager.meet_join_failure_reason,
+        )
+        await comms_utils.send_unify_message(
+            content=user_text,
+            contact_id=contact_id,
+        )
+        cm.notifications_bar.push_notif("Comms", user_text, event.timestamp)
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=Medium.TEAMS_MEET,
+            message_content=llm_text,
+            role="assistant",
+            timestamp=event.timestamp,
         )
         await cm.request_llm_run(
             delay=0,

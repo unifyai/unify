@@ -57,15 +57,15 @@ def register_sandbox_spawned_handle(handle: Any) -> None:
         bucket.append(handle)
 
 
-def _collect_handles(obj: Any) -> set[Any]:
+def _collect_handles(obj: Any) -> list[Any]:
     """Collect ``SteerableToolHandle`` instances reachable from *obj*."""
     from unify.common.async_tool_loop import SteerableToolHandle
 
-    found: set[Any] = set()
+    found: list[Any] = []
 
     def _walk(node: Any) -> None:
         if isinstance(node, SteerableToolHandle):
-            found.add(node)
+            found.append(node)
             return
         if isinstance(node, dict):
             for v in node.values():
@@ -93,12 +93,17 @@ async def _await_orphan_sandbox_handles(
     spawned: list[Any],
     result: Any,
 ) -> None:
-    """Await steerable handles spawned in-sandbox that were not returned."""
+    """Await steerable handles spawned in-sandbox that were not returned.
+
+    Membership is by object identity: spawned handles need not be hashable
+    (logging wrappers and test doubles often are not), and ``in`` on a set
+    would raise ``TypeError`` for those.
+    """
     if not spawned:
         return
-    returned = _collect_handles(result)
+    returned_ids = {id(h) for h in _collect_handles(result)}
     for handle in spawned:
-        if handle in returned:
+        if id(handle) in returned_ids:
             continue
         try:
             done = handle.done()

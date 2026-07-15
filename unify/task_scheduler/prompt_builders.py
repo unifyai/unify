@@ -117,6 +117,11 @@ def build_ask_prompt(
     reduce_fname = tool_name(tools, "reduce")
     contact_ask_fname = tool_name(tools, "contactmanager")
     request_clar_fname = tool_name(tools, "request_clarification")
+    catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
+    connections_fname = tool_name(tools, "list_provider_trigger_connections")
+    resources_fname = tool_name(tools, "describe_provider_trigger_resources")
+    health_fname = tool_name(tools, "get_provider_trigger_health")
+    context_fname = tool_name(tools, "get_provider_event_context")
 
     require_tools(
         {
@@ -178,6 +183,39 @@ def build_ask_prompt(
         f"  2 Use `{contact_ask_fname}` to identify the matching contact record(s) and read their response_policy/preferences.",
         "  3 Answer using the contact's preferences; if no matching contact exists, state that explicitly and provide a sensible default.",
     ]
+
+    if catalog_fname:
+        # TODO: Purge/Replace — drive discovery examples from the live catalog
+        # instead of hardcoding github.issue_created and Composio.
+        usage_lines.extend(
+            [
+                "",
+                "Provider-event triggers (read-only)",
+                "---------------------------------",
+                f"List supported third-party events: `{catalog_fname}()`.",
+                (
+                    f"List eligible GitHub connections: `{connections_fname}(backend_id='composio')`."
+                    if connections_fname
+                    else ""
+                ),
+                (
+                    f"Describe repository/filter contract: `{resources_fname}(event_slug='github.issue_created')`."
+                    if resources_fname
+                    else ""
+                ),
+                (
+                    f"Inspect runtime health/coverage: `{health_fname}(task_id=<id>)`."
+                    if health_fname
+                    else ""
+                ),
+                (
+                    f"Inspect run event context: `{context_fname}(task_id=<id>, run_id=<run_id>)`."
+                    if context_fname
+                    else ""
+                ),
+                "Request full source_body only when the user explicitly asks to inspect raw event data.",
+            ],
+        )
 
     if not clarification_block:
         usage_lines.extend(
@@ -254,6 +292,16 @@ def build_update_prompt(
     update_task_fname = tool_name(tools, "update_task")
     contact_ask_fname = tool_name(tools, "contactmanager")
     request_clar_fname = tool_name(tools, "request_clarification")
+    pause_trigger_fname = tool_name(tools, "pause_provider_trigger")
+    resume_trigger_fname = tool_name(tools, "resume_provider_trigger")
+    retry_trigger_fname = tool_name(tools, "retry_provider_trigger")
+    export_context_fname = tool_name(tools, "export_provider_event_context")
+    delete_context_fname = tool_name(tools, "delete_provider_event_context")
+    catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
+    connections_fname = tool_name(tools, "list_provider_trigger_connections")
+    resources_fname = tool_name(tools, "describe_provider_trigger_resources")
+    health_fname = tool_name(tools, "get_provider_trigger_health")
+    context_fname = tool_name(tools, "get_provider_event_context")
 
     require_tools(
         {
@@ -346,8 +394,9 @@ def build_update_prompt(
             "",
             "Enabled flag",
             "------------",
-            "Tasks default to `enabled=True`. Set `enabled=False` to pause automatic firing without deleting the task: scheduled start times and trigger criteria will not activate it, and manual execute is rejected until it is re-enabled.",
+            "Tasks default to `enabled=True`. Set `enabled=False` to disable all automatic and manual execution for the task.",
             f"Disable: `{update_task_fname}(task_id=<id>, enabled=False)`. Re-enable: `{update_task_fname}(task_id=<id>, enabled=True)`.",
+            "For provider-event tasks, use `pause_provider_trigger` / `resume_provider_trigger` to pause only provider automation while keeping manual run available.",
             "",
             "Realistic find-then-update flows",
             "--------------------------------",
@@ -362,6 +411,57 @@ def build_update_prompt(
             "----------------------",
             f"A task with a `trigger` must be in state 'triggerable'. Use `{update_task_fname}(task_id=<id>, trigger=...)` to add/remove triggers. Do not set `start_at` on trigger-based tasks.",
             "`schedule` and `trigger` are mutually exclusive. Use `repeat` with `schedule` for cadence-based tasks; use `trigger` for inbound-event tasks.",
+            "",
+            "Provider-event triggers",
+            "-----------------------",
+            # TODO: Purge/Replace — replace pinned github.issue_created / composio
+            # examples once prompt guidance is catalog-driven.
+            "Use provider-event triggers for third-party SaaS events such as GitHub issue creation.",
+            "Before creating one, list the catalog, eligible connections, and resource/filter contract.",
+            (
+                f"Use `{ask_fname}` for discovery tools such as the trigger catalog, "
+                f"eligible connections, and resource contract before creating the task."
+                if ask_fname
+                else "Use the provider-trigger discovery tools before creating a provider-event task."
+            ),
+            (
+                f"Create with `{create_task_fname}(..., status='triggerable', trigger={{"
+                "'kind': 'provider_event', 'state': 'enabled', 'connection_id': <exact id>, "
+                "'backend_id': 'composio', 'canonical_app_slug': 'github', "
+                "'event_slug': 'github.issue_created', 'schema_version': '1', "
+                "'filters': [...]}})`."
+                if create_task_fname
+                else ""
+            ),
+            "Filters combine with AND only. Pin the exact authorized connection and repository filter.",
+            "Do not use communication-trigger shape (`medium`, `from_contact_ids`) for provider events.",
+            (
+                f"Pause automation only: `{pause_trigger_fname}(task_id=<id>, task_revision=<rev>)`. "
+                f"Resume: `{resume_trigger_fname}(task_id=<id>, task_revision=<rev>)`."
+                if pause_trigger_fname and resume_trigger_fname
+                else ""
+            ),
+            "Provider-trigger pause is separate from `enabled=False`. `enabled=False` blocks all execution, including manual run.",
+            "A paused provider trigger with `enabled=True` remains manually runnable through task execute.",
+            (
+                f"Provisioning recovery: `{retry_trigger_fname}(task_id=<id>)`."
+                if retry_trigger_fname
+                else ""
+            ),
+            (
+                f"Inspect health/coverage: `{health_fname}(task_id=<id>)`. "
+                "Report Active only when composed_state is `active`."
+                if health_fname
+                else ""
+            ),
+            "Authored edits, pause, resume, and delete require the current `task_revision` from a fresh read.",
+            "If a tool returns `task_revision_conflict`, re-read the task and ask the user how to reconcile; do not blindly retry.",
+            "Different-account recovery requires explicit resource/filter review before re-enabling.",
+            (
+                f"Event context inspect/export/delete: `{context_fname}`, `{export_context_fname}`, `{delete_context_fname}`."
+                if context_fname and export_context_fname and delete_context_fname
+                else ""
+            ),
             "",
             "Contact context",
             "---------------",

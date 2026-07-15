@@ -123,9 +123,6 @@ class BaseContactManager(BaseStateManager, metaclass=SingletonABCMeta):
         • Do NOT use ``ask`` to ask the human for details about new contacts being
           created/changed in this update request; call ``request_clarification``
           when a clarification channel is available.
-        • When several existing contacts match and a human must choose which one
-          to mutate, call ``request_clarification`` after at most one ``ask`` that
-          lists the candidates — do not repeat the same ``ask``.
         • When no clarification tool exists, proceed with sensible defaults or
           best‑guess values and state those assumptions in the final reply.
 
