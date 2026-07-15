@@ -23,6 +23,8 @@ from unify.task_scheduler.types.task_row_field import (
     split_provider_event_task_update,
 )
 from unify.task_scheduler.typed_tasks_client import format_task_etag
+from unify.task_scheduler import typed_tasks_client
+from unify.session_details import SESSION_DETAILS
 
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "task_trigger_contract"
@@ -218,3 +220,54 @@ def test_task_scheduler_has_provider_event_helper() -> None:
     scheduler = TaskScheduler()
     task = _provider_event_task(task_revision=3)
     assert scheduler._task_has_provider_event_trigger(task) is True
+
+
+@pytest.fixture
+def _orchestra_assistant_scheduler():
+    suffix = uuid.uuid4().hex[:8]
+    assistant = unisdk.create_assistant(
+        first_name=f"RevisionCAS{suffix}",
+        surname="Actor",
+        config={"create_infra": False},
+    )
+    agent_id = int(assistant["agent_id"])
+    original_agent_id = SESSION_DETAILS.assistant.agent_id
+    SESSION_DETAILS.assistant.agent_id = agent_id
+    scheduler = TaskScheduler()
+    try:
+        yield scheduler, agent_id
+    finally:
+        SESSION_DETAILS.assistant.agent_id = original_agent_id
+
+
+def _mirror_orchestra_task_row(
+    scheduler: TaskScheduler,
+    *,
+    orchestra_task: dict,
+) -> int:
+    scheduler._sync_provider_event_task_row(typed_response=orchestra_task)
+    return int(orchestra_task["task_id"])
+
+
+@pytest.mark.requires_orchestra
+def test_pause_provider_trigger_returns_revision_conflict_outcome(
+    _orchestra_assistant_scheduler,
+) -> None:
+    scheduler, _agent_id = _orchestra_assistant_scheduler
+    created = typed_tasks_client.create_task(
+        payload={
+            "name": "GitHub issue triage",
+            "description": "Triage new GitHub issues.",
+            "status": "triggerable",
+            "trigger": _provider_event_trigger(),
+            "enabled": True,
+            "offline": False,
+            "priority": "normal",
+        },
+    )
+    task_id = _mirror_orchestra_task_row(scheduler, orchestra_task=created)
+    conflict = scheduler._pause_provider_trigger(
+        task_id=task_id,
+        task_revision=0,
+    )
+    assert conflict["outcome"] == "task_revision_conflict"

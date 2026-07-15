@@ -77,6 +77,23 @@ async def _authenticate_user_api_key(api_key: str) -> dict:
     return response.json()
 
 
+def _ensure_non_system_message(messages: list) -> None:
+    """Guarantee at least one non-system message in the payload.
+
+    Anthropic rejects any request whose message list contains only
+    system messages with ``BadRequestError: Anthropic requires at least
+    one non-system message``. Browser-automation clients (Magnus/BAML)
+    can render a system-only chat on their first planning call, before
+    any observation exists, which deterministically fails and exhausts
+    the client's retry budget. Appending a neutral continuation turn
+    makes the request valid without altering intent, and is a no-op for
+    the common case where a user/assistant/tool message is already
+    present. Mutates ``messages`` in place.
+    """
+    if not any(msg.get("role") != "system" for msg in messages):
+        messages.append({"role": "user", "content": "Please continue."})
+
+
 # ---------------------------------------------------------------------------
 # POST /chat/completions
 # ---------------------------------------------------------------------------
@@ -101,6 +118,7 @@ async def chat_completions(
     await _authenticate_user_api_key(api_key)
 
     messages = [msg.model_dump(exclude_none=True) for msg in request_body.messages]
+    _ensure_non_system_message(messages)
 
     if request_body.stream:
         return await _stream_response(request_body, messages, api_key)
