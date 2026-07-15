@@ -60,7 +60,7 @@ _BASE_FORWARD_CHANNELS = [
     "app:comms:*",
 ]
 
-DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
+DISPATCH_ACTIVATION_TIMEOUT_S = 120.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
 # before starting an assistant-initiated outbound call. Prewarm normally
 # completes in well under this; the cap exists so a wedged worker surfaces as a
@@ -80,7 +80,7 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 # minutes is a deliberate special case for these browser meets (ordinary comms
 # requests use much tighter timeouts) so a legitimately slow join is given room
 # to reach the lobby rather than being cut off mid-join.
-MEET_JOIN_HTTP_TIMEOUT_S = 360.0
+MEET_JOIN_HTTP_TIMEOUT_S = 300.0
 
 # Before issuing the browser-meet ``/join`` request, wait for the pod-local
 # agent-service to be accepting connections. The CM spawns / restarts that Node
