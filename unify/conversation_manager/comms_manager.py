@@ -2122,11 +2122,38 @@ class CommsManager:
                 )
 
                 if thread == "unify_meet":
+                    participants = event.get("participants") or []
+                    primary = None
+                    for member in participants:
+                        if (
+                            isinstance(member, dict)
+                            and member.get("kind") == "human"
+                            and member.get("contact_id") is not None
+                        ):
+                            cid = int(member["contact_id"])
+                            primary = next(
+                                (c for c in contacts if c.get("contact_id") == cid),
+                                None,
+                            )
+                            if primary is None:
+                                primary = {
+                                    "contact_id": cid,
+                                    "first_name": member.get("display_name") or "",
+                                    "surname": "",
+                                    "is_system": True,
+                                }
+                            break
+                    if primary is None:
+                        primary = next(
+                            (c for c in contacts if c.get("contact_id") == 1),
+                            contacts[0] if contacts else {"contact_id": 1},
+                        )
                     call_event = UnifyMeetReceived(
-                        contact=next(c for c in contacts if c["contact_id"] == 1),
+                        contact=primary,
                         room_name=event.get("livekit_room"),
                         opening_config=event.get("opening_config"),
                         call_session_id=event.get("call_session_id"),
+                        participants=participants if participants else None,
                     )
                     event_topic = "app:comms:unify_meet_received"
                 elif thread == "whatsapp_call":

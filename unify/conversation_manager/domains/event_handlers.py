@@ -447,8 +447,18 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     # Don't start a new call if we're already in voice mode. Unify Meet is the
     # exception: the browser can remain in the room while an assistant job drops,
     # so a fresh UnifyMeetReceived is allowed to redispatch the agent when the
-    # previous job has already been cleaned up.
+    # previous job has already been cleaned up. Mid-call roster refreshes
+    # (late human join / peer assistant add) update attribution without
+    # restarting the voice job.
     if cm.mode.is_voice:
+        if (
+            isinstance(event, UnifyMeetReceived)
+            and cm.mode == Mode.MEET
+            and cm.call_manager.has_active_call
+            and event.participants
+        ):
+            await cm.call_manager.refresh_unify_meet_roster(event.participants)
+            return
         if not (
             isinstance(event, UnifyMeetReceived)
             and cm.mode == Mode.MEET
@@ -463,7 +473,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         else None
     )
     if isinstance(event, UnifyMeetReceived):
-        contact = boss
+        contact = event.contact or boss
     elif isinstance(event, (WhatsAppCallReceived, WhatsAppCallSent)):
         contact = cm.contact_index.get_contact(
             whatsapp_number=event.contact.get("whatsapp_number"),
@@ -566,11 +576,12 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             # The owner answered; cancel any pending no-answer text fallback.
             cm._pending_meet_ring = None
             await cm.call_manager.start_unify_meet(
-                contact,
+                e.contact or contact,
                 boss,
                 e.room_name,
                 opening_config=e.opening_config,
                 call_session_id=e.call_session_id,
+                participants=e.participants,
             )
             message_content = "<Recieving Call...>"
             notif_content = f"Call received from {sender_name}"
