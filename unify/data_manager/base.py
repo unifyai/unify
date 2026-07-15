@@ -2123,6 +2123,7 @@ class BaseDataManager(BaseStateManager):
         rows: List[Dict[str, Any]],
         *,
         batched: bool = True,
+        on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
         """
@@ -2137,7 +2138,7 @@ class BaseDataManager(BaseStateManager):
         Uniqueness semantics are handled at the **schema level**
         through ``unique_keys`` (set via :meth:`create_table` or
         :meth:`ingest`).  The backend enforces constraints server-side by
-        rejecting duplicate key rows.
+        rejecting duplicate key rows unless ``on_duplicate="skip"``.
 
         Parameters
         ----------
@@ -2155,6 +2156,14 @@ class BaseDataManager(BaseStateManager):
             performance. Set to ``False`` only for special cases requiring
             sequential insertion.
 
+        on_duplicate : str | None, default ``None``
+            Orchestra collision policy for unique-key / unique-field rows.
+            ``"skip"`` inserts non-conflicting rows in one batched call and
+            returns only the successful log ids (prefer this over
+            download-or-per-row retry loops). ``"error"`` / ``None`` keep
+            Orchestra's reject-on-collision default. Only applied when
+            ``batched=True``.
+
         destination : str | None, default ``None``
             Where Data-owned rows should be stored. Pass ``"personal"`` (the
             default) for working datasets, scratch tables, and data tied only
@@ -2166,7 +2175,8 @@ class BaseDataManager(BaseStateManager):
         Returns
         -------
         list[int]
-            Log IDs of inserted rows.
+            Log IDs of inserted rows (successful inserts only when
+            ``on_duplicate="skip"``).
 
         Usage Examples
         --------------
@@ -2186,10 +2196,20 @@ class BaseDataManager(BaseStateManager):
         dm.create_table("Data/products", unique_keys={"sku": "str"})
         dm.insert_rows("Data/products", [{"sku": "ABC", "price": 29.99}])
 
+        # Idempotent bulk plant when some keys may already exist:
+        dm.insert_rows(
+            "Data/products",
+            [{"sku": "ABC", "price": 29.99}, {"sku": "DEF", "price": 19.99}],
+            on_duplicate="skip",
+        )
+
         Anti-patterns
         -------------
         - WRONG: Inserting one row at a time in a loop
           CORRECT: Batch rows into a single insert_rows call
+
+        - WRONG: Catching unique-key failures then retrying each row
+          CORRECT: ``on_duplicate="skip"`` on the batched insert
 
         Notes
         -----
