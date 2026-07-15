@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
 
 from unify.task_scheduler.prompt_builders import (
+    build_ask_prompt,
     build_task_execution_request,
     build_task_run_guidelines,
+    build_update_prompt,
 )
+from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
@@ -103,3 +106,29 @@ def test_build_task_run_guidelines_keep_child_actor_focused_on_one_task():
     assert "Activation reason: trigger" in guidelines
     assert "Task id: 3" in guidelines
     assert "Instance id: 1" in guidelines
+
+
+def test_build_update_prompt_includes_provider_event_guidance() -> None:
+    scheduler = TaskScheduler()
+    prompt = build_update_prompt(
+        scheduler.get_tools("update"),
+        num_tasks=0,
+        columns=[],
+        include_activity=False,
+    ).flatten()
+    assert "Provider-event triggers" in prompt
+    assert "task_revision_conflict" in prompt
+    assert "pause_provider_trigger" in prompt
+
+
+def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
+    scheduler = TaskScheduler()
+    prompt = build_ask_prompt(
+        scheduler.get_tools("ask"),
+        num_tasks=0,
+        columns=[],
+        include_activity=False,
+    ).flatten()
+    assert "Provider-event triggers (read-only)" in prompt
+    assert "list_provider_trigger_catalog" in prompt
+    assert "get_provider_trigger_health" in prompt
