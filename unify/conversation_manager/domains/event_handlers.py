@@ -597,21 +597,22 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         )
 
 
-def _meet_join_ack(meet_label: str) -> tuple[str, str]:
-    """Proactive acknowledgement pushed the moment a browser-meet join starts.
+def _meet_join_ack(meet_label: str) -> str:
+    """User-facing acknowledgement sent the moment a browser-meet join starts.
 
     The browser join is slow (headless Chromium cold start + LLM-guided
     click-through of the pre-join screen, then a possible wait in the lobby),
-    and the success/lobby notification only lands once all of that completes.
+    and the success/lobby message only lands once all of that completes.
     Without an immediate ack the user who just shared the link is left staring
-    at nothing, unsure anything is happening. This tells them the assistant is
-    on its way in so they are not left in a confused state.
+    at nothing, unsure anything is happening. The handler owns this message and
+    sends it deterministically for every assistant (general or coordinator), so
+    the LLM must not announce the join itself — that split ownership produced a
+    duplicate "joining" reply for general assistants and none for coordinators.
     """
-    notif = (
+    return (
         f"Getting into the {meet_label} now — give me a moment, joining can "
         "take a little while."
     )
-    return notif, f"<Joining the {meet_label} now...>"
 
 
 def _meet_join_notif(meet_label: str, in_lobby: bool) -> tuple[str, str]:
@@ -661,16 +662,19 @@ async def _(
     sender_name = _get_sender_name(contact)
 
     # Acknowledge immediately, before the slow join: the browser cold-start +
-    # click-through can take a minute, and the success/lobby notif only fires
-    # once that completes. Tell the user the assistant is on its way in so they
-    # are not left wondering whether anything is happening.
-    ack_notif, ack_thread = _meet_join_ack("Google Meet")
-    cm.notifications_bar.push_notif("Comms", ack_notif, event.timestamp)
+    # click-through can take a minute, and the success/lobby message only fires
+    # once that completes. The handler sends this deterministically (not the
+    # LLM) so every assistant acknowledges exactly once — see _meet_join_ack.
+    from unify.conversation_manager.domains import comms_utils
+
+    ack_msg = _meet_join_ack("Google Meet")
+    await comms_utils.send_unify_message(content=ack_msg, contact_id=contact_id)
+    cm.notifications_bar.push_notif("Comms", ack_msg, event.timestamp)
     cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=Medium.GOOGLE_MEET,
-        message_content=ack_thread,
+        message_content=ack_msg,
         role="assistant",
         timestamp=event.timestamp,
     )
@@ -685,6 +689,10 @@ async def _(
         notif_text, thread_text = _meet_join_notif(
             "Google Meet",
             cm.call_manager.meet_lobby_waiting,
+        )
+        await comms_utils.send_unify_message(
+            content=notif_text,
+            contact_id=contact_id,
         )
         cm.notifications_bar.push_notif(
             "Comms",
@@ -763,13 +771,16 @@ async def _(
     sender_name = _get_sender_name(contact)
 
     # Acknowledge immediately, before the slow join (see Google Meet handler).
-    ack_notif, ack_thread = _meet_join_ack("Teams meeting")
-    cm.notifications_bar.push_notif("Comms", ack_notif, event.timestamp)
+    from unify.conversation_manager.domains import comms_utils
+
+    ack_msg = _meet_join_ack("Teams meeting")
+    await comms_utils.send_unify_message(content=ack_msg, contact_id=contact_id)
+    cm.notifications_bar.push_notif("Comms", ack_msg, event.timestamp)
     cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
         thread_name=Medium.TEAMS_MEET,
-        message_content=ack_thread,
+        message_content=ack_msg,
         role="assistant",
         timestamp=event.timestamp,
     )
@@ -784,6 +795,10 @@ async def _(
         notif_text, thread_text = _meet_join_notif(
             "Teams meeting",
             cm.call_manager.meet_lobby_waiting,
+        )
+        await comms_utils.send_unify_message(
+            content=notif_text,
+            contact_id=contact_id,
         )
         cm.notifications_bar.push_notif(
             "Comms",

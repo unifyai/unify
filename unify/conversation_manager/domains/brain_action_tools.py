@@ -1030,6 +1030,13 @@ class ConversationManagerBrainActionTools:
         Wait for a real ``meet.google.com`` link before calling this rather
         than guessing one.
 
+        The system automatically messages the user that I'm joining and then
+        reports the outcome (in the meeting / waiting in the lobby / couldn't
+        join) in chat on my behalf. Do NOT send a separate chat message
+        announcing or narrating the join (no "Joining now", "I'm in", etc.) —
+        just call this tool with the spoken ``opener``. Only send a chat
+        message afterwards if the user asks something that needs a reply.
+
         Args:
             meet_url: The full Google Meet URL (e.g. https://meet.google.com/abc-defg-hij).
             opener: Verbatim spoken line once the meeting is live and someone
@@ -1132,6 +1139,13 @@ class ConversationManagerBrainActionTools:
         I do not create the meeting: the user hosts it and pastes the link.
         Wait for a real ``teams.microsoft.com`` / ``teams.live.com`` link
         before calling this rather than guessing one.
+
+        The system automatically messages the user that I'm joining and then
+        reports the outcome (in the meeting / waiting in the lobby / couldn't
+        join) in chat on my behalf. Do NOT send a separate chat message
+        announcing or narrating the join (no "Joining now", "I'm in", etc.) —
+        just call this tool with the spoken ``opener``. Only send a chat
+        message afterwards if the user asks something that needs a reply.
 
         Args:
             meet_url: The full Teams meeting URL (e.g.
