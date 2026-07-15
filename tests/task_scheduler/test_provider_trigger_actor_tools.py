@@ -180,7 +180,7 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     assert deleted["outcome"] == "task deleted"
     with pytest.raises(ValueError, match="Task not found"):
         typed_tasks_client.get_task(task_id=task_id)
-    with pytest.raises(ValueError, match="Task not found"):
+    with pytest.raises(ValueError, match="No task found with id="):
         scheduler._get_task_or_raise(task_id)
 
 

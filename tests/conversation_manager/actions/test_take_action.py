@@ -167,7 +167,7 @@ async def test_create_task_triggers_act(initialized_cm):
     result = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="Remind me to call Alice about the Q3 budget tomorrow at 9am.",
+            content="Remind me to call Alice about the Q3 budget tomorrow at 09:00 UTC.",
         ),
     )
 

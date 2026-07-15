@@ -32,7 +32,24 @@ __all__ = [
     "build_offline_run_key",
     "build_provider_event_run_key",
     "normalize_run_key_component",
+    "provider_event_offline_env_keys",
 ]
+
+
+_PROVIDER_EVENT_OFFLINE_ENV_KEYS = (
+    "UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID",
+    "UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID",
+    "UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID",
+    "UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID",
+    "UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF",
+    "UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
+)
+
+
+def provider_event_offline_env_keys() -> tuple[str, ...]:
+    """Return env-var names required for one offline provider-event run."""
+
+    return _PROVIDER_EVENT_OFFLINE_ENV_KEYS
 
 
 _RUN_KEY_SAFE_RE = re.compile(r"[^a-z0-9-]+")
@@ -56,6 +73,12 @@ def build_offline_runner_env(
     entrypoint: int | None = None,
     destination: str | None = None,
     job_name: str = "",
+    provider_event_operation_id: str | None = None,
+    provider_event_run_id: int | None = None,
+    provider_event_binding_id: str | None = None,
+    provider_event_receipt_id: str | None = None,
+    provider_event_context_ref: str | None = None,
+    provider_event_issued_at: str | None = None,
 ) -> dict[str, str]:
     """Build the task-specific env-var dict for one offline_runner subprocess.
 
@@ -110,6 +133,41 @@ def build_offline_runner_env(
         env["UNITY_OFFLINE_TASK_JOB_NAME"] = str(job_name)
     if destination:
         env["TASK_DESTINATION"] = str(destination)
+    if source_type == "provider_event":
+        if not all(
+            (
+                provider_event_operation_id,
+                provider_event_run_id is not None,
+                provider_event_binding_id,
+                provider_event_receipt_id,
+                provider_event_context_ref,
+                provider_event_issued_at,
+            ),
+        ):
+            raise ValueError(
+                "provider_event offline runs require operation_id, run_id, "
+                "binding_id, receipt_id, event_context_ref, and issued_at",
+            )
+        env.update(
+            {
+                "UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID": str(
+                    provider_event_operation_id,
+                ),
+                "UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID": str(provider_event_run_id),
+                "UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID": str(
+                    provider_event_binding_id,
+                ),
+                "UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID": str(
+                    provider_event_receipt_id,
+                ),
+                "UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF": str(
+                    provider_event_context_ref,
+                ),
+                "UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT": str(
+                    provider_event_issued_at,
+                ),
+            },
+        )
     return env
 
 

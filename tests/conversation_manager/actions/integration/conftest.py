@@ -85,15 +85,26 @@ def _isolate_local_workspace_home(
     Hash the node id so the same test always gets the same path (stable
     LLM cache keys that embed ``~/Unity/Local``), matching the actor
     suite's isolation fixture.
+
+    After switching HOME, clear manager singletons (so FileManager adapters
+    are not left bound to the session ``/tmp/unity_test_home``) and bootstrap
+    the hashed workspace layout the actor prompt embeds via ``get_local_root()``.
     """
     import hashlib
     import shutil
     import tempfile
+    from pathlib import Path
+
+    from unify.conversation_manager.workspace import ensure_local_workspace_dirs
+    from unify.file_manager.settings import get_local_root
+    from unify.manager_registry import ManagerRegistry
 
     suffix = hashlib.md5(request.node.nodeid.encode("utf-8")).hexdigest()[:12]
     test_home = os.path.join(tempfile.gettempdir(), f"unity_test_home_{suffix}")
     os.makedirs(test_home, exist_ok=True)
     monkeypatch.setenv("HOME", test_home)
+    ManagerRegistry.clear()
+    ensure_local_workspace_dirs(Path(get_local_root()))
     yield test_home
     shutil.rmtree(test_home, ignore_errors=True)
 
