@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 
 _AGENT_SERVICE_PID_FILE = Path("/tmp/agent-service.pid")
 _AGENT_SERVICE_LOG = Path("/var/log/unity/agent-service.log")
+# Upper bound on how long a restart waits for the respawned Node process to bind
+# port 3000 before returning. Closes the race where a meet-join POST arrives in
+# the cold-start window and is refused. Runs in a worker thread, so a blocking
+# poll is fine.
+_AGENT_SERVICE_READY_TIMEOUT_S = 30.0
 _CALL_NOT_ANSWERED_REASON_DISPLAY = {
     "no-answer": "did not answer",
     "busy": "was busy",
@@ -206,6 +211,31 @@ def _restart_agent_service_with_key(api_key: str) -> None:
         LOGGER.info(
             f"[agent-service-restart] Restarted agent-service (PID: {proc.pid})",
         )
+
+        # 5. Block until the respawned process is actually listening on 3000
+        # (LISTEN state) before returning, so a meet-join POST that fires right
+        # after this restart doesn't hit a dead socket. Bounded so a wedged
+        # start surfaces rather than hanging.
+        deadline = time.monotonic() + _AGENT_SERVICE_READY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            if _find_pid_on_port(3000) is not None:
+                LOGGER.info(
+                    "[agent-service-restart] agent-service listening on 3000 "
+                    f"(PID: {proc.pid})",
+                )
+                break
+            if proc.poll() is not None:
+                LOGGER.warning(
+                    "[agent-service-restart] agent-service exited during startup "
+                    f"(code {proc.returncode})",
+                )
+                break
+            time.sleep(0.2)
+        else:
+            LOGGER.warning(
+                "[agent-service-restart] agent-service not listening on 3000 "
+                f"within {_AGENT_SERVICE_READY_TIMEOUT_S:.0f}s",
+            )
     except Exception as e:
         LOGGER.info(f"[agent-service-restart] Failed (non-fatal): {e}")
 
