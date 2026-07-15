@@ -82,6 +82,21 @@ WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 # to reach the lobby rather than being cut off mid-join.
 MEET_JOIN_HTTP_TIMEOUT_S = 300.0
 
+# Before issuing the browser-meet ``/join`` request, wait for the pod-local
+# agent-service to be accepting connections. The CM spawns / restarts that Node
+# process out of band (e.g. on the user's API-key change), and a join that lands
+# in its cold-start window is refused (``ConnectionRefusedError``). Poll a cheap
+# endpoint until it answers rather than failing the join on the first refused
+# connect. Any HTTP response (even 401/404) proves the port is bound.
+AGENT_SERVICE_READY_TIMEOUT_S = 30.0
+AGENT_SERVICE_READY_POLL_INTERVAL_S = 0.5
+# Extra connect attempts for the ``/join`` POST itself, to absorb the residual
+# race where the service was ready at the gate but restarted before the POST.
+# Only connection failures are retried — a slow-but-connected join (the long
+# ``MEET_JOIN_HTTP_TIMEOUT_S`` wait) is never retried, and a real HTTP response
+# is returned as-is.
+MEET_JOIN_CONNECT_RETRIES = 2
+
 # How long the worker may stay alive-but-unwarmed while the manager is fully
 # idle before the watchdog force-restarts it to recover. Post-job re-warm usually
 # completes in seconds, but a cold container prewarm can take the full LiveKit
@@ -964,6 +979,41 @@ class LivekitCallManager:
     def has_teams_presenting(self) -> bool:
         return self._meet_presenting and self._call_channel == "teams_meet"
 
+    async def _await_agent_service_ready(
+        self,
+        base_url: str,
+        timeout: float = AGENT_SERVICE_READY_TIMEOUT_S,
+    ) -> bool:
+        """Wait until the agent-service is accepting connections on ``base_url``.
+
+        Returns True as soon as the service answers an HTTP request (any status
+        — even 401/404 proves the port is bound and the process is up), False if
+        it never comes up within ``timeout``. A transport error just means the
+        Node process is still cold-starting (it is spawned/restarted by the CM
+        out of band), so those are retried on a short interval; anything that
+        yields a response is treated as ready.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{base_url}/sessions",
+                        timeout=aiohttp.ClientTimeout(total=2.0),
+                    ):
+                        return True
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                if time.monotonic() >= deadline:
+                    LOGGER.error(
+                        f"{ICONS['ipc']} [LivekitCallManager] agent-service not "
+                        f"ready on {base_url} after {timeout:.0f}s "
+                        f"({attempt} attempts)",
+                    )
+                    return False
+                await asyncio.sleep(AGENT_SERVICE_READY_POLL_INTERVAL_S)
+
     async def _start_meet(
         self,
         channel: str,
@@ -1071,6 +1121,22 @@ class LivekitCallManager:
 
         self.is_outbound = meet_outbound
 
+        # Gate on the agent-service being up before we dispatch a worker or POST
+        # the join. It is (re)spawned by the CM out of band (API-key changes),
+        # so a join arriving in its cold-start window would otherwise fail with a
+        # bare ConnectionRefusedError. The poll here is the retry: it waits out
+        # the restart rather than dispatching a worker into a dead service.
+        if not await self._await_agent_service_ready(base_url):
+            LOGGER.error(
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} join aborted: "
+                "agent-service never became ready",
+            )
+            self.meet_join_failure_reason = "agent_service_unavailable"
+            self._meet_joining = False
+            self._meet_lobby_waiting = False
+            await self._cleanup_meet(channel)
+            return False
+
         dispatched = False
         if self._worker_proc is not None and self._worker_proc.poll() is None:
             dispatched = await self._dispatch_job(
@@ -1102,24 +1168,49 @@ class LivekitCallManager:
         # handler leaves ``_meet_joining`` stuck True with no teardown and shows
         # up as "Unhandled error processing GoogleMeetReceived". Catch it, tear
         # down, and return a clean failure the handler can retry.
-        try:
-            async with aiohttp.ClientSession() as session:
-                resp = await session.post(
-                    f"{base_url}/{meet_path}/join",
-                    json={"meetUrl": meet_url, "displayName": display_name},
-                    headers={"authorization": f"Bearer {auth_key}"},
-                    timeout=aiohttp.ClientTimeout(total=MEET_JOIN_HTTP_TIMEOUT_S),
+        resp = None
+        body = None
+        for connect_attempt in range(MEET_JOIN_CONNECT_RETRIES + 1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    resp = await session.post(
+                        f"{base_url}/{meet_path}/join",
+                        json={"meetUrl": meet_url, "displayName": display_name},
+                        headers={"authorization": f"Bearer {auth_key}"},
+                        timeout=aiohttp.ClientTimeout(total=MEET_JOIN_HTTP_TIMEOUT_S),
+                    )
+                    body = await resp.json()
+                break
+            except aiohttp.ClientConnectorError as exc:
+                # The service was up at the gate but the socket refused now —
+                # almost always an out-of-band restart. Re-await readiness and
+                # retry the connect (never the slow-join timeout below).
+                if connect_attempt >= MEET_JOIN_CONNECT_RETRIES:
+                    LOGGER.error(
+                        f"{ICONS['ipc']} [LivekitCallManager] {channel} join "
+                        f"connect failed after {connect_attempt + 1} attempts: "
+                        f"{exc!r}",
+                    )
+                    self.meet_join_failure_reason = "agent_service_unavailable"
+                    self._meet_joining = False
+                    self._meet_lobby_waiting = False
+                    await self._cleanup_meet(channel)
+                    return False
+                LOGGER.warning(
+                    f"{ICONS['ipc']} [LivekitCallManager] {channel} join connect "
+                    f"refused (attempt {connect_attempt + 1}); re-checking "
+                    "agent-service readiness and retrying",
                 )
-                body = await resp.json()
-        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
-            LOGGER.error(
-                f"{ICONS['ipc']} [LivekitCallManager] {channel} join request "
-                f"failed: {exc!r}",
-            )
-            self._meet_joining = False
-            self._meet_lobby_waiting = False
-            await self._cleanup_meet(channel)
-            return False
+                await self._await_agent_service_ready(base_url)
+            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+                LOGGER.error(
+                    f"{ICONS['ipc']} [LivekitCallManager] {channel} join request "
+                    f"failed: {exc!r}",
+                )
+                self._meet_joining = False
+                self._meet_lobby_waiting = False
+                await self._cleanup_meet(channel)
+                return False
 
         if resp.status != 200:
             LOGGER.error(
