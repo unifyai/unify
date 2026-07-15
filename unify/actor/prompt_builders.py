@@ -109,8 +109,7 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     (`Data/*` or other tabular contexts), its body **must** use
     `primitives.data` with server-side `filter=` / `reduce` /
     `update_rows` / `insert_rows` / `ingest`. Never bake in client-side
-    full-table scans, high-`limit` unfiltered fetches, or raw
-    `unisdk.get_logs` / `create_logs` / `update_logs` loops — those become
+    full-table scans or high-`limit` unfiltered fetches — those become
     permanent production hot paths.
 
     For skills discovered *during* execution (reusable patterns from the
@@ -267,16 +266,10 @@ _EXECUTION_RULES = textwrap.dedent("""
     limitation or ask for clarification instead of writing misleading
     ownership fields.
 
-    For read-only validation of **non-Data** absolute contexts (e.g. another
-    assistant's Tasks), direct SDK reads such as
-    `unisdk.get_logs(project="Assistants", context="<user_id>/<assistant_id>/...")`
-    may be used when you know the exact absolute context and have access.
-    Do **not** use `unisdk.get_logs` / `create_logs` / `update_logs` as a
-    substitute for `primitives.data.*` on Orchestra `Data/*` (or other
-    tabular) contexts — push filters/aggregations/updates through
-    DataManager. Avoid direct cross-assistant writes through low-level SDK
-    calls unless a documented primitive or user-confirmed administrative
-    workflow explicitly permits them.
+    Do not peek into another assistant's private contexts. Shared tabular
+    data for teammates lives under team Data roots and is already readable
+    via `primitives.data.*` (team-scoped fan-out). Use that path — not
+    another assistant's absolute context — for shared reads.
 
 
     **Python-first principle:** When a task can be accomplished with

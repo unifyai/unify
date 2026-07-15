@@ -165,8 +165,6 @@ aggregate, or decide updates.
   - Prefer `reduce` over fetch+`len`/sum/group; prefer one selective \
 `update_rows(..., filter=...)` (or `update_by_ids` on ids from \
 `include_ids=True`) over download-then-per-row updates.
-  - Do **not** use raw `unisdk.get_logs` / `create_logs` / `update_logs` \
-for Data tables when `primitives.data` covers the operation.
 
 - **Mutation methods are self-contained**: when storing or modifying records \
 via `.update(...)` / `.execute(...)` / `.refactor(...)`, go straight to the \

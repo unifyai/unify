@@ -182,8 +182,9 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`update_rows` — never download a large table into Python to "
             "count, aggregate, or decide updates. Prefer one selective "
             "`update_rows(..., filter=...)` over fetch-all then per-row "
-            "updates. Do not use raw `unisdk.get_logs` / `create_logs` / "
-            "`update_logs` when `primitives.data` covers the operation."
+            "updates. Team-shared tables are already readable via "
+            "`primitives.data` team-root fan-out — do not peek into "
+            "another assistant's private contexts."
         ),
     ),
     ManagerSpec(
@@ -1144,9 +1145,9 @@ class ToolSurfaceRegistry:
                     "selective `filter=`. Prefer `reduce` over fetch+`len`/"
                     "sum/group. Prefer one `update_rows(..., filter=...)` "
                     "(or `update_by_ids` on ids from `include_ids=True`) over "
-                    "download-then-per-row updates. Do **not** use "
-                    "`unisdk.get_logs` / `create_logs` / `update_logs` for "
-                    "Data tables when `primitives.data` covers the operation.",
+                    "download-then-per-row updates. Shared team Data is "
+                    "already reachable via `primitives.data` — do not read "
+                    "another assistant's private contexts.",
                 )
 
         # ── Section 5: Detailed method documentation ──
