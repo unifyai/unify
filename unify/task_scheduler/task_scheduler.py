@@ -79,8 +79,18 @@ from .prompt_builders import (
     build_task_run_guidelines,
     build_update_prompt,
 )
+from .provider_trigger_actor import (
+    describe_provider_trigger_resource_contract,
+    list_eligible_provider_trigger_connections,
+    task_revision_conflict_outcome,
+)
+from .provider_trigger_health import (
+    compose_provider_trigger_state,
+    sanitize_event_context_for_actor,
+)
 from .storage import TasksStore
 from . import typed_tasks_client
+from .typed_tasks_client import TaskRevisionConflictError
 from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
@@ -199,6 +209,26 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(fn=self._filter_tasks, display_label="Filtering tasks"),
                 ToolSpec(fn=self._search_tasks, display_label="Searching tasks"),
                 ToolSpec(fn=self._reduce, display_label="Summarising tasks"),
+                ToolSpec(
+                    fn=self._list_provider_trigger_catalog,
+                    display_label="Listing provider trigger catalog",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_connections,
+                    display_label="Listing provider trigger connections",
+                ),
+                ToolSpec(
+                    fn=self._describe_provider_trigger_resources,
+                    display_label="Describing provider trigger resources",
+                ),
+                ToolSpec(
+                    fn=self._get_provider_trigger_health,
+                    display_label="Inspecting provider trigger health",
+                ),
+                ToolSpec(
+                    fn=self._get_provider_event_context,
+                    display_label="Inspecting provider event context",
+                ),
                 include_class_name=False,
             ),
             **methods_to_tool_dict(
@@ -225,6 +255,26 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(fn=self._delete_task, display_label="Deleting a task"),
                 ToolSpec(fn=self._cancel_tasks, display_label="Cancelling tasks"),
                 ToolSpec(fn=self._update_task, display_label="Updating a task"),
+                ToolSpec(
+                    fn=self._pause_provider_trigger,
+                    display_label="Pausing provider trigger automation",
+                ),
+                ToolSpec(
+                    fn=self._resume_provider_trigger,
+                    display_label="Resuming provider trigger automation",
+                ),
+                ToolSpec(
+                    fn=self._retry_provider_trigger,
+                    display_label="Retrying provider trigger provisioning",
+                ),
+                ToolSpec(
+                    fn=self._export_provider_event_context,
+                    display_label="Exporting provider event context",
+                ),
+                ToolSpec(
+                    fn=self._delete_provider_event_context,
+                    display_label="Deleting provider event context",
+                ),
                 include_class_name=False,
             ),
             **methods_to_tool_dict(
@@ -1675,6 +1725,7 @@ class TaskScheduler(BaseTaskScheduler):
         if trigger is not None and isinstance(trigger, ProviderEventTrigger):
             created = typed_tasks_client.create_task(payload=task_details)
             task_id = int(created["task_id"])
+            self._sync_provider_event_task_row(typed_response=created)
         else:
             log = self._store.log(entries=task_details, new=True)
             task_id = int(log.entries["task_id"])
@@ -1807,10 +1858,14 @@ class TaskScheduler(BaseTaskScheduler):
                 raise ValueError(
                     f"Task {task_id} is missing task_revision; re-read before deleting.",
                 )
-            typed_tasks_client.delete_task(
-                task_id=task_id,
-                expected_task_revision=int(task.task_revision),
-            )
+            try:
+                typed_tasks_client.delete_task(
+                    task_id=task_id,
+                    expected_task_revision=int(task.task_revision),
+                )
+            except TaskRevisionConflictError as exc:
+                return task_revision_conflict_outcome(exc)
+            self._store.delete(logs=log_ids)
         else:
             self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
@@ -2163,11 +2218,15 @@ class TaskScheduler(BaseTaskScheduler):
                 raise ValueError(
                     f"Task {task_id} is missing task_revision; re-read before updating.",
                 )
-            typed_tasks_client.patch_task(
-                task_id=task_id,
-                expected_task_revision=int(task.task_revision),
-                updates=authored_entries,
-            )
+            try:
+                updated = typed_tasks_client.patch_task(
+                    task_id=task_id,
+                    expected_task_revision=int(task.task_revision),
+                    updates=authored_entries,
+                )
+            except TaskRevisionConflictError as exc:
+                return task_revision_conflict_outcome(exc)
+            self._sync_provider_event_task_row(typed_response=updated)
             return {"detail": "Provider-event authored update applied."}
         if runtime_entries:
             return self._write_log_entries(
@@ -2286,6 +2345,294 @@ class TaskScheduler(BaseTaskScheduler):
             logs=logs,
             entries=entries,
         )
+
+    def _sync_provider_event_task_row(
+        self,
+        *,
+        typed_response: dict[str, Any],
+    ) -> None:
+        """Mirror one typed Tasks API row into the local Tasks store."""
+
+        task_id = int(typed_response["task_id"])
+        log_ids = self._store.get_rows(
+            filter=f"task_id == {task_id} and instance_id == 0",
+            return_ids_only=True,
+        )
+        entries = {
+            key: typed_response[key]
+            for key in (
+                "task_revision",
+                "name",
+                "description",
+                "status",
+                "trigger",
+                "enabled",
+                "offline",
+                "priority",
+                "entrypoint",
+            )
+            if key in typed_response and typed_response[key] is not None
+        }
+        if log_ids:
+            self._write_log_entries(logs=log_ids, entries=entries)
+            return
+        payload = {
+            "task_id": task_id,
+            "instance_id": 0,
+            **entries,
+        }
+        with self._use_task_destination(None):
+            self._store.log(entries=payload, new=True)
+
+    def _list_provider_trigger_catalog(self) -> ToolOutcome:
+        """List curated provider-event triggers available for task configuration.
+
+        Returns the Orchestra trigger catalog with canonical event slugs,
+        supported filter fields, and backend availability for actor-driven setup.
+        """
+
+        catalog = typed_tasks_client.get_trigger_catalog()
+        return {
+            "outcome": "provider trigger catalog listed",
+            "details": catalog,
+        }
+
+    def _list_provider_trigger_connections(
+        self,
+        *,
+        backend_id: str | None = None,
+    ) -> ToolOutcome:
+        """List assistant-owned connections eligible for curated GitHub triggers.
+
+        Returns provider-neutral connection summaries without secret references
+        or credential material suitable for model-visible actor responses.
+        """
+
+        connections = list_eligible_provider_trigger_connections(
+            backend_id=backend_id,
+        )
+        return {
+            "outcome": "provider trigger connections listed",
+            "details": {"connections": connections},
+        }
+
+    def _describe_provider_trigger_resources(
+        self,
+        *,
+        event_slug: str,
+        schema_version: str = "1",
+    ) -> ToolOutcome:
+        """Describe how to select resources and filters for one curated event.
+
+        Explains the exact repository or resource contract, supported AND
+        filters, and backend mappings before creating a provider-event task.
+        """
+
+        catalog = typed_tasks_client.get_trigger_catalog()
+        contract = describe_provider_trigger_resource_contract(
+            event_slug=event_slug,
+            schema_version=schema_version,
+            catalog_events=catalog.get("events"),
+        )
+        return {
+            "outcome": "provider trigger resource contract described",
+            "details": contract,
+        }
+
+    def _get_provider_trigger_health(self, *, task_id: int) -> ToolOutcome:
+        """Inspect composed provider-trigger health, coverage, and remediation.
+
+        Returns a provider-neutral composed lifecycle state plus runtime
+        health, coverage windows, and remediation guidance for actor responses.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        health = typed_tasks_client.get_trigger_health(task_id=task_id)
+        return {
+            "outcome": "provider trigger health inspected",
+            "details": compose_provider_trigger_state(health),
+        }
+
+    def _get_provider_event_context(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        include_source_body: bool = False,
+    ) -> ToolOutcome:
+        """Inspect authorized provider-event context for one run.
+
+        Returns the curated projection and envelope by default. Include raw
+        source_body only when the user explicitly requests advanced inspection.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        context = typed_tasks_client.get_event_context(
+            task_id=task_id,
+            run_id=run_id,
+        )
+        return {
+            "outcome": "provider event context inspected",
+            "details": sanitize_event_context_for_actor(
+                context,
+                include_source_body=include_source_body,
+            ),
+        }
+
+    def _pause_provider_trigger(
+        self,
+        *,
+        task_id: int,
+        task_revision: int,
+    ) -> ToolOutcome:
+        """Pause provider-event automation while keeping manual run available.
+
+        Closes the acceptance fence for new provider deliveries without
+        disabling the global task.enabled gate or blocking manual execution.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        try:
+            updated = typed_tasks_client.pause_trigger(
+                task_id=task_id,
+                expected_task_revision=int(task_revision),
+            )
+        except TaskRevisionConflictError as exc:
+            return task_revision_conflict_outcome(exc)
+        self._sync_provider_event_task_row(typed_response=updated)
+        return {
+            "outcome": "provider trigger paused",
+            "details": {
+                "task_id": task_id,
+                "task_revision": updated.get("task_revision"),
+            },
+        }
+
+    def _resume_provider_trigger(
+        self,
+        *,
+        task_id: int,
+        task_revision: int,
+    ) -> ToolOutcome:
+        """Resume provider-event automation for one task.
+
+        Reopens provider automation under the current authored revision and
+        schedules reconciliation for the active subscription generation.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        try:
+            updated = typed_tasks_client.resume_trigger(
+                task_id=task_id,
+                expected_task_revision=int(task_revision),
+            )
+        except TaskRevisionConflictError as exc:
+            return task_revision_conflict_outcome(exc)
+        self._sync_provider_event_task_row(typed_response=updated)
+        return {
+            "outcome": "provider trigger resumed",
+            "details": {
+                "task_id": task_id,
+                "task_revision": updated.get("task_revision"),
+            },
+        }
+
+    def _retry_provider_trigger(self, *, task_id: int) -> ToolOutcome:
+        """Request immediate provider-trigger reconciliation.
+
+        Schedules binding and subscription reconciliation without changing the
+        authored task revision or mutating trigger intent directly.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        result = typed_tasks_client.retry_trigger(task_id=task_id)
+        return {
+            "outcome": "provider trigger reconciliation requested",
+            "details": result,
+        }
+
+    def _export_provider_event_context(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+    ) -> ToolOutcome:
+        """Export authorized provider-event context with audit logging.
+
+        Returns the full authorized context for user-requested export while
+        keeping credentials and backend details out of the actor response.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        context = typed_tasks_client.export_event_context(
+            task_id=task_id,
+            run_id=run_id,
+        )
+        return {
+            "outcome": "provider event context exported",
+            "details": sanitize_event_context_for_actor(
+                context,
+                include_source_body=True,
+            ),
+        }
+
+    def _delete_provider_event_context(
+        self,
+        *,
+        task_id: int,
+        run_id: int,
+        task_revision: int,
+    ) -> ToolOutcome:
+        """Delete provider-event context for one run.
+
+        Makes the event context unavailable immediately and records the
+        deletion under the current authored task revision when supplied.
+        """
+
+        task = self._get_task_or_raise(task_id)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        if task.task_revision is None:
+            raise ValueError(
+                f"Task {task_id} is missing task_revision; re-read before deleting context.",
+            )
+        if int(task.task_revision) != int(task_revision):
+            return task_revision_conflict_outcome(
+                TaskRevisionConflictError(
+                    latest_task_revision=int(task.task_revision),
+                ),
+            )
+        typed_tasks_client.delete_event_context(task_id=task_id, run_id=run_id)
+        return {
+            "outcome": "provider event context deleted",
+            "details": {"task_id": task_id, "run_id": run_id},
+        }
 
     @staticmethod
     def _task_has_provider_event_trigger(task: Task) -> bool:
