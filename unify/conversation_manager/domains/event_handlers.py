@@ -298,30 +298,49 @@ def _call_not_answered_reason_text(reason: str) -> str:
     )
 
 
-def _meet_join_failure_notif(
+def _meet_join_failure_texts(
     meet_label: str,
     join_tool: str,
     reason: str | None,
-) -> str:
-    """Build the notification text shown when a browser-meet join fails.
+) -> tuple[str, str]:
+    """Build (user_text, llm_text) for a failed browser-meet join.
+
+    ``user_text`` is a first-person, user-facing chat message (no tool names),
+    sent so the person who shared the link isn't left in silence after the
+    "joining now" ack and can ask for a retry. ``llm_text`` carries the
+    machine detail (failure reason + the exact retry tool) into the transcript
+    the brain reads, so it can retry with the right tool.
 
     When the agent-service reports a guest-admission block (``*_join_blocked``),
-    the host was almost certainly not present in the meeting to admit the guest,
-    so tell the user exactly that and what to do instead of a bare retry line.
+    the host was almost certainly not present to admit the guest, so say exactly
+    that and what to do instead of a bare retry line.
     """
 
     reason_text = (reason or "").strip()
     if "join_blocked" in reason_text:
-        return (
+        user_text = (
+            f"Couldn't get into the {meet_label} — the host wasn't in the "
+            "meeting to let me in, so I was turned away at the door. Start the "
+            "meeting and stay in it, then re-share the link and I'll rejoin."
+        )
+        llm_text = (
             f"Couldn't join the {meet_label}: the host wasn't in the meeting to "
             "let me in, so it turned me away at the door. Ask the user to start "
             "the meeting and stay in it, then re-share the link and I'll rejoin "
             f"with {join_tool}."
         )
-    retry = f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+        return user_text, llm_text
+
+    user_text = (
+        f"I couldn't get into the {meet_label}. Re-share the link and I'll try "
+        "again."
+    )
+    llm_text = (
+        f"Failed to join {meet_label}. You may retry by calling {join_tool} again."
+    )
     if reason_text:
-        return f"{retry} (reason: {reason_text})"
-    return retry
+        llm_text = f"{llm_text} (reason: {reason_text})"
+    return user_text, llm_text
 
 
 class EventHandler:
@@ -728,14 +747,26 @@ async def _(
             sender_name=sender_name,
             timestamp=event.timestamp,
         )
-        cm.notifications_bar.push_notif(
-            "Comms",
-            _meet_join_failure_notif(
-                "Google Meet",
-                "join_google_meet",
-                cm.call_manager.meet_join_failure_reason,
-            ),
-            event.timestamp,
+        # Surface the failure as a real outbound chat (not just the internal
+        # notifications bar) so the user sees it after the "Joining now…" ack
+        # and can request a retry — mirrors the ack/success paths above.
+        user_text, llm_text = _meet_join_failure_texts(
+            "Google Meet",
+            "join_google_meet",
+            cm.call_manager.meet_join_failure_reason,
+        )
+        await comms_utils.send_unify_message(
+            content=user_text,
+            contact_id=contact_id,
+        )
+        cm.notifications_bar.push_notif("Comms", user_text, event.timestamp)
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=Medium.GOOGLE_MEET,
+            message_content=llm_text,
+            role="assistant",
+            timestamp=event.timestamp,
         )
         await cm.request_llm_run(
             delay=0,
@@ -834,14 +865,26 @@ async def _(
             sender_name=sender_name,
             timestamp=event.timestamp,
         )
-        cm.notifications_bar.push_notif(
-            "Comms",
-            _meet_join_failure_notif(
-                "Teams meeting",
-                "join_teams_meet",
-                cm.call_manager.meet_join_failure_reason,
-            ),
-            event.timestamp,
+        # Surface the failure as a real outbound chat (not just the internal
+        # notifications bar) so the user sees it after the "Joining now…" ack
+        # and can request a retry — mirrors the ack/success paths above.
+        user_text, llm_text = _meet_join_failure_texts(
+            "Teams meeting",
+            "join_teams_meet",
+            cm.call_manager.meet_join_failure_reason,
+        )
+        await comms_utils.send_unify_message(
+            content=user_text,
+            contact_id=contact_id,
+        )
+        cm.notifications_bar.push_notif("Comms", user_text, event.timestamp)
+        cm.contact_index.push_message(
+            contact_id=contact_id,
+            sender_name=sender_name,
+            thread_name=Medium.TEAMS_MEET,
+            message_content=llm_text,
+            role="assistant",
+            timestamp=event.timestamp,
         )
         await cm.request_llm_run(
             delay=0,
