@@ -313,11 +313,12 @@ async def test_execute_function_dispatches_provider_backed_primitive_by_row(
 ) -> None:
     calls: list[tuple[str, dict]] = []
 
-    def fake_run_tool(tool_id, arguments, **_payload):
+    async def fake_run_tool(tool_id, arguments, **_payload):
         calls.append((tool_id, arguments))
         return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
 
     monkeypatch.setattr("unify.integrations.ops.run_tool", fake_run_tool)
+    monkeypatch.setattr("unify.integrations.ops.async_run_tool", fake_run_tool)
     fm = FunctionManager.__new__(FunctionManager)
     fm._include_primitives = True
     fm._get_function_data_by_name = lambda name: None
