@@ -18,7 +18,7 @@ from unify.common.authorship import (
     is_shared_authored_context,
     strip_authoring_assistant_id,
 )
-from unify.common.log_utils import log as unify_log, create_logs as unify_create_logs
+from unify.common.log_utils import create_logs as unify_create_logs
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,15 @@ def update_rows_impl(
     context: str,
     updates: Dict[str, Any],
     *,
-    filter: str,
+    filter: Optional[str] = None,
+    log_ids: Optional[List[int]] = None,
+    overwrite: bool = False,
 ) -> int:
     """
     Implementation of update_rows operation.
 
-    Updates rows matching a filter expression.
+    Updates rows matching a filter expression and/or specific log IDs.
+    Uses in-place Orchestra updates so log ids stay stable.
 
     Parameters
     ----------
@@ -103,8 +106,17 @@ def update_rows_impl(
         Fully-qualified Unify context path.
     updates : dict[str, Any]
         Column values to update.
-    filter : str
-        Filter expression to select rows. Required.
+    filter : str | None
+        Filter expression to select rows.
+    log_ids : list[int] | None
+        Specific log IDs to update. When set without ``filter``, updates
+        those rows only.
+    overwrite : bool, default False
+        When False (default), merge ``updates`` into each row's existing
+        entries (filter path) or pass ``updates`` through with Orchestra's
+        non-overwrite merge (log_ids path). When True, replace entries with
+        ``updates`` for log_ids path; for filter path, still merge then
+        write with overwrite=True so unspecified columns are preserved.
 
     Returns
     -------
@@ -113,49 +125,84 @@ def update_rows_impl(
 
     Raises
     ------
+    ValueError
+        If neither filter nor log_ids is provided.
     Exception
         If update fails.
     """
-    logger.debug("Updating rows in %s where %s", context, filter)
+    if filter is None and log_ids is None:
+        raise ValueError("Either filter or log_ids must be provided for update_rows")
 
-    filter_expr = normalize_filter_expr(filter)
-
-    # Get matching rows
-    logs = unisdk.get_logs(context=context, filter=filter_expr)
-
-    if not logs:
-        return 0
-
-    # Update each matching row (delete + insert pattern)
-    # Note: This is the current pattern used elsewhere in the codebase
-    updated = 0
     cleaned_updates = (
         strip_authoring_assistant_id(updates)
         if is_shared_authored_context(context)
         else dict(updates)
     )
+
+    if log_ids is not None and filter is None:
+        if not log_ids:
+            return 0
+        logger.debug(
+            "Updating %d rows in %s by log_ids (overwrite=%s)",
+            len(log_ids),
+            context,
+            overwrite,
+        )
+        unisdk.update_logs(
+            logs=log_ids,
+            context=context,
+            entries=cleaned_updates,
+            overwrite=overwrite,
+        )
+        return len(log_ids)
+
+    filter_expr = normalize_filter_expr(filter)
+    logger.debug("Updating rows in %s where %s", context, filter_expr)
+
+    logs = unisdk.get_logs(context=context, filter=filter_expr)
+    if not logs:
+        return 0
+
+    updated = 0
     for log in logs:
-        # Get existing entries
+        log_id = log.id if hasattr(log, "id") else None
+        if log_id is None:
+            continue
         if hasattr(log, "entries") and isinstance(log.entries, dict):
             existing = dict(log.entries)
         elif isinstance(log, dict):
             existing = dict(log)
         else:
             continue
-
-        # Delete old row
-        log_id = log.id if hasattr(log, "id") else None
-        if log_id:
-            unisdk.delete_logs(context=context, logs=[log_id])
-
-        # Merge updates
         new_entries = {**existing, **cleaned_updates}
-
-        # Insert updated row
-        unify_log(context=context, **new_entries)
+        unisdk.update_logs(
+            logs=[log_id],
+            context=context,
+            entries=new_entries,
+            overwrite=True,
+        )
         updated += 1
 
     return updated
+
+
+def update_by_ids_impl(
+    log_ids: List[int],
+    updates: Dict[str, Any],
+    *,
+    overwrite: bool = True,
+    context: Optional[str] = None,
+) -> int:
+    """In-place update of known log ids (stable ids; no delete+reinsert)."""
+    if not log_ids:
+        return 0
+    unisdk.update_logs(
+        logs=log_ids,
+        context=context,
+        entries=updates,
+        overwrite=overwrite,
+    )
+    return len(log_ids)
 
 
 def delete_rows_impl(

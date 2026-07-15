@@ -447,7 +447,10 @@ class SimulatedDataManager(BaseDataManager):
         order_by: Optional[str] = None,
         descending: bool = False,
         return_ids_only: bool = False,
+        include_ids: bool = False,
     ) -> Union[List[Dict[str, Any]], List[int]]:
+        if return_ids_only and include_ids:
+            raise ValueError("return_ids_only and include_ids are mutually exclusive")
         resolved = self._resolve_context(context)
         rows = list(self._tables.get(resolved, []))
 
@@ -480,9 +483,13 @@ class SimulatedDataManager(BaseDataManager):
         if return_ids_only:
             return [row.get("_log_id", i + 1) for i, row in enumerate(rows)]
 
+        log_ids = [row.get("_log_id", i + 1) for i, row in enumerate(rows)]
+
         # Select columns
         if columns:
             rows = [{k: row.get(k) for k in columns} for row in rows]
+        else:
+            rows = [{k: v for k, v in row.items() if k != "_log_id"} for row in rows]
 
         # Exclude columns
         if exclude_columns:
@@ -490,6 +497,10 @@ class SimulatedDataManager(BaseDataManager):
                 {k: v for k, v in row.items() if k not in exclude_columns}
                 for row in rows
             ]
+
+        if include_ids:
+            for i, row in enumerate(rows):
+                row["_log_id"] = log_ids[i]
 
         return rows
 
@@ -921,24 +932,76 @@ class SimulatedDataManager(BaseDataManager):
         context: str,
         updates: Dict[str, Any],
         *,
-        filter: str,
+        filter: Optional[str] = None,
+        log_ids: Optional[List[int]] = None,
+        overwrite: bool = False,
         destination: str | None = None,
     ) -> int:
+        if filter is None and log_ids is None:
+            raise ValueError(
+                "Either filter or log_ids must be provided for update_rows",
+            )
         resolved = self._resolve_context(context)
         updated = 0
+        log_id_set = set(log_ids or [])
 
         new_rows = []
         for row in self._tables.get(resolved, []):
-            try:
-                if eval(filter, {"__builtins__": {}}, row):
+            matched = False
+            if log_ids is not None and row.get("_log_id") in log_id_set:
+                matched = True
+            elif filter is not None:
+                try:
+                    matched = bool(eval(filter, {"__builtins__": {}}, row))
+                except Exception:
+                    matched = False
+            if matched:
+                if overwrite and log_ids is not None and filter is None:
+                    kept_id = row.get("_log_id")
+                    row = {**updates}
+                    if kept_id is not None:
+                        row["_log_id"] = kept_id
+                else:
                     row = {**row, **updates}
-                    updated += 1
-            except Exception:
-                pass
+                updated += 1
             new_rows.append(row)
 
         self._tables[resolved] = new_rows
         return updated
+
+    @functools.wraps(BaseDataManager.update_by_ids, updated=())
+    def update_by_ids(
+        self,
+        log_ids: List[int],
+        updates: Dict[str, Any],
+        *,
+        overwrite: bool = True,
+        context: Optional[str] = None,
+    ) -> int:
+        if not log_ids:
+            return 0
+        if context is None:
+            # Scan all tables for matching ids (test/sim convenience).
+            updated = 0
+            for resolved, rows in self._tables.items():
+                new_rows = []
+                for row in rows:
+                    if row.get("_log_id") in log_ids:
+                        if overwrite:
+                            kept_id = row.get("_log_id")
+                            row = {**updates, "_log_id": kept_id}
+                        else:
+                            row = {**row, **updates}
+                        updated += 1
+                    new_rows.append(row)
+                self._tables[resolved] = new_rows
+            return updated
+        return self.update_rows(
+            context,
+            updates,
+            log_ids=log_ids,
+            overwrite=overwrite,
+        )
 
     @functools.wraps(BaseDataManager.delete_rows, updated=())
     def delete_rows(
