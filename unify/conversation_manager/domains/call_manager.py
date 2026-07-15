@@ -597,6 +597,24 @@ class LivekitCallManager:
             return {}
         return {str(cid): vec for cid, vec in (profiles or {}).items()}
 
+    def _worker_has_idle_process(self) -> bool:
+        """Whether the persistent worker can pick a dispatch up right now.
+
+        The worker must be alive AND expose a freshly-prewarmed idle process
+        (``WORKER_READY_PATH``). A worker that is merely alive but still
+        re-warming its single idle slot will accept a LiveKit dispatch that
+        never gets assigned to a process, leaving the caller waiting on a
+        job that silently never activates. Callers should route to a
+        self-contained subprocess instead in that window.
+        """
+        if self._worker_proc is None or self._worker_proc.poll() is not None:
+            return False
+        from unify.conversation_manager.medium_scripts.worker import (
+            WORKER_READY_PATH,
+        )
+
+        return os.path.exists(WORKER_READY_PATH)
+
     async def _dispatch_job(
         self,
         room_name: str,
@@ -1137,8 +1155,17 @@ class LivekitCallManager:
             await self._cleanup_meet(channel)
             return False
 
+        # Only hand the meet to the persistent worker when it has a freshly
+        # prewarmed idle process ready to take the dispatch. A worker that is
+        # merely alive but still re-warming its single idle slot (common
+        # mid coordinator-onboarding, which is voice-heavy and recently consumed
+        # that slot) would accept a dispatch LiveKit then never assigns — the
+        # browser joins but no fast brain ever activates ("Dispatch never
+        # activated"), leaving the meeting deaf and mute. In that window launch a
+        # self-contained subprocess instead: it connects its own IPC client and
+        # always activates.
         dispatched = False
-        if self._worker_proc is not None and self._worker_proc.poll() is None:
+        if self._worker_has_idle_process():
             dispatched = await self._dispatch_job(
                 room_name,
                 channel,
