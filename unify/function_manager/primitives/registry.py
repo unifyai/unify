@@ -176,7 +176,14 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
         special_note=(
             "DataManager operates on any Unify context path. "
-            "Use `describe_table` and `list_tables` to discover schemas and available tables."
+            "Use `describe_table` and `list_tables` to discover schemas. "
+            "HARD RULE: push predicates and aggregations into "
+            "`filter` / `reduce` / `filter_join` / `reduce_join` / "
+            "`update_rows` — never download a large table into Python to "
+            "count, aggregate, or decide updates. Prefer one selective "
+            "`update_rows(..., filter=...)` over fetch-all then per-row "
+            "updates. Do not use raw `unisdk.get_logs` / `create_logs` / "
+            "`update_logs` when `primitives.data` covers the operation."
         ),
     ),
     ManagerSpec(
@@ -451,7 +458,9 @@ _ROUTING_GUIDANCE: List[Dict[str, Any]] = [
                 "aggregating, joining, and data ingestion. Works on "
                 "any Unify context (`Data/*`, `Files/*`, `Knowledge/*`). Use when the question "
                 "is about DATA INSIDE tables, regardless of where those tables came from. "
-                "Also use for ingesting data from APIs/warehouses.",
+                "Also use for ingesting data from APIs/warehouses. Always prefer "
+                "server-side `filter=` / `reduce` / join variants over fetching "
+                "rows into Python loops.",
             ),
             (
                 "files",
@@ -856,13 +865,46 @@ class ToolSurfaceRegistry:
         return inspect.getdoc(fn) or ""
 
     @staticmethod
+    def _extract_section_lines(
+        lines: list[str],
+        *,
+        start_index: int,
+        section_name: str,
+    ) -> list[str]:
+        """Return body lines of a NumPy-style section, or empty if missing."""
+        section_lines: list[str] = []
+        in_section = False
+        for j in range(start_index, len(lines)):
+            stripped = lines[j].strip()
+            if stripped == section_name:
+                in_section = True
+                continue
+            if in_section and stripped.startswith("---"):
+                continue
+            if in_section:
+                if (
+                    stripped
+                    and not stripped[0].isspace()
+                    and not stripped.startswith("-")
+                ):
+                    if j + 1 < len(lines) and lines[j + 1].strip().startswith(
+                        "---",
+                    ):
+                        break
+                    if re.match(r"^[A-Z][a-zA-Z\s]+$", stripped) and len(stripped) < 30:
+                        break
+                section_lines.append(lines[j])
+        return section_lines
+
+    @staticmethod
     def _extract_summary_and_params(docstring: str) -> str:
-        """Extract the first paragraph and Parameters block from a docstring.
+        """Extract summary, Parameters, and Anti-patterns from a docstring.
 
         Returns a compact version containing the summary (up to the first
-        blank line) and the NumPy-style ``Parameters`` section, omitting
-        Returns, Raises, Examples, Notes, other verbose sections, and any
-        internal ``_``-prefixed parameters.
+        blank line), the NumPy-style ``Parameters`` section, and
+        ``Anti-patterns`` when present (critical for Orchestra / DataManager
+        efficiency). Omits Returns, Raises, Examples, Notes, and internal
+        ``_``-prefixed parameters.
         """
         if not docstring:
             return ""
@@ -879,30 +921,16 @@ class ToolSurfaceRegistry:
             else:
                 summary_lines.append(line)
 
-        # Find Parameters section
-        params_lines: list[str] = []
-        in_params = False
-        for j in range(i, len(lines)):
-            stripped = lines[j].strip()
-            if stripped == "Parameters":
-                in_params = True
-                continue
-            if in_params and stripped.startswith("---"):
-                continue
-            if in_params:
-                # Stop at next section header
-                if (
-                    stripped
-                    and not stripped[0].isspace()
-                    and not stripped.startswith("-")
-                ):
-                    if j + 1 < len(lines) and lines[j + 1].strip().startswith(
-                        "---",
-                    ):
-                        break
-                    if re.match(r"^[A-Z][a-zA-Z\s]+$", stripped) and len(stripped) < 30:
-                        break
-                params_lines.append(lines[j])
+        params_lines = ToolSurfaceRegistry._extract_section_lines(
+            lines,
+            start_index=i,
+            section_name="Parameters",
+        )
+        anti_lines = ToolSurfaceRegistry._extract_section_lines(
+            lines,
+            start_index=i,
+            section_name="Anti-patterns",
+        )
 
         # Filter out internal _-prefixed parameter entries.
         # Detect the base indentation level from the first non-empty line.
@@ -925,6 +953,9 @@ class ToolSurfaceRegistry:
         params = "\n".join(filtered_params).rstrip()
         if params:
             result += "\n\nParameters\n----------\n" + params
+        anti = "\n".join(anti_lines).rstrip()
+        if anti:
+            result += "\n\nAnti-patterns\n-------------\n" + anti
         return result
 
     @staticmethod
@@ -1054,6 +1085,11 @@ class ToolSurfaceRegistry:
                 "5. **files** when dealing with specific documents or file-level operations",
             )
             lines.append(
+                "6. **data** for tabular Orchestra contexts (`Data/*` and "
+                "other tables): filter, reduce, join, ingest, update_rows — "
+                "never client-scan large tables in Python",
+            )
+            lines.append(
                 "\nTyped claim / procedure catalogues (`KnowledgeManager_*`, "
                 "`GuidanceManager_*`) are top-level Actor JSON tools, not "
                 "`primitives.*` — use them for durable domain claims and SOPs.",
@@ -1098,6 +1134,20 @@ class ToolSurfaceRegistry:
             lines.append(
                 "- When in doubt between managers, prefer the most specific domain match",
             )
+            if "data" in exposed_aliases:
+                lines.append(
+                    "- **Orchestra / `Data/*` efficiency (HARD):** push "
+                    "predicates and aggregations into `primitives.data.filter` "
+                    "/ `.reduce` / `.filter_join` / `.reduce_join` / "
+                    "`.update_rows`. Never `for row in await "
+                    "primitives.data.filter(...)` over a large table without a "
+                    "selective `filter=`. Prefer `reduce` over fetch+`len`/"
+                    "sum/group. Prefer one `update_rows(..., filter=...)` "
+                    "(or `update_by_ids` on ids from `include_ids=True`) over "
+                    "download-then-per-row updates. Do **not** use "
+                    "`unisdk.get_logs` / `create_logs` / `update_logs` for "
+                    "Data tables when `primitives.data` covers the operation.",
+                )
 
         # ── Section 5: Detailed method documentation ──
         lines.append("\n---\n")

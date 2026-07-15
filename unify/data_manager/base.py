@@ -959,7 +959,10 @@ class BaseDataManager(BaseStateManager):
         include_ids: bool = False,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         """
-        Filter rows from a table by expression.
+        Filter rows from a table by expression (Orchestra evaluates
+        ``filter`` server-side). Prefer a selective ``filter=``; use
+        ``reduce`` to count/sum/group. Never download a large table into
+        Python to filter, count, or decide updates.
 
         Use this tool for **exact matches** on structured fields (ids, statuses,
         dates, numeric comparisons). For **semantic/meaning-based** lookups,
@@ -1245,10 +1248,11 @@ class BaseDataManager(BaseStateManager):
         group_by: Optional[Union[str, List[str]]] = None,
     ) -> Any:
         """
-        Compute aggregate metrics over rows.
+        Compute aggregate metrics over rows server-side. Prefer this over
+        ``filter`` + Python ``len``/sum/groupby — never download a large
+        table just to aggregate.
 
         Use this tool for **aggregations** like counts, sums, averages, min/max.
-        Much more efficient than fetching all rows and computing in Python.
 
         Parameters
         ----------
@@ -2122,7 +2126,8 @@ class BaseDataManager(BaseStateManager):
         destination: str | None = None,
     ) -> List[int]:
         """
-        Insert rows into a table.
+        Insert rows into a table via bulk create (prefer batches over
+        one-row-at-a-time loops).
 
         Use this to add new data to an existing table via efficient bulk
         inserts.  For large batch inserts with optional embedding, prefer
@@ -2205,10 +2210,11 @@ class BaseDataManager(BaseStateManager):
         destination: str | None = None,
     ) -> int:
         """
-        Update rows matching a filter and/or by log ids.
+        Update rows matching a filter and/or by log ids (in-place; ids stay
+        stable). Prefer one selective ``filter`` / ``log_ids`` update over
+        downloading rows into Python and updating one-by-one.
 
-        Use this to modify existing rows in place (Orchestra log ids stay
-        stable). Prefer a selective ``filter`` or known ``log_ids`` from
+        Prefer a selective ``filter`` or known ``log_ids`` from
         ``filter(..., include_ids=True)`` / ``return_ids_only=True``.
 
         Parameters
