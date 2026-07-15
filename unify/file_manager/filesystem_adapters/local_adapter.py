@@ -19,9 +19,12 @@ if TYPE_CHECKING:
 class LocalFileSystemAdapter(BaseFileSystemAdapter):
     """Adapter for a local directory tree with optional VM sync.
 
-    This adapter operates on ~/Unity/Local for user files. When sync is
-    enabled and a managed VM is configured (via SESSION_DETAILS.desktop_url),
-    the workspace directory is synchronized with the VM via rclone SFTP.
+    This adapter operates on the local workspace root (``get_local_root()``,
+    typically ``~/Unity/Local``) for user files. When no explicit ``root`` is
+    passed, that path is resolved on each access so HOME /
+    ``UNITY_LOCAL_ROOT`` changes take effect. When sync is enabled and a
+    managed VM is configured (via SESSION_DETAILS.desktop_url), the workspace
+    directory is synchronized with the VM via rclone SFTP.
 
     Reads are not confined to the workspace root: an absolute path anywhere on
     the local filesystem resolves through, so files staged outside the
@@ -47,20 +50,19 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
         Parameters
         ----------
         root : str | None, default None
-            Root directory for file operations. Defaults to ~/Unity/Local.
+            Root directory for file operations. When omitted, the root is
+            resolved lazily via ``get_local_root()`` on each access so HOME /
+            ``UNITY_LOCAL_ROOT`` changes are picked up (e.g. per-test isolation).
+            An explicit ``root`` is frozen at construction time.
         enable_sync : bool, default True
             Whether to enable VM file sync. Actual sync only occurs if
             SESSION_DETAILS.desktop_url is configured.
         """
-        if root is None:
-            from unify.file_manager.settings import get_local_root
-
-            root = get_local_root()
-
-        self._root = Path(root).expanduser().resolve()
-
-        # Ensure root directory exists
-        self._root.mkdir(parents=True, exist_ok=True)
+        # None => follow get_local_root(); otherwise freeze the explicit path.
+        self._explicit_root: Path | None = None
+        if root is not None:
+            self._explicit_root = Path(root).expanduser().resolve()
+            self._explicit_root.mkdir(parents=True, exist_ok=True)
 
         self._caps = FileSystemCapabilities(
             can_read=True,
@@ -72,6 +74,23 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
         # Sync component (lazy initialization)
         self._enable_sync = enable_sync
         self._sync_manager: Optional["SyncManager"] = None
+
+    @property
+    def _root(self) -> Path:
+        """Workspace root used for relative paths and attachment storage."""
+        if self._explicit_root is not None:
+            return self._explicit_root
+        from unify.file_manager.settings import get_local_root
+
+        root = Path(get_local_root()).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @_root.setter
+    def _root(self, value: str | Path) -> None:
+        """Pin the workspace root (tests / callers that override the path)."""
+        self._explicit_root = Path(value).expanduser().resolve()
+        self._explicit_root.mkdir(parents=True, exist_ok=True)
 
     @property
     def name(self) -> str:
