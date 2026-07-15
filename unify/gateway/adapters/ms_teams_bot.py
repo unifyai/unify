@@ -337,27 +337,28 @@ async def ms_teams_bot_messages_webhook(
         members_added = activity.get("membersAdded") or []
         recipient_id = (activity.get("recipient") or {}).get("id") or ""
         if any(member.get("id") == recipient_id for member in members_added):
-            # Personal-scope add fires with a live 1:1 conversation reference,
-            # so record the install and DM the installer a one-click connect
-            # link. The welcome is gated on ``created`` so it fires exactly once
-            # even though the add also emits an ``installationUpdate``.
+            # Bot added to a conversation (personal 1:1 or a team channel).
+            # Fires once per conversation, so it is the right place to welcome:
+            # personal chat and each team channel are distinct conversations and
+            # each must get its own welcome. ``_ensure_pending_install`` records
+            # the tenant and returns the connect link. Keyed on the bot-add
+            # event, not the tenant, so a second-scope add on an already-known
+            # tenant still greets.
             install = await _ensure_pending_install(activity)
-            if install and install.get("created"):
+            if install:
                 await _send_install_welcome(activity, install)
         return {"status": 200}
 
     # ``installationUpdate`` fires for app install/uninstall across scopes.
-    # ``add`` registers the tenant so the owner can bind it. We also welcome
-    # here (gated on ``created``) so an org-wide / admin-center install — which
-    # may never emit the personal ``conversationUpdate`` — still gets the one
-    # welcome DM; ``created`` dedups against the ``conversationUpdate`` add.
+    # ``add`` only registers the tenant so the owner can bind it — the welcome
+    # is NOT sent here. Any scope that can receive a proactive welcome
+    # (personal, team) also emits a ``conversationUpdate`` bot-add, which is the
+    # single place we greet; welcoming here too would double-send.
     # ``remove``/``remove-upgrade`` are teardown signals the local mirror does
     # not act on (no per-tenant token to revoke at Microsoft).
     if activity_type == "installationUpdate":
         if (activity.get("action") or "") == "add":
-            install = await _ensure_pending_install(activity)
-            if install and install.get("created"):
-                await _send_install_welcome(activity, install)
+            await _ensure_pending_install(activity)
         return {"status": 200}
 
     if activity_type != "message":
