@@ -120,31 +120,26 @@ def _precompute_embeddings(context: str) -> None:
 
 def _ensure_embeddings_exist(context: str) -> bool:
     """
-    Check if embeddings exist for the pure columns, create them if missing.
+    Ensure embeddings exist and are populated for the pure columns.
 
-    Returns True if any embeddings were created (scenario needs recommit).
+    Creates the column when missing and backfills orphaned values when the
+    field is registered but empty (e.g. after a prior rollback). Returns True
+    if any create/backfill ran so the scenario can be recommitted.
     """
-    try:
-        fields = unisdk.get_fields(context=context)
-    except Exception:
-        return False
-
     embeddings_created = False
     for column in _COLUMNS_TO_EMBED:
         embed_column = f"_{column}_emb"
-        if embed_column not in fields:
-            print(f"Missing embedding {embed_column} in {context}, creating...")
-            try:
-                ensure_vector_column(
-                    context=context,
-                    embed_column=embed_column,
-                    source_column=column,
-                    derived_expr=None,
-                )
+        try:
+            if ensure_vector_column(
+                context=context,
+                embed_column=embed_column,
+                source_column=column,
+                derived_expr=None,
+            ):
                 embeddings_created = True
-                print(f"  - Created {embed_column}")
-            except Exception as e:
-                print(f"  - Failed to create {embed_column}: {e}")
+                print(f"  - Ensured {embed_column}")
+        except Exception as e:
+            print(f"  - Failed to ensure {embed_column}: {e}")
 
     return embeddings_created
 
