@@ -136,7 +136,10 @@ def test_actor_lists_pipedream_backend_in_catalog(
     )
     assert "pipedream" in github_event.get("backends", [])
 
-    connections = scheduler._list_provider_trigger_connections(backend_id="pipedream")
+    connections = scheduler._list_provider_trigger_connections(
+        event_slug="github.issue_created",
+        backend_id="pipedream",
+    )
     listed = connections["details"].get("connections") or []
     assert any(item["connection_id"] == connection["connection_id"] for item in listed)
 

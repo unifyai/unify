@@ -132,7 +132,10 @@ def test_actor_discovery_tools_see_stub_backed_catalog_and_connection(
     events = catalog["details"].get("events") or []
     assert any(event.get("event_slug") == "github.issue_created" for event in events)
 
-    connections = scheduler._list_provider_trigger_connections(backend_id="composio")
+    connections = scheduler._list_provider_trigger_connections(
+        event_slug="github.issue_created",
+        backend_id="composio",
+    )
     listed = connections["details"].get("connections") or []
     assert any(item["connection_id"] == connection["connection_id"] for item in listed)
 

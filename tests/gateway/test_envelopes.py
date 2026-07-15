@@ -163,6 +163,38 @@ def test_unify_message_team_fanout_allows_missing_contact_id() -> None:
         UnifyMessageEnvelope.model_validate(raw_no_team)
 
 
+def test_unify_message_group_fanout_allows_missing_contact_id() -> None:
+    """Org chat-group fan-out is ordinary unify_message traffic.
+
+    Same contact_id omission rules as team_id: when ``group_id`` is set the
+    runtime resolves the sender by email.
+    """
+    raw = {
+        "thread": "unify_message",
+        "publish_timestamp": 1700000000.0,
+        "event": {
+            "assistant_id": "42",
+            "contacts": [],
+            "body": "Hello group",
+            "group_id": 9,
+            "sender_user_id": "user-1",
+            "sender_email": "dana@example.com",
+            "sender_name": "Dana",
+            "group_message_id": 11,
+        },
+    }
+    env = parse_envelope(raw)
+    assert isinstance(env, UnifyMessageEnvelope)
+    assert env.event.contact_id is None
+    assert env.event.group_id == 9
+    assert env.event.sender_email == "dana@example.com"
+
+    raw_no_group = {**raw, "event": {**raw["event"]}}
+    raw_no_group["event"].pop("group_id")
+    with pytest.raises(ValidationError):
+        UnifyMessageEnvelope.model_validate(raw_no_group)
+
+
 def test_system_event_envelope_requires_event_type() -> None:
     raw = {
         "thread": "unity_system_event",

@@ -179,6 +179,8 @@ class UnifyMeetReceived(Event):
     room_name: str | None = None
     opening_config: dict | None = None
     call_session_id: str | None = None
+    # Org multi-party roster: humans + peer assistants with contact_ids.
+    participants: list[dict] | None = None
 
 
 @dataclass
@@ -240,6 +242,8 @@ class InboundUnifyMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
     engaged: bool = True
+    participant_names: list[str] | None = None
+    participant_contact_ids: list[int] | None = None
 
 
 @dataclass
@@ -1040,6 +1044,10 @@ class UnifyMessageReceived(Event):
     # the room must pass this team_id back to ``send_unify_message``.
     team_id: int | None = None
     team_name: str = ""
+    # Set when the message was posted in an org chat group (non-team room).
+    # Same reply routing as team_id: pass group_id back to
+    # ``send_unify_message`` to reply in the room.
+    group_id: int | None = None
 
 
 @dataclass
@@ -1103,6 +1111,8 @@ class OutboundUnifyMeetUtterance(Event):
 
     contact: dict
     content: str
+    participant_names: list[str] | None = None
+    participant_contact_ids: list[int] | None = None
 
 
 @dataclass
@@ -1237,6 +1247,10 @@ class UnifyMessageSent(Event):
     content: str
     # List of attachment dicts with full metadata.
     attachments: list[dict] = field(default_factory=list)
+    # When set, the outbound message was posted into a team or org chat
+    # group room rather than a 1:1 Console thread.
+    team_id: int | None = None
+    group_id: int | None = None
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None

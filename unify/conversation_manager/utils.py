@@ -13,12 +13,14 @@ def dispatch_livekit_agent(
     record: bool = True,
     assistant_id: str = "",
     user_id: str = "",
+    agent_name: str | None = None,
 ):
     """
     Dispatch a LiveKit agent via the communication service.
 
-    The room_name (from make_room_name()) is used as both the LiveKit room
-    name and the agent worker registration name.
+    By default ``room_name`` is used as both the LiveKit room name and the
+    agent worker registration name. Pass ``agent_name`` when they must differ
+    (org multi-assistant rooms share one room but register distinct workers).
 
     This is a fire-and-forget operation - we dispatch and move on regardless of
     the result. The function is resilient to:
@@ -36,6 +38,7 @@ def dispatch_livekit_agent(
         )
         return False
 
+    livekit_agent_name = agent_name or room_name
     try:
         response = requests.post(
             f"{unity_comms_url}/phone/dispatch-livekit-agent",
@@ -43,7 +46,7 @@ def dispatch_livekit_agent(
             # valid user API key or the platform admin key here.
             headers={"Authorization": f"Bearer {SESSION_DETAILS.unify_key}"},
             json={
-                "livekit_agent_name": room_name,
+                "livekit_agent_name": livekit_agent_name,
                 "room_name": room_name,
                 "record": record,
                 "assistant_id": assistant_id,
