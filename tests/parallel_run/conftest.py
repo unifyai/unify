@@ -24,6 +24,9 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 TESTS_DIR = REPO_ROOT / "tests"
 SCRIPT_PATH = TESTS_DIR / "parallel_run.sh"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+# Kept outside fixtures/ so directory-discovery meta-tests do not spawn the
+# intentional hang session used only by --session-timeout coverage.
+HANG_FIXTURES_DIR = Path(__file__).parent / "hang_fixtures"
 PYTEST_LOGS_DIR = REPO_ROOT / "logs" / "pytest"
 
 
@@ -317,6 +320,7 @@ class ParallelRunner:
     def __init__(self):
         self.script_path = SCRIPT_PATH
         self.fixtures_dir = FIXTURES_DIR
+        self.hang_fixtures_dir = HANG_FIXTURES_DIR
         self.repo_root = REPO_ROOT
         self._created_sessions: List[tuple[str, str]] = []  # (socket, session_name)
         # Generate a unique socket name for this runner instance so all runs
@@ -543,6 +547,11 @@ class ParallelRunner:
     def fixture_path(self, *parts: str) -> str:
         """Get the path to a fixture file relative to repo root."""
         path = self.fixtures_dir.joinpath(*parts)
+        return str(path.relative_to(self.repo_root))
+
+    def hang_fixture_path(self, *parts: str) -> str:
+        """Get the path to a hang-only fixture relative to repo root."""
+        path = self.hang_fixtures_dir.joinpath(*parts)
         return str(path.relative_to(self.repo_root))
 
     def cleanup(self):
