@@ -250,7 +250,7 @@ async def test_stop_task_change_of_mind(initialized_cm):
     result1 = await cm.step_until_wait(
         SMSReceived(
             contact=BOSS,
-            content="Create a reminder to call Bob tomorrow at 3pm.",
+            content="Create a reminder to call Bob tomorrow at 15:00 UTC.",
         ),
     )
     assert get_in_flight_action_count(cm) >= 1, assertion_failed(

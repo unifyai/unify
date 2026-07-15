@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 
 UPDATE_QUERIES: list[str] = [
-    "Create a new task: Call Alice about the Q3 budget tomorrow at 09:00.",
+    "Create a new task: Call Alice about the Q3 budget tomorrow at 09:00 UTC.",
     "Delete the task named 'Old Onboarding Checklist'.",
 ]
 
