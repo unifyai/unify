@@ -140,6 +140,32 @@ class TestBuildOfflineRunnerEnv:
         assert env_int["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
         assert env_str["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "77"
 
+    def test_provider_event_env_requires_dispatch_fields(self):
+        with pytest.raises(ValueError, match="provider_event offline runs require"):
+            self._make_env(source_type="provider_event")
+
+    def test_provider_event_env_includes_dispatch_identity(self):
+        env = self._make_env(
+            source_type="provider_event",
+            provider_event_operation_id="op-1",
+            provider_event_run_id=42,
+            provider_event_binding_id="binding-1",
+            provider_event_receipt_id="receipt-1",
+            provider_event_context_ref="blob://binding-1/receipt-1",
+            provider_event_issued_at="2030-04-10T09:00:00+00:00",
+        )
+        assert env["UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"] == "op-1"
+        assert env["UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID"] == "42"
+        assert env["UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"] == "binding-1"
+        assert env["UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"] == "receipt-1"
+        assert (
+            env["UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"]
+            == "blob://binding-1/receipt-1"
+        )
+        assert env["UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT"] == (
+            "2030-04-10T09:00:00+00:00"
+        )
+
 
 # --------------------------------------------------------------------------- #
 # build_offline_run_key                                                       #

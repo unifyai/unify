@@ -187,6 +187,10 @@ async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
     # _mark_environment_ready autouse fixture; no need to set inline.
 
     # Simulate an attachment download: save a .txt file with known content.
+    from pathlib import Path
+
+    from unify.file_manager.settings import get_local_root
+
     fm = ManagerRegistry.get_file_manager()
     saved_path = fm.save_attachment(
         "att-notes-1",
@@ -195,6 +199,11 @@ async def test_downloaded_attachment_readable_by_actor(initialized_cm_codeact):
         b"Attendees: Sarah Chen, Marcus Webb, Priya Patel\n"
         b"Decision: launch date set for March 15th\n"
         b"Action item: Marcus to prepare the budget forecast by Friday\n",
+    )
+    abs_saved = Path(get_local_root()) / saved_path
+    assert abs_saved.is_file(), (
+        f"save_attachment did not create {abs_saved} under get_local_root(); "
+        f"saved_path={saved_path!r}"
     )
 
     result = await cm.step_until_wait(

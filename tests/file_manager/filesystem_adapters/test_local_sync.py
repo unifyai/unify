@@ -12,10 +12,24 @@ class TestLocalFileSystemAdapterSync:
     """Tests for LocalFileSystemAdapter sync integration."""
 
     def test_adapter_default_root(self, tmp_path):
-        """Test adapter default root is ~/Unity."""
-        # With explicit root
+        """Test adapter with an explicit root uses that path."""
         adapter = LocalFileSystemAdapter(str(tmp_path), enable_sync=False)
-        assert adapter._root == tmp_path
+        assert adapter._root == tmp_path.resolve()
+
+    def test_adapter_default_root_tracks_home(self, tmp_path, monkeypatch):
+        """Default root follows get_local_root() when HOME changes."""
+        home1 = tmp_path / "home1"
+        home2 = tmp_path / "home2"
+        home1.mkdir()
+        home2.mkdir()
+
+        monkeypatch.setenv("HOME", str(home1))
+        adapter = LocalFileSystemAdapter(enable_sync=False)
+        assert adapter._root == (home1 / "Unity" / "Local").resolve()
+
+        monkeypatch.setenv("HOME", str(home2))
+        assert adapter._root == (home2 / "Unity" / "Local").resolve()
+        assert (home2 / "Unity" / "Local").is_dir()
 
     def test_adapter_sync_disabled_by_default_no_session(self, tmp_path):
         """Test sync is disabled when no SESSION_DETAILS configured."""

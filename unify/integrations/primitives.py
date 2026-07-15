@@ -886,7 +886,7 @@ class IntegrationPrimitives:
         if approval_audit_id is not None:
             effective_scope["approval_audit_id"] = approval_audit_id
 
-        return integration_ops.run_tool(
+        return await integration_ops.async_run_tool(
             tool_id,
             arguments or {},
             confirmation_token=confirmation_token,

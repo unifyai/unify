@@ -53,6 +53,13 @@ from unify.task_scheduler.machine_state import (
     remember_live_task_run_provenance,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.provider_event_context import (
+    fetch_provider_event_context,
+    provider_event_context_as_untrusted_data,
+    verify_precreated_provider_event_run,
+)
+from unify.task_scheduler.provider_event_dispatch import ProviderEventDispatchRequest
+from unify.task_scheduler.provider_event_execution import resolve_captured_task_revision
 from unify.task_scheduler.types.run_source import RunSource
 
 TASK_RUN_UPDATE_PATH = "/task-run/update"
@@ -111,6 +118,36 @@ def _optional_int_env(name: str) -> int | None:
     if not value:
         return None
     return int(value)
+
+
+def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
+    """Construct one offline provider-event dispatch authorization from env."""
+
+    issued_at_raw = _require_env("UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT")
+    try:
+        issued_at = datetime.fromisoformat(issued_at_raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError(
+            "Invalid UNITY_OFFLINE_PROVIDER_EVENT_ISSUED_AT",
+        ) from exc
+    if issued_at.tzinfo is None:
+        issued_at = issued_at.replace(tzinfo=timezone.utc)
+    return ProviderEventDispatchRequest(
+        operation_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"),
+        run_id=int(_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID")),
+        run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
+        assistant_id=_require_env("ASSISTANT_ID"),
+        task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
+        binding_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
+        receipt_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"),
+        accepted_activation_revision=_require_env(
+            "UNITY_OFFLINE_TASK_ACTIVATION_REVISION",
+        ),
+        source_type="provider_event",
+        dispatch_mode="offline",
+        event_context_ref=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"),
+        issued_at=issued_at,
+    )
 
 
 def _load_config_from_env() -> OfflineTaskConfig:
@@ -476,6 +513,32 @@ class _OfflineTaskExecutionDelegate:
             self._actor = None
 
 
+async def _execute_provider_event_offline_task(
+    config: OfflineTaskConfig,
+    dispatch: ProviderEventDispatchRequest,
+) -> Any:
+    """Execute one offline provider-event run via captured-revision instance."""
+
+    event_context = fetch_provider_event_context(dispatch)
+    verify_precreated_provider_event_run(dispatch)
+    untrusted = provider_event_context_as_untrusted_data(event_context)
+    captured_task_revision = resolve_captured_task_revision(task_id=dispatch.task_id)
+
+    delegate = _OfflineTaskExecutionDelegate(config)
+    token = current_task_execution_delegate.set(delegate)
+    try:
+        scheduler = TaskScheduler()
+        handle = await scheduler.start_provider_event_instance(
+            request=dispatch,
+            captured_task_revision=captured_task_revision,
+            provider_event_context=untrusted,
+        )
+        return await handle.result()
+    finally:
+        current_task_execution_delegate.reset(token)
+        await delegate.close()
+
+
 async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task through the scheduler-owned lifecycle."""
 
@@ -523,10 +586,13 @@ async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     SESSION_DETAILS.populate_from_env()
     _ensure_offline_client_bundle()
     unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
+    if config.source_type is RunSource.provider_event:
+        dispatch = _load_provider_event_dispatch_from_env()
+        return await _execute_provider_event_offline_task(config, dispatch)
     if not _is_scheduler_managed(config):
         raise RuntimeError(
             "Offline task runner only supports scheduler-managed scheduled, "
-            "triggered, and explicit task runs.",
+            "triggered, explicit, and provider_event task runs.",
         )
     return await _execute_scheduler_managed_task(config)
 

@@ -60,6 +60,28 @@ def run_tool(
         return _request_failed("run_integration_tool", exc)
 
 
+async def async_run_tool(
+    tool_id: str,
+    arguments: dict[str, Any],
+    *,
+    confirmation_token: Optional[str] = None,
+    approval_audit_id: Optional[int] = None,
+    **scope: Any,
+) -> Any:
+    try:
+        return await unisdk.async_run_integration_tool(
+            tool_id,
+            arguments,
+            confirmation_token=confirmation_token,
+            approval_audit_id=approval_audit_id,
+            **_clean_scope(scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("async_run_integration_tool", exc)
+
+
 def get_tool_policy(connection_id: str, **scope: Any) -> Any:
     try:
         return unisdk.get_integration_tool_policy(
