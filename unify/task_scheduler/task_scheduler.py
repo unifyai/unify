@@ -2402,16 +2402,22 @@ class TaskScheduler(BaseTaskScheduler):
     def _list_provider_trigger_connections(
         self,
         *,
+        event_slug: str,
+        schema_version: str = "1",
         backend_id: str | None = None,
     ) -> ToolOutcome:
-        """List assistant-owned connections eligible for curated GitHub triggers.
+        """List assistant-owned connections eligible for one curated event.
 
         Returns provider-neutral connection summaries without secret references
         or credential material suitable for model-visible actor responses.
         """
 
+        catalog = typed_tasks_client.get_trigger_catalog()
         connections = list_eligible_provider_trigger_connections(
+            event_slug=event_slug,
+            schema_version=schema_version,
             backend_id=backend_id,
+            catalog_events=catalog.get("events"),
         )
         return {
             "outcome": "provider trigger connections listed",
