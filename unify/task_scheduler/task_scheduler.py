@@ -3057,6 +3057,7 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
+        browser_target = payload.pop("browser_target", None)
         name = payload.pop("name")
         description = payload.pop("description")
 
@@ -3102,6 +3103,7 @@ class TaskScheduler(BaseTaskScheduler):
             entries={
                 "custom_key": custom_key,
                 "custom_hash": custom_hash,
+                "browser_target": browser_target,
             },
         )
         return task_id
@@ -3127,6 +3129,7 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
+        browser_target = payload.pop("browser_target", None)
         name = payload.pop("name", None)
         description = payload.pop("description", None)
 
@@ -3176,6 +3179,7 @@ class TaskScheduler(BaseTaskScheduler):
             "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
+            "browser_target": browser_target,
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(
