@@ -179,6 +179,8 @@ class UnifyMeetReceived(Event):
     room_name: str | None = None
     opening_config: dict | None = None
     call_session_id: str | None = None
+    # Org multi-party roster: humans + peer assistants with contact_ids.
+    participants: list[dict] | None = None
 
 
 @dataclass
@@ -240,6 +242,8 @@ class InboundUnifyMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
     engaged: bool = True
+    participant_names: list[str] | None = None
+    participant_contact_ids: list[int] | None = None
 
 
 @dataclass
@@ -1103,6 +1107,8 @@ class OutboundUnifyMeetUtterance(Event):
 
     contact: dict
     content: str
+    participant_names: list[str] | None = None
+    participant_contact_ids: list[int] | None = None
 
 
 @dataclass

@@ -144,6 +144,7 @@ class LivekitCallManager:
         self.room_name = ""
         self.call_session_id = ""
         self.unify_meet_call_session_id = ""
+        self.unify_meet_participants: list[dict] = []
         self.provider_call_sid = ""
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
@@ -863,6 +864,17 @@ class LivekitCallManager:
                 extra_env=extra_env or None,
             )
 
+    async def refresh_unify_meet_roster(self, participants: list[dict] | None) -> None:
+        """Update in-memory org-call roster and push it to the voice agent."""
+        roster = list(participants or [])
+        self.unify_meet_participants = roster
+        if self._event_broker is None:
+            return
+        await self._event_broker.publish(
+            "app:call:status",
+            json.dumps({"type": "unify_meet_roster", "participants": roster}),
+        )
+
     async def start_unify_meet(
         self,
         contact: dict | None,
@@ -871,6 +883,7 @@ class LivekitCallManager:
         *,
         opening_config: dict | None = None,
         call_session_id: str | None = None,
+        participants: list[dict] | None = None,
     ):
         if self.has_active_call:
             if self._clear_stale_dispatch_state():
@@ -932,6 +945,7 @@ class LivekitCallManager:
         room_name = room_name or make_room_name(self.assistant_id, "meet")
         self.room_name = room_name
         self.unify_meet_call_session_id = call_session_id or ""
+        self.unify_meet_participants = list(participants or [])
         extra_metadata = {}
         if opening_config:
             extra_metadata["opening_config"] = opening_config
@@ -939,6 +953,8 @@ class LivekitCallManager:
             extra_metadata["call_session_id"] = call_session_id
         if gate_reason:
             extra_metadata["hang_up_gate_reason"] = gate_reason
+        if self.unify_meet_participants:
+            extra_metadata["participants"] = self.unify_meet_participants
         extra_env = {
             key: value
             for key, value in {
@@ -947,6 +963,11 @@ class LivekitCallManager:
                 ),
                 "CALL_SESSION_ID": call_session_id,
                 "hang_up_gate_reason": gate_reason or None,
+                "UNIFY_MEET_PARTICIPANTS": (
+                    json.dumps(self.unify_meet_participants)
+                    if self.unify_meet_participants
+                    else None
+                ),
             }.items()
             if value
         } or None
@@ -1660,6 +1681,7 @@ class LivekitCallManager:
         self._call_channel = None
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
+        self.unify_meet_participants = []
         self.engaged_contacts = {}
         self.engaged_labels = set()
         self.known_speaker_labels = set()

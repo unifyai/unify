@@ -1139,9 +1139,8 @@ async def log_message(
     else:
         sender_id, receiver_ids = contact_id, [SESSION_DETAILS.self_contact_id]
 
-    # For browser-meet utterances (Google Meet / Teams Meet), resolve
-    # participant names to contact IDs so receiver_ids reflects all known
-    # meeting participants.
+    # For browser-meet and Unify Meet utterances, resolve participant names /
+    # contact_ids so receiver_ids reflects all known meeting participants.
     meet_participants_meta: list[dict] = []
     if isinstance(
         event,
@@ -1150,11 +1149,21 @@ async def log_message(
             OutboundGoogleMeetUtterance,
             InboundTeamsMeetUtterance,
             OutboundTeamsMeetUtterance,
+            InboundUnifyMeetUtterance,
+            OutboundUnifyMeetUtterance,
         ),
     ):
+        participant_contact_ids = getattr(event, "participant_contact_ids", None) or []
         participant_names = getattr(event, "participant_names", None) or []
-        if participant_names:
-            resolved_ids: set[int] = set()
+        resolved_ids: set[int] = set()
+        if participant_contact_ids:
+            for raw_cid in participant_contact_ids:
+                if raw_cid is None:
+                    continue
+                cid = int(raw_cid)
+                resolved_ids.add(cid)
+                meet_participants_meta.append({"name": None, "contact_id": cid})
+        elif participant_names:
             for name in participant_names:
                 resolved = _resolve_meet_name_to_contact(cm, name)
                 cid = resolved.get("contact_id") if resolved else None
@@ -1163,9 +1172,11 @@ async def log_message(
                 meet_participants_meta.append(
                     {"name": name, "contact_id": cid},
                 )
+        if resolved_ids:
             if role == "Assistant":
                 if contact_id is not None:
                     resolved_ids.add(contact_id)
+                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
             else:
@@ -1293,10 +1304,11 @@ async def log_message(
                     OutboundGoogleMeetUtterance,
                     InboundTeamsMeetUtterance,
                     OutboundTeamsMeetUtterance,
+                    InboundUnifyMeetUtterance,
+                    OutboundUnifyMeetUtterance,
                 ),
             ):
-                participant_names = getattr(event, "participant_names", None) or []
-                if participant_names:
+                if meet_participants_meta:
                     metadata = metadata or {}
                     metadata["meet_participants"] = meet_participants_meta
 
