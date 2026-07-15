@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -69,7 +71,7 @@ class FakeIntegrationClient:
         self.calls.append(("get_tool_schema", (tool_id,), scope))
         return {"tool_id": tool_id, "input_schema": {"type": "object"}}
 
-    def run_tool(self, tool_id, arguments, **payload):
+    async def run_tool(self, tool_id, arguments, **payload):
         self.calls.append(("run_tool", (tool_id, arguments), payload))
         return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
 
@@ -109,6 +111,7 @@ class FakeIntegrationClient:
 def patch_ops_from_client(monkeypatch, client: FakeIntegrationClient) -> None:
     monkeypatch.setattr(ops_module, "list_connections", client.list_connections)
     monkeypatch.setattr(ops_module, "run_tool", client.run_tool)
+    monkeypatch.setattr(ops_module, "async_run_tool", client.run_tool)
     monkeypatch.setattr(ops_module, "get_tool_policy", client.get_tool_policy)
     monkeypatch.setattr(ops_module, "patch_tool_policy", client.patch_tool_policy)
     monkeypatch.setattr(
@@ -218,7 +221,8 @@ def stub_native_app(monkeypatch, *, app_slug: str, function_names: list[str]) ->
     monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
 
-def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> None:
+@pytest.mark.anyio
+async def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> None:
     calls: list[tuple[str, tuple, dict]] = []
 
     def helper(name):
@@ -236,6 +240,16 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
     monkeypatch.setattr(
         "unify.integrations.ops.unisdk.run_integration_tool",
         helper("run_tool"),
+        raising=False,
+    )
+
+    async def async_helper(*args, **kwargs):
+        calls.append(("async_run_tool", args, kwargs))
+        return {"helper": "async_run_tool"}
+
+    monkeypatch.setattr(
+        "unify.integrations.ops.unisdk.async_run_integration_tool",
+        async_helper,
         raising=False,
     )
     monkeypatch.setattr(
@@ -273,6 +287,12 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
         {"query": "alice"},
         confirmation_token="confirm",
         approval_audit_id=17,
+        owner_scope="assistant",
+    )
+    await ops_module.async_run_tool(
+        "tool-2",
+        {"query": "bob"},
+        confirmation_token="confirm-2",
         owner_scope="assistant",
     )
     ops_module.get_tool_policy(
@@ -317,6 +337,15 @@ def test_ops_functions_delegate_to_unify_integration_helpers(monkeypatch) -> Non
             {
                 "confirmation_token": "confirm",
                 "approval_audit_id": 17,
+                "owner_scope": "assistant",
+            },
+        ),
+        (
+            "async_run_tool",
+            ("tool-2", {"query": "bob"}),
+            {
+                "confirmation_token": "confirm-2",
+                "approval_audit_id": None,
                 "owner_scope": "assistant",
             },
         ),
@@ -1096,7 +1125,7 @@ async def test_provider_runtime_envelopes_are_returned_without_hiding_failures(
             super().__init__()
             self.envelope = envelope
 
-        def run_tool(self, tool_id, arguments, **payload):
+        async def run_tool(self, tool_id, arguments, **payload):
             self.calls.append(("run_tool", (tool_id, arguments), payload))
             return dict(self.envelope)
 
@@ -1123,3 +1152,40 @@ async def test_provider_runtime_envelopes_are_returned_without_hiding_failures(
         patch_ops_from_client(monkeypatch, client)
         primitives = IntegrationPrimitives(owner_scope={})
         assert await primitives.execute_tool("tool-1", {"query": "alice"}) == envelope
+
+
+@pytest.mark.anyio
+async def test_execute_tool_overlaps_concurrent_async_run_tool_calls(
+    monkeypatch,
+) -> None:
+    """execute_tool must await async IO so gather can overlap provider calls."""
+
+    in_flight = 0
+    max_in_flight = 0
+    gate = asyncio.Lock()
+
+    async def slow_async_run_tool(tool_id, arguments, **_payload):
+        nonlocal in_flight, max_in_flight
+        async with gate:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.15)
+        async with gate:
+            in_flight -= 1
+        return {"status": "ok", "tool_id": tool_id, "arguments": arguments}
+
+    monkeypatch.setattr(ops_module, "async_run_tool", slow_async_run_tool)
+    primitives = IntegrationPrimitives(owner_scope={"assistant_id": 42})
+
+    started = time.monotonic()
+    results = await asyncio.gather(
+        *(
+            primitives.execute_tool(f"tool-{i}", {"i": i}, assistant_id=42)
+            for i in range(5)
+        ),
+    )
+    elapsed = time.monotonic() - started
+
+    assert len(results) == 5
+    assert max_in_flight >= 4
+    assert elapsed < 0.45
