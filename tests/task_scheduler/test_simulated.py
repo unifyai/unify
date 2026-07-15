@@ -12,7 +12,7 @@ from unify.task_scheduler.simulated import (
 from tests.helpers import (
     _handle_project,
     DEFAULT_TIMEOUT,
-    _normalize_alnum_lower,
+    _unique_token,
 )
 
 
@@ -60,26 +60,28 @@ async def test_start_and_ask():
 async def test_stateful_memory_serial_asks():
     """
     Two consecutive .ask() calls should share the same conversation context.
+
+    Seed a unique token in the first turn and require the second turn to
+    recall it, rather than asking the model to invent a codename.
     """
     ts = SimulatedTaskScheduler()
 
-    # 1) Ask for a unique codename – any non-empty string
+    token = _unique_token("MARKER")
     h1 = await ts.ask(
-        "Please invent a codename for our secret task-force. "
-        "Respond with only the **single-word** codename and **nothing else**.",
+        "Please give a one-sentence note about the task list. "
+        f"Ensure the note includes this exact marker verbatim: {token}",
     )
-    codename = await h1.result()
-    codename = _normalize_alnum_lower(codename.replace("codename", ""))
-    assert codename, "Codename should not be empty"
+    first_answer = (await h1.result()).strip()
+    assert first_answer, "First answer should not be empty"
 
-    # 2) Ask what codename was suggested
-    h2 = await ts.ask("Great. What codename did you propose earlier?")
-    answer2 = (await h2.result()).lower()
-    answer2 = _normalize_alnum_lower(answer2.replace("codename", ""))
-
-    assert (codename in answer2) or (
-        answer2 in codename
-    ), "LLM should recall the previous codename"
+    h2 = await ts.ask(
+        "What exact marker did you include earlier? Quote it verbatim.",
+    )
+    answer2 = await h2.result()
+    assert (
+        isinstance(answer2, str) and answer2.strip()
+    ), "Second answer should be non-empty"
+    assert token in answer2, "LLM should recall the previously mentioned marker"
 
 
 # ────────────────────────────────────────────────────────────────────────────
