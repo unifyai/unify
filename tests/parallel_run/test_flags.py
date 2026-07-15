@@ -155,7 +155,7 @@ class TestSessionTimeoutFlag:
             "3",
             "--timeout",
             "60",
-            runner.fixture_path("test_hang.py"),
+            runner.hang_fixture_path("test_hang.py"),
         )
         # Hung session is killed by timeout(1) → non-zero pytest status → runner exit 1
         # (not whole-run exit 2, which only fires when sessions are still pending).
