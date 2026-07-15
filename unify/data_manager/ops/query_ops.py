@@ -31,6 +31,7 @@ def filter_impl(
     order_by: Optional[str] = None,
     descending: bool = False,
     return_ids_only: bool = False,
+    include_ids: bool = False,
 ) -> Union[List[Dict[str, Any]], List[int]]:
     """
     Implementation of filter operation.
@@ -57,6 +58,10 @@ def filter_impl(
         When True and order_by is set, sort in descending order.
     return_ids_only : bool, default False
         When True, returns only log IDs instead of full row data.
+    include_ids : bool, default False
+        When True (and ``return_ids_only`` is False), each row dict includes
+        ``_log_id`` with the Orchestra log id. Mutually exclusive with
+        ``return_ids_only``.
 
     Returns
     -------
@@ -66,18 +71,21 @@ def filter_impl(
     Raises
     ------
     ValueError
-        If limit > 1000.
+        If limit > 1000, or both return_ids_only and include_ids are True.
     """
     if limit > 1000:
         raise ValueError("Limit must be <= 1000")
+    if return_ids_only and include_ids:
+        raise ValueError("return_ids_only and include_ids are mutually exclusive")
 
     logger.debug(
-        "Filtering context=%s filter=%s limit=%d offset=%d return_ids_only=%s",
+        "Filtering context=%s filter=%s limit=%d offset=%d return_ids_only=%s include_ids=%s",
         context,
         filter,
         limit,
         offset,
         return_ids_only,
+        include_ids,
     )
 
     filter_expr = normalize_filter_expr(filter)
@@ -115,9 +123,14 @@ def filter_impl(
     results = []
     for log in logs or []:
         if hasattr(log, "entries") and isinstance(log.entries, dict):
-            results.append(log.entries)
+            row = dict(log.entries)
         elif isinstance(log, dict):
-            results.append(log)
+            row = dict(log)
+        else:
+            continue
+        if include_ids and hasattr(log, "id"):
+            row["_log_id"] = log.id
+        results.append(row)
 
     return results
 

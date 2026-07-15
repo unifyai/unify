@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import pytest
 
 from unify.secret_manager.simulated import (
@@ -9,6 +8,7 @@ from unify.secret_manager.simulated import (
 
 from tests.helpers import (
     _handle_project,
+    _unique_token,
 )
 
 
@@ -50,21 +50,31 @@ async def test_start_and_ask():
 @pytest.mark.llm_call
 @_handle_project
 async def test_stateful_memory_serial_asks():
+    """
+    Two consecutive .ask() calls share context because the manager keeps a
+    stateful LLM.
+
+    Seed a unique token in the first turn and require the second turn to
+    recall it, rather than asking the model to invent a placeholder.
+    """
     sm = SimulatedSecretManager()
 
+    token = _unique_token("MARKER")
     h1 = await sm.ask(
-        "Please propose a safe placeholder, output only the placeholder name like ${token_name}.",
+        "Please give a one-sentence note about the secret inventory. "
+        f"Ensure the note includes this exact marker verbatim: {token}",
     )
-    placeholder = (await h1.result()).strip()
-    assert placeholder, "Placeholder should not be empty"
-    # Extract a single ${key} token from the first answer
-    m = re.search(r"\$\{[^}]+\}", placeholder)
-    assert m, "Response should contain a ${name} placeholder token"
-    token = m.group(0).lower()
+    first_answer = (await h1.result()).strip()
+    assert first_answer, "First answer should not be empty"
 
-    h2 = await sm.ask("What placeholder did you just propose?")
-    answer2 = (await h2.result()).lower()
-    assert token in answer2, "LLM should recall the placeholder token it generated"
+    h2 = await sm.ask(
+        "What exact marker did you include earlier? Quote it verbatim.",
+    )
+    answer2 = await h2.result()
+    assert (
+        isinstance(answer2, str) and answer2.strip()
+    ), "Second answer should be non-empty"
+    assert token in answer2, "LLM should recall the previously mentioned marker"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

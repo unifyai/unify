@@ -13,6 +13,7 @@ from unify.web_searcher.simulated import (
 # keeps each test isolated in its own Unify project / trace context
 from tests.helpers import (
     _handle_project,
+    _unique_token,
 )
 
 
@@ -55,19 +56,29 @@ async def test_stateful_memory_serial_asks():
     """
     Two consecutive .ask() calls share context because the manager keeps a
     stateful LLM.
+
+    Seed a unique token in the first turn and require the second turn to
+    recall it, rather than asking the model to invent one (which trips the
+    read-only ask mutation guard).
     """
     ws = SimulatedWebSearcher()
 
+    token = _unique_token("MARKER")
     h1 = await ws.ask(
-        "Please propose a short unique report code for my research, "
-        "and reply with only that code.",
+        "Please give a one-sentence research note. "
+        f"Ensure the note includes this exact marker verbatim: {token}",
     )
-    code = (await h1.result()).strip()
-    assert code, "Code should not be empty"
+    first_answer = (await h1.result()).strip()
+    assert first_answer, "First answer should not be empty"
 
-    h2 = await ws.ask("Great. What code did you just propose?")
-    answer2 = (await h2.result()).lower()
-    assert code.lower() in answer2, "LLM should recall the code it generated"
+    h2 = await ws.ask(
+        "What exact marker did you include earlier? Quote it verbatim.",
+    )
+    answer2 = await h2.result()
+    assert (
+        isinstance(answer2, str) and answer2.strip()
+    ), "Second answer should be non-empty"
+    assert token in answer2, "LLM should recall the previously mentioned marker"
 
 
 @_handle_project
