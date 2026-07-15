@@ -156,6 +156,16 @@ purely from memory.
   - `await primitives.<manager>.update(...)`, `.execute(...)`, `.refactor(...)` \
 are **impure** (they mutate state or start work).
 
+- **Orchestra / `Data/*` tables (HARD — never client-scan)**:
+  - Push predicates and aggregations into `primitives.data.filter` / \
+`.reduce` / `.filter_join` / `.reduce_join` / `.update_rows`.
+  - Never pull a large table into Python (`filter` with empty/vacuous \
+predicate + high `limit`, then `for row in rows:` / pandas) to count, \
+aggregate, or decide updates.
+  - Prefer `reduce` over fetch+`len`/sum/group; prefer one selective \
+`update_rows(..., filter=...)` (or `update_by_ids` on ids from \
+`include_ids=True`) over download-then-per-row updates.
+
 - **Mutation methods are self-contained**: when storing or modifying records \
 via `.update(...)` / `.execute(...)` / `.refactor(...)`, go straight to the \
 mutation method — do NOT first call `.ask(...)` on the **same manager** to \

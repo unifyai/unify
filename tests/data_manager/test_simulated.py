@@ -304,6 +304,36 @@ def test_filter_with_return_ids_only_and_filter(seeded_dm):
     assert len(ids) == 2
 
 
+def test_filter_with_include_ids(seeded_dm):
+    """filter with include_ids=True attaches _log_id to each row."""
+    rows = seeded_dm.filter("test/products", include_ids=True, limit=2)
+    assert len(rows) == 2
+    assert all("_log_id" in r for r in rows)
+    assert all(isinstance(r["_log_id"], int) for r in rows)
+    # Default filter strips internal ids
+    bare = seeded_dm.filter("test/products", limit=2)
+    assert all("_log_id" not in r for r in bare)
+
+
+def test_update_rows_by_log_ids(seeded_dm):
+    """update_rows with log_ids updates in place."""
+    ids = seeded_dm.filter("test/products", return_ids_only=True)
+    updated = seeded_dm.update_rows(
+        "test/products",
+        updates={"category": "updated"},
+        log_ids=ids[:2],
+        overwrite=False,
+    )
+    assert updated == 2
+    rows = seeded_dm.filter(
+        "test/products",
+        filter="category == 'updated'",
+        include_ids=True,
+    )
+    assert len(rows) == 2
+    assert {r["_log_id"] for r in rows} == set(ids[:2])
+
+
 def test_search_basic(seeded_dm):
     """search should return results with similarity scores."""
     # Add some text content for searching

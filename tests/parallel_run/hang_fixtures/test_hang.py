@@ -1,4 +1,4 @@
-"""Fixture that never finishes — used to verify --session-timeout kills hung sessions."""
+"""Hang-only fixture used to verify --session-timeout kills hung sessions."""
 
 import time
 

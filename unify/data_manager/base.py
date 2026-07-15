@@ -956,9 +956,13 @@ class BaseDataManager(BaseStateManager):
         order_by: Optional[str] = None,
         descending: bool = False,
         return_ids_only: bool = False,
+        include_ids: bool = False,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         """
-        Filter rows from a table by expression.
+        Filter rows from a table by expression (Orchestra evaluates
+        ``filter`` server-side). Prefer a selective ``filter=``; use
+        ``reduce`` to count/sum/group. Never download a large table into
+        Python to filter, count, or decide updates.
 
         Use this tool for **exact matches** on structured fields (ids, statuses,
         dates, numeric comparisons). For **semantic/meaning-based** lookups,
@@ -1031,6 +1035,13 @@ class BaseDataManager(BaseStateManager):
             (e.g., for deletion or batched updates).
 
             Example: ``ids = dm.filter(ctx, filter="...", return_ids_only=True)``
+
+        include_ids : bool, default ``False``
+            When ``True``, each returned row dict includes ``_log_id`` (the
+            Orchestra log id). Use this when a later ``update_rows`` /
+            ``update_by_ids`` / ``delete_rows`` call needs stable ids.
+            Mutually exclusive with ``return_ids_only``. Requires a single
+            resolved context (not federated multi-source reads).
 
         Returns
         -------
@@ -1237,10 +1248,11 @@ class BaseDataManager(BaseStateManager):
         group_by: Optional[Union[str, List[str]]] = None,
     ) -> Any:
         """
-        Compute aggregate metrics over rows.
+        Compute aggregate metrics over rows server-side. Prefer this over
+        ``filter`` + Python ``len``/sum/groupby — never download a large
+        table just to aggregate.
 
         Use this tool for **aggregations** like counts, sums, averages, min/max.
-        Much more efficient than fetching all rows and computing in Python.
 
         Parameters
         ----------
@@ -2114,7 +2126,8 @@ class BaseDataManager(BaseStateManager):
         destination: str | None = None,
     ) -> List[int]:
         """
-        Insert rows into a table.
+        Insert rows into a table via bulk create (prefer batches over
+        one-row-at-a-time loops).
 
         Use this to add new data to an existing table via efficient bulk
         inserts.  For large batch inserts with optional embedding, prefer
@@ -2191,14 +2204,18 @@ class BaseDataManager(BaseStateManager):
         context: str,
         updates: Dict[str, Any],
         *,
-        filter: str,
+        filter: Optional[str] = None,
+        log_ids: Optional[List[int]] = None,
+        overwrite: bool = False,
         destination: str | None = None,
     ) -> int:
         """
-        Update rows matching a filter.
+        Update rows matching a filter and/or by log ids (in-place; ids stay
+        stable). Prefer one selective ``filter`` / ``log_ids`` update over
+        downloading rows into Python and updating one-by-one.
 
-        Use this to modify existing rows based on a condition. All matching
-        rows receive the same updates.
+        Prefer a selective ``filter`` or known ``log_ids`` from
+        ``filter(..., include_ids=True)`` / ``return_ids_only=True``.
 
         Parameters
         ----------
@@ -2207,13 +2224,23 @@ class BaseDataManager(BaseStateManager):
 
         updates : dict
             Column values to set. Only specified columns are updated;
-            other columns remain unchanged.
+            other columns remain unchanged (filter path merges into the
+            existing row before writing).
 
             Example: ``{"status": "processed", "processed_at": "2024-01-15"}``
 
-        filter : str
-            Filter expression to match rows for update. **Required** to prevent
-            accidental mass updates. Same syntax as ``filter()`` method.
+        filter : str | None, default ``None``
+            Filter expression to match rows for update. Same syntax as
+            ``filter()``. Provide ``filter`` and/or ``log_ids``.
+
+        log_ids : list[int] | None, default ``None``
+            Specific Orchestra log ids to update. More efficient when ids
+            are already known.
+
+        overwrite : bool, default ``False``
+            Only applies when updating purely by ``log_ids`` (no filter).
+            When ``True``, pass ``updates`` through Orchestra with
+            overwrite semantics. When ``False``, Orchestra merges fields.
 
         destination : str | None, default ``None``
             Which Data root contains the rows. Pass ``"personal"`` (the
@@ -2244,19 +2271,59 @@ class BaseDataManager(BaseStateManager):
             filter="due_date < '2024-01-01' and status == 'pending'"
         )
 
+        # Update by known log ids
+        dm.update_rows(
+            "Data/orders",
+            updates={"status": "shipped"},
+            log_ids=[101, 102],
+            overwrite=True,
+        )
+
         Anti-patterns
         -------------
-        - WRONG: Trying to use empty filter to update all rows
-          CORRECT: Filter is required; use very broad filter if intentional
+        - WRONG: Updating with neither filter nor log_ids
+          CORRECT: Always pass a selective filter or explicit log_ids
 
         - WRONG: Updating primary/unique key columns
           CORRECT: Delete and re-insert if key changes are needed
 
         Notes
         -----
-        - Filter is required as a safety measure
-        - Updates are applied atomically per row
-        - For complex updates, consider delete + insert pattern
+        - Provide ``filter`` and/or ``log_ids`` (at least one required)
+        - Updates are applied in place; log ids do not change
+        """
+
+    @abstractmethod
+    def update_by_ids(
+        self,
+        log_ids: List[int],
+        updates: Dict[str, Any],
+        *,
+        overwrite: bool = True,
+        context: Optional[str] = None,
+    ) -> int:
+        """
+        Update known Orchestra log ids in place.
+
+        Use when callers already hold log ids (e.g. from
+        ``filter(..., include_ids=True)``) and do not need a table filter.
+        ``context`` is optional when Orchestra can resolve the ids alone.
+
+        Parameters
+        ----------
+        log_ids : list[int]
+            Orchestra log ids to update.
+        updates : dict
+            Field values to write.
+        overwrite : bool, default ``True``
+            Orchestra overwrite flag for the update payload.
+        context : str | None, default ``None``
+            Optional fully-qualified context hint for the update.
+
+        Returns
+        -------
+        int
+            Number of ids submitted for update.
         """
 
     @abstractmethod

@@ -5,8 +5,6 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
-unity_comms_url = SETTINGS.conversation.COMMS_URL
-
 
 # dispatch LiveKit agent
 def dispatch_livekit_agent(
@@ -30,6 +28,7 @@ def dispatch_livekit_agent(
 
     Returns True if dispatch was attempted, False if skipped due to missing config.
     """
+    unity_comms_url = SETTINGS.conversation.COMMS_URL
     if not unity_comms_url:
         LOGGER.debug(
             f"{DEFAULT_ICON} [dispatch_livekit_agent] Skipping: UNITY_COMMS_URL not configured. "

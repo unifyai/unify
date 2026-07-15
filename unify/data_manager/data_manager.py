@@ -46,6 +46,7 @@ from unify.data_manager.ops.query_ops import (
 from unify.data_manager.ops.mutation_ops import (
     insert_rows_impl,
     update_rows_impl,
+    update_by_ids_impl,
     delete_rows_impl,
 )
 from unify.data_manager.ops.join_ops import (
@@ -720,8 +721,16 @@ class DataManager(BaseDataManager):
         order_by: Optional[str] = None,
         descending: bool = False,
         return_ids_only: bool = False,
+        include_ids: bool = False,
     ) -> Union[List[Dict[str, Any]], List[int]]:
+        if return_ids_only and include_ids:
+            raise ValueError("return_ids_only and include_ids are mutually exclusive")
         resolved_contexts = self._resolve_contexts_for_read(context)
+        if include_ids and len(resolved_contexts) != 1:
+            raise ValueError(
+                "include_ids requires a single resolved context; "
+                "pass a fully-qualified path rather than a federated name",
+            )
         if len(resolved_contexts) == 1 or return_ids_only:
             return filter_impl(
                 resolved_contexts[0],
@@ -733,6 +742,7 @@ class DataManager(BaseDataManager):
                 order_by=order_by,
                 descending=descending,
                 return_ids_only=return_ids_only,
+                include_ids=include_ids,
             )
 
         sorting = None
@@ -1095,7 +1105,9 @@ class DataManager(BaseDataManager):
         context: str,
         updates: Dict[str, Any],
         *,
-        filter: str,
+        filter: Optional[str] = None,
+        log_ids: Optional[List[int]] = None,
+        overwrite: bool = False,
         destination: str | None = None,
     ) -> int:
         try:
@@ -1105,7 +1117,35 @@ class DataManager(BaseDataManager):
             )
         except ToolErrorException as exc:
             return self._tool_error(exc)  # type: ignore[return-value]
-        return update_rows_impl(resolved, updates, filter=filter)
+        return update_rows_impl(
+            resolved,
+            updates,
+            filter=filter,
+            log_ids=log_ids,
+            overwrite=overwrite,
+        )
+
+    @functools.wraps(BaseDataManager.update_by_ids, updated=())
+    def update_by_ids(
+        self,
+        log_ids: List[int],
+        updates: Dict[str, Any],
+        *,
+        overwrite: bool = True,
+        context: Optional[str] = None,
+    ) -> int:
+        resolved = None
+        if context is not None:
+            try:
+                resolved = self._resolve_context_for_write(context)
+            except ToolErrorException as exc:
+                return self._tool_error(exc)  # type: ignore[return-value]
+        return update_by_ids_impl(
+            log_ids,
+            updates,
+            overwrite=overwrite,
+            context=resolved,
+        )
 
     @functools.wraps(BaseDataManager.delete_rows, updated=())
     def delete_rows(

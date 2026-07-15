@@ -1204,20 +1204,30 @@ def get_primitives_dashboards_baked_in_example() -> str:
 # graphics, CSS animations, responsive designs, and more.
 # ============================================================
 
-# Example: Plotly chart with baked-in data (small static snapshots only)
+# Example: Plotly chart with baked-in data (small static snapshots only).
+# Aggregate SERVER-SIDE first — never filter(..., limit=5000) then pandas.
 async def chart_repairs_by_category(context: str = "Data/examplehousing/Repairs") -> str:
-    """Generate a Plotly bar chart from data and create a shareable tile."""
+    """Generate a Plotly bar chart from a server-side aggregation."""
     import subprocess
     subprocess.check_call(["pip", "install", "plotly", "pandas"])
     import plotly.express as px
     import pandas as pd
 
-    rows = await primitives.data.filter(context, limit=5000)
-    df = pd.DataFrame(rows)
+    agg = await primitives.data.reduce(
+        context,
+        metric="count",
+        columns="WorksOrderReference",
+        group_by="SORGroupDescription",
+    )
+    df = pd.DataFrame(
+        [{"SORGroupDescription": k, "count": v} for k, v in (agg or {}).items()]
+        if isinstance(agg, dict)
+        else (agg or [])
+    )
     fig = px.bar(
         df,
         x="SORGroupDescription",
-        y="WorksOrderReference",
+        y="count",
         title="Repairs by Category",
     )
     html = fig.to_html(include_plotlyjs="cdn", full_html=True)
