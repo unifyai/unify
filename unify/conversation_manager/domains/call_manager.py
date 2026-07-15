@@ -60,7 +60,7 @@ _BASE_FORWARD_CHANNELS = [
     "app:comms:*",
 ]
 
-DISPATCH_ACTIVATION_TIMEOUT_S = 120.0
+DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
 # before starting an assistant-initiated outbound call. Prewarm normally
 # completes in well under this; the cap exists so a wedged worker surfaces as a
@@ -183,6 +183,10 @@ class LivekitCallManager:
         self._boss_notification_task: asyncio.Task | None = None
         self._worker_watchdog_task: asyncio.Task | None = None
         self._dispatch_watchdog_task: asyncio.Task | None = None
+        # Subprocess-shaped respawn params for the pending dispatch, so the
+        # watchdog can self-heal a dispatch that never activates by launching a
+        # self-contained fast brain into the already-live room.
+        self._pending_dispatch_fallback: dict | None = None
         self._dispatch_lock = asyncio.Lock()
         # WhatsApp call joining state
         self._whatsapp_call_joining: bool = False
@@ -518,6 +522,7 @@ class LivekitCallManager:
         if task is not None and not task.done():
             task.cancel()
         self._dispatch_watchdog_task = None
+        self._pending_dispatch_fallback = None
 
     def _schedule_dispatch_watchdog(self) -> None:
         self._cancel_dispatch_watchdog()
@@ -526,7 +531,15 @@ class LivekitCallManager:
         )
 
     async def _watch_dispatch_activation(self) -> None:
-        """Clear orphaned dispatch state when no voice agent joins the room."""
+        """Self-heal a dispatch that LiveKit accepts but never assigns.
+
+        The persistent worker can accept a dispatch it cannot immediately give
+        to a process (its single prewarmed slot is still re-warming), so the
+        room goes live with no fast brain ever joining. When that window
+        elapses with no IPC client connected, spawn a self-contained subprocess
+        into the same room rather than merely clearing the flag — otherwise the
+        call is silently deaf and mute.
+        """
         try:
             await asyncio.sleep(DISPATCH_ACTIVATION_TIMEOUT_S)
         except asyncio.CancelledError:
@@ -537,11 +550,29 @@ class LivekitCallManager:
         if self._socket_server and self._socket_server.has_connected_clients:
             return
 
+        fallback = self._pending_dispatch_fallback
+        self._pending_dispatch_fallback = None
+        self._active_job = False
+        if fallback is None:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] Dispatch never activated; "
+                "cleared stale active-job state (no respawn params)",
+            )
+            return
+
         LOGGER.warning(
             f"{ICONS['ipc']} [LivekitCallManager] Dispatch never activated; "
-            "clearing stale active-job state",
+            "spawning subprocess fallback into live room "
+            f"{fallback.get('room_name')}",
         )
-        self._active_job = False
+        await self._start_call_subprocess(
+            fallback["room_name"],
+            fallback["channel"],
+            fallback["contact"],
+            fallback["boss"],
+            fallback["outbound"],
+            extra_env=fallback.get("extra_env"),
+        )
 
     async def _wait_for_worker_registered(
         self,
@@ -597,24 +628,6 @@ class LivekitCallManager:
             return {}
         return {str(cid): vec for cid, vec in (profiles or {}).items()}
 
-    def _worker_has_idle_process(self) -> bool:
-        """Whether the persistent worker can pick a dispatch up right now.
-
-        The worker must be alive AND expose a freshly-prewarmed idle process
-        (``WORKER_READY_PATH``). A worker that is merely alive but still
-        re-warming its single idle slot will accept a LiveKit dispatch that
-        never gets assigned to a process, leaving the caller waiting on a
-        job that silently never activates. Callers should route to a
-        self-contained subprocess instead in that window.
-        """
-        if self._worker_proc is None or self._worker_proc.poll() is not None:
-            return False
-        from unify.conversation_manager.medium_scripts.worker import (
-            WORKER_READY_PATH,
-        )
-
-        return os.path.exists(WORKER_READY_PATH)
-
     async def _dispatch_job(
         self,
         room_name: str,
@@ -624,9 +637,15 @@ class LivekitCallManager:
         outbound: bool,
         *,
         extra_metadata: dict | None = None,
+        fallback_env: dict | None = None,
         registration_timeout: float = WORKER_DISPATCH_REGISTERED_TIMEOUT_S,
     ) -> bool:
-        """Dispatch a LiveKit job to the persistent worker."""
+        """Dispatch a LiveKit job to the persistent worker.
+
+        ``fallback_env`` is the subprocess-shaped env the dispatch watchdog uses
+        to respawn a self-contained fast brain into the room if the dispatched
+        worker never activates.
+        """
         self._refresh_config()
         async with self._dispatch_lock:
             worker_proc = self._worker_proc
@@ -680,6 +699,14 @@ class LivekitCallManager:
                 )
                 self._active_job = True
                 self._schedule_dispatch_watchdog()
+                self._pending_dispatch_fallback = {
+                    "room_name": room_name,
+                    "channel": channel,
+                    "contact": contact,
+                    "boss": boss,
+                    "outbound": outbound,
+                    "extra_env": fallback_env,
+                }
                 LOGGER.info(
                     f"{ICONS['ipc']} [LivekitCallManager] Dispatched job "
                     f"(dispatch_id={dispatch.id}, room={room_name}, "
@@ -824,6 +851,7 @@ class LivekitCallManager:
                 boss,
                 outbound,
                 extra_metadata=extra_metadata or None,
+                fallback_env=extra_env or None,
             )
         if not dispatched:
             await self._start_call_subprocess(
@@ -932,6 +960,7 @@ class LivekitCallManager:
                 boss,
                 outbound,
                 extra_metadata=extra_metadata or None,
+                fallback_env=extra_env,
             )
         if not dispatched:
             await self._start_call_subprocess(
@@ -1155,37 +1184,26 @@ class LivekitCallManager:
             await self._cleanup_meet(channel)
             return False
 
-        # Only hand the meet to the persistent worker when it has a freshly
-        # prewarmed idle process ready to take the dispatch. A worker that is
-        # merely alive but still re-warming its single idle slot (common
-        # mid coordinator-onboarding, which is voice-heavy and recently consumed
-        # that slot) would accept a dispatch LiveKit then never assigns — the
-        # browser joins but no fast brain ever activates ("Dispatch never
-        # activated"), leaving the meeting deaf and mute. In that window launch a
-        # self-contained subprocess instead: it connects its own IPC client and
-        # always activates.
-        dispatched = False
-        if self._worker_has_idle_process():
-            dispatched = await self._dispatch_job(
-                room_name,
-                channel,
-                contact,
-                boss,
-                meet_outbound,
-                extra_metadata=meet_extra,
-            )
-        if not dispatched:
-            meet_env = dict(meet_extra)
-            if meet_opening_config:
-                meet_env["opening_config"] = json.dumps(meet_opening_config)
-            await self._start_call_subprocess(
-                room_name,
-                channel,
-                contact,
-                boss,
-                meet_outbound,
-                extra_env=meet_env,
-            )
+        # Browser meets always launch a self-contained subprocess rather than a
+        # persistent-worker dispatch. The worker accepts a LiveKit dispatch it
+        # cannot immediately assign whenever its single prewarmed slot is not
+        # dispatch-ready this soon after startup (or was consumed by the
+        # voice-heavy coordinator onboarding), so the browser joins the meeting
+        # but no fast brain ever activates ("Dispatch never activated") — the
+        # meeting is deaf and mute. A subprocess connects its own IPC client and
+        # always activates; its model-load cost overlaps the browser cold-start
+        # and LLM-guided join, so it is not on the critical path.
+        meet_env = dict(meet_extra)
+        if meet_opening_config:
+            meet_env["opening_config"] = json.dumps(meet_opening_config)
+        await self._start_call_subprocess(
+            room_name,
+            channel,
+            contact,
+            boss,
+            meet_outbound,
+            extra_env=meet_env,
+        )
 
         # Browser join runs after dispatch — fast brain initializes in parallel.
         # The join can be slow (headless-browser cold start + LLM-guided
