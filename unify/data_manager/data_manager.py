@@ -1084,6 +1084,7 @@ class DataManager(BaseDataManager):
         rows: List[Dict[str, Any]],
         *,
         batched: bool = True,
+        on_duplicate: Optional[str] = None,
         destination: str | None = None,
     ) -> List[int]:
         try:
@@ -1097,6 +1098,7 @@ class DataManager(BaseDataManager):
             resolved,
             rows,
             batched=batched,
+            on_duplicate=on_duplicate,
         )
 
     @functools.wraps(BaseDataManager.update_rows, updated=())

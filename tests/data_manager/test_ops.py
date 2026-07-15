@@ -22,6 +22,40 @@ def _duplicate_key_error() -> RequestError:
     return RequestError("https://api.unify.ai/v0/logs", "POST", response)
 
 
+def test_insert_rows_passes_on_duplicate_to_create_logs(monkeypatch):
+    captured: dict = {}
+
+    def fake_create_logs(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(mutation_ops, "unify_create_logs", fake_create_logs)
+
+    mutation_ops.insert_rows_impl(
+        "Data/test",
+        [{"key": "a"}, {"key": "b"}],
+        on_duplicate="skip",
+    )
+
+    assert captured["on_duplicate"] == "skip"
+    assert captured["batched"] is True
+    assert captured["entries"] == [{"key": "a"}, {"key": "b"}]
+
+
+def test_insert_rows_omits_on_duplicate_when_unset(monkeypatch):
+    captured: dict = {}
+
+    def fake_create_logs(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(mutation_ops, "unify_create_logs", fake_create_logs)
+
+    mutation_ops.insert_rows_impl("Data/test", [{"key": "a"}])
+
+    assert "on_duplicate" not in captured
+
+
 def test_insert_rows_duplicate_key_errors_raise_by_default(monkeypatch):
     def fake_create_logs(**_kwargs):
         raise _duplicate_key_error()
