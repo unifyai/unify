@@ -1223,7 +1223,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         if not isinstance(request, ProviderEventDispatchRequest):
             raise TypeError("request must be a ProviderEventDispatchRequest")
-        if request.dispatch_mode != "live":
+        if request.dispatch_mode not in {"live", "offline"}:
             raise ProviderEventDispatchValidationError("invalid_dispatch_mode")
         if str(request.source_type) != RunSource.provider_event.value:
             raise ProviderEventDispatchValidationError("run_source_type_mismatch")
@@ -1248,7 +1248,9 @@ class TaskScheduler(BaseTaskScheduler):
             assistant_id=str(request.assistant_id),
             task_id=request.task_id,
             source_type=RunSource.provider_event,
-            execution_mode="live",
+            execution_mode=(
+                "offline" if request.dispatch_mode == "offline" else "live"
+            ),
             source_task_log_id=int(source_task_log_id),
             activation_revision=request.accepted_activation_revision,
             destination=instance.destination,
