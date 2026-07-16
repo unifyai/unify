@@ -217,7 +217,6 @@ class BaseContactManager(BaseStateManager, metaclass=SingletonABCMeta):
         description: Optional[str] = None,
         bio: Optional[str] = None,
         rolling_summary: Optional[str] = None,
-        custom_fields: Optional[Dict[str, Any]] = None,
     ) -> "ToolOutcome":
         """
         Modify **one** existing contact identified by *contact_id*.
@@ -235,7 +234,7 @@ class BaseContactManager(BaseStateManager, metaclass=SingletonABCMeta):
         contact_id : int
             The unique ``contact_id`` of the record to update.
         first_name, surname, email_address, phone_number, whatsapp_number,
-        description, bio, rolling_summary, custom_fields
+        description, bio, rolling_summary
             Same semantics as the public :pyfunc:`update` method.
 
         Returns

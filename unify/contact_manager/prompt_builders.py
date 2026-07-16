@@ -4,13 +4,11 @@ import textwrap
 from typing import Dict, Callable, List, Union
 
 from .types.contact import Contact
-from ..common.column_types import column_type_schema
 from ..common.prompt_helpers import (
     sig_dict,
     now,
     tool_name as _shared_tool_name,
     require_tools as _shared_require_tools,
-    get_custom_columns,
     # New standardized composer utilities
     PromptSpec,
     PromptParts,
@@ -35,16 +33,6 @@ def _sig_dict(tools: Dict[str, Callable]) -> Dict[str, str]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _permanent_columns() -> str:
-    """
-    Return a comma-separated string of the *built-in* column names taken
-    directly from the `Contact` Pydantic model (works on v1 & v2).  Any
-    extra/custom fields are ignored because they are not part of the schema
-    at import time.
-    """
-    return ", ".join(sorted(Contact.model_fields.keys()))
-
-
 def _tool_name(tools: Dict[str, Callable], needle: str) -> str | None:
     """Delegates to shared tool name resolver."""
     return _shared_tool_name(tools, needle)
@@ -66,12 +54,6 @@ def build_ask_prompt(
     include_activity: bool = True,
 ) -> PromptParts:
     """Return the system-prompt used by *ask* using the shared composer."""
-    # Extract custom columns (not in Contact model)
-    custom_cols = get_custom_columns(Contact, columns)
-
-    # ------------------------------------------------------------------ #
-    #  Dynamic helpers for custom-column tools
-    # ------------------------------------------------------------------ #
     filter_contacts_fname = _tool_name(tools, "filter_contacts")
     search_contacts_fname = _tool_name(tools, "search_contacts")
     list_columns_fname = _tool_name(tools, "list_columns")
@@ -91,7 +73,7 @@ def build_ask_prompt(
     )
 
     # ------------------------------------------------------------------ #
-    #  Usage snippets (standard search + custom-column examples)
+    #  Usage snippets (standard search examples)
     # ------------------------------------------------------------------ #
     clarification_block = (
         textwrap.dedent(
@@ -115,7 +97,7 @@ Examples
   `{list_columns_fname}()`
 
 ─ Tool selection (read carefully) ─
-• For ANY semantic question over free‑form text (bio, rolling_summary, custom text columns), ALWAYS use `{search_contacts_fname}`. Never try to approximate meaning with brittle substring filters.
+• For ANY semantic question over free‑form text (bio, rolling_summary, job_title), ALWAYS use `{search_contacts_fname}`. Never try to approximate meaning with brittle substring filters.
 • Use `{filter_contacts_fname}` only for exact/boolean logic over structured fields (emails, phone numbers, null checks) or for narrow, constrained text where substring checks make sense (e.g., case‑insensitive contains on first_name).
 
 ─ Semantic search: targeted references across columns ─
@@ -126,11 +108,11 @@ Examples
   `{search_contacts_fname}(references={{'bio': 'based in Berlin product designer'}}, k=3)`
 
 • Find the accountant who we had a call with last week
-  `{search_contacts_fname}(references={{'occupation': 'accountant', 'rolling_summary': 'had a call last week'}}, k=3)`
+  `{search_contacts_fname}(references={{'job_title': 'accountant', 'rolling_summary': 'had a call last week'}}, k=3)`
 
 ─ Derived expression (fallback, when you truly cannot target columns) ─
 • Build one composite expression spanning likely fields, then search it. Prefer multi‑column references when you know where the signal lives.
-  `expr = "str({{skills}}) + ' ' + str({{occupation}}) "`
+  `expr = "str({{bio}}) + ' ' + str({{job_title}}) "`
   `{search_contacts_fname}(references={{expr: 'Software engineering'}}, k=2)`
 
 ─ Filtering (exact/boolean or constrained text only; not semantic) ─
@@ -192,7 +174,6 @@ Anti‑patterns to avoid
         counts_value=num_contacts,
         # Schema-based table info (avoids duplication)
         table_schema_name="Contact",
-        custom_columns=custom_cols if custom_cols else None,
         include_tools_block=True,
         usage_examples=usage_examples,
         clarification_examples_block=clarification_block or None,
@@ -217,19 +198,12 @@ def build_update_prompt(
     include_activity: bool = True,
 ) -> PromptParts:
     """Return the system-prompt used by *update* using the shared composer."""
-    # Extract custom columns (not in Contact model)
-    custom_cols = get_custom_columns(Contact, columns)
-
     # Pick out canonical names heuristically (all dynamic)
     create_fname = _tool_name(tools, "create_contact")
     update_fname = _tool_name(tools, "update_contact")
     delete_fname = _tool_name(tools, "delete_contact")
     merge_fname = _tool_name(tools, "merge_contacts")
     ask_fname = _tool_name(tools, "ask")
-
-    # Custom-column helpers (dynamic)
-    create_custom_fname = _tool_name(tools, "create_custom_column")
-    delete_custom_fname = _tool_name(tools, "delete_custom_column")
 
     # Clarification helper (optional)
     request_clar_fname = _tool_name(tools, "request_clarification")
@@ -241,8 +215,6 @@ def build_update_prompt(
             "update_contact": update_fname,
             "delete_contact": delete_fname,
             "merge_contacts": merge_fname,
-            "create_custom_column": create_custom_fname,
-            "delete_custom_column": delete_custom_fname,
             "ask": ask_fname,
         },
         tools,
@@ -272,7 +244,6 @@ Ask vs Clarification
 • `{ask_fname}` is ONLY for inspecting/locating contacts that ALREADY EXIST (e.g., to find `contact_id`, verify fields).
 • Do NOT use `{ask_fname}` to ask the human for details about NEW contacts being created/changed in this update request.
 • For human clarifications about prospective/new contacts (e.g., name spelling, missing numbers, preferred channel), call `{request_clar_fname}` when available.
-• If the schema lacks a field the user wants to set, create it with `{create_custom_fname}` (typically `column_type='str'`) before updating.
 • Use `{merge_fname}` only when the user explicitly asks to combine two known contacts or when duplicates are clearly identified.
 • Use `{delete_fname}` only on explicit deletion requests. Never delete assistant self or boss system contacts.
 
@@ -291,19 +262,11 @@ Realistic find-then-update flows
     `{update_fname}(contact_id=<id>, should_respond=True)`
 
 • Query may span multiple freeform fields (derived expression)
-  1 Build a composite expression across `bio`, `rolling_summary`, and a custom field like `occupation`:
-    `expr = "str({{bio}}) + ' ' + str({{rolling_summary}}) + ' ' + str({{occupation}})"`
+  1 Build a composite expression across `bio`, `rolling_summary`, and `job_title`:
+    `expr = "str({{bio}}) + ' ' + str({{rolling_summary}}) + ' ' + str({{job_title}})"`
   2 Ask a freeform question referring to the same clues:
     `{ask_fname}(text="Who is the London-based 28-year-old software engineer?")`
   3 Update the found record as requested.
-
-Schema evolution and custom columns
-----------------------------------
-• If the user asks to store a new attribute that does not map to built-ins, create a custom column first:
-  `{create_custom_fname}(column_name='occupation', column_type='str')`
-  Then apply the update:
-  `{update_fname}(contact_id=42, custom_fields={{'occupation': 'Designer'}})`
-• Required columns ({_permanent_columns()}) cannot be deleted. Remove optional columns with `{delete_custom_fname}(column_name=...)` only when explicitly asked.
 
 Merge and delete
 ----------------
@@ -331,7 +294,7 @@ Conversely, if a contact has no name simply because the name is unknown (e.g. "c
 Asking Questions
 ----------------
 • It can often be very difficult to keep track of your own 'update' progress purely via tool call histories. If you're unsure, always just `ask`!
-  `{ask_fname}(text="I think I've now updated all of the contact 'occupation' columns to engineer, but I might have missed some. Could you list all engineers in the contact list so I can check my progress?")`
+  `{ask_fname}(text="I think I've now updated all of the contact 'job_title' fields to engineer, but I might have missed some. Could you list all engineers in the contact list so I can check my progress?")`
 
 Anti‑patterns to avoid
 ---------------------
@@ -358,10 +321,9 @@ Anti‑patterns to avoid
         SESSION_DETAILS.team_summaries,
     )
 
-    # Schemas: Contact for table columns, ColumnType for custom column creation
+    # Schemas: Contact defines the fixed table columns
     schemas = [
-        ("Contact", Contact),  # Full schema defines table columns
-        ("ColumnType (for custom columns)", column_type_schema),
+        ("Contact", Contact),
     ]
 
     spec = PromptSpec(
@@ -387,7 +349,6 @@ Anti‑patterns to avoid
         counts_value=num_contacts,
         # Schema-based table info (avoids duplication)
         table_schema_name="Contact",
-        custom_columns=custom_cols if custom_cols else None,
         include_tools_block=True,
         usage_examples=usage_examples,
         clarification_examples_block=clarification_block or None,
@@ -399,7 +360,6 @@ Anti‑patterns to avoid
         special_blocks=[
             accessible_teams_block,
             special_block,
-            "Do not create new columns if an alias already exists.",
         ],
         include_clarification_footer=True,
         include_time_footer=True,

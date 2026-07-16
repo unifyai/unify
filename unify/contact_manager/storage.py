@@ -20,19 +20,6 @@ def provision_storage(self) -> None:
         fields={**model_to_fields(Contact), **VOICE_ENROLLMENT_FIELDS},
     )
 
-    # Prefill known custom fields once to include any preexisting non-private columns
-    try:
-        existing_cols = get_columns(self)
-        for col in existing_cols:
-            if col not in self._REQUIRED_COLUMNS and not str(col).startswith("_"):
-                try:
-                    self._known_custom_fields.add(col)  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-    except Exception:
-        # Best-effort only; tools fall back safely
-        pass
-
 
 def get_columns(self) -> Dict[str, str]:
     """Return {column_name: column_type} for the contacts table."""

@@ -456,8 +456,7 @@ def _filter_single_contact(cm, contact_filter: str) -> dict | None:
     try:
         result = cm.filter_contacts(filter=contact_filter, limit=1)
     except Exception:
-        # Filters on custom columns (e.g. agent_id) fail before the column
-        # exists; treat as "not found".
+        # Any backend filter error is treated as "not found".
         return None
     contacts = result.get("contacts", [])
     if not contacts:

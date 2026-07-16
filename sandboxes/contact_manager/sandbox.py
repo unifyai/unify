@@ -75,8 +75,8 @@ async def _build_scenario(
         if custom
         else (
             "Generate 10 realistic business contacts across EMEA, APAC and AMER. "
-            "Each contact needs first_name, surname, email_address and phone_number. "
-            "Also create custom columns with varying industries and locations."
+            "Each contact needs first_name, surname, email_address, phone_number, "
+            "job_title, and bio with varying industries and locations."
         )
     )
     description += (
@@ -115,7 +115,7 @@ _INTENT_SYS_MSG = (
     "Decide if the user's input is a read-only question about existing contacts ('ask') "
     "or a write/mutation that creates, updates, or deletes contact data ('update').\n"
     "Return ONLY JSON with this shape: {'action':'ask'|'update'}. Do not rewrite or summarize the user's input.\n"
-    "- Classify as 'update' when the user asks to set, add, create, change, update, delete, write, draft, generate, populate, fill in, assign or otherwise produce/modify data (e.g., bios, summaries, phone, email, custom columns), including bulk operations ('for all', 'for each', 'all of the ...').\n"
+    "- Classify as 'update' when the user asks to set, add, create, change, update, delete, write, draft, generate, populate, fill in, assign or otherwise produce/modify data (e.g., bios, summaries, phone, email, job titles), including bulk operations ('for all', 'for each', 'all of the ...').\n"
     "- Classify as 'ask' when the user is requesting information/lookup/reporting without modifying data (e.g., 'give me/show me/what is/which contacts have ...').\n"
     "Examples:\n"
     " - 'Give all of the footballers a bio' → update\n"

@@ -117,10 +117,8 @@ def test_update_system_prompt_formatting(contact_manager_scenario):
     # Schemas
     assert "Schemas" in prompt
     assert "Contact = " in prompt
-    assert "ColumnType (for custom columns) = " in prompt
 
     # Standard blocks
-    assert "Do not create new columns if an alias already exists." in prompt
     assert "Parallelism and single" in prompt
 
     assert re.search(
@@ -143,7 +141,6 @@ def test_update_system_prompt_formatting(contact_manager_scenario):
             "Tool selection",
             "Parallelism and single",
             "Special contacts",
-            "Do not create new columns if an alias already exists.",
             "Current UTC time is ",
         ],
     )

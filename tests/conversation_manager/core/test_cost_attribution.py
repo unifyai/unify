@@ -571,9 +571,6 @@ class TestContactProvisioningUserId:
                 },
             ),
             patch(
-                "unify.contact_manager.system_contacts._ensure_columns_exist",
-            ),
-            patch(
                 "unify.contact_manager.system_contacts._upsert_personal_contact_membership",
             ),
             patch("unify.session_details.SESSION_DETAILS") as mock_sd,
@@ -589,10 +586,10 @@ class TestContactProvisioningUserId:
 
         mock_self._create_contact.assert_called_once()
         call_kwargs = mock_self._create_contact.call_args
-        # Closed create schema: platform user_id is not a named create arg, so
-        # partition_create_kwargs places it under custom_fields.
+        # user_id is now a named create field, passed directly through
+        # partition_create_kwargs.
         all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert all_kwargs.get("custom_fields", {}).get("user_id") == "boss_platform_uid"
+        assert all_kwargs.get("user_id") == "boss_platform_uid"
 
     def test_provision_user_contact_skips_user_id_when_not_initialized(self):
         """user_id is not stored when SESSION_DETAILS is not yet initialized."""
@@ -624,9 +621,6 @@ class TestContactProvisioningUserId:
                     "email": "boss@example.com",
                 },
             ),
-            patch(
-                "unify.contact_manager.system_contacts._ensure_columns_exist",
-            ),
             patch("unify.session_details.SESSION_DETAILS") as mock_sd,
             patch("unify.settings.SETTINGS") as mock_settings,
         ):
@@ -639,4 +633,3 @@ class TestContactProvisioningUserId:
         call_kwargs = mock_self._create_contact.call_args
         all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
         assert "user_id" not in all_kwargs
-        assert "user_id" not in (all_kwargs.get("custom_fields") or {})

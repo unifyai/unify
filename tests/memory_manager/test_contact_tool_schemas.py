@@ -10,8 +10,6 @@ from __future__ import annotations
 import functools
 import inspect
 
-import pytest
-
 from tests.helpers import _handle_project
 
 from unify.common.llm_helpers import method_to_schema
@@ -41,7 +39,9 @@ def _assert_closed_contact_schema(schema: dict, *, expected_props: set[str]) -> 
     assert expected_props <= set(
         props,
     ), f"missing properties {expected_props - set(props)}; have {sorted(props)}"
-    assert "custom_fields" not in props
+    # Platform identity ids are set by system provisioning, never by the LLM.
+    assert "user_id" not in props
+    assert "agent_id" not in props
     assert "kwargs" not in props
 
 
@@ -65,12 +65,13 @@ def test_build_contact_tools_schemas_are_closed():
     )
 
 
-def test_llm_visible_signature_strips_varkw_and_custom_fields():
+def test_llm_visible_signature_strips_varkw_and_platform_ids():
     sig = _llm_visible_contact_signature(ContactManager._create_contact)
     names = set(sig.parameters)
     assert {"first_name", "destination"} <= names
     assert "kwargs" not in names
-    assert "custom_fields" not in names
+    assert "user_id" not in names
+    assert "agent_id" not in names
     assert not any(
         p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
     )
@@ -94,27 +95,6 @@ def test_pinned_schema_survives_wraps_spy_monkeypatch(monkeypatch):
         _schema_for_tool(tools, "create_contact"),
         expected_props={"first_name", "phone_number"},
     )
-
-
-@_handle_project
-@pytest.mark.asyncio
-async def test_create_contact_wrapper_rejects_custom_fields(monkeypatch):
-    cm = SimulatedContactManager(description="custom_fields guard")
-    mm = SimulatedMemoryManager(contact_manager=cm)
-    tools = mm._build_contact_tools()
-    fn = tools["create_contact"]
-    fn = fn.fn if isinstance(fn, ToolSpec) else fn
-
-    async def _to_thread(func, /, *args, **kwargs):
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(
-        "unify.memory_manager.memory_manager.asyncio.to_thread",
-        _to_thread,
-    )
-
-    with pytest.raises(ValueError, match="custom columns"):
-        await fn(custom_fields={"nickname": "x"})
 
 
 def test_pin_helper_sets_signature_without_varkw():
