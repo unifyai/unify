@@ -670,6 +670,16 @@ async def test_search_integrations_reports_connection_and_materialization_status
         "connection_status": "connected",
         "connection_id": "conn-1",
         "external_account_label": "Sales Hub",
+        "connections": [
+            {
+                "connection_id": "conn-1",
+                "status": "connected",
+                "external_account_label": "Sales Hub",
+                "backend_id": None,
+                "provider_connection_id": None,
+            },
+        ],
+        "account_count": 1,
         "auth_modes": ["oauth"],
         "tool_count": 2,
         "materialized_function_count": 2,
@@ -801,6 +811,8 @@ async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
 def test_integration_primitives_expose_discovery_and_permission_tools() -> None:
     assert IntegrationPrimitives._PRIMITIVE_METHODS == (
         "search_integrations",
+        "get_app_usage_mode",
+        "set_app_usage_mode",
         "review_tool_permissions",
         "update_tool_permissions",
         "resolve_tool_execution",

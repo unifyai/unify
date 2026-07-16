@@ -47,6 +47,36 @@ def list_connections(**scope: Any) -> Any:
         return _request_failed("list_integration_connections", exc)
 
 
+def get_app_preference(canonical_app_slug: str, **scope: Any) -> Any:
+    try:
+        return unisdk.get_integration_app_preference(
+            canonical_app_slug,
+            **_clean_scope(scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("get_integration_app_preference", exc)
+
+
+def update_app_preference(
+    canonical_app_slug: str,
+    *,
+    usage_mode: str,
+    **scope: Any,
+) -> Any:
+    try:
+        return unisdk.update_integration_app_preference(
+            canonical_app_slug,
+            usage_mode=usage_mode,
+            **_clean_scope(scope),
+        )
+    except KeyError:
+        raise
+    except Exception as exc:
+        return _request_failed("update_integration_app_preference", exc)
+
+
 def run_tool(
     tool_id: str,
     arguments: dict[str, Any],
