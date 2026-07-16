@@ -34,8 +34,8 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
     )
 
 
-def test_offline_runner_rejects_non_scheduler_source_type(monkeypatch):
-    """The offline task runner should not keep a direct function execution lane."""
+def test_offline_runner_normalizes_unknown_source_type_to_explicit(monkeypatch):
+    """Unknown source types normalize to explicit and enter the scheduler lane."""
 
     from unify.task_scheduler import offline_runner
 
@@ -55,12 +55,14 @@ def test_offline_runner_rejects_non_scheduler_source_type(monkeypatch):
         lambda *args, **kwargs: None,
     )
 
+    config = offline_runner._load_config_from_env()
+    assert config.source_type == offline_runner.RunSource.explicit
+
     exit_code = offline_runner.main()
 
     assert exit_code == 1
     assert updates[0][0] == "42"
     assert updates[0][2]["state"] == "failed"
-    assert "scheduler-managed" in updates[0][2]["result_summary"]
 
 
 def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypatch):
@@ -215,7 +217,11 @@ def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
         async def close(self):
             captured["closed"] = True
 
-    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeActor)
+    monkeypatch.setattr(
+        offline_runner,
+        "_build_offline_actor",
+        lambda _config: _FakeActor(),
+    )
     config = offline_runner.OfflineTaskConfig(
         assistant_id="42",
         run_key="offline:scheduled:42:101:rev:once",
@@ -263,13 +269,87 @@ def test_load_config_from_env_canonicalizes_destination(monkeypatch):
     assert config.destination == "team:7"
 
 
-def test_load_config_from_env_rejects_invalid_destination(monkeypatch):
-    """Offline runner fails fast on invalid destination labels."""
+def test_load_config_from_env_reads_resource_flags(monkeypatch):
+    """Resource knobs load from UNITY_OFFLINE_TASK_REQUIRES_* env vars."""
 
     from unify.task_scheduler import offline_runner
 
-    _seed_env(monkeypatch)
-    monkeypatch.setenv("TASK_DESTINATION", "org_default")
+    _seed_env(monkeypatch, source_type="scheduled")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM", "1")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER", "true")
 
-    with pytest.raises(RuntimeError, match="Invalid TASK_DESTINATION"):
-        offline_runner._load_config_from_env()
+    config = offline_runner._load_config_from_env()
+
+    assert config.requires_filesystem is True
+    assert config.requires_computer is True
+
+
+def test_execute_offline_task_requires_desktop_env_when_resources_needed(monkeypatch):
+    """Missing desktop injection fails loudly when resources are required."""
+
+    from unify.task_scheduler import offline_runner
+
+    config = offline_runner.OfflineTaskConfig(
+        assistant_id="42",
+        run_key="offline:scheduled:42:101:rev:once",
+        task_id=101,
+        function_id=None,
+        request="Touch Local files.",
+        source_type="scheduled",
+        source_task_log_id=555,
+        activation_revision="rev-123",
+        requires_filesystem=True,
+    )
+
+    async def _run():
+        with pytest.raises(RuntimeError, match="ASSISTANT_DESKTOP_URL"):
+            await offline_runner._execute_offline_task(config)
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_build_offline_actor_omits_computer_unless_required(monkeypatch):
+    """ComputerEnvironment is only mounted when requires_computer is True."""
+
+    from unify.actor.environments import ComputerEnvironment
+    from unify.task_scheduler import offline_runner
+
+    captured: list[list] = []
+
+    class _FakeActor:
+        def __init__(self, environments=None, **kwargs):
+            captured.append(list(environments or []))
+
+    monkeypatch.setattr(offline_runner, "CodeActActor", _FakeActor)
+
+    offline_runner._build_offline_actor(
+        offline_runner.OfflineTaskConfig(
+            assistant_id="42",
+            run_key="offline:scheduled:42:101:rev:once",
+            task_id=101,
+            function_id=None,
+            request="No computer.",
+            source_type="scheduled",
+            source_task_log_id=555,
+            activation_revision="rev-123",
+            requires_computer=False,
+        ),
+    )
+    offline_runner._build_offline_actor(
+        offline_runner.OfflineTaskConfig(
+            assistant_id="42",
+            run_key="offline:scheduled:42:101:rev:once",
+            task_id=101,
+            function_id=None,
+            request="Use the desktop.",
+            source_type="scheduled",
+            source_task_log_id=555,
+            activation_revision="rev-123",
+            requires_computer=True,
+        ),
+    )
+
+    assert not any(isinstance(env, ComputerEnvironment) for env in captured[0])
+    assert any(isinstance(env, ComputerEnvironment) for env in captured[1])

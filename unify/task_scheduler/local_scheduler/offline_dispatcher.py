@@ -187,6 +187,8 @@ def _build_local_offline_runner_env(
         source_contact_display_name=source_contact_display_name,
         entrypoint=snap.entrypoint,
         destination=snap.destination,
+        requires_filesystem=bool(snap.requires_filesystem),
+        requires_computer=bool(snap.requires_computer),
     )
 
 

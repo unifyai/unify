@@ -88,6 +88,7 @@ from .provider_trigger_health import (
     compose_provider_trigger_state,
     sanitize_event_context_for_actor,
 )
+from .resource_requirements import resolve_task_resource_requirements
 from .storage import TasksStore
 from . import typed_tasks_client
 from .typed_tasks_client import TaskRevisionConflictError
@@ -1705,6 +1706,8 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy: Optional[str] = None,
         entrypoint: Optional[int] = None,
         offline: bool = False,
+        requires_filesystem: bool = False,
+        requires_computer: bool = False,
         enabled: bool = True,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -1736,6 +1739,8 @@ class TaskScheduler(BaseTaskScheduler):
                     response_policy=response_policy,
                     entrypoint=entrypoint,
                     offline=offline,
+                    requires_filesystem=requires_filesystem,
+                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=effective_destination,
                     _root_applied=True,
@@ -1821,6 +1826,8 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
             enabled=enabled,
         ).to_post_json()
 
@@ -1903,6 +1910,8 @@ class TaskScheduler(BaseTaskScheduler):
                 "response_policy",
                 "entrypoint",
                 "offline",
+                "requires_filesystem",
+                "requires_computer",
                 "enabled",
             ):
                 if key in spec:
@@ -2075,6 +2084,8 @@ class TaskScheduler(BaseTaskScheduler):
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
         offline: Any = _UNSET,
+        requires_filesystem: Any = _UNSET,
+        requires_computer: Any = _UNSET,
         enabled: Any = _UNSET,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -2108,6 +2119,8 @@ class TaskScheduler(BaseTaskScheduler):
                     trigger=trigger,
                     entrypoint=entrypoint,
                     offline=offline,
+                    requires_filesystem=requires_filesystem,
+                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=resolved_destination,
                     _root_applied=True,
@@ -2117,6 +2130,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         trigger_provided = trigger is not _UNSET
         offline_provided = offline is not _UNSET
+        requires_filesystem_provided = requires_filesystem is not _UNSET
+        requires_computer_provided = requires_computer is not _UNSET
         enabled_provided = enabled is not _UNSET
         task = self._get_task_or_raise(task_id)
 
@@ -2131,6 +2146,8 @@ class TaskScheduler(BaseTaskScheduler):
             and not trigger_provided
             and entrypoint is _UNSET
             and not offline_provided
+            and not requires_filesystem_provided
+            and not requires_computer_provided
             and not enabled_provided
         ):
             raise ValueError("At least one field must be provided for an update.")
@@ -2266,6 +2283,30 @@ class TaskScheduler(BaseTaskScheduler):
             else:
                 offline = bool(offline)
             entries["offline"] = offline
+        if requires_filesystem_provided:
+            if isinstance(requires_filesystem, str):
+                normalized_requires_filesystem = requires_filesystem.strip().lower()
+                if normalized_requires_filesystem in {"true", "1"}:
+                    requires_filesystem = True
+                elif normalized_requires_filesystem in {"false", "0"}:
+                    requires_filesystem = False
+                else:
+                    raise ValueError("requires_filesystem must be a boolean value")
+            else:
+                requires_filesystem = bool(requires_filesystem)
+            entries["requires_filesystem"] = requires_filesystem
+        if requires_computer_provided:
+            if isinstance(requires_computer, str):
+                normalized_requires_computer = requires_computer.strip().lower()
+                if normalized_requires_computer in {"true", "1"}:
+                    requires_computer = True
+                elif normalized_requires_computer in {"false", "0"}:
+                    requires_computer = False
+                else:
+                    raise ValueError("requires_computer must be a boolean value")
+            else:
+                requires_computer = bool(requires_computer)
+            entries["requires_computer"] = requires_computer
         if enabled_provided:
             if isinstance(enabled, str):
                 normalized_enabled = enabled.strip().lower()
@@ -3142,6 +3183,13 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
         browser_target = payload.pop("browser_target", None)
+        requires_filesystem, requires_computer = resolve_task_resource_requirements(
+            {
+                "requires_filesystem": payload.pop("requires_filesystem", False),
+                "requires_computer": payload.pop("requires_computer", False),
+                "browser_target": browser_target,
+            },
+        )
         name = payload.pop("name")
         description = payload.pop("description")
 
@@ -3173,6 +3221,8 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
             enabled=False,
             destination=destination_arg,
             _root_applied=True,
@@ -3182,13 +3232,20 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
+        sync_entries: Dict[str, Any] = {
+            "custom_key": custom_key,
+            "custom_hash": custom_hash,
+            "requires_filesystem": requires_filesystem,
+            "requires_computer": requires_computer,
+            "browser_target": (
+                (browser_target or "assistant_desktop")
+                if (requires_computer or browser_target)
+                else None
+            ),
+        }
         self._write_log_entries(
             logs=log_ids,
-            entries={
-                "custom_key": custom_key,
-                "custom_hash": custom_hash,
-                "browser_target": browser_target,
-            },
+            entries=sync_entries,
         )
         return task_id
 
@@ -3214,6 +3271,13 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
         browser_target = payload.pop("browser_target", None)
+        requires_filesystem, requires_computer = resolve_task_resource_requirements(
+            {
+                "requires_filesystem": payload.pop("requires_filesystem", False),
+                "requires_computer": payload.pop("requires_computer", False),
+                "browser_target": browser_target,
+            },
+        )
         name = payload.pop("name", None)
         description = payload.pop("description", None)
 
@@ -3263,7 +3327,13 @@ class TaskScheduler(BaseTaskScheduler):
             "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
-            "browser_target": browser_target,
+            "requires_filesystem": requires_filesystem,
+            "requires_computer": requires_computer,
+            "browser_target": (
+                (browser_target or "assistant_desktop")
+                if (requires_computer or browser_target)
+                else None
+            ),
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(
