@@ -116,7 +116,7 @@ def build_ask_prompt(
     request_clar_fname = tool_name(tools, "request_clarification")
     catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
     connections_fname = tool_name(tools, "list_provider_trigger_connections")
-    resources_fname = tool_name(tools, "describe_provider_trigger_resources")
+    trigger_fname = tool_name(tools, "describe_provider_trigger")
     health_fname = tool_name(tools, "get_provider_trigger_health")
     context_fname = tool_name(tools, "get_provider_event_context")
 
@@ -189,13 +189,13 @@ def build_ask_prompt(
                 "---------------------------------",
                 f"List supported third-party events: `{catalog_fname}()`.",
                 (
-                    f"List eligible connections: `{connections_fname}(event_slug='<event_slug>')`."
+                    f"List eligible connections: `{connections_fname}(canonical_app_slug='<app>')`."
                     if connections_fname
                     else ""
                 ),
                 (
-                    f"Describe resource/filter contract: `{resources_fname}(event_slug='<event_slug>')`."
-                    if resources_fname
+                    f"Describe trigger config schema: `{trigger_fname}(provider_trigger_slug='<slug>', backend_id='<backend>')`."
+                    if trigger_fname
                     else ""
                 ),
                 (
@@ -291,7 +291,7 @@ def build_update_prompt(
     delete_context_fname = tool_name(tools, "delete_provider_event_context")
     catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
     connections_fname = tool_name(tools, "list_provider_trigger_connections")
-    resources_fname = tool_name(tools, "describe_provider_trigger_resources")
+    trigger_fname = tool_name(tools, "describe_provider_trigger")
     health_fname = tool_name(tools, "get_provider_trigger_health")
     context_fname = tool_name(tools, "get_provider_event_context")
 
@@ -407,10 +407,10 @@ def build_update_prompt(
             "Provider-event triggers",
             "-----------------------",
             "Use provider-event triggers for third-party SaaS events configured in the trigger catalog.",
-            "Before creating one, list the catalog, eligible connections for the target event_slug, and the resource/filter contract.",
+            "Before creating one, list the catalog, eligible connections for the target app, and the trigger config schema.",
             (
                 f"Use `{ask_fname}` for discovery tools such as the trigger catalog, "
-                f"eligible connections, and resource contract before creating the task."
+                f"eligible connections, and trigger schema before creating the task."
                 if ask_fname
                 else "Use the provider-trigger discovery tools before creating a provider-event task."
             ),
@@ -418,12 +418,12 @@ def build_update_prompt(
                 f"Create with `{create_task_fname}(..., status='triggerable', trigger={{"
                 "'kind': 'provider_event', 'state': 'enabled', 'connection_id': <exact id>, "
                 "'backend_id': <catalog backend>, 'canonical_app_slug': <catalog app>, "
-                "'event_slug': <catalog event_slug>, 'schema_version': '1', "
-                "'filters': [...]}})`."
+                "'provider_trigger_slug': <catalog slug>, "
+                "'trigger_config': {<provider config fields>}})`."
                 if create_task_fname
                 else ""
             ),
-            "Filters combine with AND only. Pin the exact authorized connection and resource filter from the catalog contract.",
+            "Pin the exact authorized connection and provider_trigger_slug from the catalog.",
             "Do not use communication-trigger shape (`medium`, `from_contact_ids`) for provider events.",
             (
                 f"Pause automation only: `{pause_trigger_fname}(task_id=<id>, task_revision=<rev>)`. "
