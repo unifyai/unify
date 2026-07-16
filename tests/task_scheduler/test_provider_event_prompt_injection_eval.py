@@ -27,9 +27,8 @@ def _provider_task(*, destination: str | None = None) -> Task:
                 "connection_id": "conn-1",
                 "backend_id": "composio",
                 "canonical_app_slug": "github",
-                "event_slug": "github.issue_created",
-                "schema_version": "1",
-                "filters": [],
+                "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+                "trigger_config": {},
             },
         ),
     )
@@ -46,7 +45,7 @@ def test_malicious_event_body_stays_untrusted_and_cannot_rewrite_task_contract()
         receipt_id="receipt-1",
         run_id=7,
         event_context_ref="blob://binding/receipt-1",
-        envelope={"event": "github.issue_created"},
+        envelope={"provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER"},
         curated_projection={"title": injection},
         source_body={"title": injection, "body": injection},
     )

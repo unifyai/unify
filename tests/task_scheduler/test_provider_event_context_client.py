@@ -28,7 +28,7 @@ class _ContextHandler(BaseHTTPRequestHandler):
             "receipt_id": _ContextHandler.captured_body["receipt_id"],
             "run_id": _ContextHandler.captured_body["run_id"],
             "event_context_ref": _ContextHandler.captured_body["event_context_ref"],
-            "envelope": {"event_slug": "github.issue_created"},
+            "envelope": {"provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER"},
             "curated_projection": {"title": "Issue"},
             "source_body": {"number": 1},
             "expires_at": datetime.now(timezone.utc).isoformat(),

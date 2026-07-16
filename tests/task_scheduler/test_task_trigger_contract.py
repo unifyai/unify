@@ -62,8 +62,9 @@ def test_parse_task_trigger_accepts_provider_event_kind() -> None:
     trigger = parse_task_trigger(_load_fixture("task_trigger.provider_event.v1.json"))
     assert isinstance(trigger, ProviderEventTrigger)
     assert trigger.state == "enabled"
-    assert trigger.event_slug == "github.issue_created"
-    assert trigger.filters[0].field == "repository"
+    assert trigger.provider_trigger_slug == "GITHUB_ISSUE_CREATED_TRIGGER"
+    assert trigger.trigger_config["owner"] == "YushaArif99"
+    assert trigger.trigger_config["repo"] == "triggers-test-repo"
 
 
 def test_parse_task_trigger_rejects_unknown_kind() -> None:
