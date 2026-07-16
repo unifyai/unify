@@ -4,13 +4,9 @@
   "connection_id": "conn-fixture-1",
   "backend_id": "composio",
   "canonical_app_slug": "github",
-  "event_slug": "github.issue_created",
-  "schema_version": "1",
-  "filters": [
-    {
-      "field": "repository",
-      "operator": "is",
-      "value": "unifyai/demo"
-    }
-  ]
+  "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
+  "trigger_config": {
+    "owner": "YushaArif99",
+    "repo": "triggers-test-repo"
+  }
 }

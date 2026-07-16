@@ -11,6 +11,7 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
+from tests.provider_trigger_delivery import create_github_composio_connection
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler import typed_tasks_client
 from unify.task_scheduler.provider_trigger_actor import CONNECTION_SUMMARY_KEYS
@@ -34,12 +35,14 @@ _SECRET_KEYS = frozenset(
 )
 
 
-def _provider_event_trigger() -> dict[str, Any]:
-    return json.loads(
+def _provider_event_trigger(*, connection_id: str) -> dict[str, Any]:
+    payload = json.loads(
         (_FIXTURE_DIR / "task_trigger.provider_event.v1.json").read_text(
             encoding="utf-8",
         ),
     )
+    payload["connection_id"] = connection_id
+    return payload
 
 
 def _mirror_orchestra_task(
@@ -72,7 +75,7 @@ def _seed_non_provider_task(scheduler: TaskScheduler) -> int:
 
 
 @pytest.fixture
-def orchestra_assistant_and_scheduler():
+def orchestra_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch):
     """Create one assistant, pin session agent_id, and return a TaskScheduler."""
 
     suffix = uuid.uuid4().hex[:8]
@@ -84,9 +87,10 @@ def orchestra_assistant_and_scheduler():
     agent_id = int(assistant["agent_id"])
     original_agent_id = SESSION_DETAILS.assistant.agent_id
     SESSION_DETAILS.assistant.agent_id = agent_id
+    connection = create_github_composio_connection(assistant_id=agent_id)
     scheduler = TaskScheduler()
     try:
-        yield scheduler, agent_id
+        yield scheduler, agent_id, connection
     finally:
         SESSION_DETAILS.assistant.agent_id = original_agent_id
 
@@ -96,22 +100,35 @@ def orchestra_assistant_and_scheduler():
 def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
     orchestra_assistant_and_scheduler,
 ) -> None:
-    scheduler, _agent_id = orchestra_assistant_and_scheduler
+    scheduler, _agent_id, _connection = orchestra_assistant_and_scheduler
 
     catalog = scheduler._list_provider_trigger_catalog()
     assert catalog["outcome"] == "provider trigger catalog listed"
-    events = catalog["details"].get("events") or []
-    assert any(event.get("event_slug") == "github.issue_created" for event in events)
-
-    contract = scheduler._describe_provider_trigger_resources(
-        event_slug="github.issue_created",
+    triggers = catalog["details"].get("triggers") or []
+    assert catalog["details"].get("available") is not False
+    github_trigger = next(
+        (
+            item
+            for item in triggers
+            if item.get("canonical_app_slug") == "github"
+            and item.get("backend_id") == "composio"
+        ),
+        None,
     )
-    assert contract["outcome"] == "provider trigger resource contract described"
-    assert contract["details"]["resource_kind"] == "github_repository"
-    assert contract["details"]["filters"]
+    assert github_trigger is not None, "expected at least one composio github catalog trigger"
+
+    contract = scheduler._describe_provider_trigger(
+        provider_trigger_slug=github_trigger["provider_trigger_slug"],
+        backend_id="composio",
+    )
+    assert contract["outcome"] == "provider trigger described"
+    assert (
+        contract["details"]["provider_trigger_slug"]
+        == github_trigger["provider_trigger_slug"]
+    )
 
     connections = scheduler._list_provider_trigger_connections(
-        event_slug="github.issue_created",
+        canonical_app_slug="github",
         backend_id="composio",
     )
     assert connections["outcome"] == "provider trigger connections listed"
@@ -128,14 +145,16 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
 def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision_conflict(
     orchestra_assistant_and_scheduler,
 ) -> None:
-    scheduler, agent_id = orchestra_assistant_and_scheduler
+    scheduler, agent_id, connection = orchestra_assistant_and_scheduler
 
     created = typed_tasks_client.create_task(
         payload={
             "name": "GitHub issue triage",
             "description": "Triage new GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",
@@ -190,14 +209,16 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
 def test_provider_trigger_health_and_event_context_tools_are_actor_safe(
     orchestra_assistant_and_scheduler,
 ) -> None:
-    scheduler, _agent_id = orchestra_assistant_and_scheduler
+    scheduler, _agent_id, connection = orchestra_assistant_and_scheduler
 
     created = typed_tasks_client.create_task(
         payload={
             "name": "GitHub issue handler",
             "description": "Handle GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",

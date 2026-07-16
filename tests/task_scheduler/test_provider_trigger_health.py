@@ -66,7 +66,7 @@ def test_sanitize_event_context_hides_source_body_by_default() -> None:
             "receipt_id": "receipt-1",
             "run_id": 42,
             "event_context_ref": "blob-1",
-            "envelope": {"event_slug": "github.issue_created"},
+            "envelope": {"provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER"},
             "curated_projection": {"title": "Fixture"},
             "source_body": {"raw_payload_field": "value"},
             "expires_at": "2026-08-12T12:00:00+00:00",
