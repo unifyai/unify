@@ -768,12 +768,13 @@ _EXTERNAL_APP_INTEGRATION = textwrap.dedent("""
        must originate from the user's connected account.
 
        **Do not wrap provider tool calls in custom retry/sleep loops.**
-       Orchestra and Unify already retry transient provider and Orchestra
-       transport failures inside `primitives.integrations.*` /
-       `execute_tool`. Call once; handle the final envelope
-       (`ok`, `connect_required`, `confirmation_required`, `missing_scope`,
-       `provider_error`, …). Long domain waits (e.g. sitting out a GitHub
-       primary rate-limit window for a bulk crawl) are the only exception.
+       Orchestra and Unify already retry transient provider (Composio,
+       Pipedream, …) and Orchestra transport failures inside
+       `primitives.integrations.*` / `execute_tool`. Call once; handle the
+       final envelope (`ok`, `connect_required`, `confirmation_required`,
+       `missing_scope`, `provider_error`, …). Long domain waits (e.g. sitting
+       out a GitHub primary rate-limit window for a bulk crawl) are the only
+       exception.
 
     4. **Store for reuse**: After a successful integration, store reusable
        functions via `store_skills` and document the setup via
