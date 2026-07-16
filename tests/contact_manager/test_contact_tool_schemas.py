@@ -1,8 +1,8 @@
 """ContactManager create/update tools must expose closed LLM schemas.
 
 Open ``**kwargs`` / top-level ``additionalProperties: true`` schemas are
-unreliable on OpenAI tool calling. Custom column values go through the named
-``custom_fields`` parameter instead.
+unreliable on OpenAI tool calling. The Contact schema is fixed, so tools
+expose only the named built-in fields.
 """
 
 from __future__ import annotations
@@ -43,16 +43,22 @@ def test_contact_manager_update_tools_schemas_are_closed():
     create = _schema_for_tool(tools, "create_contact")
     _assert_closed(
         create,
-        expected_props={"first_name", "surname", "email_address", "custom_fields"},
+        expected_props={"first_name", "surname", "email_address"},
     )
     assert "_contact_id" not in (
+        create["function"]["parameters"].get("properties") or {}
+    )
+    assert "custom_fields" not in (
         create["function"]["parameters"].get("properties") or {}
     )
 
     update = _schema_for_tool(tools, "update_contact")
     _assert_closed(
         update,
-        expected_props={"contact_id", "first_name", "custom_fields"},
+        expected_props={"contact_id", "first_name"},
+    )
+    assert "custom_fields" not in (
+        update["function"]["parameters"].get("properties") or {}
     )
 
 
@@ -62,4 +68,4 @@ def test_create_and_update_signatures_have_no_varkw():
         assert not any(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
         ), f"{fn.__name__} must not accept **kwargs"
-        assert "custom_fields" in sig.parameters
+        assert "custom_fields" not in sig.parameters

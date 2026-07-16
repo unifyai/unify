@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,10 +22,18 @@ from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.event_handlers import EventHandler
 from unify.conversation_manager.events import (
     SyncContacts,
+    EmailReceived,
+    EmailSent,
     InboundUnifyMeetUtterance,
     OutboundUnifyMeetUtterance,
     InboundPhoneUtterance,
     OutboundPhoneUtterance,
+    SlackChannelMessageReceived,
+    SlackChannelMessageSent,
+    SlackMessageReceived,
+    SlackMessageSent,
+    SMSReceived,
+    SMSSent,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
@@ -133,9 +142,12 @@ def _make_cm_for_log_message() -> MagicMock:
     cm.contact_index.get_contact = MagicMock(
         return_value={"contact_id": 1, "first_name": "Test", "surname": "User"},
     )
+    cm.call_manager.teams_meet_exchange_id = UNASSIGNED
+    cm.call_manager.teams_meet_start_timestamp = None
     cm._local_to_global_message_ids = {}
     cm._local_to_global_message_ids_by_destination = {}
     cm._local_message_destinations = {}
+    cm._conversation_exchange_ids = {}
     return cm
 
 
@@ -355,3 +367,336 @@ async def test_log_message_does_not_overwrite_existing_exchange_id():
         assert (
             cm.call_manager.unify_meet_exchange_id == 42
         ), "log_message must not overwrite an already-set exchange_id"
+
+
+# ---------------------------------------------------------------------------
+# Email exchange grouping: messages sharing a provider thread_id land in the
+# same exchange (inbound + outbound reply), distinct threads stay separate,
+# and the exchange is recovered from Exchanges metadata after a restart clears
+# the in-memory cache.
+# ---------------------------------------------------------------------------
+
+
+def _exchange_id_of_last_message(cm: MagicMock) -> int:
+    return int(cm.transcript_manager._sim_messages[-1].exchange_id)
+
+
+@pytest.mark.asyncio
+async def test_log_message_groups_email_by_thread_id():
+    """An inbound email and the assistant's reply on the same provider thread
+    share one exchange; a message on a different thread opens a new one."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    inbound = EmailReceived(
+        contact=contact,
+        subject="Quote request",
+        body="Can you send pricing?",
+        thread_id="THREAD-A",
+    )
+    reply = EmailSent(
+        contact=contact,
+        subject="Re: Quote request",
+        body="Here you go.",
+        thread_id="THREAD-A",
+    )
+    other = EmailReceived(
+        contact=contact,
+        subject="Different topic",
+        body="Unrelated.",
+        thread_id="THREAD-B",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, inbound)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        await managers_utils.log_message(cm, reply)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "Reply on the same thread_id must reuse the inbound exchange"
+
+        await managers_utils.log_message(cm, other)
+        assert (
+            _exchange_id_of_last_message(cm) != first_exchange
+        ), "A different thread_id must open a new exchange"
+
+
+@pytest.mark.asyncio
+async def test_log_message_email_recovers_exchange_after_restart():
+    """A cold in-memory cache (simulated restart) recovers the thread's
+    exchange from Exchanges metadata rather than opening a duplicate."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    first = EmailReceived(
+        contact=contact,
+        subject="Ongoing thread",
+        body="Message one.",
+        thread_id="THREAD-DURABLE",
+    )
+    after_restart = EmailReceived(
+        contact=contact,
+        subject="Re: Ongoing thread",
+        body="Message two.",
+        thread_id="THREAD-DURABLE",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, first)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        # Simulate a CM restart: the in-memory cache is empty but the
+        # Exchanges metadata persists.
+        cm._conversation_exchange_ids = {}
+
+        await managers_utils.log_message(cm, after_restart)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "Email thread must recover its exchange from metadata after restart"
+
+
+@pytest.mark.asyncio
+async def test_log_message_email_without_thread_id_creates_fresh_exchange():
+    """Emails with no provider thread_id fall back to a fresh exchange per
+    message rather than grouping under a blank key."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    first = EmailReceived(
+        contact=contact,
+        subject="No thread one",
+        body="First.",
+        thread_id=None,
+    )
+    second = EmailReceived(
+        contact=contact,
+        subject="No thread two",
+        body="Second.",
+        thread_id=None,
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, first)
+        first_exchange = _exchange_id_of_last_message(cm)
+
+        await managers_utils.log_message(cm, second)
+        assert (
+            _exchange_id_of_last_message(cm) != first_exchange
+        ), "Threadless emails must not group under a blank key"
+
+
+# ---------------------------------------------------------------------------
+# SMS exchange grouping: a 1:1 DM reuses one exchange while activity stays
+# within DM_EXCHANGE_GAP (keyed on contact_id), and a message after the gap
+# starts a fresh exchange. In-memory only (fresh after restart).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_log_message_groups_sms_by_contact_within_window():
+    """An inbound SMS and the assistant reply within the window share one
+    exchange (keyed on contact_id)."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    inbound = SMSReceived(contact=contact, content="Hi there")
+    reply = SMSSent(contact=contact, content="Hello back")
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, inbound)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        await managers_utils.log_message(cm, reply)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "SMS reply within the window must reuse the inbound exchange"
+
+
+@pytest.mark.asyncio
+async def test_log_message_sms_new_exchange_after_gap():
+    """An SMS arriving after DM_EXCHANGE_GAP starts a fresh exchange."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    first = SMSReceived(contact=contact, content="Morning")
+    later = SMSReceived(contact=contact, content="Afternoon")
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    clock = MagicMock(return_value=base)
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        with patch.object(managers_utils, "prompt_now", clock):
+            await managers_utils.log_message(cm, first)
+            first_exchange = _exchange_id_of_last_message(cm)
+            assert first_exchange != UNASSIGNED
+
+            clock.return_value = (
+                base
+                + managers_utils.DM_EXCHANGE_GAP
+                + timedelta(
+                    minutes=1,
+                )
+            )
+            await managers_utils.log_message(cm, later)
+            assert (
+                _exchange_id_of_last_message(cm) != first_exchange
+            ), "SMS after the inactivity gap must open a new exchange"
+
+
+# ---------------------------------------------------------------------------
+# Slack exchange grouping: DMs group by contact_id (time-windowed); channels
+# group by the native (team_id, channel_id, thread_ts) thread, where a
+# top-level @mention keys on the message's own event_ts (the value the reply
+# threads under). In-memory only (fresh after restart).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_log_message_groups_slack_dm_by_contact():
+    """A Slack DM and the assistant reply share one exchange (keyed on
+    contact_id)."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    inbound = SlackMessageReceived(
+        contact=contact,
+        content="Hey",
+        team_id="T1",
+        channel_id="D1",
+    )
+    reply = SlackMessageSent(
+        contact=contact,
+        content="Hi",
+        team_id="T1",
+        channel_id="D1",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, inbound)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        await managers_utils.log_message(cm, reply)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "Slack DM reply must reuse the inbound exchange"
+
+
+@pytest.mark.asyncio
+async def test_log_message_groups_slack_channel_by_thread():
+    """A top-level Slack @mention and its threaded reply share one exchange;
+    a message in a different thread of the same channel opens a new one."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    # Top-level @mention: no thread_ts yet, so the thread is keyed on the
+    # message's own event_ts.
+    mention = SlackChannelMessageReceived(
+        contact=contact,
+        content="@bot help",
+        team_id="T1",
+        channel_id="C1",
+        thread_ts="",
+        event_ts="111.1",
+    )
+    # The reply threads under the mention (thread_ts == the mention's ts).
+    reply = SlackChannelMessageSent(
+        contact=contact,
+        content="Sure, here you go",
+        team_id="T1",
+        channel_id="C1",
+        thread_ts="111.1",
+    )
+    # A separate top-level mention in the same channel is a distinct thread.
+    other_thread = SlackChannelMessageReceived(
+        contact=contact,
+        content="@bot another thing",
+        team_id="T1",
+        channel_id="C1",
+        thread_ts="",
+        event_ts="222.2",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, mention)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        await managers_utils.log_message(cm, reply)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "Threaded reply must reuse the mention's exchange"
+
+        await managers_utils.log_message(cm, other_thread)
+        assert (
+            _exchange_id_of_last_message(cm) != first_exchange
+        ), "A different thread in the same channel must open a new exchange"
+
+
+@pytest.mark.asyncio
+async def test_log_message_slack_channel_without_ids_creates_fresh_exchange():
+    """Slack channel messages missing a channel_id/thread identifier fall back
+    to a fresh exchange rather than grouping under a blank key."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    first = SlackChannelMessageReceived(
+        contact=contact,
+        content="One",
+        team_id="T1",
+        channel_id="",
+        thread_ts="",
+        event_ts="",
+    )
+    second = SlackChannelMessageReceived(
+        contact=contact,
+        content="Two",
+        team_id="T1",
+        channel_id="",
+        thread_ts="",
+        event_ts="",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, first)
+        first_exchange = _exchange_id_of_last_message(cm)
+
+        await managers_utils.log_message(cm, second)
+        assert (
+            _exchange_id_of_last_message(cm) != first_exchange
+        ), "Slack channel messages without ids must not group under a blank key"

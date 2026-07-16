@@ -4160,12 +4160,18 @@ class CommsPrimitives:
             attachment=attachment,
         )
         if response.get("success"):
+            # A net-new thread has no thread_id until the provider assigns one
+            # on send; capture it here so the eventual inbound reply groups into
+            # this exchange rather than opening a fresh one.
+            effective_thread_id = (
+                thread_id or response.get("thread_id") or response.get("threadId")
+            )
             event = EmailSent(
                 contact=primary_contact or {},
                 body=body,
                 subject=final_subject,
                 email_id_replied_to=reply_email_id,
-                thread_id=thread_id,
+                thread_id=effective_thread_id,
                 attachments=[attachment_meta] if attachment_meta else [],
                 to=final_to,
                 cc=final_cc,
@@ -4184,13 +4190,13 @@ class CommsPrimitives:
                     "bcc": final_bcc,
                     "reply_all": reply_all,
                     "email_id_to_reply_to": reply_email_id or "",
-                    "thread_id": thread_id or "",
+                    "thread_id": effective_thread_id or "",
                     "attachment_filepath": attachment_filepath or "",
                 },
                 history_metadata={
                     "contact_display_name": _get_contact_display_name(primary_contact),
                     "reply_to_email_id": reply_email_id or None,
-                    "thread_id": thread_id or None,
+                    "thread_id": effective_thread_id or None,
                 },
                 attachments=[attachment_meta] if attachment_meta else None,
                 provider_response=response,

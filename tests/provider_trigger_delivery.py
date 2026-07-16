@@ -37,6 +37,36 @@ _PIPEDREAM_FIXTURE_PATH = (
     / "pipedream_github_issue.redacted.json"
 )
 
+_DEFAULT_PROBE_REPO_OWNER = "YushaArif99"
+_DEFAULT_PROBE_REPO_NAME = "triggers-test-repo"
+
+
+def probe_github_repo_owner() -> str:
+    """GitHub owner for provider-trigger probe tasks and webhook fixtures."""
+
+    return os.getenv("COMPOSIO_PROBE_REPO_OWNER", _DEFAULT_PROBE_REPO_OWNER).strip()
+
+
+def probe_github_repo_name() -> str:
+    """GitHub repository name for provider-trigger probe tasks and fixtures."""
+
+    return os.getenv("COMPOSIO_PROBE_REPO_NAME", _DEFAULT_PROBE_REPO_NAME).strip()
+
+
+def probe_github_repository_full_name() -> str:
+    """Return owner/repo for the disposable provider-trigger probe repository."""
+
+    return f"{probe_github_repo_owner()}/{probe_github_repo_name()}"
+
+
+def probe_github_trigger_config() -> dict[str, str]:
+    """Composio issue-created trigger config for the probe repository."""
+
+    return {
+        "owner": probe_github_repo_owner(),
+        "repo": probe_github_repo_name(),
+    }
+
 
 def orchestra_api_base() -> str:
     raw = os.getenv("UNIFY_BASE_URL", "http://localhost:8000/v0").rstrip("/")
@@ -149,6 +179,13 @@ def deliver_signed_pipedream_webhook(
 
 def _orchestra_worker_env() -> dict[str, str]:
     env = os.environ.copy()
+    for key in (
+        "COMPOSIO_API_KEY",
+        "PIPEDREAM_CLIENT_ID",
+        "PIPEDREAM_CLIENT_SECRET",
+        "PIPEDREAM_PROJECT_ID",
+    ):
+        env.pop(key, None)
     env.setdefault("ORCHESTRA_DB_USER", "orchestra")
     env.setdefault("ORCHESTRA_DB_PASS", "orchestra")
     env.setdefault("ORCHESTRA_DB_BASE", "orchestra")
@@ -277,13 +314,25 @@ def deliver_signed_composio_webhook(
     )
 
 
-def run_orchestra_trigger_worker_cycle() -> None:
+def run_orchestra_trigger_worker_cycle(
+    *,
+    use_live_provider_credentials: bool = False,
+) -> None:
     """Advance Orchestra trigger reconciliation/dispatch using the local worker."""
 
     python_bin = _ORCHESTRA_ROOT / ".venv/bin/python"
     if not python_bin.exists():
         raise RuntimeError(f"Orchestra venv not found at {python_bin}")
     env = _orchestra_worker_env()
+    if use_live_provider_credentials:
+        for key in (
+            "COMPOSIO_API_KEY",
+            "PIPEDREAM_CLIENT_ID",
+            "PIPEDREAM_CLIENT_SECRET",
+            "PIPEDREAM_PROJECT_ID",
+        ):
+            if key in os.environ:
+                env[key] = os.environ[key]
     env["PROVIDER_TRIGGER_WORKER_READINESS"] = "0"
     Path(env["TRIGGER_EVENT_PRIVATE_ROOT"]).mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -366,7 +415,37 @@ def fetch_latest_receipt_run_key(*, binding_id: str) -> str:
     return output
 
 
-def create_github_composio_connection(*, assistant_id: int) -> dict[str, Any]:
+def fetch_orchestra_task_by_name_fragment(
+    *,
+    assistant_id: int,
+    name_fragment: str,
+) -> dict[str, Any]:
+    """Return the single Orchestra task whose name contains ``name_fragment``."""
+
+    headers = {"Authorization": f"Bearer {orchestra_api_key()}"}
+    response = requests.get(
+        f"{orchestra_api_base()}/v0/assistants/{assistant_id}/tasks",
+        headers=headers,
+        timeout=30,
+    )
+    response.raise_for_status()
+    tasks = response.json()["info"]["tasks"]
+    needle = name_fragment.lower()
+    matches = [task for task in tasks if needle in str(task.get("name") or "").lower()]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected exactly one Orchestra task matching {name_fragment!r}, "
+            f"found {len(matches)}",
+        )
+    return matches[0]
+
+
+def create_github_composio_connection(
+    *,
+    assistant_id: int,
+    provider_connection_id: str = "ca_local_stub",
+    provider_user_id: str = "assistant:provider-trigger-probe",
+) -> dict[str, Any]:
     """Start and complete one assistant-scoped Composio GitHub connection."""
 
     api_key = orchestra_api_key()
@@ -393,8 +472,8 @@ def create_github_composio_connection(*, assistant_id: int) -> dict[str, Any]:
         f"{base}/v0/integrations/connections/{connection_id}/complete",
         headers=headers,
         json={
-            "provider_connection_id": "ca_local_stub",
-            "provider_user_id": "assistant:provider-trigger-probe",
+            "provider_connection_id": provider_connection_id,
+            "provider_user_id": provider_user_id,
             "granted_scopes": [],
             "status": "connected",
         },

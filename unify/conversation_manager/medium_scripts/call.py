@@ -1578,6 +1578,13 @@ async def entrypoint(ctx: agents.JobContext):
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
     _meet_speaker_map: dict[str, dict[str, int]] = {}
+    # Alone-detection state (browser meets). "Alone" = no other participants
+    # (assistant is the only one). Debounced over consecutive polls; guarded so
+    # a solo start (assistant in before any human) never fires immediately.
+    _MEET_ALONE_DEBOUNCE_POLLS = 3
+    _meet_seen_human: bool = False
+    _meet_alone_streak: int = 0
+    _meet_alone_notified: bool = False
     if channel in ("google_meet", "teams_meet"):
         if meta:
             _meet_display_name = meta.get("meet_display_name", "")
@@ -1911,10 +1918,12 @@ async def entrypoint(ctx: agents.JobContext):
     if channel == "teams_meet":
         _ParticipantJoinedEvent = TeamsMeetParticipantJoined
         _ParticipantLeftEvent = TeamsMeetParticipantLeft
+        _AloneEvent = TeamsMeetAlone
         _participant_topic = "app:comms:teamsmeet_participant"
     else:
         _ParticipantJoinedEvent = GoogleMeetParticipantJoined
         _ParticipantLeftEvent = GoogleMeetParticipantLeft
+        _AloneEvent = GoogleMeetAlone
         _participant_topic = "app:comms:googlemeet_participant"
 
     async def _meet_poll_loop() -> None:
@@ -1929,6 +1938,7 @@ async def entrypoint(ctx: agents.JobContext):
         nonlocal _meet_cached_active_speaker, _meet_cached_participants
         nonlocal _meet_prev_participant_names, meet_session_id
         nonlocal _meet_latest_screenshot
+        nonlocal _meet_seen_human, _meet_alone_streak, _meet_alone_notified
         import aiohttp as _aiohttp
 
         try:
@@ -2012,6 +2022,36 @@ async def entrypoint(ctx: agents.JobContext):
                                 evt.to_json(),
                             ),
                         )
+
+                    # Alone detection: notify the slow brain once the assistant
+                    # is the only participant left, sustained over a debounce
+                    # window. The brain decides whether to say a closing line
+                    # and hang up (never an automatic kill here). Guarded so a
+                    # solo start never fires before any human has been seen.
+                    other_count = len(_get_meet_participant_names())
+                    if other_count > 0:
+                        _meet_seen_human = True
+                        _meet_alone_streak = 0
+                        _meet_alone_notified = False
+                    else:
+                        _meet_alone_streak += 1
+                    if (
+                        _meet_seen_human
+                        and _meet_alone_streak >= _MEET_ALONE_DEBOUNCE_POLLS
+                        and not _meet_alone_notified
+                    ):
+                        _log.info(
+                            f"{channel}: assistant alone "
+                            f"(streak={_meet_alone_streak}) — notifying slow brain",
+                        )
+                        alone_evt = _AloneEvent(contact=contact)
+                        asyncio.create_task(
+                            event_broker.publish(
+                                _AloneEvent.topic,
+                                alone_evt.to_json(),
+                            ),
+                        )
+                        _meet_alone_notified = True
 
                     # Fetch cached screenshot (non-blocking — agent-service
                     # captures during its own poll cycle)

@@ -11,7 +11,7 @@ This folder contains an **interactive playground** for the `ContactManager` comp
 
 What is the `ContactManager`?
 -----------------------------
-`ContactManager` is an abstraction that stores contact records (first name, surname, phone, bio, rolling summary, plus any number of **custom columns**) and exposes two high-level natural-language methods:
+`ContactManager` is an abstraction that stores contact records (first name, surname, phone, bio, rolling summary, and other built-in contact fields) and exposes two high-level natural-language methods:
 
 * **`ask(text)`**   – read-only questions such as *"What is Alice's phone number?"*
 * **`update(text)`** – mutations such as *"Update Bob's phone number to +123…"*

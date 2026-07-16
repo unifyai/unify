@@ -30,7 +30,6 @@ __all__ = [
     "render_counts_and_columns",
     "render_schemas",
     "render_table_info",
-    "get_custom_columns",
     "clarification_top_sentence",
     "clarification_else_policy",
     "special_contacts_block",
@@ -459,7 +458,6 @@ class PromptSpec:
 
     - `schemas`: List of (name, model_or_dict) pairs rendered early in the prompt
     - `table_schema_name`: Name of the schema that defines the table columns
-    - `custom_columns`: Only non-schema columns (dynamic/custom fields)
     - `columns_payload`: Legacy field; use only when NOT using schema-based approach
     """
 
@@ -488,7 +486,6 @@ class PromptSpec:
 
     # Schema-based table info (preferred - avoids duplication)
     table_schema_name: Optional[str] = None  # e.g., "Contact" - references schema
-    custom_columns: Optional[Dict[str, str]] = None  # Only non-schema columns
 
     # Tools block
     include_tools_block: bool = True
@@ -604,59 +601,11 @@ def render_counts_and_columns(
     )
 
 
-def get_custom_columns(
-    model: Type[BaseModel],
-    columns: Union[Dict[str, str], List[Dict[str, str]], List[str]],
-) -> Dict[str, str]:
-    """Extract columns that are NOT defined in the Pydantic model (i.e., custom/dynamic columns).
-
-    Parameters
-    ----------
-    model : Type[BaseModel]
-        The Pydantic model class (e.g., Contact, Task).
-    columns : Union[Dict[str, str], List[Dict[str, str]], List[str]]
-        The runtime columns, either as a dict {name: type} or list of dicts/strings.
-
-    Returns
-    -------
-    Dict[str, str]
-        Only the columns not present in model.model_fields.
-    """
-    builtin_fields = set(model.model_fields.keys())
-
-    # Normalize columns to dict
-    if isinstance(columns, dict):
-        cols_dict = columns
-    elif isinstance(columns, list):
-        if not columns:
-            return {}
-        if isinstance(columns[0], dict):
-            # List of single-key dicts: [{"field1": "type1"}, ...]
-            cols_dict = {}
-            for item in columns:
-                cols_dict.update(item)
-        else:
-            # List of strings: ["field1", "field2", ...]
-            cols_dict = {c: "unknown" for c in columns}
-    else:
-        return {}
-
-    # Return only non-builtin columns (excluding embedding columns)
-    return {
-        name: typ
-        for name, typ in cols_dict.items()
-        if name not in builtin_fields
-        and not str(name).startswith("_")
-        and not str(name).endswith("_emb")
-    }
-
-
 def render_table_info(
     *,
     entity_plural: str,
     count: int,
     schema_name: Optional[str] = None,
-    custom_columns: Optional[Dict[str, str]] = None,
 ) -> str:
     """Render table info that references a schema instead of duplicating column definitions.
 
@@ -669,8 +618,6 @@ def render_table_info(
     schema_name : Optional[str]
         Name of the schema to reference (e.g., "Contact"). If provided, columns
         are referenced rather than listed.
-    custom_columns : Optional[Dict[str, str]]
-        Additional custom/dynamic columns not in the schema.
 
     Returns
     -------
@@ -681,9 +628,6 @@ def render_table_info(
 
     if schema_name:
         parts.append(f"Columns are defined in the {schema_name} schema above.")
-
-    if custom_columns:
-        parts.append(f"Additional custom columns: {json.dumps(custom_columns)}")
 
     return "\n".join(parts)
 
@@ -915,7 +859,6 @@ def compose_system_prompt(spec: PromptSpec) -> PromptParts:
                     entity_plural=spec.counts_entity_plural,
                     count=spec.counts_value,
                     schema_name=spec.table_schema_name,
-                    custom_columns=spec.custom_columns,
                 ),
             )
         elif spec.columns_payload is not None:

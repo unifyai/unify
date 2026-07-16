@@ -80,7 +80,7 @@ from .prompt_builders import (
     build_update_prompt,
 )
 from .provider_trigger_actor import (
-    describe_provider_trigger_resource_contract,
+    describe_provider_trigger,
     list_eligible_provider_trigger_connections,
     task_revision_conflict_outcome,
 )
@@ -218,8 +218,8 @@ class TaskScheduler(BaseTaskScheduler):
                     display_label="Listing provider trigger connections",
                 ),
                 ToolSpec(
-                    fn=self._describe_provider_trigger_resources,
-                    display_label="Describing provider trigger resources",
+                    fn=self._describe_provider_trigger,
+                    display_label="Describing provider trigger config",
                 ),
                 ToolSpec(
                     fn=self._get_provider_trigger_health,
@@ -2387,11 +2387,7 @@ class TaskScheduler(BaseTaskScheduler):
             self._store.log(entries=payload, new=True)
 
     def _list_provider_trigger_catalog(self) -> ToolOutcome:
-        """List curated provider-event triggers available for task configuration.
-
-        Returns the Orchestra trigger catalog with canonical event slugs,
-        supported filter fields, and backend availability for actor-driven setup.
-        """
+        """List staged provider triggers for this assistant's connected apps."""
 
         catalog = typed_tasks_client.get_trigger_catalog()
         return {
@@ -2402,49 +2398,37 @@ class TaskScheduler(BaseTaskScheduler):
     def _list_provider_trigger_connections(
         self,
         *,
-        event_slug: str,
-        schema_version: str = "1",
+        canonical_app_slug: str | None = None,
         backend_id: str | None = None,
     ) -> ToolOutcome:
-        """List assistant-owned connections eligible for one curated event.
+        """List assistant-owned connections usable for provider triggers."""
 
-        Returns provider-neutral connection summaries without secret references
-        or credential material suitable for model-visible actor responses.
-        """
-
-        catalog = typed_tasks_client.get_trigger_catalog()
         connections = list_eligible_provider_trigger_connections(
-            event_slug=event_slug,
-            schema_version=schema_version,
+            canonical_app_slug=canonical_app_slug,
             backend_id=backend_id,
-            catalog_events=catalog.get("events"),
         )
         return {
             "outcome": "provider trigger connections listed",
             "details": {"connections": connections},
         }
 
-    def _describe_provider_trigger_resources(
+    def _describe_provider_trigger(
         self,
         *,
-        event_slug: str,
-        schema_version: str = "1",
+        provider_trigger_slug: str,
+        backend_id: str,
     ) -> ToolOutcome:
-        """Describe how to select resources and filters for one curated event.
-
-        Explains the exact repository or resource contract, supported AND
-        filters, and backend mappings before creating a provider-event task.
-        """
+        """Return config schema for one staged provider trigger."""
 
         catalog = typed_tasks_client.get_trigger_catalog()
-        contract = describe_provider_trigger_resource_contract(
-            event_slug=event_slug,
-            schema_version=schema_version,
-            catalog_events=catalog.get("events"),
+        trigger = describe_provider_trigger(
+            provider_trigger_slug=provider_trigger_slug,
+            backend_id=backend_id,
+            catalog_triggers=catalog.get("triggers"),
         )
         return {
-            "outcome": "provider trigger resource contract described",
-            "details": contract,
+            "outcome": "provider trigger described",
+            "details": trigger,
         }
 
     def _get_provider_trigger_health(self, *, task_id: int) -> ToolOutcome:
@@ -3057,6 +3041,7 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
+        browser_target = payload.pop("browser_target", None)
         name = payload.pop("name")
         description = payload.pop("description")
 
@@ -3102,6 +3087,7 @@ class TaskScheduler(BaseTaskScheduler):
             entries={
                 "custom_key": custom_key,
                 "custom_hash": custom_hash,
+                "browser_target": browser_target,
             },
         )
         return task_id
@@ -3127,6 +3113,7 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
+        browser_target = payload.pop("browser_target", None)
         name = payload.pop("name", None)
         description = payload.pop("description", None)
 
@@ -3176,6 +3163,7 @@ class TaskScheduler(BaseTaskScheduler):
             "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
+            "browser_target": browser_target,
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(

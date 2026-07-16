@@ -59,33 +59,28 @@ def test_multi_columns_json_vec():
 def test_all_columns_default():
     cm = ContactManager()
 
-    # Create a custom column to be included in the composite expression
-    from unify.common.column_types import ColumnType
-
-    cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
-
     # Populate different fields so the all-columns JSON helps similarity
     cm._create_contact(
         first_name="Helen",
         bio="Reads a lot",
         email_address="helen@example.com",
-        custom_fields={"occupation": "Designer"},
+        job_title="Designer",
     )
     cm._create_contact(
         first_name="Ian",
         bio="Responds best to emails",
         email_address="ian@example.com",
-        custom_fields={"occupation": "Email specialist"},
+        job_title="Email specialist",
     )
     cm._create_contact(
         first_name="Judy",
         bio="Text first please",
         phone_number="1234567890",
-        custom_fields={"occupation": "Engineer"},
+        job_title="Engineer",
     )
 
-    # Build a composite expression spanning multiple fields including the custom column
-    expr = "str({first_name}) + ' ' + str({bio}) + ' ' + str({email_address}) + ' ' + str({phone_number}) + ' ' + str({occupation})"
+    # Build a composite expression spanning multiple built-in fields
+    expr = "str({first_name}) + ' ' + str({bio}) + ' ' + str({email_address}) + ' ' + str({phone_number}) + ' ' + str({job_title})"
     query = "best to emails"
     results = cm._search_contacts(references={expr: query}, k=2)
     contacts = results["contacts"]
@@ -103,33 +98,28 @@ def test_all_columns_default():
 def test_mean_cosine_ranking():
     cm = ContactManager()
 
-    # Ensure custom column exists
-    from unify.common.column_types import ColumnType
-
-    cm._create_custom_column(column_name="occupation", column_type=ColumnType.str)
-
     # A: matches both references
     cm._create_contact(
         first_name="Alex",
         rolling_summary="We had a phone call last week about training",
-        custom_fields={"occupation": "Professional footballer playing striker"},
+        job_title="Professional footballer playing striker",
     )
-    # B: matches only the occupation reference
+    # B: matches only the job_title reference
     cm._create_contact(
         first_name="Blake",
         rolling_summary="Haven't spoken yet",
-        custom_fields={"occupation": "Retired footballer and youth coach"},
+        job_title="Retired footballer and youth coach",
     )
     # C: matches only the rolling_summary reference
     cm._create_contact(
         first_name="Casey",
         rolling_summary="Had a phone call last week regarding taxes",
-        custom_fields={"occupation": "Senior accountant focused on audits"},
+        job_title="Senior accountant focused on audits",
     )
 
-    # Provide multiple references including the custom column and the composite expr
+    # Provide multiple references across built-in text fields
     refs = {
-        "occupation": "footballer",
+        "job_title": "footballer",
         "rolling_summary": "phone call last week",
     }
     results = cm._search_contacts(references=refs, k=3)
@@ -144,8 +134,8 @@ def test_mean_cosine_ranking():
 
     # Ensure columns and vectors were created
     cols = cm._list_columns()
-    assert "occupation" in cols
-    assert "_occupation_emb" in cols
+    assert "job_title" in cols
+    assert "_job_title_emb" in cols
     assert "_rolling_summary_emb" in cols
     assert any(k.startswith("_sum_cos_") for k in cols.keys())
 

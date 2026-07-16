@@ -440,7 +440,11 @@ async def send_email(request: Request, *, assistant: dict | None = None):
             status_code=500,
             detail="Gmail send failed; see gateway logs for traceback.",
         ) from exc
-    return {"success": True, "id": sent.get("id")}
+    return {
+        "success": True,
+        "id": sent.get("id"),
+        "thread_id": sent.get("threadId"),
+    }
 
 
 @router.post("/send")
