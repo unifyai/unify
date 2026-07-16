@@ -48,6 +48,8 @@ def pytest_configure(config) -> None:
     # so they need concrete manager implementations.
     os.environ["UNITY_CONTACT_IMPL"] = "real"
     os.environ["UNITY_TRANSCRIPT_IMPL"] = "real"
+    os.environ["UNITY_TASK_IMPL"] = "real"
+    os.environ["UNITY_FUNCTION_IMPL"] = "real"
 
     # Enable FileManager for attachment/file flows.
     os.environ["UNITY_FILE_ENABLED"] = "true"
@@ -62,9 +64,7 @@ def pytest_configure(config) -> None:
     os.environ["UNITY_WEB_ENABLED"] = "false"
     os.environ["UNITY_MEMORY_ENABLED"] = "false"
 
-    # CodeActActor integration tests need a vision-capable model when files or
-    # screenshots flow through the actor (OpenRouter defaults often lack image input).
-    os.environ["UNIFY_MODEL"] = "gpt-4o-mini@openai"
+    # Production actor/model defaults (gpt-5.6-sol@openai) come from SETTINGS.
 
     # Ensure NEW marker comparisons are stable in tests.
     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
@@ -272,31 +272,31 @@ async def conversation_manager_codeact(request) -> AsyncIterator[CMStepDriver]:
 
 @pytest_asyncio.fixture
 async def code_act_actor() -> AsyncIterator[object]:
-    """Create a fresh primitives-only CodeActActor for each test."""
-    from unify.actor.code_act_actor import CodeActActor
-    from unify.actor.environments import StateManagerEnvironment
-    from unify.function_manager.primitives import Primitives, PrimitiveScope
-
-    scope = PrimitiveScope(
-        scoped_managers=frozenset({"contacts", "tasks", "transcripts", "files"}),
+    """Create a production-wired CodeActActor for CM integration tests."""
+    from unify.actor.environments import (
+        ActorEnvironment,
+        ComputerEnvironment,
+        StateManagerEnvironment,
     )
-    primitives = Primitives(primitive_scope=scope)
-    env = StateManagerEnvironment(primitives)
-
-    actor = CodeActActor(
-        environments=[env],
-        function_manager=None,
-        model="gpt-4o-mini@openai",
+    from unify.function_manager.primitives import (
+        ComputerPrimitives,
+        Primitives,
+        default_runtime_scope,
     )
+    from unify.manager_registry import ManagerRegistry
 
-    # Strip FunctionManager tools for determinism (focus on routing via primitives).
-    try:
-        act_tools = actor.get_tools("act")
-        if "execute_code" in act_tools:
-            actor.add_tools("act", {"execute_code": act_tools["execute_code"]})
-    except Exception:
-        # If tool filtering fails, tests will surface it; don't hard-crash fixture.
-        pass
+    ManagerRegistry.clear()
+    computer_primitives = ComputerPrimitives()
+    actor = ManagerRegistry.get_actor(
+        description="cm integration test",
+        environments=[
+            StateManagerEnvironment(
+                Primitives(primitive_scope=default_runtime_scope()),
+            ),
+            ComputerEnvironment(computer_primitives),
+            ActorEnvironment(),
+        ],
+    )
 
     try:
         yield actor
