@@ -217,6 +217,11 @@ class IntegrationPrimitives:
     global app catalog, then enriched with current-assistant state in Unity.
     Executable functions/tools are still discovered through normal
     FunctionManager search after an app is active and materialized.
+
+    Provider and Orchestra transport retries are built into ``execute_tool`` /
+    Orchestra ``run_tool``. Plans must call tools once and handle the final
+    envelope — never author ad-hoc retry/sleep loops around Composio or
+    provider GraphQL failures.
     """
 
     # Concrete app/tool rows are materialized by FunctionManager sync. This
@@ -873,6 +878,12 @@ class IntegrationPrimitives:
         Treat non-``ok`` statuses as first-class outcomes. Surface the blocked
         state to the user and ask them to connect, reconnect, grant scope, or
         confirm in the approved UI flow.
+
+        Transient provider failures (HTTP 429/5xx, GitHub GraphQL platform
+        blips on reads) are retried inside Orchestra before this returns.
+        Transient Orchestra connectivity failures are retried in Unify ops.
+        Do **not** wrap this call in a custom retry loop — call once and
+        handle the final envelope.
         """
 
         effective_scope = self._effective_owner_scope(
