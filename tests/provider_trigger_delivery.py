@@ -431,11 +431,7 @@ def fetch_orchestra_task_by_name_fragment(
     response.raise_for_status()
     tasks = response.json()["info"]["tasks"]
     needle = name_fragment.lower()
-    matches = [
-        task
-        for task in tasks
-        if needle in str(task.get("name") or "").lower()
-    ]
+    matches = [task for task in tasks if needle in str(task.get("name") or "").lower()]
     if len(matches) != 1:
         raise RuntimeError(
             f"expected exactly one Orchestra task matching {name_fragment!r}, "
