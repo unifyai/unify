@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -35,7 +35,8 @@ TASK_SYNC_FIELDS = (
     "response_policy",
     "entrypoint_function",
     "offline",
-    "browser_target",
+    "requires_filesystem",
+    "requires_computer",
 )
 
 
@@ -54,7 +55,8 @@ class CustomTaskSourceEntry(BaseModel):
     response_policy: Optional[str] = None
     entrypoint_function: Optional[str] = None
     offline: bool = False
-    browser_target: Optional[Literal["assistant_desktop"]] = None
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     destination: str = "personal"
     auto_sync: bool = True
 
@@ -87,7 +89,7 @@ def _compute_task_hash(
     components = [key, destination or "personal"]
     for field_name in TASK_SYNC_FIELDS:
         value = fields.get(field_name)
-        if field_name == "offline":
+        if field_name in {"offline", "requires_filesystem", "requires_computer"}:
             components.append(str(bool(value)))
         elif field_name in {"schedule", "trigger", "repeat"}:
             components.append(_stable_json(value))
@@ -189,6 +191,7 @@ def collect_custom_tasks(
     tasks: Dict[str, Dict[str, Any]] = {}
     for entry in _parse_jsonl_file(jsonl_path):
         destination = entry.destination or "personal"
+        requires_computer = entry.requires_computer
         fields = {
             "name": entry.name,
             "description": entry.description,
@@ -201,7 +204,8 @@ def collect_custom_tasks(
             "response_policy": entry.response_policy,
             "entrypoint_function": entry.entrypoint_function,
             "offline": entry.offline,
-            "browser_target": entry.browser_target,
+            "requires_filesystem": entry.requires_filesystem,
+            "requires_computer": requires_computer,
         }
         custom_hash = _compute_task_hash(
             key=entry.key,

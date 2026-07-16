@@ -1,25 +1,27 @@
-"""Live provider-event dispatch helpers for Unity.
-
-# TODO: Purge ``dispatch_provider_event_live`` and its inbox dependency once
-Orchestra-backed downstream adoption is wired and the authenticated CM handler
-is the only live entrypoint. Keep request validation / audience constants.
-"""
+"""Live provider-event dispatch helpers for Unity."""
 
 from __future__ import annotations
 
+import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Literal
+from typing import Any, Literal
 
+import requests
 from pydantic import BaseModel, ConfigDict, Field
 
-from unify.task_scheduler.provider_event_dispatch_inbox import (
-    LiveDispatchInboxSnapshot,
-    ProviderEventLiveDispatchInbox,
-)
+from unify.session_details import SESSION_DETAILS
+from unify.settings import SETTINGS
 
 PROVIDER_EVENT_DISPATCH_AUDIENCE = "unity:provider-event-dispatch"
 PublicDispatchStatus = Literal["adopted", "started", "terminal"]
+
+_DISPATCH_CLAIM_PATH = "/provider-event-dispatch/claim"
+_DISPATCH_REPORT_STARTED_PATH = "/provider-event-dispatch/report-started"
+_DISPATCH_REPORT_TERMINAL_PATH = "/provider-event-dispatch/report-terminal"
+_HTTP_TIMEOUT_SECONDS = 30
+PROVIDER_EVENT_OPERATION_INFO_PREFIX = "provider_event_operation:"
 
 
 class ProviderEventDispatchRequest(BaseModel):
@@ -51,6 +53,14 @@ class ProviderEventDispatchValidationError(ValueError):
         super().__init__(reason_code)
 
 
+class ProviderEventDispatchAuthorizationError(ValueError):
+    """Raised when Orchestra rejects a reused operation authorization snapshot."""
+
+    def __init__(self, reason_code: str = "dispatch_authorization_mismatch") -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
 @dataclass(frozen=True)
 class LiveProviderEventDispatchOutcome:
     """Result of one live provider-event dispatch attempt."""
@@ -58,10 +68,11 @@ class LiveProviderEventDispatchOutcome:
     operation_id: str
     run_id: int
     run_key: str
-    captured_task_revision: int
+    captured_task_revision: int | None
     status: PublicDispatchStatus
-    launch_count: int
+    fencing_token: int
     adopted_only: bool
+    launch_identity: str | None = None
     terminal_reason: str | None = None
 
 
@@ -86,111 +97,170 @@ def validate_provider_event_dispatch_request(
         raise ProviderEventDispatchValidationError("dispatch_request_expired")
 
 
-def public_status_for_inbox_state(state: str) -> PublicDispatchStatus:
-    """Map durable inbox state to the public dispatch status vocabulary."""
+def live_launch_identity(*, operation_id: str) -> str:
+    """Return the deterministic captured-instance identity for one operation."""
 
-    if state == "started":
-        return "started"
-    if state == "terminal":
-        return "terminal"
-    return "adopted"
+    return f"{PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
 
 
-def dispatch_snapshot(
-    request: ProviderEventDispatchRequest,
-    *,
-    captured_task_revision: int,
-) -> LiveDispatchInboxSnapshot:
-    """Return the authorization snapshot stored with one inbox adoption."""
+def _orchestra_headers() -> dict[str, str]:
+    unify_key = SESSION_DETAILS.unify_key
+    if not unify_key:
+        raise ProviderEventDispatchValidationError("orchestra_credentials_missing")
+    return {
+        "accept": "application/json",
+        "Authorization": f"Bearer {unify_key}",
+        "Content-Type": "application/json",
+    }
 
-    return LiveDispatchInboxSnapshot(
-        run_key=request.run_key,
-        receipt_id=request.receipt_id,
-        accepted_activation_revision=request.accepted_activation_revision,
-        captured_task_revision=captured_task_revision,
+
+def _orchestra_url(path: str) -> str:
+    base = (SETTINGS.ORCHESTRA_URL or "").rstrip("/")
+    if not base:
+        raise ProviderEventDispatchValidationError("orchestra_url_missing")
+    return f"{base}{path}"
+
+
+def _orchestra_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    response = requests.post(
+        _orchestra_url(path),
+        headers=_orchestra_headers(),
+        json=payload,
+        timeout=_HTTP_TIMEOUT_SECONDS,
     )
+    if response.status_code == 409:
+        detail = response.json() if response.content else {}
+        reason = "dispatch_authorization_mismatch"
+        if isinstance(detail, dict):
+            nested = detail.get("detail")
+            if isinstance(nested, dict) and nested.get("reason"):
+                reason = str(nested["reason"])
+            elif detail.get("reason"):
+                reason = str(detail["reason"])
+        raise ProviderEventDispatchAuthorizationError(reason)
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise RuntimeError(f"Unexpected Orchestra response for {path}")
+    return body
 
 
-def dispatch_provider_event_live(
-    *,
-    inbox: ProviderEventLiveDispatchInbox,
+def _claimant_id() -> str:
+    hostname = os.environ.get("HOSTNAME") or uuid.uuid4().hex[:8]
+    return f"unity:{hostname}:{os.getpid()}"
+
+
+def claim_provider_event_dispatch(
     request: ProviderEventDispatchRequest,
-    captured_task_revision: int,
-    start_instance: Callable[[ProviderEventDispatchRequest, int], None],
+    *,
+    launch_identity: str,
+    claimant_id: str | None = None,
 ) -> LiveProviderEventDispatchOutcome:
-    """Adopt one live dispatch operation, then start at most one task instance.
+    """Claim Orchestra launch ownership before live instance start I/O."""
 
-    # TODO: Remove once live adoption is recorded only through Orchestra
-    downstream adoption and callers stop passing a container-local inbox.
-    """
-
-    if request.dispatch_mode != "live":
-        raise ProviderEventDispatchValidationError("invalid_dispatch_mode")
-
-    snapshot = dispatch_snapshot(
-        request,
-        captured_task_revision=captured_task_revision,
+    body = _orchestra_post(
+        _DISPATCH_CLAIM_PATH,
+        {
+            "operation_id": request.operation_id,
+            "run_id": request.run_id,
+            "run_key": request.run_key,
+            "assistant_id": request.assistant_id,
+            "task_id": request.task_id,
+            "binding_id": request.binding_id,
+            "receipt_id": request.receipt_id,
+            "accepted_activation_revision": request.accepted_activation_revision,
+            "dispatch_mode": request.dispatch_mode,
+            "audience": request.audience,
+            "claimant_id": claimant_id or _claimant_id(),
+            "launch_identity": launch_identity,
+        },
     )
-    adopted = inbox.adopt_or_get(
-        operation_id=request.operation_id,
-        run_id=request.run_id,
-        snapshot=snapshot,
-    )
-    if adopted.state in {"started", "terminal"}:
-        return LiveProviderEventDispatchOutcome(
-            operation_id=adopted.operation_id,
-            run_id=adopted.run_id,
-            run_key=adopted.run_key,
-            captured_task_revision=adopted.captured_task_revision,
-            status=public_status_for_inbox_state(adopted.state),
-            launch_count=adopted.launch_count,
-            adopted_only=True,
-            terminal_reason=adopted.terminal_reason,
-        )
-
-    claimed = inbox.claim_start(operation_id=request.operation_id)
-    if not claimed.owns_start:
-        return LiveProviderEventDispatchOutcome(
-            operation_id=claimed.operation_id,
-            run_id=claimed.run_id,
-            run_key=claimed.run_key,
-            captured_task_revision=claimed.captured_task_revision,
-            status=public_status_for_inbox_state(claimed.state),
-            launch_count=claimed.launch_count,
-            adopted_only=True,
-            terminal_reason=claimed.terminal_reason,
-        )
-
-    try:
-        start_instance(request, claimed.captured_task_revision)
-    except ProviderEventDispatchValidationError:
-        inbox.mark_terminal(
-            operation_id=request.operation_id,
-            reason="live_instance_start_failed",
-        )
-        raise
-
-    started = inbox.start_if_owner(operation_id=request.operation_id)
     return LiveProviderEventDispatchOutcome(
-        operation_id=started.operation_id,
-        run_id=started.run_id,
-        run_key=started.run_key,
-        captured_task_revision=started.captured_task_revision,
-        status=public_status_for_inbox_state(started.state),
-        launch_count=started.launch_count,
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        captured_task_revision=None,
+        status=str(body["status"]),  # type: ignore[arg-type]
+        fencing_token=int(body["fencing_token"]),
+        adopted_only=not bool(body.get("owns_launch")),
+        launch_identity=body.get("launch_identity"),
+        terminal_reason=body.get("terminal_reason"),
+    )
+
+
+def report_provider_event_dispatch_started(
+    *,
+    operation_id: str,
+    fencing_token: int,
+    launch_identity: str | None,
+    captured_task_revision: int | None = None,
+) -> LiveProviderEventDispatchOutcome:
+    """Report fenced start after the captured-revision instance is reconciled."""
+
+    body = _orchestra_post(
+        _DISPATCH_REPORT_STARTED_PATH,
+        {
+            "operation_id": operation_id,
+            "fencing_token": fencing_token,
+            "launch_identity": launch_identity,
+        },
+    )
+    return LiveProviderEventDispatchOutcome(
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        captured_task_revision=captured_task_revision,
+        status=str(body["status"]),  # type: ignore[arg-type]
+        fencing_token=int(body["fencing_token"]),
         adopted_only=False,
-        terminal_reason=started.terminal_reason,
+        launch_identity=body.get("launch_identity"),
+        terminal_reason=body.get("terminal_reason"),
+    )
+
+
+def report_provider_event_dispatch_terminal(
+    *,
+    operation_id: str,
+    fencing_token: int,
+    terminal_reason: str,
+    launch_identity: str | None = None,
+    captured_task_revision: int | None = None,
+) -> LiveProviderEventDispatchOutcome:
+    """Report fenced terminal failure for one live dispatch attempt."""
+
+    body = _orchestra_post(
+        _DISPATCH_REPORT_TERMINAL_PATH,
+        {
+            "operation_id": operation_id,
+            "fencing_token": fencing_token,
+            "terminal_reason": terminal_reason,
+            "launch_identity": launch_identity,
+        },
+    )
+    return LiveProviderEventDispatchOutcome(
+        operation_id=str(body["operation_id"]),
+        run_id=int(body["run_id"]),
+        run_key=str(body["run_key"]),
+        captured_task_revision=captured_task_revision,
+        status=str(body["status"]),  # type: ignore[arg-type]
+        fencing_token=int(body["fencing_token"]),
+        adopted_only=False,
+        launch_identity=body.get("launch_identity"),
+        terminal_reason=body.get("terminal_reason"),
     )
 
 
 __all__ = [
     "PROVIDER_EVENT_DISPATCH_AUDIENCE",
+    "PROVIDER_EVENT_OPERATION_INFO_PREFIX",
     "LiveProviderEventDispatchOutcome",
+    "ProviderEventDispatchAuthorizationError",
     "ProviderEventDispatchRequest",
     "ProviderEventDispatchValidationError",
     "PublicDispatchStatus",
-    "dispatch_provider_event_live",
-    "dispatch_snapshot",
-    "public_status_for_inbox_state",
+    "claim_provider_event_dispatch",
+    "live_launch_identity",
+    "report_provider_event_dispatch_started",
+    "report_provider_event_dispatch_terminal",
     "validate_provider_event_dispatch_request",
 ]

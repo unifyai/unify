@@ -20,6 +20,8 @@ class AuthoredTaskField(StrEnum):
     trigger = "trigger"
     enabled = "enabled"
     offline = "offline"
+    requires_filesystem = "requires_filesystem"
+    requires_computer = "requires_computer"
     entrypoint = "entrypoint"
     priority = "priority"
     repeat = "repeat"

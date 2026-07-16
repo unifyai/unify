@@ -6,6 +6,8 @@
     "trigger",
     "enabled",
     "offline",
+    "requires_filesystem",
+    "requires_computer",
     "entrypoint",
     "priority",
     "repeat",

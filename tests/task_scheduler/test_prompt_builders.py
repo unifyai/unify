@@ -25,6 +25,8 @@ def test_task_derives_delivery_mode_and_execution_style_independently():
         priority=Priority.normal,
         offline=True,
         entrypoint=None,
+        requires_filesystem=True,
+        requires_computer=False,
     )
     symbolic_live = Task(
         task_id=10,
@@ -35,12 +37,18 @@ def test_task_derives_delivery_mode_and_execution_style_independently():
         priority=Priority.normal,
         offline=False,
         entrypoint=321,
+        requires_filesystem=False,
+        requires_computer=True,
     )
 
     assert agentic_offline.delivery_mode == DeliveryMode.offline
     assert agentic_offline.execution_style == ExecutionStyle.agentic
+    assert agentic_offline.requires_filesystem is True
+    assert agentic_offline.requires_computer is False
     assert symbolic_live.delivery_mode == DeliveryMode.live
     assert symbolic_live.execution_style == ExecutionStyle.symbolic
+    assert symbolic_live.requires_filesystem is False
+    assert symbolic_live.requires_computer is True
 
 
 def test_build_task_execution_request_includes_run_metadata():

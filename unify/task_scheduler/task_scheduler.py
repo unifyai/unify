@@ -88,6 +88,7 @@ from .provider_trigger_health import (
     compose_provider_trigger_state,
     sanitize_event_context_for_actor,
 )
+from .resource_requirements import resolve_task_resource_requirements
 from .storage import TasksStore
 from . import typed_tasks_client
 from .typed_tasks_client import TaskRevisionConflictError
@@ -108,8 +109,9 @@ from .types.task import Task, TaskBase
 from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
-
-_PROVIDER_EVENT_OPERATION_INFO_PREFIX = "provider_event_operation:"
+from .provider_event_dispatch import (
+    PROVIDER_EVENT_OPERATION_INFO_PREFIX as _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
+)
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -1374,7 +1376,20 @@ class TaskScheduler(BaseTaskScheduler):
         operation_id: str,
         captured_task_revision: int,
     ) -> Task:
-        """Materialize one execution instance without re-arming the definition."""
+        """Create or adopt one execution instance keyed by operation identity."""
+
+        launch_identity = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
+        if (
+            self._find_provider_event_captured_instance(
+                task_id=definition.task_id,
+                launch_identity=launch_identity,
+            )
+            is not None
+        ):
+            return self._adopt_canonical_provider_event_captured_instance(
+                task_id=definition.task_id,
+                launch_identity=launch_identity,
+            )
 
         clone_payload = definition.model_dump(
             exclude={"instance_id", "activated_by", "info"},
@@ -1383,7 +1398,7 @@ class TaskScheduler(BaseTaskScheduler):
         clone_payload["status"] = Status.triggerable
         clone_payload["task_id"] = definition.task_id
         clone_payload["task_revision"] = captured_task_revision
-        clone_payload["info"] = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
+        clone_payload["info"] = launch_identity
         with self._use_task_destination(definition.destination):
             created = self._store.log(entries=clone_payload, new=True)
         if self._num_tasks_cached is not None:
@@ -1392,7 +1407,93 @@ class TaskScheduler(BaseTaskScheduler):
         entries.setdefault("destination", definition.destination)
         entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
         sanitized = self._sanitize_activation(entries)
-        return Task(**sanitized)
+        created_task = Task(**sanitized)
+
+        # Collapse a race where another process created the same operation sink.
+        return self._adopt_canonical_provider_event_captured_instance(
+            task_id=definition.task_id,
+            launch_identity=launch_identity,
+            fallback=created_task,
+        )
+
+    def _find_provider_event_captured_instance(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+    ) -> Task | None:
+        """Return the oldest captured instance for one deterministic operation."""
+
+        matches = self._list_provider_event_captured_instances(
+            task_id=task_id,
+            launch_identity=launch_identity,
+        )
+        return matches[0] if matches else None
+
+    def _list_provider_event_captured_instances(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+    ) -> list[Task]:
+        """Return matching captured instances oldest-first."""
+
+        rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
+        matches = [row for row in rows if str(row.info or "") == launch_identity]
+        return sorted(matches, key=lambda row: row.instance_id)
+
+    def _adopt_canonical_provider_event_captured_instance(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+        matches: list[Task] | None = None,
+        fallback: Task | None = None,
+    ) -> Task:
+        """Keep the oldest sink row for an operation and drop create-race losers."""
+
+        from unisdk.utils.http import RequestError as UnifyRequestError
+
+        if matches is None:
+            matches = self._list_provider_event_captured_instances(
+                task_id=task_id,
+                launch_identity=launch_identity,
+            )
+        if not matches:
+            if fallback is None:
+                raise RuntimeError(
+                    f"Missing captured instance for {launch_identity}",
+                )
+            return fallback
+        canonical = matches[0]
+        losers = matches[1:]
+        if not losers:
+            return canonical
+
+        loser_filter = " or ".join(
+            f"(task_id == {loser.task_id} and instance_id == {loser.instance_id})"
+            for loser in losers
+        )
+        loser_ids = self._store.get_rows(
+            filter=loser_filter,
+            return_ids_only=True,
+        )
+        if loser_ids:
+            try:
+                with self._use_task_destination(canonical.destination):
+                    self._store.delete(logs=loser_ids)
+            except UnifyRequestError as exc:
+                # Another concurrent adopter may have already removed the loser.
+                response = getattr(exc, "response", None)
+                if getattr(response, "status_code", None) != 404:
+                    raise
+            else:
+                if self._num_tasks_cached is not None:
+                    self._num_tasks_cached = max(
+                        0,
+                        int(self._num_tasks_cached) - len(loser_ids),
+                    )
+        return canonical
 
     def create_task(
         self,
@@ -1605,6 +1706,8 @@ class TaskScheduler(BaseTaskScheduler):
         response_policy: Optional[str] = None,
         entrypoint: Optional[int] = None,
         offline: bool = False,
+        requires_filesystem: bool = False,
+        requires_computer: bool = False,
         enabled: bool = True,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -1636,6 +1739,8 @@ class TaskScheduler(BaseTaskScheduler):
                     response_policy=response_policy,
                     entrypoint=entrypoint,
                     offline=offline,
+                    requires_filesystem=requires_filesystem,
+                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=effective_destination,
                     _root_applied=True,
@@ -1721,6 +1826,8 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
             enabled=enabled,
         ).to_post_json()
 
@@ -1803,6 +1910,8 @@ class TaskScheduler(BaseTaskScheduler):
                 "response_policy",
                 "entrypoint",
                 "offline",
+                "requires_filesystem",
+                "requires_computer",
                 "enabled",
             ):
                 if key in spec:
@@ -1975,6 +2084,8 @@ class TaskScheduler(BaseTaskScheduler):
         trigger: Any = _UNSET,
         entrypoint: Any = _UNSET,
         offline: Any = _UNSET,
+        requires_filesystem: Any = _UNSET,
+        requires_computer: Any = _UNSET,
         enabled: Any = _UNSET,
         destination: str | None = None,
         _root_applied: bool = False,
@@ -2008,6 +2119,8 @@ class TaskScheduler(BaseTaskScheduler):
                     trigger=trigger,
                     entrypoint=entrypoint,
                     offline=offline,
+                    requires_filesystem=requires_filesystem,
+                    requires_computer=requires_computer,
                     enabled=enabled,
                     destination=resolved_destination,
                     _root_applied=True,
@@ -2017,6 +2130,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         trigger_provided = trigger is not _UNSET
         offline_provided = offline is not _UNSET
+        requires_filesystem_provided = requires_filesystem is not _UNSET
+        requires_computer_provided = requires_computer is not _UNSET
         enabled_provided = enabled is not _UNSET
         task = self._get_task_or_raise(task_id)
 
@@ -2031,6 +2146,8 @@ class TaskScheduler(BaseTaskScheduler):
             and not trigger_provided
             and entrypoint is _UNSET
             and not offline_provided
+            and not requires_filesystem_provided
+            and not requires_computer_provided
             and not enabled_provided
         ):
             raise ValueError("At least one field must be provided for an update.")
@@ -2166,6 +2283,30 @@ class TaskScheduler(BaseTaskScheduler):
             else:
                 offline = bool(offline)
             entries["offline"] = offline
+        if requires_filesystem_provided:
+            if isinstance(requires_filesystem, str):
+                normalized_requires_filesystem = requires_filesystem.strip().lower()
+                if normalized_requires_filesystem in {"true", "1"}:
+                    requires_filesystem = True
+                elif normalized_requires_filesystem in {"false", "0"}:
+                    requires_filesystem = False
+                else:
+                    raise ValueError("requires_filesystem must be a boolean value")
+            else:
+                requires_filesystem = bool(requires_filesystem)
+            entries["requires_filesystem"] = requires_filesystem
+        if requires_computer_provided:
+            if isinstance(requires_computer, str):
+                normalized_requires_computer = requires_computer.strip().lower()
+                if normalized_requires_computer in {"true", "1"}:
+                    requires_computer = True
+                elif normalized_requires_computer in {"false", "0"}:
+                    requires_computer = False
+                else:
+                    raise ValueError("requires_computer must be a boolean value")
+            else:
+                requires_computer = bool(requires_computer)
+            entries["requires_computer"] = requires_computer
         if enabled_provided:
             if isinstance(enabled, str):
                 normalized_enabled = enabled.strip().lower()
@@ -3041,7 +3182,12 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
-        browser_target = payload.pop("browser_target", None)
+        requires_filesystem, requires_computer = resolve_task_resource_requirements(
+            {
+                "requires_filesystem": payload.pop("requires_filesystem", False),
+                "requires_computer": payload.pop("requires_computer", False),
+            },
+        )
         name = payload.pop("name")
         description = payload.pop("description")
 
@@ -3073,6 +3219,8 @@ class TaskScheduler(BaseTaskScheduler):
             response_policy=response_policy,
             entrypoint=entrypoint,
             offline=offline,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
             enabled=False,
             destination=destination_arg,
             _root_applied=True,
@@ -3082,13 +3230,15 @@ class TaskScheduler(BaseTaskScheduler):
             filter=f"task_id == {task_id}",
             return_ids_only=True,
         )
+        sync_entries: Dict[str, Any] = {
+            "custom_key": custom_key,
+            "custom_hash": custom_hash,
+            "requires_filesystem": requires_filesystem,
+            "requires_computer": requires_computer,
+        }
         self._write_log_entries(
             logs=log_ids,
-            entries={
-                "custom_key": custom_key,
-                "custom_hash": custom_hash,
-                "browser_target": browser_target,
-            },
+            entries=sync_entries,
         )
         return task_id
 
@@ -3113,7 +3263,12 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
-        browser_target = payload.pop("browser_target", None)
+        requires_filesystem, requires_computer = resolve_task_resource_requirements(
+            {
+                "requires_filesystem": payload.pop("requires_filesystem", False),
+                "requires_computer": payload.pop("requires_computer", False),
+            },
+        )
         name = payload.pop("name", None)
         description = payload.pop("description", None)
 
@@ -3163,7 +3318,8 @@ class TaskScheduler(BaseTaskScheduler):
             "max_runtime_seconds": max_runtime_seconds,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
-            "browser_target": browser_target,
+            "requires_filesystem": requires_filesystem,
+            "requires_computer": requires_computer,
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(
