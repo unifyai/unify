@@ -108,8 +108,9 @@ from .types.task import Task, TaskBase
 from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
-
-_PROVIDER_EVENT_OPERATION_INFO_PREFIX = "provider_event_operation:"
+from .provider_event_dispatch import (
+    PROVIDER_EVENT_OPERATION_INFO_PREFIX as _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
+)
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -1374,7 +1375,20 @@ class TaskScheduler(BaseTaskScheduler):
         operation_id: str,
         captured_task_revision: int,
     ) -> Task:
-        """Materialize one execution instance without re-arming the definition."""
+        """Create or adopt one execution instance keyed by operation identity."""
+
+        launch_identity = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
+        if (
+            self._find_provider_event_captured_instance(
+                task_id=definition.task_id,
+                launch_identity=launch_identity,
+            )
+            is not None
+        ):
+            return self._adopt_canonical_provider_event_captured_instance(
+                task_id=definition.task_id,
+                launch_identity=launch_identity,
+            )
 
         clone_payload = definition.model_dump(
             exclude={"instance_id", "activated_by", "info"},
@@ -1383,7 +1397,7 @@ class TaskScheduler(BaseTaskScheduler):
         clone_payload["status"] = Status.triggerable
         clone_payload["task_id"] = definition.task_id
         clone_payload["task_revision"] = captured_task_revision
-        clone_payload["info"] = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
+        clone_payload["info"] = launch_identity
         with self._use_task_destination(definition.destination):
             created = self._store.log(entries=clone_payload, new=True)
         if self._num_tasks_cached is not None:
@@ -1392,7 +1406,93 @@ class TaskScheduler(BaseTaskScheduler):
         entries.setdefault("destination", definition.destination)
         entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
         sanitized = self._sanitize_activation(entries)
-        return Task(**sanitized)
+        created_task = Task(**sanitized)
+
+        # Collapse a race where another process created the same operation sink.
+        return self._adopt_canonical_provider_event_captured_instance(
+            task_id=definition.task_id,
+            launch_identity=launch_identity,
+            fallback=created_task,
+        )
+
+    def _find_provider_event_captured_instance(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+    ) -> Task | None:
+        """Return the oldest captured instance for one deterministic operation."""
+
+        matches = self._list_provider_event_captured_instances(
+            task_id=task_id,
+            launch_identity=launch_identity,
+        )
+        return matches[0] if matches else None
+
+    def _list_provider_event_captured_instances(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+    ) -> list[Task]:
+        """Return matching captured instances oldest-first."""
+
+        rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
+        matches = [row for row in rows if str(row.info or "") == launch_identity]
+        return sorted(matches, key=lambda row: row.instance_id)
+
+    def _adopt_canonical_provider_event_captured_instance(
+        self,
+        *,
+        task_id: int,
+        launch_identity: str,
+        matches: list[Task] | None = None,
+        fallback: Task | None = None,
+    ) -> Task:
+        """Keep the oldest sink row for an operation and drop create-race losers."""
+
+        from unisdk.utils.http import RequestError as UnifyRequestError
+
+        if matches is None:
+            matches = self._list_provider_event_captured_instances(
+                task_id=task_id,
+                launch_identity=launch_identity,
+            )
+        if not matches:
+            if fallback is None:
+                raise RuntimeError(
+                    f"Missing captured instance for {launch_identity}",
+                )
+            return fallback
+        canonical = matches[0]
+        losers = matches[1:]
+        if not losers:
+            return canonical
+
+        loser_filter = " or ".join(
+            f"(task_id == {loser.task_id} and instance_id == {loser.instance_id})"
+            for loser in losers
+        )
+        loser_ids = self._store.get_rows(
+            filter=loser_filter,
+            return_ids_only=True,
+        )
+        if loser_ids:
+            try:
+                with self._use_task_destination(canonical.destination):
+                    self._store.delete(logs=loser_ids)
+            except UnifyRequestError as exc:
+                # Another concurrent adopter may have already removed the loser.
+                response = getattr(exc, "response", None)
+                if getattr(response, "status_code", None) != 404:
+                    raise
+            else:
+                if self._num_tasks_cached is not None:
+                    self._num_tasks_cached = max(
+                        0,
+                        int(self._num_tasks_cached) - len(loser_ids),
+                    )
+        return canonical
 
     def create_task(
         self,
