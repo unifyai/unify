@@ -1,7 +1,6 @@
 """Resolve authored task resource requirements.
 
 ``requires_filesystem`` and ``requires_computer`` are the canonical knobs.
-Legacy ``browser_target == "assistant_desktop"`` implies ``requires_computer``.
 """
 
 from __future__ import annotations
@@ -30,23 +29,11 @@ def resolve_requires_filesystem(data: Mapping[str, Any] | None) -> bool:
 
 
 def resolve_requires_computer(data: Mapping[str, Any] | None) -> bool:
-    """Return whether a computer-use desktop must be ready before the run starts.
-
-    Legacy rows that only set ``browser_target="assistant_desktop"`` are treated
-    as requiring computer use.
-    """
+    """Return whether a computer-use desktop must be ready before the run starts."""
 
     if not isinstance(data, Mapping):
         return False
-    if _coerce_bool(data.get("requires_computer")):
-        return True
-    browser_target = data.get("browser_target")
-    if (
-        isinstance(browser_target, str)
-        and browser_target.strip() == "assistant_desktop"
-    ):
-        return True
-    return False
+    return _coerce_bool(data.get("requires_computer"))
 
 
 def resolve_task_resource_requirements(

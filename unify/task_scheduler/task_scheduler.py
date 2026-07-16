@@ -3182,12 +3182,10 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", Priority.normal)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
-        browser_target = payload.pop("browser_target", None)
         requires_filesystem, requires_computer = resolve_task_resource_requirements(
             {
                 "requires_filesystem": payload.pop("requires_filesystem", False),
                 "requires_computer": payload.pop("requires_computer", False),
-                "browser_target": browser_target,
             },
         )
         name = payload.pop("name")
@@ -3237,11 +3235,6 @@ class TaskScheduler(BaseTaskScheduler):
             "custom_hash": custom_hash,
             "requires_filesystem": requires_filesystem,
             "requires_computer": requires_computer,
-            "browser_target": (
-                (browser_target or "assistant_desktop")
-                if (requires_computer or browser_target)
-                else None
-            ),
         }
         self._write_log_entries(
             logs=log_ids,
@@ -3270,12 +3263,10 @@ class TaskScheduler(BaseTaskScheduler):
         priority = payload.pop("priority", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
-        browser_target = payload.pop("browser_target", None)
         requires_filesystem, requires_computer = resolve_task_resource_requirements(
             {
                 "requires_filesystem": payload.pop("requires_filesystem", False),
                 "requires_computer": payload.pop("requires_computer", False),
-                "browser_target": browser_target,
             },
         )
         name = payload.pop("name", None)
@@ -3329,11 +3320,6 @@ class TaskScheduler(BaseTaskScheduler):
             "offline": bool(offline) if offline is not None else None,
             "requires_filesystem": requires_filesystem,
             "requires_computer": requires_computer,
-            "browser_target": (
-                (browser_target or "assistant_desktop")
-                if (requires_computer or browser_target)
-                else None
-            ),
         }
         if repeat is not None:
             normalized_repeat = normalize_repeat_patterns(

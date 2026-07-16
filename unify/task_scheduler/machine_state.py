@@ -73,7 +73,6 @@ _ACTIVATION_QUERY_FIELDS = [
     "activation_revision",
     "requires_filesystem",
     "requires_computer",
-    "browser_target",
 ]
 _DEFAULT_TRIGGER_PAGE_SIZE = 200
 _PENDING_LIVE_TASK_RUNS: dict[tuple[int, str | None], "TaskRunProvenance"] = {}
