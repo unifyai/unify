@@ -73,7 +73,6 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 7) Resource opt-ins
    - `requires_filesystem` and `requires_computer` are authored independently of `offline` and `entrypoint`.
    - When either is true, dispatch waits for a ready assistant desktop (Local sync and/or computer-use) before the run starts.
-   - Legacy `browser_target="assistant_desktop"` is treated as `requires_computer=True`.
 
 8) Concurrency
    - Multiple instances of the same `task_id` may be `active` at once (for example a 90-minute job on a 60-minute schedule).

@@ -8,7 +8,6 @@
     "offline",
     "requires_filesystem",
     "requires_computer",
-    "browser_target",
     "entrypoint",
     "priority",
     "repeat",

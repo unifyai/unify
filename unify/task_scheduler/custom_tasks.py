@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -37,7 +37,6 @@ TASK_SYNC_FIELDS = (
     "offline",
     "requires_filesystem",
     "requires_computer",
-    "browser_target",
 )
 
 
@@ -58,7 +57,6 @@ class CustomTaskSourceEntry(BaseModel):
     offline: bool = False
     requires_filesystem: bool = False
     requires_computer: bool = False
-    browser_target: Optional[Literal["assistant_desktop"]] = None
     destination: str = "personal"
     auto_sync: bool = True
 
@@ -194,8 +192,6 @@ def collect_custom_tasks(
     for entry in _parse_jsonl_file(jsonl_path):
         destination = entry.destination or "personal"
         requires_computer = entry.requires_computer
-        if entry.browser_target == "assistant_desktop" and not requires_computer:
-            requires_computer = True
         fields = {
             "name": entry.name,
             "description": entry.description,
@@ -210,7 +206,6 @@ def collect_custom_tasks(
             "offline": entry.offline,
             "requires_filesystem": entry.requires_filesystem,
             "requires_computer": requires_computer,
-            "browser_target": entry.browser_target,
         }
         custom_hash = _compute_task_hash(
             key=entry.key,

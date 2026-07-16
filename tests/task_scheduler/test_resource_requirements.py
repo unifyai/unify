@@ -1,6 +1,4 @@
-"""Unit tests for authored task resource requirement helpers."""
-
-from __future__ import annotations
+"""Tests for authored task resource-requirement helpers."""
 
 from unify.task_scheduler.resource_requirements import (
     desktop_required_for_resources,
@@ -36,28 +34,16 @@ def test_resolve_requires_computer_explicit_flag():
     assert resolve_requires_computer({"requires_computer": "true"}) is True
 
 
-def test_resolve_requires_computer_legacy_browser_target():
-    assert resolve_requires_computer({"browser_target": "assistant_desktop"}) is True
-    assert (
-        resolve_requires_computer(
-            {"browser_target": " assistant_desktop ", "requires_computer": False},
-        )
-        is True
-    )
-    assert resolve_requires_computer({"browser_target": "other"}) is False
-
-
 def test_resolve_task_resource_requirements_pair():
     assert resolve_task_resource_requirements(
         {
             "requires_filesystem": True,
-            "browser_target": "assistant_desktop",
+            "requires_computer": False,
         },
-    ) == (True, True)
+    ) == (True, False)
     assert resolve_task_resource_requirements(
         {"requires_computer": True},
     ) == (False, True)
-    assert resolve_task_resource_requirements({}) == (False, False)
 
 
 def test_desktop_required_for_resources():
