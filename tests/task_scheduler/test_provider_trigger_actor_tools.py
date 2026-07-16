@@ -115,7 +115,9 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
         ),
         None,
     )
-    assert github_trigger is not None, "expected at least one composio github catalog trigger"
+    assert (
+        github_trigger is not None
+    ), "expected at least one composio github catalog trigger"
 
     contract = scheduler._describe_provider_trigger(
         provider_trigger_slug=github_trigger["provider_trigger_slug"],
