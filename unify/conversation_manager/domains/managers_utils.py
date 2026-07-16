@@ -1039,16 +1039,19 @@ def _resolve_meet_name_to_contact(
 
 
 # Inactivity gap after which a new DM exchange is started for direct-message
-# channels (WhatsApp / Discord / MS Teams bot). Provider-thread channels
-# (Discord / Teams group channels, email) ignore this and reuse the exchange for
-# the whole thread, keyed by the native provider-supplied thread id.
+# channels (SMS / WhatsApp / Discord / MS Teams bot / Slack DMs). Provider-thread
+# channels (Discord / Teams group channels, Slack channels, email) ignore this and
+# reuse the exchange for the whole thread, keyed by the native provider-supplied
+# thread id.
 DM_EXCHANGE_GAP = timedelta(minutes=30)
 
 _DM_MEDIA = frozenset(
     {
+        Medium.SMS_MESSAGE,
         Medium.WHATSAPP_MESSAGE,
         Medium.DISCORD_MESSAGE,
         Medium.MS_TEAMS_BOT_MESSAGE,
+        Medium.SLACK_MESSAGE,
     },
 )
 # Channels grouped by a native provider-supplied thread id. These reuse the
@@ -1058,6 +1061,7 @@ _PROVIDER_THREAD_MEDIA = frozenset(
     {
         Medium.DISCORD_CHANNEL_MESSAGE,
         Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
+        Medium.SLACK_CHANNEL_MESSAGE,
         Medium.EMAIL,
     },
 )
@@ -1075,11 +1079,14 @@ def _derive_conversation_key(
     key, so an assistant reply lands in the same exchange as the message it
     answers. Keys use only fields carried by both directions:
 
-    - DMs (WhatsApp / Discord / MS Teams bot) key on ``contact_id`` — the only
-      identifier present on both the received and sent events.
+    - DMs (SMS / WhatsApp / Discord / MS Teams bot / Slack) key on ``contact_id``
+      — the only identifier present on both the received and sent events.
     - Group channels key on the native provider thread: Discord on
       ``(guild_id, channel_id)``; MS Teams bot on ``(tenant_id, conversation_id)``
-      (the Bot Framework ``conversation_id`` already encodes the thread).
+      (the Bot Framework ``conversation_id`` already encodes the thread); Slack on
+      ``(team_id, channel_id, thread_ts)`` where ``thread_ts`` falls back to the
+      message's own ``event_ts`` for a top-level @mention (the value the reply
+      threads under, so inbound and outbound resolve to the same thread).
     - Email keys on the provider ``thread_id`` (Gmail threadId / Outlook
       conversationId), carried on both received and sent events.
 
@@ -1103,6 +1110,15 @@ def _derive_conversation_key(
         if not conversation_id:
             return None
         return f"{medium.value}:{tenant_id}:{conversation_id}"
+    if medium == Medium.SLACK_CHANNEL_MESSAGE:
+        team_id = getattr(event, "team_id", "") or ""
+        channel_id = getattr(event, "channel_id", "") or ""
+        thread_ts = (
+            getattr(event, "thread_ts", "") or getattr(event, "event_ts", "") or ""
+        )
+        if not channel_id or not thread_ts:
+            return None
+        return f"{medium.value}:{team_id}:{channel_id}:{thread_ts}"
     if medium == Medium.EMAIL:
         thread_id = getattr(event, "thread_id", "") or ""
         if not thread_id:
@@ -1117,9 +1133,19 @@ def _conversation_exchange_metadata(
     conversation_key: str,
 ) -> dict:
     """Routing identity persisted on a conversation-thread exchange so it can be
-    queried back to its Discord channel / Teams thread / email thread."""
+    queried back to its Discord channel / Teams thread / Slack thread / email
+    thread."""
     metadata: dict = {"medium": medium.value, "conversation_key": conversation_key}
-    for attr in ("channel_id", "guild_id", "tenant_id", "conversation_id", "thread_id"):
+    for attr in (
+        "channel_id",
+        "guild_id",
+        "tenant_id",
+        "conversation_id",
+        "team_id",
+        "thread_ts",
+        "event_ts",
+        "thread_id",
+    ):
         value = getattr(event, attr, "") or ""
         if value:
             metadata[attr] = value
@@ -1357,10 +1383,10 @@ async def log_message(
     elif medium == Medium.TEAMS_MEET:
         exchange_id = cm.call_manager.teams_meet_exchange_id
 
-    # Group messages into conversation-thread exchanges (WhatsApp / Discord /
-    # MS Teams bot DMs and channels, and email). Inbound and outbound resolve to
-    # the same key, so an assistant reply lands in the same exchange it answers.
-    # DMs reuse while activity stays within DM_EXCHANGE_GAP; provider-thread
+    # Group messages into conversation-thread exchanges (SMS / WhatsApp / Discord
+    # / MS Teams bot / Slack DMs and channels, and email). Inbound and outbound
+    # resolve to the same key, so an assistant reply lands in the same exchange it
+    # answers. DMs reuse while activity stays within DM_EXCHANGE_GAP; provider-thread
     # channels (group channels, email) reuse for the whole thread keyed by the
     # native provider thread id, and email additionally recovers its exchange
     # from Exchanges metadata on a cold (post-restart) cache.
