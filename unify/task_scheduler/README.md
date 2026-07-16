@@ -70,7 +70,11 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
    - The job runs `offline_runner.py`, which starts the same actor substrate headlessly and delegates through `TaskScheduler.execute(...)`.
    - Offline delivery is independent from execution style. Agentic offline tasks keep `entrypoint=None`; symbolic offline tasks use a stored FunctionManager entrypoint.
 
-7) Concurrency
+7) Resource opt-ins
+   - `requires_filesystem` and `requires_computer` are authored independently of `offline` and `entrypoint`.
+   - When either is true, dispatch waits for a ready assistant desktop (Local sync and/or computer-use) before the run starts.
+
+8) Concurrency
    - Multiple instances of the same `task_id` may be `active` at once (for example a 90-minute job on a 60-minute schedule).
    - `execute` only refuses to start when activation provenance targets the exact instance that is already `active`.
    - Symbolic entrypoints receive opt-in kwargs (`task_id`, `instance_id`, `task_execution_context`) so they can gate or skip themselves when desired.

@@ -93,6 +93,8 @@ class OfflineTaskConfig:
     source_ref: str = ""
     source_medium: str = ""
     source_contact_id: str = ""
+    requires_filesystem: bool = False
+    requires_computer: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -118,6 +120,37 @@ def _optional_int_env(name: str) -> int | None:
     if not value:
         return None
     return int(value)
+
+
+def _bool_env(name: str, *, default: bool = False) -> bool:
+    """Return a boolean environment variable (``1``/``true`` → True)."""
+
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes"}
+
+
+def _ensure_desktop_env_for_resources(config: OfflineTaskConfig) -> None:
+    """Fail loudly when desktop resources are required but Comms did not inject them.
+
+    Comms should 503-retry until the desktop is ready before launching this
+    runner. Missing ``ASSISTANT_DESKTOP_URL`` / ``ASSISTANT_BROWSER_TARGET``
+    here means that guard was skipped.
+    """
+
+    if not (config.requires_computer or config.requires_filesystem):
+        return
+    desktop_url = os.environ.get("ASSISTANT_DESKTOP_URL", "").strip()
+    browser_target = os.environ.get("ASSISTANT_BROWSER_TARGET", "").strip()
+    if not desktop_url or not browser_target:
+        raise RuntimeError(
+            "Offline task requires desktop resources "
+            f"(requires_filesystem={config.requires_filesystem}, "
+            f"requires_computer={config.requires_computer}) but "
+            "ASSISTANT_DESKTOP_URL / ASSISTANT_BROWSER_TARGET are missing. "
+            "Comms should 503-retry until the desktop is ready before launch.",
+        )
 
 
 def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
@@ -176,6 +209,8 @@ def _load_config_from_env() -> OfflineTaskConfig:
         source_ref=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_REF", ""),
         source_medium=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_MEDIUM", ""),
         source_contact_id=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID", ""),
+        requires_filesystem=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"),
+        requires_computer=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"),
     )
 
 
@@ -345,16 +380,19 @@ def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
     return None
 
 
-def _build_offline_actor() -> CodeActActor:
-    """Construct the normal actor substrate for a headless task run."""
+def _build_offline_actor(config: OfflineTaskConfig) -> CodeActActor:
+    """Construct the actor substrate for a headless task run.
 
-    return CodeActActor(
-        environments=[
-            StateManagerEnvironment(),
-            ComputerEnvironment(ComputerPrimitives()),
-            ActorEnvironment(),
-        ],
-    )
+    ``ComputerEnvironment`` is included only when the task explicitly requires
+    computer use; filesystem-only tasks still need desktop readiness (checked
+    separately) but do not mount computer-use primitives.
+    """
+
+    environments: list[Any] = [StateManagerEnvironment()]
+    if config.requires_computer:
+        environments.append(ComputerEnvironment(ComputerPrimitives()))
+    environments.append(ActorEnvironment())
+    return CodeActActor(environments=environments)
 
 
 def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
@@ -479,7 +517,7 @@ class _OfflineTaskExecutionDelegate:
             },
         )
 
-        self._actor = _build_offline_actor()
+        self._actor = _build_offline_actor(self._config)
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
             raise TypeError(
@@ -583,6 +621,7 @@ def _ensure_offline_client_bundle() -> None:
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task with assistant session context."""
 
+    _ensure_desktop_env_for_resources(config)
     SESSION_DETAILS.populate_from_env()
     _ensure_offline_client_bundle()
     unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)

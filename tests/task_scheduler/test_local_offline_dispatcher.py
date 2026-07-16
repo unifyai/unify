@@ -172,10 +172,30 @@ class TestBuildLocalOfflineRunnerEnv:
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
         assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
 
-    def test_scheduled_for_z_suffix_normalised(self):
-        snap = _make_snapshot(next_due_at="2030-04-10T09:00:00Z")
+    def test_resource_flags_propagate_from_snapshot(self):
+        snap = _make_snapshot()
+        # Defaults stay off.
         env = od._build_local_offline_runner_env(snap, source_type="scheduled")
-        assert env["UNITY_OFFLINE_TASK_SCHEDULED_FOR"] == "2030-04-10T09:00:00+00:00"
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
+
+        snap = TaskActivationSnapshot(
+            assistant_id="42",
+            activation_key="42:7",
+            task_id=7,
+            source_task_log_id=999,
+            activation_kind="scheduled",
+            execution_mode="offline",
+            task_name="Run weekly report",
+            task_description="Generate the weekly report and email finance.",
+            next_due_at=_DEFAULT_DUE,
+            activation_revision="rev-1",
+            requires_filesystem=True,
+            requires_computer=True,
+        )
+        env = od._build_local_offline_runner_env(snap, source_type="scheduled")
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
 
 class TestBuildLocalOfflineRunKey:

@@ -26,6 +26,10 @@ from unify.common.context_registry import (
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
 
+from unify.task_scheduler.resource_requirements import (
+    resolve_requires_computer,
+    resolve_requires_filesystem,
+)
 from unify.task_scheduler.storage import TasksStore
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.run_source import RunSource
@@ -67,6 +71,8 @@ _ACTIVATION_QUERY_FIELDS = [
     "entrypoint",
     "repeat",
     "activation_revision",
+    "requires_filesystem",
+    "requires_computer",
 ]
 _DEFAULT_TRIGGER_PAGE_SIZE = 200
 _PENDING_LIVE_TASK_RUNS: dict[tuple[int, str | None], "TaskRunProvenance"] = {}
@@ -119,6 +125,8 @@ class TaskActivationSnapshot:
     trigger_recurring: bool = False
     entrypoint: int | None = None
     max_runtime_seconds: int | None = None
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     repeat: list[Any] | None = None
     activation_revision: str | None = None
 
@@ -930,6 +938,8 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
         max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         repeat=_coerce_list(entries.get("repeat")),
         activation_revision=_coerce_str(entries.get("activation_revision")),
+        requires_filesystem=resolve_requires_filesystem(entries),
+        requires_computer=resolve_requires_computer(entries),
     )
 
 

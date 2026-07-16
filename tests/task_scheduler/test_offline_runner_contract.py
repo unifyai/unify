@@ -59,9 +59,21 @@ class TestBuildOfflineRunnerEnv:
             "UNITY_OFFLINE_TASK_SOURCE_REF",
             "UNITY_OFFLINE_TASK_SOURCE_MEDIUM",
             "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID",
+            "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM",
+            "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER",
             "ASSISTANT_ID",
         }
         assert required - set(env.keys()) == set()
+
+    def test_resource_flags_default_to_zero(self):
+        env = self._make_env()
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "0"
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "0"
+
+    def test_resource_flags_emit_one_when_true(self):
+        env = self._make_env(requires_filesystem=True, requires_computer=True)
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"] == "1"
+        assert env["UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"] == "1"
 
     def test_mode_is_actor(self):
         env = self._make_env()
@@ -412,6 +424,8 @@ def _original_communication_env_builder(
             if request.source_contact_id is not None
             else ""
         ),
+        "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM": "0",
+        "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER": "0",
         "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
         "ASSISTANT_ID": str(assistant_data.get("assistant_id") or request.assistant_id),
         "ASSISTANT_FIRST_NAME": str(assistant_data.get("assistant_first_name") or ""),

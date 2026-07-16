@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 
 _TASK_CONTEXT_SUMMARY_MAX_CHARS = 220
 _TRIGGER_CONTEXT_CANDIDATE_LIMIT = 3
+_RESOURCE_READY_TIMEOUT_S = 300.0
+_RESOURCE_READY_POLL_S = 1.0
 
 
 class _ConversationTaskExecutionDelegate:
@@ -200,6 +202,50 @@ def _current_task_assistant_id() -> str | None:
 
     assistant_id = SESSION_DETAILS.assistant.agent_id
     return str(assistant_id) if assistant_id is not None else None
+
+
+async def _ensure_task_resources_ready(
+    cm: "ConversationManager",
+    *,
+    requires_filesystem: bool,
+    requires_computer: bool,
+) -> None:
+    """Block until desktop / file-sync readiness matches the task's requirements.
+
+    Assistant Local lives on the desktop workspace, so either flag requires
+    ``cm.vm_ready``. Filesystem-gated tasks additionally wait for
+    ``cm.file_sync_complete``.
+    """
+
+    if not requires_filesystem and not requires_computer:
+        return
+
+    from unify.conversation_manager.domains.comms_utils import (
+        request_deferred_desktop_binding,
+    )
+
+    if not cm.vm_ready and (requires_computer or requires_filesystem):
+        assistant_id = _current_task_assistant_id()
+        if assistant_id:
+            await request_deferred_desktop_binding(assistant_id)
+        deadline = perf_counter() + _RESOURCE_READY_TIMEOUT_S
+        while not cm.vm_ready:
+            if perf_counter() >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for assistant desktop (vm_ready) "
+                    "before starting a resource-gated task.",
+                )
+            await asyncio.sleep(_RESOURCE_READY_POLL_S)
+
+    if requires_filesystem and not cm.file_sync_complete:
+        deadline = perf_counter() + _RESOURCE_READY_TIMEOUT_S
+        while not cm.file_sync_complete:
+            if perf_counter() >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for file sync to complete "
+                    "before starting a filesystem-gated task.",
+                )
+            await asyncio.sleep(_RESOURCE_READY_POLL_S)
 
 
 def _compact_task_text(text: str | None, *, fallback: str) -> str:
@@ -530,6 +576,21 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             ),
         )
     try:
+        requires_filesystem = (
+            activation.requires_filesystem
+            if activation is not None
+            else event.requires_filesystem
+        )
+        requires_computer = (
+            activation.requires_computer
+            if activation is not None
+            else event.requires_computer
+        )
+        await _ensure_task_resources_ready(
+            cm,
+            requires_filesystem=requires_filesystem,
+            requires_computer=requires_computer,
+        )
         handle_id = await _start_live_task_due_execution(event, cm, activation)
     except Exception as exc:
         error_message = (
@@ -605,6 +666,12 @@ async def _handle_task_trigger_requested_event(
             ),
         )
     try:
+        if activation is not None:
+            await _ensure_task_resources_ready(
+                cm,
+                requires_filesystem=activation.requires_filesystem,
+                requires_computer=activation.requires_computer,
+            )
         handle_id = await _start_live_task_trigger_execution(event, cm)
     except Exception as exc:
         error_message = (
@@ -646,11 +713,9 @@ async def _handle_provider_event_dispatch_requested_event(
 
     from unify.common.task_execution_context import current_task_execution_delegate
     from unify.task_scheduler.provider_event_dispatch import (
+        ProviderEventDispatchAuthorizationError,
         ProviderEventDispatchRequest,
         ProviderEventDispatchValidationError,
-    )
-    from unify.task_scheduler.provider_event_dispatch_inbox import (
-        ProviderEventInboxMismatchError,
     )
     from unify.task_scheduler.provider_event_execution import (
         handle_provider_event_live_dispatch,
@@ -691,7 +756,7 @@ async def _handle_provider_event_dispatch_requested_event(
         outcome = await handle_provider_event_live_dispatch(request)
     except (
         ProviderEventDispatchValidationError,
-        ProviderEventInboxMismatchError,
+        ProviderEventDispatchAuthorizationError,
     ) as exc:
         reason = getattr(exc, "reason_code", str(exc))
         cm._session_logger.info(
@@ -823,6 +888,8 @@ def _dispatch_offline_explicit_candidate(
         payload["destination"] = candidate.destination
     if candidate.entrypoint is not None:
         payload["entrypoint"] = candidate.entrypoint
+    payload["requires_filesystem"] = bool(candidate.requires_filesystem)
+    payload["requires_computer"] = bool(candidate.requires_computer)
     response = requests.post(
         f"{comms_url}/infra/task-activation/offline-dispatch",
         json=payload,
@@ -1060,6 +1127,8 @@ def _dispatch_offline_trigger_candidate(
                 sender_name,
                 contact_id=contact_id,
             ),
+            "requires_filesystem": bool(candidate.requires_filesystem),
+            "requires_computer": bool(candidate.requires_computer),
         },
         headers={"Authorization": f"Bearer {unify_key}"},
         timeout=15,

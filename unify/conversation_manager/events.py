@@ -1743,6 +1743,8 @@ class TaskDue(Event):
     task_summary: str = ""
     visibility_policy: str = "silent_by_default"
     recurrence_hint: str = "one_off"
+    requires_filesystem: bool = False
+    requires_computer: bool = False
     reason: str = ""
 
     @classmethod
@@ -1800,6 +1802,11 @@ class TaskDue(Event):
             )
         except ValueError:
             return None
+        from unify.task_scheduler.resource_requirements import (
+            resolve_requires_computer,
+            resolve_requires_filesystem,
+        )
+
         task_label = str(payload.get("task_label") or "")
         resolved_reason = reason or (
             f"Scheduled task '{task_label}' became due."
@@ -1819,6 +1826,8 @@ class TaskDue(Event):
                 payload.get("visibility_policy") or "silent_by_default",
             ),
             recurrence_hint=str(payload.get("recurrence_hint") or "one_off"),
+            requires_filesystem=resolve_requires_filesystem(payload),
+            requires_computer=resolve_requires_computer(payload),
             reason=resolved_reason,
         )
 
