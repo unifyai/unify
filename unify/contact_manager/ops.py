@@ -5,13 +5,17 @@ from typing import Any, Dict, Mapping, Optional
 import unisdk
 from pydantic import ValidationError
 
-from ..common.authorship import strip_authoring_assistant_id
+from ..common.authorship import (
+    AUTHORING_ASSISTANT_ID_FIELD,
+    strip_authoring_assistant_id,
+)
 from ..common.log_utils import log as unity_log
 from ..common.tool_outcome import ToolOutcome
 from .types.contact import Contact
 
 # Named create/update params (plus plumbing). The Contact schema is fixed;
-# any key outside this set is rejected.
+# any key outside this set is rejected. Authorship is stamped separately and
+# must not appear in named kwargs.
 _NAMED_CREATE_FIELDS = frozenset(
     {
         "first_name",
@@ -72,6 +76,8 @@ def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``_create_contact`` kwargs."""
     named: dict[str, Any] = {}
     for key, value in payload.items():
+        if key == AUTHORING_ASSISTANT_ID_FIELD:
+            continue
         if key == "contact_id":
             named["_contact_id"] = value
         elif key in _NAMED_CREATE_FIELDS:
@@ -85,6 +91,8 @@ def partition_update_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``update_contact`` kwargs."""
     named: dict[str, Any] = {}
     for key, value in payload.items():
+        if key == AUTHORING_ASSISTANT_ID_FIELD:
+            continue
         if key in _NAMED_UPDATE_FIELDS:
             named[key] = value
         else:
