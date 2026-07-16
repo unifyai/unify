@@ -1138,6 +1138,8 @@ async def log_message(
         medium = Medium.SMS_MESSAGE
     elif "googlemeet" in event_name:
         medium = Medium.GOOGLE_MEET
+    elif "teamsmeet" in event_name:
+        medium = Medium.TEAMS_MEET
     elif "discord" in event_name:
         medium = (
             Medium.DISCORD_CHANNEL_MESSAGE
