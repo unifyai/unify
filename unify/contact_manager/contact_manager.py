@@ -13,7 +13,6 @@ logger = _log
 CONTACTS_TABLE = "Contacts"
 CONTACTS_META_TABLE = "Contacts/Meta"
 from .prompt_builders import build_ask_prompt, build_update_prompt
-from ..common.column_types import ColumnType
 from ..common.embed_utils import ensure_vector_column
 from ..common.tool_outcome import ToolErrorException, ToolOutcome
 from ..common.tool_spec import read_only, manager_tool, ToolSpec
@@ -55,15 +54,10 @@ from .storage import (
     get_columns as _storage_get_columns,
 )
 from .system_contacts import (
-    _ensure_columns_exist as _sys_ensure_columns_exist,
     provision_assistant_contact as _sys_provision_assistant_contact,
     provision_user_contact as _sys_provision_user_contact,
     provision_org_member_contacts as _sys_provision_org_member_contacts,
     provision_team_assistant_contacts as _sys_provision_team_assistant_contacts,
-)
-from .custom_columns import (
-    create_custom_column as _cc_create,
-    delete_custom_column as _cc_delete,
 )
 from .voice_enrollment import (
     get_voice_profiles as _voice_get_profiles,
@@ -162,11 +156,6 @@ class ContactManager(BaseContactManager):
         self._BUILTIN_FIELDS: Tuple[str, ...] = tuple(Contact.model_fields.keys())
         self._REQUIRED_COLUMNS: set[str] = set(self._BUILTIN_FIELDS)
 
-        # Track observed/created custom columns in-process so immediate reads
-        # right after creation include the new columns without requiring a
-        # round-trip schema refresh.
-        self._known_custom_fields: set[str] = set()
-
         # ── public tool dictionaries ─────────────────────────────────────
         # ask-side tools are read-only, so they never change
         ask_tools: Dict[str, Callable] = {
@@ -191,14 +180,6 @@ class ContactManager(BaseContactManager):
                 ToolSpec(fn=self.update_contact, display_label="Updating a contact"),
                 ToolSpec(fn=self._delete_contact, display_label="Deleting a contact"),
                 ToolSpec(
-                    fn=self._create_custom_column,
-                    display_label="Adding a custom contact field",
-                ),
-                ToolSpec(
-                    fn=self._delete_custom_column,
-                    display_label="Removing a custom contact field",
-                ),
-                ToolSpec(
                     fn=self._merge_contacts,
                     display_label="Merging duplicate contacts",
                 ),
@@ -214,10 +195,7 @@ class ContactManager(BaseContactManager):
         # rolling activity inclusion flag
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
 
-        # (No per-instance shorthand registry; dynamic aliases are registered
-        #  directly on the Contact class for minimal plumbing.)
-
-        # Ensure context/schema and prefill known custom fields
+        # Ensure context/schema exist
         self._provision_storage()
 
         # Ensure assistant self and boss contacts exist and are up to date.
@@ -544,14 +522,12 @@ class ContactManager(BaseContactManager):
     def clear(self) -> None:
         unisdk.delete_context(self._ctx)
 
-        # Clear local cache and custom-field state so subsequent reads/writes
-        # operate against a clean slate
+        # Clear local cache so subsequent reads/writes operate against a
+        # clean slate
         try:
             self._data_store.clear()
         except Exception:
             pass
-
-        # No per-instance custom field state to reset
 
         # Ensure the schema exists again via shared provisioning helper
         ContextRegistry.refresh(self, "Contacts")
@@ -734,7 +710,7 @@ class ContactManager(BaseContactManager):
             ``\"max\"``, ``\"median\"``, ``\"mode\"``, and ``\"count\"``.
         keys : str | list[str]
             One or more numeric contact fields to aggregate, for example
-            ``\"contact_id\"`` or numeric custom columns. A single column name
+            ``\"contact_id\"``. A single column name
             returns a scalar; a list of column names computes the metric
             independently per key and returns a ``{key -> value}`` mapping.
         filter : str | dict[str, str] | None, default None
@@ -742,8 +718,8 @@ class ContactManager(BaseContactManager):
             :py:meth:`filter_contacts`. When a string, the expression is applied
             uniformly; when a dict, each key maps to its own filter expression.
         group_by : str | list[str] | None, default None
-            Optional contact field(s) to group by, for example ``\"should_respond\"``
-            or a segmenting custom column. Use a single column name for one
+            Optional contact field(s) to group by, for example ``\"should_respond\"``.
+            Use a single column name for one
             grouping level, or a list such as ``[\"should_respond\", \"contact_id\"]``
             to group hierarchically in that order. When provided, the result
             becomes a nested mapping keyed by group values, mirroring
@@ -855,8 +831,6 @@ class ContactManager(BaseContactManager):
                             eff_limit = min(eff_limit, count_ids)
 
         from_fields = list(self._BUILTIN_FIELDS)
-        if getattr(self, "_known_custom_fields", None):
-            from_fields.extend(sorted(self._known_custom_fields))
 
         contexts = [
             FederatedSearchContext(
@@ -927,8 +901,6 @@ class ContactManager(BaseContactManager):
           all terms to favour contacts similar across several fields.
         """
         allowed_fields = list(self._BUILTIN_FIELDS)
-        if getattr(self, "_known_custom_fields", None):
-            allowed_fields.extend(sorted(self._known_custom_fields))
 
         from ..session_details import SESSION_DETAILS
 
@@ -988,7 +960,8 @@ class ContactManager(BaseContactManager):
         is_system: bool = False,
         custom_key: Optional[str] = None,
         custom_hash: Optional[str] = None,
-        custom_fields: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         destination: Optional[str] = None,
         _contact_id: Optional[int] = None,
     ) -> ToolOutcome:
@@ -1036,10 +1009,6 @@ class ContactManager(BaseContactManager):
             Mark as a system contact (assistant/user/org member). Optional.
         custom_key / custom_hash : str | None
             Deployment-defined contact identity fields. Optional.
-        custom_fields : dict[str, Any] | None
-            Values for existing custom columns (snake_case keys that are not part of
-            the built‑in ``Contact`` schema). Create new columns first via
-            ``_create_custom_column``. Do not nest a key literally named ``"kwargs"``.
         destination : str | None, default None
             Where to file this contact. Pass ``"personal"`` (the default) for
             contacts that belong only to you — personal acquaintances, family,
@@ -1075,8 +1044,6 @@ class ContactManager(BaseContactManager):
         - ``response_policy`` defaults to a conservative policy that avoids sharing sensitive
           information when not explicitly provided.
         - Unspecified fields remain ``None`` and can be populated later via ``update_contact``.
-        - For custom columns, ensure the column exists beforehand via ``_create_custom_column``;
-          otherwise the request will fail server‑side.
         """
         try:
             context = self._contact_context_for_destination(destination)
@@ -1100,7 +1067,8 @@ class ContactManager(BaseContactManager):
             is_system=is_system,
             custom_key=custom_key,
             custom_hash=custom_hash,
-            custom_fields=custom_fields,
+            user_id=user_id,
+            agent_id=agent_id,
             contact_id=_contact_id,
             context=context,
             data_store=self._data_store_for_context(context),
@@ -1126,7 +1094,8 @@ class ContactManager(BaseContactManager):
         is_system: Optional[bool] = None,
         custom_key: Optional[str] = None,
         custom_hash: Optional[str] = None,
-        custom_fields: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         destination: Optional[str] = None,
         _log_id: Optional[int] = None,
     ) -> ToolOutcome:
@@ -1172,10 +1141,6 @@ class ContactManager(BaseContactManager):
             System-contact flag. Omit to leave unchanged.
         custom_key / custom_hash : str | None
             Deployment-defined contact identity fields. Optional.
-        custom_fields : dict[str, Any] | None
-            Updates for existing custom columns. Keys must be existing column names
-            (snake_case) that are not part of the built‑in ``Contact`` schema. Any key
-            with a ``None`` value is ignored.
         destination : str | None, default None
             The team whose copy of this contact you are updating. Defaults to
             ``"personal"`` (your private copy). Passing ``"team:<id>"``
@@ -1224,7 +1189,8 @@ class ContactManager(BaseContactManager):
             is_system=is_system,
             custom_key=custom_key,
             custom_hash=custom_hash,
-            custom_fields=custom_fields,
+            user_id=user_id,
+            agent_id=agent_id,
             _log_id=_log_id,
             context=context,
             data_store=self._data_store_for_context(context),
@@ -1307,8 +1273,8 @@ class ContactManager(BaseContactManager):
         contact_id_2 : int
             Identifier of the second source contact. Must be different from ``contact_id_1``.
         overrides : Dict[str, int], optional
-            A map indicating which source wins for each column. Keys are column names
-            (built‑in or custom). Values must be either ``1`` or ``2`` where:
+            A map indicating which source wins for each column. Keys are column names.
+            Values must be either ``1`` or ``2`` where:
             - ``1`` → take the value from ``contact_id_1``
             - ``2`` → take the value from ``contact_id_2``
 
@@ -1338,8 +1304,6 @@ class ContactManager(BaseContactManager):
         -----
         - After the merge, transcript messages that referenced the deleted contact will have
           their ``contact_id`` updated to the kept id for consistency.
-        - Custom fields are applied via ``update_contact``; built‑in fields are applied
-          directly as arguments.
         """
         try:
             context = self._contact_context_for_destination(destination)
@@ -1493,53 +1457,6 @@ class ContactManager(BaseContactManager):
             "details": {"contact_id": int(contact_id), "blacklist_ids": created_ids},
         }
 
-    def _create_custom_column(
-        self,
-        *,
-        column_name: str,
-        column_type: ColumnType | str,
-        column_description: Optional[str] = None,
-    ) -> Dict[str, str]:
-        """
-        Create a new custom column on the contacts table.
-
-        Parameters
-        ----------
-        column_name : str
-            The name of the new custom column. Must be a valid snake_case name.
-        column_type : ColumnType | str
-            The type of the new custom column.
-        column_description : str | None
-            The description of the new custom column.
-
-        Returns
-        -------
-        Dict[str, str]
-            A dictionary containing the name and type of the new custom column.
-        """
-        return _cc_create(
-            self,
-            column_name=column_name,
-            column_type=column_type,
-            column_description=column_description,
-        )
-
-    def _delete_custom_column(self, *, column_name: str) -> Dict[str, str]:
-        """
-        Delete a custom column from the contacts table.
-
-        Parameters
-        ----------
-        column_name : str
-            The name of the custom column to delete.
-
-        Returns
-        -------
-        Dict[str, str]
-            A dictionary containing the name.
-        """
-        return _cc_delete(self, column_name=column_name)
-
     # ──────────────────────────────────────────────────────────────────────
     #  Internal helpers (not exposed as tools)
     # ──────────────────────────────────────────────────────────────────────
@@ -1611,9 +1528,6 @@ class ContactManager(BaseContactManager):
         return _storage_get_columns(self)
 
     # System contact sync
-    def _ensure_columns_exist(self, extra_fields: Dict[str, Any]) -> None:
-        _sys_ensure_columns_exist(self, extra_fields)
-
     def _sync_required_contacts(self) -> None:
         from ..session_details import SESSION_DETAILS
 
@@ -1658,13 +1572,6 @@ class ContactManager(BaseContactManager):
         for b in self._BUILTIN_FIELDS:
             if b not in allowed:
                 allowed.append(b)
-        # Include any custom fields created/observed during this manager's lifetime
-        try:
-            for k in getattr(self, "_known_custom_fields", set()):
-                if k not in allowed:
-                    allowed.append(k)
-        except Exception:
-            pass
         return allowed
 
     # Misc small utilities (kept last)

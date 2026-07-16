@@ -925,7 +925,8 @@ class SimulatedContactManager(BaseContactManager):
         is_system: bool = False,
         custom_key: Optional[str] = None,
         custom_hash: Optional[str] = None,
-        custom_fields: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         destination: Optional[str] = None,
         _contact_id: Optional[int] = None,
     ) -> "ToolOutcome":
@@ -961,10 +962,10 @@ class SimulatedContactManager(BaseContactManager):
             "custom_key": custom_key,
             "custom_hash": custom_hash,
         }
-
-        # Add any custom fields
-        if custom_fields:
-            contact.update(custom_fields)
+        if user_id is not None:
+            contact["user_id"] = user_id
+        if agent_id is not None:
+            contact["agent_id"] = agent_id
 
         # Store in internal contacts dict
         self._contacts[contact_id] = contact
@@ -994,7 +995,8 @@ class SimulatedContactManager(BaseContactManager):
         rolling_summary: Optional[str] = None,
         should_respond: Optional[bool] = None,
         response_policy: Optional[str] = None,
-        custom_fields: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ) -> "ToolOutcome":
         """
         Update one or more fields of an existing contact in the internal store.
@@ -1027,7 +1029,8 @@ class SimulatedContactManager(BaseContactManager):
                             "rolling_summary": rolling_summary,
                             "should_respond": should_respond,
                             "response_policy": response_policy,
-                            **(custom_fields or {}),
+                            "user_id": user_id,
+                            "agent_id": agent_id,
                         }.items()
                         if v is not None
                     ],
@@ -1062,7 +1065,8 @@ class SimulatedContactManager(BaseContactManager):
                 "rolling_summary": rolling_summary,
                 "should_respond": should_respond,
                 "response_policy": response_policy,
-                **(custom_fields or {}),
+                "user_id": user_id,
+                "agent_id": agent_id,
             }.items()
             if v is not None
         }

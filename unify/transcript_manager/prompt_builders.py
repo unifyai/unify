@@ -12,9 +12,8 @@ Schemas are rendered once early in the prompt and referenced throughout.
 
 from __future__ import annotations
 
-import json
 import textwrap
-from typing import Callable, Dict, Union, List, Optional
+from typing import Callable, Dict, Union, List
 
 # Schemas used in the prompt -------------------------------------------------
 from ..contact_manager.types.contact import Contact
@@ -28,7 +27,6 @@ from ..common.prompt_helpers import (
     now,
     tool_name as _shared_tool_name,
     require_tools as _shared_require_tools,
-    get_custom_columns,
     # New standardized composer utilities
     PromptSpec,
     PromptParts,
@@ -64,7 +62,6 @@ def _require_tools(pairs: Dict[str, str | None], tools: Dict[str, Callable]) -> 
 
 def _render_two_table_info(
     num_messages: int,
-    transcript_custom_columns: Optional[Dict[str, str]] = None,
 ) -> str:
     """Render table info for TranscriptManager's two-table architecture.
 
@@ -80,11 +77,6 @@ def _render_two_table_info(
         "- Semantic search (`search_messages`) can query across both tables via sender_id → contact_id joins.",
         "- Exact filtering (`filter_messages`) is limited to Transcript columns only.",
     ]
-
-    if transcript_custom_columns:
-        lines.append(
-            f"- Additional custom columns on Transcripts: {json.dumps(transcript_custom_columns)}",
-        )
 
     return "\n".join(lines)
 
@@ -132,9 +124,6 @@ def build_ask_prompt(
     early in the prompt. Table info references these schemas instead of
     duplicating column definitions.
     """
-    # Extract custom columns for transcripts (not in Message model)
-    transcript_custom_cols = get_custom_columns(Message, transcript_columns)
-
     # Resolve canonical tool names dynamically
     filter_messages_fname = _tool_name(tools, "filter_messages")
     search_messages_fname = _tool_name(tools, "search_messages")
@@ -175,7 +164,7 @@ def build_ask_prompt(
  --------
 
  ─ Tool selection (read carefully) ─
- • For ANY semantic question over free‑form text (message content, free‑text custom columns), ALWAYS use `{search_messages_fname}`. Never try to approximate meaning with brittle substring filters.
+ • For ANY semantic question over free‑form text (message content), ALWAYS use `{search_messages_fname}`. Never try to approximate meaning with brittle substring filters.
  • Use `{filter_messages_fname}` only for exact/boolean logic over structured message fields (ids, mediums, equality checks) or for narrow, constrained text where substring checks make sense. Contact fields (sender profile) are NOT available in `{filter_messages_fname}`.
 
  ─ Semantic search: targeted references across columns (ranked by SUM of cosine distances) ─
@@ -287,9 +276,6 @@ def build_ask_prompt(
     # Two-table info: explains both tables and references schemas
     two_table_info = _render_two_table_info(
         num_messages=num_messages,
-        transcript_custom_columns=(
-            transcript_custom_cols if transcript_custom_cols else None
-        ),
     )
     attribution_guidance = _authoring_attribution_guidance()
 

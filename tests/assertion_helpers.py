@@ -339,27 +339,3 @@ def mock_columns_from_model(model_class: Type) -> Dict[str, str]:
             type_str = str(annotation)
         columns[field_name] = type_str.lower()
     return columns
-
-
-def mock_columns_with_custom(
-    model_class: Type,
-    custom_columns: Optional[Dict[str, str]] = None,
-) -> Dict[str, str]:
-    """Generate mock columns from a model plus optional custom columns.
-
-    Parameters
-    ----------
-    model_class : Type
-        A Pydantic model class.
-    custom_columns : Optional[Dict[str, str]]
-        Additional custom columns to add.
-
-    Returns
-    -------
-    Dict[str, str]
-        Combined columns dictionary.
-    """
-    columns = mock_columns_from_model(model_class)
-    if custom_columns:
-        columns.update(custom_columns)
-    return columns

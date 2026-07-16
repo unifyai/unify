@@ -16,7 +16,6 @@ from .types.activated_by import ActivatedBy
 from ..common.prompt_helpers import (
     tool_name,
     require_tools,
-    get_custom_columns,
     PromptSpec,
     PromptParts,
     compose_system_prompt,
@@ -109,8 +108,6 @@ def build_ask_prompt(
     include_activity: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the `ask` method."""
-
-    custom_cols = get_custom_columns(Task, columns)
 
     filter_tasks_fname = tool_name(tools, "filter_tasks")
     search_tasks_fname = tool_name(tools, "search_tasks")
@@ -252,7 +249,6 @@ def build_ask_prompt(
         counts_entity_plural="tasks",
         counts_value=num_tasks,
         table_schema_name="Task",
-        custom_columns=custom_cols if custom_cols else None,
         include_tools_block=True,
         usage_examples=usage_examples,
         clarification_examples_block=clarification_block or None,
@@ -277,8 +273,6 @@ def build_update_prompt(
     include_activity: bool = True,
 ) -> PromptParts:
     """Build the system prompt for the `update` method."""
-
-    custom_cols = get_custom_columns(Task, columns)
 
     filter_tasks_fname = tool_name(tools, "filter_tasks")
     search_tasks_fname = tool_name(tools, "search_tasks")
@@ -503,7 +497,6 @@ def build_update_prompt(
         counts_entity_plural="tasks",
         counts_value=num_tasks,
         table_schema_name="Task",
-        custom_columns=custom_cols if custom_cols else None,
         include_tools_block=True,
         usage_examples=usage_examples,
         clarification_examples_block=clarification_block or None,

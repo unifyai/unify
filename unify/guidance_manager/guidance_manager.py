@@ -6,7 +6,6 @@ import base64
 import functools
 import inspect
 import logging
-import re
 import threading
 
 import unisdk
@@ -122,10 +121,7 @@ class GuidanceManager(BaseGuidanceManager):
         # Get ImageManager via registry for resolving and attaching images
         self._image_manager = ManagerRegistry.get_image_manager()
 
-        # Track custom fields seen/created during lifetime
-        self._known_custom_fields: set[str] = set()
-
-        # Ensure context/schema and prefill known custom fields
+        # Ensure context/schema exist
         self._provision_storage()
 
     def _guidance_context_for_root(self, root_context: str) -> str:
@@ -369,9 +365,8 @@ class GuidanceManager(BaseGuidanceManager):
         unisdk.delete_context(self._ctx)
         unisdk.delete_context(self._meta_ctx)
 
-        # Reset observed custom fields for this manager instance
+        # Reset sync bookkeeping for this manager instance
         try:
-            self._known_custom_fields = set()
             self._custom_guidance_synced = False
             self._custom_guidance_synced_contexts.clear()
         except Exception:
@@ -408,8 +403,7 @@ class GuidanceManager(BaseGuidanceManager):
             pass
 
     def _provision_storage(self) -> None:
-        """Ensure Guidance context, schema, and custom-field bookkeeping exist."""
-        # Ensure context/fields exist deterministically (idempotent)
+        """Ensure Guidance context and schema exist (idempotent)."""
         self._store = TableStore(
             self._ctx,
             unique_keys={"guidance_id": "int"},
@@ -419,16 +413,6 @@ class GuidanceManager(BaseGuidanceManager):
             ),
             fields=model_to_fields(Guidance),
         )
-
-        # Prefill known custom fields once to include any preexisting non-private columns
-        try:
-            existing_cols = self._get_columns()
-            for col in existing_cols:
-                if col not in self._REQUIRED_COLUMNS and not str(col).startswith("_"):
-                    self._known_custom_fields.add(col)
-        except Exception:
-            # Best-effort only; tools fall back safely
-            pass
 
     def _get_columns(self) -> Dict[str, str]:
         return self._store.get_columns()
@@ -456,81 +440,6 @@ class GuidanceManager(BaseGuidanceManager):
         """
         cols = self._get_columns()
         return cols if include_types else list(cols)
-
-    def _create_custom_column(
-        self,
-        *,
-        column_name: str,
-        column_type: str,
-        column_description: Optional[str] = None,
-    ) -> Dict[str, str]:
-        """Create a new mutable custom column on the Guidance table.
-
-        Notes
-        -----
-        - Required/built-in columns cannot be recreated.
-        - ``column_name`` must be snake_case: start with a letter, followed by
-          letters, digits or underscores.
-
-        Parameters
-        ----------
-        column_name : str
-            Name of the column to create (snake_case).
-        column_type : str
-            Logical type label recorded in the context metadata.
-        column_description : str | None, default None
-            Optional human-friendly description to attach to the column.
-
-        Returns
-        -------
-        Dict[str, str]
-            Service response confirming the created field metadata.
-        """
-        if column_name in self._REQUIRED_COLUMNS:
-            raise ValueError(
-                f"'{column_name}' is a required column and cannot be recreated.",
-            )
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", column_name):
-            raise ValueError(
-                "column_name must be snake_case: start with a letter, then letters/digits/underscores",
-            )
-        if (
-            getattr(self, "_known_custom_fields", None)
-            and column_name in self._known_custom_fields
-        ):
-            raise ValueError(f"Column '{column_name}' already exists.")
-        info: Dict[str, Any] = {"type": str(column_type), "mutable": True}
-        if column_description is not None:
-            info["description"] = column_description
-        resp = unisdk.create_fields(fields={column_name: info}, context=self._ctx)
-        try:
-            self._known_custom_fields.add(column_name)
-        except Exception:
-            pass
-        return resp
-
-    def _delete_custom_column(self, *, column_name: str) -> Dict[str, str]:
-        """Delete a custom column previously added to the Guidance table.
-
-        Parameters
-        ----------
-        column_name : str
-            Name of the column to remove. Required columns cannot be deleted.
-
-        Returns
-        -------
-        Dict[str, str]
-            Service response confirming deletion.
-        """
-        if column_name in self._REQUIRED_COLUMNS:
-            raise ValueError(f"Cannot delete required column '{column_name}'.")
-        resp = unisdk.delete_fields(fields=[column_name], context=self._ctx)
-        try:
-            if column_name in getattr(self, "_known_custom_fields", set()):
-                self._known_custom_fields.discard(column_name)
-        except Exception:
-            pass
-        return resp
 
     # ------------------------------- Private tools ----------------------------
     def _get_images_for_guidance(

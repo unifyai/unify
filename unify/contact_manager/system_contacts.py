@@ -13,7 +13,6 @@ _PERSONAL_SCOPE = "personal"
 _SELF_RELATIONSHIP = "self"
 _BOSS_RELATIONSHIP = "boss"
 
-from ..common.column_types import ColumnType
 from ..session_details import (
     PLACEHOLDER_ASSISTANT_BIO,
     PLACEHOLDER_ASSISTANT_EMAIL,
@@ -36,23 +35,6 @@ def _is_duplicate_contact_error(error: RequestError) -> bool:
         detail = str(getattr(error.response, "text", ""))
     normalized = detail.lower()
     return "unique" in normalized or "duplicate composite key" in normalized
-
-
-def _ensure_columns_exist(self, extra_fields: Dict[str, Any]) -> None:
-    """Create custom columns for *extra_fields* that are not yet present."""
-    existing_cols = self._get_columns()
-    for col in extra_fields:
-        if col in self._REQUIRED_COLUMNS or col in existing_cols:
-            continue
-        try:
-            # Default to string type for new assistant/user metadata columns
-            self._create_custom_column(
-                column_name=col,
-                column_type=ColumnType.str,
-            )
-        except Exception:
-            # Column may have been created concurrently – ignore
-            pass
 
 
 def _upsert_personal_contact_membership(
@@ -377,23 +359,6 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     if SESSION_DETAILS.is_initialized and SESSION_DETAILS.user.id:
         base_fields["user_id"] = SESSION_DETAILS.user.id
 
-    extra_fields = {
-        k: v
-        for k, v in user_info.items()
-        if k
-        not in {
-            "first_name",
-            "last_name",
-            "email",
-            "phone_number",
-            "whatsapp_number",
-            "discord_id",
-            "slack_user_id",
-        }
-    }
-    if extra_fields:
-        _ensure_columns_exist(self, extra_fields)
-
     if user_log is not None:
         try:
             entries = user_log.entries
@@ -573,8 +538,6 @@ def provision_team_assistant_contacts(self) -> None:
     )
     if not peers:
         return
-
-    _ensure_columns_exist(self, {"agent_id": None})
 
     for peer in peers:
         agent_id = str(peer["agent_id"])
