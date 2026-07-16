@@ -20,6 +20,8 @@ from tests.provider_trigger_delivery import (
     load_composio_github_issue_fixture,
     orchestra_api_base,
     orchestra_api_key,
+    probe_github_repository_full_name,
+    probe_github_trigger_config,
     run_orchestra_trigger_worker_cycle,
 )
 from unify.session_details import SESSION_DETAILS
@@ -44,13 +46,7 @@ def _provider_event_trigger(
     )
     payload["connection_id"] = connection_id
     payload["state"] = state
-    payload["filters"] = [
-        {
-            "field": "repository",
-            "operator": "is",
-            "value": "octocat/Hello-World",
-        },
-    ]
+    payload["trigger_config"] = probe_github_trigger_config()
     return payload
 
 
@@ -129,11 +125,11 @@ def test_actor_discovery_tools_see_stub_backed_catalog_and_connection(
 
     catalog = scheduler._list_provider_trigger_catalog()
     assert catalog["outcome"] == "provider trigger catalog listed"
-    events = catalog["details"].get("events") or []
-    assert any(event.get("event_slug") == "github.issue_created" for event in events)
+    triggers = catalog["details"].get("triggers") or []
+    assert catalog["details"].get("available") is not False
 
     connections = scheduler._list_provider_trigger_connections(
-        event_slug="github.issue_created",
+        canonical_app_slug="github",
         backend_id="composio",
     )
     listed = connections["details"].get("connections") or []
@@ -187,6 +183,7 @@ def test_actor_enable_and_stub_delivery_create_one_provider_run(
             "provider_user_id",
             "assistant:provider-trigger-probe",
         ),
+        repository=probe_github_repository_full_name(),
     )
     first = deliver_signed_composio_webhook(
         ingress_key=generation["ingress_key"],

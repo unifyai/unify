@@ -126,30 +126,6 @@ def test_system_present_after_init():
 
 
 @_handle_project
-def test_data_store_hygiene_after_custom_column_delete():
-    cm = ContactManager()
-    ds = DataStore.for_context(cm._ctx, key_fields=("contact_id",))
-
-    # Create a custom column and a contact that uses it
-    cm._create_custom_column(column_name="department", column_type="str")
-    cid = cm._create_contact(
-        first_name="Jane",
-        custom_fields={"department": "Engineering"},
-    )["details"]["contact_id"]
-
-    # Ensure cache has the field
-    row = ds[cid]
-    assert row.get("department") == "Engineering"
-
-    # Delete the custom column
-    cm._delete_custom_column(column_name="department")
-
-    # The cache should be scrubbed of the deleted key
-    row2 = ds[cid]
-    assert "department" not in row2
-
-
-@_handle_project
 def test_after_merge():
     cm = ContactManager()
     ds = DataStore.for_context(cm._ctx, key_fields=("contact_id",))

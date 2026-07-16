@@ -23,10 +23,9 @@ if TYPE_CHECKING:
     from ..knowledge_manager.base import BaseKnowledgeManager
     from ..task_scheduler.base import BaseTaskScheduler
 
-# Fields MemoryManager refuses to expose to the contact-update LLM, even when
-# the underlying ContactManager signature still accepts them via **kwargs /
-# named params on the simulated manager.
-_CONTACT_TOOL_LLM_EXCLUDE = frozenset({"custom_fields"})
+# Fields MemoryManager refuses to expose to the contact-update LLM. The
+# platform identity ids are set by system provisioning, never by the LLM.
+_CONTACT_TOOL_LLM_EXCLUDE = frozenset({"user_id", "agent_id"})
 
 
 def _llm_visible_contact_signature(
@@ -39,7 +38,7 @@ def _llm_visible_contact_signature(
     Unwraps monkeypatch/wraps spies to the real ContactManager method, then
     drops ``**kwargs`` / ``*args`` so ``method_to_schema`` does not advertise
     ``additionalProperties: true`` (OpenAI ignores freeform extras on empty
-    ``properties``). Also drops names in *exclude* (e.g. ``custom_fields``).
+    ``properties``). Also drops names in *exclude* (e.g. ``user_id``).
     """
     unwrapped = inspect.unwrap(getattr(source, "__func__", source))
     sig = inspect.signature(unwrapped)
@@ -259,20 +258,12 @@ class MemoryManager(BaseMemoryManager):
 
         @functools.wraps(create_src, updated=())
         async def _create_contact(**kwargs):
-            if kwargs.get("custom_fields"):
-                raise ValueError(
-                    "Creation of custom columns is not allowed.",
-                )
             allowed = _named_params(create_src)
             cleaned_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
             return await asyncio.to_thread(create_src, **cleaned_kwargs)
 
         @functools.wraps(update_src, updated=())
         async def _update_contact(**kwargs):
-            if kwargs.get("custom_fields"):
-                raise ValueError(
-                    "Modification involving custom columns is not allowed.",
-                )
             allowed = _named_params(update_src)
             cleaned_kwargs = {k: v for k, v in kwargs.items() if k in allowed}
             return await asyncio.to_thread(update_src, **cleaned_kwargs)

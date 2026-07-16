@@ -44,24 +44,10 @@ def task_revision_conflict_outcome(
 
 def list_eligible_provider_trigger_connections(
     *,
-    event_slug: str,
-    schema_version: str = "1",
+    canonical_app_slug: str | None = None,
     backend_id: str | None = None,
-    catalog_events: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return assistant-scoped connections suitable for one curated provider event."""
-
-    event = _find_catalog_event(
-        events=catalog_events or [],
-        event_slug=event_slug,
-        schema_version=schema_version,
-    )
-    if event is None:
-        raise ValueError(
-            f"Unsupported provider event {event_slug!r} schema {schema_version!r}.",
-        )
-    canonical_app_slug = str(event.get("canonical_app_slug") or "")
-    eligible_backends = set(event.get("backends") or [])
+    """Return assistant-scoped connections for provider-trigger setup."""
 
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
@@ -79,12 +65,12 @@ def list_eligible_provider_trigger_connections(
     for connection in connections:
         if not isinstance(connection, dict):
             continue
-        if connection.get("canonical_app_slug") != canonical_app_slug:
+        if canonical_app_slug is not None and (
+            connection.get("canonical_app_slug") != canonical_app_slug
+        ):
             continue
         resolved_backend = str(connection.get("backend_id") or "")
         if backend_id is not None and resolved_backend != backend_id:
-            continue
-        if backend_id is None and resolved_backend not in eligible_backends:
             continue
         if connection.get("status") not in {"connected", "active"}:
             continue
@@ -100,48 +86,22 @@ def summarize_connection(connection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def describe_provider_trigger_resource_contract(
+def describe_provider_trigger(
     *,
-    event_slug: str,
-    schema_version: str = "1",
-    catalog_events: list[dict[str, Any]] | None = None,
+    provider_trigger_slug: str,
+    backend_id: str,
+    catalog_triggers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Explain how resources are selected for one curated provider event."""
+    """Return staged catalog metadata for one provider trigger."""
 
-    event = _find_catalog_event(
-        events=catalog_events or [],
-        event_slug=event_slug,
-        schema_version=schema_version,
-    )
-    if event is None:
-        raise ValueError(
-            f"Unsupported provider event {event_slug!r} schema {schema_version!r}.",
-        )
-    return {
-        "event_slug": event_slug,
-        "schema_version": schema_version,
-        "resource_kind": event.get("resource_kind"),
-        "resource_id_format": event.get("resource_id_format"),
-        "resource_filter_field": event.get("resource_filter_field"),
-        "resource_filter_operator": event.get("resource_filter_operator"),
-        "selection_contract": event.get("selection_contract"),
-        "filters": event.get("filters") or [],
-        "backends": event.get("backends") or [],
-    }
-
-
-def _find_catalog_event(
-    *,
-    events: list[dict[str, Any]],
-    event_slug: str,
-    schema_version: str,
-) -> dict[str, Any] | None:
-    for event in events:
-        if not isinstance(event, dict):
+    for trigger in catalog_triggers or []:
+        if not isinstance(trigger, dict):
             continue
         if (
-            event.get("event_slug") == event_slug
-            and str(event.get("schema_version")) == schema_version
+            trigger.get("provider_trigger_slug") == provider_trigger_slug
+            and trigger.get("backend_id") == backend_id
         ):
-            return event
-    return None
+            return trigger
+    raise ValueError(
+        f"Unsupported provider trigger {provider_trigger_slug!r} on {backend_id!r}.",
+    )

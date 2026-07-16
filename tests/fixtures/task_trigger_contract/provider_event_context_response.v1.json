@@ -3,7 +3,7 @@
   "run_id": 42,
   "event_context_ref": "blob-ctx-1",
   "envelope": {
-    "event_slug": "github.issue_created",
+    "provider_trigger_slug": "GITHUB_ISSUE_CREATED_TRIGGER",
     "delivery_id": "gh-fixture-1"
   },
   "curated_projection": {

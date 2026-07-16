@@ -21,6 +21,7 @@ from tests.provider_trigger_delivery import (
     load_pipedream_github_issue_fixture,
     orchestra_api_base,
     orchestra_api_key,
+    probe_github_repository_full_name,
     run_orchestra_trigger_worker_cycle,
 )
 from unify.session_details import SESSION_DETAILS
@@ -45,13 +46,10 @@ def _pipedream_provider_event_trigger(
     payload["connection_id"] = connection_id
     payload["backend_id"] = "pipedream"
     payload["state"] = state
-    payload["filters"] = [
-        {
-            "field": "repository",
-            "operator": "is",
-            "value": "octocat/Hello-World",
-        },
-    ]
+    payload["provider_trigger_slug"] = "github-new-or-updated-issue"
+    payload["trigger_config"] = {
+        "repoFullname": probe_github_repository_full_name(),
+    }
     return payload
 
 
@@ -130,14 +128,17 @@ def test_actor_lists_pipedream_backend_in_catalog(
     scheduler, _agent_id, connection = orchestra_pipedream_assistant_and_scheduler
 
     catalog = scheduler._list_provider_trigger_catalog()
-    events = catalog["details"].get("events") or []
-    github_event = next(
-        event for event in events if event.get("event_slug") == "github.issue_created"
+    triggers = catalog["details"].get("triggers") or []
+    github_trigger = next(
+        trigger
+        for trigger in triggers
+        if trigger.get("backend_id") == "pipedream"
+        and trigger.get("canonical_app_slug") == "github"
     )
-    assert "pipedream" in github_event.get("backends", [])
+    assert github_trigger["provider_trigger_slug"]
 
     connections = scheduler._list_provider_trigger_connections(
-        event_slug="github.issue_created",
+        canonical_app_slug="github",
         backend_id="pipedream",
     )
     listed = connections["details"].get("connections") or []
@@ -191,7 +192,9 @@ def test_actor_enable_and_pipedream_stub_delivery_create_one_provider_run(
     else:
         pytest.fail("active Pipedream provider-trigger generation was not provisioned")
 
-    payload = load_pipedream_github_issue_fixture()
+    payload = load_pipedream_github_issue_fixture(
+        repository=probe_github_repository_full_name(),
+    )
     first = deliver_signed_pipedream_webhook(
         ingress_key=generation["ingress_key"],
         payload=payload,

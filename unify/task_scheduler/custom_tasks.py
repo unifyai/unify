@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -35,6 +35,7 @@ TASK_SYNC_FIELDS = (
     "response_policy",
     "entrypoint_function",
     "offline",
+    "browser_target",
 )
 
 
@@ -53,6 +54,7 @@ class CustomTaskSourceEntry(BaseModel):
     response_policy: Optional[str] = None
     entrypoint_function: Optional[str] = None
     offline: bool = False
+    browser_target: Optional[Literal["assistant_desktop"]] = None
     destination: str = "personal"
     auto_sync: bool = True
 
@@ -199,6 +201,7 @@ def collect_custom_tasks(
             "response_policy": entry.response_policy,
             "entrypoint_function": entry.entrypoint_function,
             "offline": entry.offline,
+            "browser_target": entry.browser_target,
         }
         custom_hash = _compute_task_hash(
             key=entry.key,

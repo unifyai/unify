@@ -416,6 +416,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the exchange without a database filter query.
         self._recording_exchange_ids: dict[str, int] = {}
 
+        # Groups messages into conversation-thread exchanges (WhatsApp /
+        # Discord / MS Teams bot DMs and channels, and email). Maps a
+        # per-conversation key to the (exchange_id, last_activity) pair. DMs
+        # reuse the exchange while activity stays within DM_EXCHANGE_GAP;
+        # provider-thread channels (group channels, email) reuse for the whole
+        # thread (keyed by the native provider thread id). In-memory only; on a
+        # cold cache, email additionally recovers its exchange from Exchanges
+        # metadata so email threads survive a restart.
+        self._conversation_exchange_ids: dict[str, tuple[int, datetime]] = {}
+
         # proactive speech
         self.proactive_speech = ProactiveSpeech()
         self._proactive_speech_task: asyncio.Task | None = None

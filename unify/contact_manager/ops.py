@@ -5,13 +5,17 @@ from typing import Any, Dict, Mapping, Optional
 import unisdk
 from pydantic import ValidationError
 
-from ..common.authorship import strip_authoring_assistant_id
+from ..common.authorship import (
+    AUTHORING_ASSISTANT_ID_FIELD,
+    strip_authoring_assistant_id,
+)
 from ..common.log_utils import log as unity_log
 from ..common.tool_outcome import ToolOutcome
 from .types.contact import Contact
-from .custom_columns import sanitize_custom_columns
 
-# Named create/update params (plus plumbing). Everything else is custom_fields.
+# Named create/update params (plus plumbing). The Contact schema is fixed;
+# any key outside this set is rejected. Authorship is stamped separately and
+# must not appear in named kwargs.
 _NAMED_CREATE_FIELDS = frozenset(
     {
         "first_name",
@@ -30,6 +34,8 @@ _NAMED_CREATE_FIELDS = frozenset(
         "is_system",
         "custom_key",
         "custom_hash",
+        "user_id",
+        "agent_id",
         "destination",
         "context",
         "data_store",
@@ -55,6 +61,8 @@ _NAMED_UPDATE_FIELDS = frozenset(
         "is_system",
         "custom_key",
         "custom_hash",
+        "user_id",
+        "agent_id",
         "destination",
         "context",
         "data_store",
@@ -65,36 +73,30 @@ _NAMED_UPDATE_FIELDS = frozenset(
 
 
 def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Split a splat dict into closed ``_create_contact`` kwargs + custom_fields."""
+    """Split a splat dict into closed ``_create_contact`` kwargs."""
     named: dict[str, Any] = {}
-    custom: dict[str, Any] = {}
     for key, value in payload.items():
+        if key == AUTHORING_ASSISTANT_ID_FIELD:
+            continue
         if key == "contact_id":
             named["_contact_id"] = value
-        elif key == "custom_fields" and isinstance(value, Mapping):
-            custom.update(value)
         elif key in _NAMED_CREATE_FIELDS:
             named[key] = value
         else:
-            custom[key] = value
-    if custom:
-        named["custom_fields"] = custom
+            raise ValueError(f"Unknown contact field: {key}")
     return named
 
 
 def partition_update_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Split a splat dict into closed ``update_contact`` kwargs + custom_fields."""
+    """Split a splat dict into closed ``update_contact`` kwargs."""
     named: dict[str, Any] = {}
-    custom: dict[str, Any] = {}
     for key, value in payload.items():
-        if key == "custom_fields" and isinstance(value, Mapping):
-            custom.update(value)
-        elif key in _NAMED_UPDATE_FIELDS:
+        if key == AUTHORING_ASSISTANT_ID_FIELD:
+            continue
+        if key in _NAMED_UPDATE_FIELDS:
             named[key] = value
         else:
-            custom[key] = value
-    if custom:
-        named["custom_fields"] = custom
+            raise ValueError(f"Unknown contact field: {key}")
     return named
 
 
@@ -252,16 +254,14 @@ def create_contact(
     is_system: bool = False,
     custom_key: Optional[str] = None,
     custom_hash: Optional[str] = None,
-    custom_fields: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     contact_id: Optional[int] = None,
     context: str | None = None,
     data_store: Any = None,
 ) -> ToolOutcome:
     context_name = context or self._ctx
     store = data_store or self._data_store
-    extras = dict(custom_fields or {})
-    if "kwargs" in extras and isinstance(extras["kwargs"], Mapping):
-        extras = {**extras, **extras.pop("kwargs")}
 
     contact_details = {
         "first_name": first_name,
@@ -281,21 +281,15 @@ def create_contact(
         "custom_key": custom_key,
         "custom_hash": custom_hash,
     }
+    if user_id is not None:
+        contact_details["user_id"] = user_id
+    if agent_id is not None:
+        contact_details["agent_id"] = agent_id
     if contact_id is not None:
         contact_details["contact_id"] = contact_id
     if contact_details["response_policy"] is None:
         contact_details["response_policy"] = self.DEFAULT_RESPONSE_POLICY
 
-    if extras:
-        safe_custom = sanitize_custom_columns(extras)
-        contact_details.update(safe_custom)
-        try:
-            for k in safe_custom.keys():
-                if k not in self._BUILTIN_FIELDS:
-                    if hasattr(self, "_known_custom_fields"):
-                        self._known_custom_fields.add(k)  # type: ignore[attr-defined]
-        except Exception:
-            pass
     contact_details = strip_authoring_assistant_id(contact_details)
 
     if not any(v is not None for v in contact_details.values()):
@@ -354,16 +348,14 @@ def update_contact(
     is_system: Optional[bool] = None,
     custom_key: Optional[str] = None,
     custom_hash: Optional[str] = None,
-    custom_fields: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     _log_id: Optional[int] = None,
     context: str | None = None,
     data_store: Any = None,
 ) -> ToolOutcome:
     context_name = context or self._ctx
     store = data_store or self._data_store
-    extras = dict(custom_fields or {})
-    if "kwargs" in extras and isinstance(extras["kwargs"], Mapping):
-        extras = {**extras, **extras.pop("kwargs")}
 
     contact_details = {
         "first_name": first_name,
@@ -382,17 +374,9 @@ def update_contact(
         "is_system": is_system,
         "custom_key": custom_key,
         "custom_hash": custom_hash,
+        "user_id": user_id,
+        "agent_id": agent_id,
     }
-    if extras:
-        safe_custom = sanitize_custom_columns(extras)
-        contact_details.update(safe_custom)
-        try:
-            for k in safe_custom.keys():
-                if k not in self._BUILTIN_FIELDS:
-                    if hasattr(self, "_known_custom_fields"):
-                        self._known_custom_fields.add(k)  # type: ignore[attr-defined]
-        except Exception:
-            pass
 
     updates_dict = strip_authoring_assistant_id(
         {k: v for k, v in contact_details.items() if v is not None},
@@ -646,11 +630,8 @@ def merge_contacts(
     builtin_updates = {
         k: v for k, v in consolidated.items() if k in self._BUILTIN_FIELDS
     }
-    custom_updates = {
-        k: v for k, v in consolidated.items() if k not in self._BUILTIN_FIELDS
-    }
 
-    if builtin_updates or custom_updates:
+    if builtin_updates:
         kept_log_id = getattr(by_id[keep_id], "id", None)
         update_contact(
             self,
@@ -663,7 +644,6 @@ def merge_contacts(
                 for k in self._BUILTIN_FIELDS
                 if k in builtin_updates
             },
-            **(custom_updates or {}),
         )
 
     # Rewrite transcripts BEFORE deleting the merged contact to avoid FK SET NULL

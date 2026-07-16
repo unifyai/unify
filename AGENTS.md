@@ -117,6 +117,34 @@ pre-commit run --all-files
 
 ---
 
+## Provider integrations: no custom retries
+
+Orchestra ``run_tool`` retries transient provider failures by default for
+**every** backend (Composio, Pipedream, …): HTTP 429/5xx, timeouts, empty
+bodies, GitHub GraphQL “Something went wrong while executing your query” on
+**read** tools, and Pipedream action-level failures embedded in an HTTP-ok
+body when attribution looks like network / upstream 429–5xx. Unify
+``integrations.ops.run_tool`` additionally retries transient Orchestra
+connectivity failures.
+
+When authoring CodeAct plans, stored functions, or brain ticks that call
+``primitives.integrations.*`` / Composio / Pipedream via Orchestra:
+
+- Call the tool **once** and handle the final envelope (`ok`,
+  `connect_required`, `confirmation_required`, `provider_error`, …).
+- Do **not** wrap provider calls in ad-hoc `for attempt in range…` /
+  `time.sleep` loops for flakiness — that duplicates policy and often misses
+  GraphQL-in-payload or Pipedream embedded-action errors that Orchestra
+  already classifies.
+- Domain-specific **long** waits (e.g. sitting through a GitHub primary
+  rate-limit reset for a multi-hour crawl) may remain at the call site; short
+  transport/platform blips belong in the shared layer.
+
+Opt out (ops/debug only): `ORCHESTRA_INTEGRATION_RETRY_MAX_ATTEMPTS=1` and/or
+`UNIFY_INTEGRATION_TRANSPORT_RETRY_MAX_ATTEMPTS=1`.
+
+---
+
 ## Testing philosophy
 
 We **never** mock the LLM client. All tests use real LLM calls via `unillm.AsyncUnify`, with responses cached per unique input (`UNILLM_CACHE=true`, the default). First run is slow; subsequent runs replay from cache in milliseconds.

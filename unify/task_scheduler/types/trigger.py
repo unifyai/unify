@@ -43,16 +43,8 @@ class CommunicationTrigger(BaseModel):
     )
 
 
-class ProviderEventTriggerFilter(BaseModel):
-    """One deterministic AND filter over a curated provider-event field."""
-
-    field: str
-    operator: str
-    value: str | list[str] | bool | int | float | None = None
-
-
 class ProviderEventTrigger(BaseModel):
-    """Third-party provider event that should start the task."""
+    """Third-party provider trigger that should start the task."""
 
     kind: Literal["provider_event"] = Field(
         default="provider_event",
@@ -72,28 +64,20 @@ class ProviderEventTrigger(BaseModel):
     )
     canonical_app_slug: str = Field(
         ...,
-        description="Provider-neutral app slug from the curated registry.",
+        description="Connected app slug for the chosen integration.",
     )
-    event_slug: str = Field(
+    provider_trigger_slug: str = Field(
         ...,
-        description="Canonical event slug from the curated registry.",
+        description="Provider-native trigger identifier from the staged catalog.",
     )
-    schema_version: str = Field(
-        ...,
-        description="Pinned registry schema version for this trigger.",
-    )
-    filters: list[ProviderEventTriggerFilter] = Field(
-        default_factory=list,
-        description="Deterministic AND filters over curated event fields.",
+    trigger_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider trigger configuration from the staged catalog schema.",
     )
 
 
 def _coerce_trigger_dict(data: Any) -> Any:
-    """Normalize Orchestra/API trigger payloads into a discriminated dict.
-
-    Orchestra may return nested trigger columns as JSON text (especially when
-    the field was registered as ``str``). Legacy rows may also omit ``kind``.
-    """
+    """Normalize Orchestra/API trigger payloads into a discriminated dict."""
 
     if isinstance(data, str):
         data = json.loads(data)

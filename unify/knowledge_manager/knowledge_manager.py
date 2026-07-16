@@ -127,7 +127,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         self._REQUIRED_COLUMNS: set[str] = set(self._BUILTIN_FIELDS)
 
         self._rolling_summary_in_prompts = rolling_summary_in_prompts
-        self._known_custom_fields: set[str] = set()
 
         self._provision_storage()
 
@@ -283,7 +282,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         unisdk.delete_context(self._meta_ctx)
 
         try:
-            self._known_custom_fields = set()
             self._custom_knowledge_synced = False
             self._custom_knowledge_synced_contexts.clear()
         except Exception:
@@ -325,13 +323,6 @@ class KnowledgeManager(BaseKnowledgeManager):
             description="Typed claim ledger for durable domain knowledge.",
             fields=model_to_fields(Knowledge),
         )
-        try:
-            existing_cols = self._store.get_columns()
-            for col in existing_cols:
-                if col not in self._REQUIRED_COLUMNS and not str(col).startswith("_"):
-                    self._known_custom_fields.add(col)
-        except Exception:
-            pass
 
     def _build_knowledge(
         self,
