@@ -1038,32 +1038,38 @@ def _resolve_meet_name_to_contact(
     return None
 
 
-# Inactivity gap after which a new DM exchange is started for text channels
-# (WhatsApp / Discord / MS Teams bot direct messages). Group channels ignore
-# this and reuse the exchange for the whole session (keyed by provider thread).
-TEXT_DM_EXCHANGE_GAP = timedelta(minutes=30)
+# Inactivity gap after which a new DM exchange is started for direct-message
+# channels (WhatsApp / Discord / MS Teams bot). Provider-thread channels
+# (Discord / Teams group channels, email) ignore this and reuse the exchange for
+# the whole thread, keyed by the native provider-supplied thread id.
+DM_EXCHANGE_GAP = timedelta(minutes=30)
 
-_TEXT_DM_MEDIA = frozenset(
+_DM_MEDIA = frozenset(
     {
         Medium.WHATSAPP_MESSAGE,
         Medium.DISCORD_MESSAGE,
         Medium.MS_TEAMS_BOT_MESSAGE,
     },
 )
-_TEXT_CHANNEL_MEDIA = frozenset(
+# Channels grouped by a native provider-supplied thread id. These reuse the
+# exchange for the whole thread with no inactivity window (a reply days later
+# still belongs to the thread).
+_PROVIDER_THREAD_MEDIA = frozenset(
     {
         Medium.DISCORD_CHANNEL_MESSAGE,
         Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
+        Medium.EMAIL,
     },
 )
 
 
-def _derive_text_conversation_key(
+def _derive_conversation_key(
     event: "Event",
     medium: "Medium",
     contact_id: int | None,
 ) -> str | None:
-    """Return a stable per-conversation key for a text-channel message.
+    """Return a stable per-conversation key for a message that groups into a
+    conversation-thread exchange.
 
     Both the inbound and outbound event for a conversation resolve to the same
     key, so an assistant reply lands in the same exchange as the message it
@@ -1074,12 +1080,14 @@ def _derive_text_conversation_key(
     - Group channels key on the native provider thread: Discord on
       ``(guild_id, channel_id)``; MS Teams bot on ``(tenant_id, conversation_id)``
       (the Bot Framework ``conversation_id`` already encodes the thread).
+    - Email keys on the provider ``thread_id`` (Gmail threadId / Outlook
+      conversationId), carried on both received and sent events.
 
     Returns ``None`` when grouping should not apply (unknown medium or a
     required identifier is missing), so the caller falls back to a fresh
     exchange per message rather than grouping under a blank key.
     """
-    if medium in _TEXT_DM_MEDIA:
+    if medium in _DM_MEDIA:
         if contact_id is None:
             return None
         return f"{medium.value}:dm:{contact_id}"
@@ -1095,22 +1103,53 @@ def _derive_text_conversation_key(
         if not conversation_id:
             return None
         return f"{medium.value}:{tenant_id}:{conversation_id}"
+    if medium == Medium.EMAIL:
+        thread_id = getattr(event, "thread_id", "") or ""
+        if not thread_id:
+            return None
+        return f"{medium.value}:thread:{thread_id}"
     return None
 
 
-def _text_exchange_metadata(
+def _conversation_exchange_metadata(
     event: "Event",
     medium: "Medium",
     conversation_key: str,
 ) -> dict:
-    """Routing identity persisted on a text-channel exchange so it can be
-    queried back to its Discord channel / Teams thread."""
+    """Routing identity persisted on a conversation-thread exchange so it can be
+    queried back to its Discord channel / Teams thread / email thread."""
     metadata: dict = {"medium": medium.value, "conversation_key": conversation_key}
-    for attr in ("channel_id", "guild_id", "tenant_id", "conversation_id"):
+    for attr in ("channel_id", "guild_id", "tenant_id", "conversation_id", "thread_id"):
         value = getattr(event, attr, "") or ""
         if value:
             metadata[attr] = value
     return metadata
+
+
+def _recover_email_exchange_id(
+    cm: "ConversationManager",
+    thread_id: str,
+) -> int | None:
+    """Find an existing email exchange for ``thread_id`` in Exchanges metadata.
+
+    Runs only on an in-memory cache miss (e.g. the first email of a thread after
+    a CM restart), so email threads survive restarts without opening a duplicate
+    exchange. Returns ``None`` when no matching exchange exists.
+    """
+    try:
+        result = cm.transcript_manager.filter_exchanges(
+            filter=(
+                f'medium == "{Medium.EMAIL.value}" '
+                f'and metadata["thread_id"] == "{thread_id}"'
+            ),
+            limit=1,
+        )
+    except Exception:
+        return None
+    exchanges = result.get("exchanges") or []
+    if not exchanges:
+        return None
+    return exchanges[0].exchange_id
 
 
 async def log_message(
@@ -1318,30 +1357,37 @@ async def log_message(
     elif medium == Medium.TEAMS_MEET:
         exchange_id = cm.call_manager.teams_meet_exchange_id
 
-    # Group text-channel messages (WhatsApp / Discord / MS Teams bot) into
-    # conversation-thread exchanges. Inbound and outbound resolve to the same
-    # key, so an assistant reply lands in the same exchange it answers. DMs
-    # reuse while activity stays within TEXT_DM_EXCHANGE_GAP; group channels
-    # reuse for the whole session (keyed by the native provider thread).
-    text_conversation_key: str | None = None
+    # Group messages into conversation-thread exchanges (WhatsApp / Discord /
+    # MS Teams bot DMs and channels, and email). Inbound and outbound resolve to
+    # the same key, so an assistant reply lands in the same exchange it answers.
+    # DMs reuse while activity stays within DM_EXCHANGE_GAP; provider-thread
+    # channels (group channels, email) reuse for the whole thread keyed by the
+    # native provider thread id, and email additionally recovers its exchange
+    # from Exchanges metadata on a cold (post-restart) cache.
+    conversation_key: str | None = None
     if exchange_id == UNASSIGNED and (
-        medium in _TEXT_DM_MEDIA or medium in _TEXT_CHANNEL_MEDIA
+        medium in _DM_MEDIA or medium in _PROVIDER_THREAD_MEDIA
     ):
-        text_conversation_key = _derive_text_conversation_key(
+        conversation_key = _derive_conversation_key(
             event,
             medium,
             contact_id,
         )
-        if text_conversation_key is not None:
-            cached = cm._text_exchange_ids.get(text_conversation_key)
+        if conversation_key is not None:
+            cached = cm._conversation_exchange_ids.get(conversation_key)
             if cached is not None:
                 cached_exchange, last_activity = cached
-                if medium in _TEXT_CHANNEL_MEDIA:
+                if medium in _PROVIDER_THREAD_MEDIA:
                     exchange_id = cached_exchange
-                elif (
-                    prompt_now(as_string=False) - last_activity <= TEXT_DM_EXCHANGE_GAP
-                ):
+                elif prompt_now(as_string=False) - last_activity <= DM_EXCHANGE_GAP:
                     exchange_id = cached_exchange
+            elif medium == Medium.EMAIL:
+                recovered = _recover_email_exchange_id(
+                    cm,
+                    getattr(event, "thread_id", "") or "",
+                )
+                if recovered is not None:
+                    exchange_id = recovered
 
     call_utterance_timestamp = ""
     call_start = (
@@ -1467,8 +1513,8 @@ async def log_message(
                 if metadata:
                     msg_data["metadata"] = metadata
                 exchange_initial_metadata = (
-                    _text_exchange_metadata(event, medium, text_conversation_key)
-                    if text_conversation_key is not None
+                    _conversation_exchange_metadata(event, medium, conversation_key)
+                    if conversation_key is not None
                     else None
                 )
                 exchange_id, tm_message_id = (
@@ -1575,10 +1621,10 @@ async def log_message(
             and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
         ):
             cm.call_manager.teams_meet_exchange_id = exchange_id
-        elif text_conversation_key is not None:
+        elif conversation_key is not None:
             # Record the exchange and slide the DM inactivity window forward so
             # the next message in this conversation reuses it.
-            cm._text_exchange_ids[text_conversation_key] = (
+            cm._conversation_exchange_ids[conversation_key] = (
                 exchange_id,
                 prompt_now(as_string=False),
             )
