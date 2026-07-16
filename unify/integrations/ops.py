@@ -7,8 +7,12 @@ normalization, auth headers, and payload shape. Auth follows the same contract a
 logging APIs: session bootstrap exports ``UNIFY_KEY``/``ORCHESTRA_URL`` and the
 Unify SDK resolves credentials only when it builds the bearer header.
 
-The only shared behavior here is scope cleanup plus consistent request-failed
-envelopes for non-auth errors.
+The only shared behavior here is scope cleanup, consistent request-failed
+envelopes for non-auth errors, and default transport retries for transient
+Orchestra connectivity failures. Provider flakiness (Composio/GitHub GraphQL
+platform errors, 429/5xx from the provider) is retried inside Orchestra
+``run_tool`` — callers must not add a second custom retry loop around these
+helpers.
 """
 
 from __future__ import annotations
@@ -16,6 +20,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import unisdk
+
+from unify.integrations.transient import (
+    async_call_with_transport_retries,
+    call_with_transport_retries,
+)
 
 
 def _request_failed(helper_name: str, exc: Exception) -> dict[str, Any]:
@@ -46,18 +55,21 @@ def run_tool(
     approval_audit_id: Optional[int] = None,
     **scope: Any,
 ) -> Any:
-    try:
-        return unisdk.run_integration_tool(
-            tool_id,
-            arguments,
-            confirmation_token=confirmation_token,
-            approval_audit_id=approval_audit_id,
-            **_clean_scope(scope),
-        )
-    except KeyError:
-        raise
-    except Exception as exc:
-        return _request_failed("run_integration_tool", exc)
+    def _once() -> Any:
+        try:
+            return unisdk.run_integration_tool(
+                tool_id,
+                arguments,
+                confirmation_token=confirmation_token,
+                approval_audit_id=approval_audit_id,
+                **_clean_scope(scope),
+            )
+        except KeyError:
+            raise
+        except Exception as exc:
+            return _request_failed("run_integration_tool", exc)
+
+    return call_with_transport_retries(_once)
 
 
 async def async_run_tool(
@@ -68,18 +80,21 @@ async def async_run_tool(
     approval_audit_id: Optional[int] = None,
     **scope: Any,
 ) -> Any:
-    try:
-        return await unisdk.async_run_integration_tool(
-            tool_id,
-            arguments,
-            confirmation_token=confirmation_token,
-            approval_audit_id=approval_audit_id,
-            **_clean_scope(scope),
-        )
-    except KeyError:
-        raise
-    except Exception as exc:
-        return _request_failed("async_run_integration_tool", exc)
+    async def _once() -> Any:
+        try:
+            return await unisdk.async_run_integration_tool(
+                tool_id,
+                arguments,
+                confirmation_token=confirmation_token,
+                approval_audit_id=approval_audit_id,
+                **_clean_scope(scope),
+            )
+        except KeyError:
+            raise
+        except Exception as exc:
+            return _request_failed("async_run_integration_tool", exc)
+
+    return await async_call_with_transport_retries(_once)
 
 
 def get_tool_policy(connection_id: str, **scope: Any) -> Any:
