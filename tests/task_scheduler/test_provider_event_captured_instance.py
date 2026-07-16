@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -114,6 +115,62 @@ async def test_provider_event_captured_instance_leaves_definition_unarmed():
     active = [row for row in instances if row.status == Status.active]
     assert len(active) == 1
     assert active[0].instance_id == instance.instance_id
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_same_provider_event_operation_adopts_one_captured_instance():
+    scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
+    task_id = _seed_provider_event_definition(scheduler, task_revision=4)
+    definition = scheduler._get_task_or_raise(task_id)
+
+    first = scheduler._create_provider_event_captured_instance(
+        definition=definition,
+        operation_id="op-same",
+        captured_task_revision=4,
+    )
+    second = scheduler._create_provider_event_captured_instance(
+        definition=definition,
+        operation_id="op-same",
+        captured_task_revision=4,
+    )
+    assert first.instance_id == second.instance_id
+    assert first.info == "provider_event_operation:op-same"
+    instances = scheduler._filter_tasks(filter=f"task_id == {task_id}")
+    matching = [
+        row
+        for row in instances
+        if str(row.info or "") == "provider_event_operation:op-same"
+    ]
+    assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_concurrent_same_provider_event_operation_adopts_one_captured_instance():
+    scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
+    task_id = _seed_provider_event_definition(scheduler, task_revision=4)
+    definition = scheduler._get_task_or_raise(task_id)
+
+    def _create():
+        return scheduler._create_provider_event_captured_instance(
+            definition=definition,
+            operation_id="op-concurrent",
+            captured_task_revision=4,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: _create(), range(4)))
+
+    instance_ids = {row.instance_id for row in results}
+    assert len(instance_ids) == 1
+    matching = [
+        row
+        for row in scheduler._filter_tasks(filter=f"task_id == {task_id}")
+        if str(row.info or "") == "provider_event_operation:op-concurrent"
+    ]
+    assert len(matching) == 1
+    assert matching[0].instance_id == results[0].instance_id
 
 
 @pytest.mark.asyncio
