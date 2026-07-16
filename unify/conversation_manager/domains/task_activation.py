@@ -646,11 +646,9 @@ async def _handle_provider_event_dispatch_requested_event(
 
     from unify.common.task_execution_context import current_task_execution_delegate
     from unify.task_scheduler.provider_event_dispatch import (
+        ProviderEventDispatchAuthorizationError,
         ProviderEventDispatchRequest,
         ProviderEventDispatchValidationError,
-    )
-    from unify.task_scheduler.provider_event_dispatch_inbox import (
-        ProviderEventInboxMismatchError,
     )
     from unify.task_scheduler.provider_event_execution import (
         handle_provider_event_live_dispatch,
@@ -691,7 +689,7 @@ async def _handle_provider_event_dispatch_requested_event(
         outcome = await handle_provider_event_live_dispatch(request)
     except (
         ProviderEventDispatchValidationError,
-        ProviderEventInboxMismatchError,
+        ProviderEventDispatchAuthorizationError,
     ) as exc:
         reason = getattr(exc, "reason_code", str(exc))
         cm._session_logger.info(
