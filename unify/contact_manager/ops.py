@@ -74,6 +74,7 @@ _NAMED_UPDATE_FIELDS = frozenset(
 
 def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``_create_contact`` kwargs."""
+    payload = strip_authoring_assistant_id(payload)
     named: dict[str, Any] = {}
     for key, value in payload.items():
         if key == AUTHORING_ASSISTANT_ID_FIELD:
@@ -89,6 +90,8 @@ def partition_create_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def partition_update_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Split a splat dict into closed ``update_contact`` kwargs."""
+    # Authorship is stamped at the log boundary, never as a create/update kwarg.
+    payload = strip_authoring_assistant_id(payload)
     named: dict[str, Any] = {}
     for key, value in payload.items():
         if key == AUTHORING_ASSISTANT_ID_FIELD:
