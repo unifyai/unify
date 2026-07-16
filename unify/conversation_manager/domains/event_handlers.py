@@ -1085,6 +1085,47 @@ async def _(
     )
 
 
+@EventHandler.register((GoogleMeetAlone, TeamsMeetAlone))
+async def _(
+    event: GoogleMeetAlone | TeamsMeetAlone,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Everyone else left the browser meet — wake the brain to decide the exit.
+
+    Notify + LLM-decides: this pushes a system notification and wakes the slow
+    brain, which then chooses whether to say a brief closing line and hang up
+    (the same ``hang_up`` path a user's "leave the call" request takes). No
+    automatic teardown happens here.
+    """
+    if isinstance(event, GoogleMeetAlone):
+        meeting_label = "Google Meet"
+        medium = Medium.GOOGLE_MEET
+    else:
+        meeting_label = "Teams meeting"
+        medium = Medium.TEAMS_MEET
+
+    label = (
+        f"Everyone else has left the {meeting_label} — you're the only "
+        f"participant left. Say a brief goodbye and leave the call unless "
+        f"there's still something to do."
+    )
+    cm.notifications_bar.push_notif("Comms", label, event.timestamp)
+
+    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name="Comms",
+        thread_name=medium,
+        message_content=f"<{label}>",
+        role="system",
+        timestamp=event.timestamp,
+    )
+
+    await cm.request_llm_run(delay=0)
+
+
 @EventHandler.register(PhoneCallNotAnswered)
 async def _(
     event: PhoneCallNotAnswered,

@@ -456,6 +456,21 @@ class GoogleMeetParticipantLeft(Event):
 
 
 @dataclass
+class GoogleMeetAlone(Event):
+    """The assistant is the only remaining participant in the Google Meet.
+
+    Emitted by the voice worker once every other participant has left and the
+    condition has held for a debounce window. Wakes the slow brain to decide
+    whether to say a closing line and leave.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_alone"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
+
+
+@dataclass
 class TeamsMeetReceived(Event):
     """A request to join a Microsoft Teams meeting via browser."""
 
@@ -531,6 +546,21 @@ class TeamsMeetParticipantLeft(Event):
 
     contact: dict
     participant_name: str
+
+
+@dataclass
+class TeamsMeetAlone(Event):
+    """The assistant is the only remaining participant in the Teams meeting.
+
+    Emitted by the voice worker once every other participant has left and the
+    condition has held for a debounce window. Wakes the slow brain to decide
+    whether to say a closing line and leave.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_alone"
+    prominent: ClassVar[bool] = True
+
+    contact: dict
 
 
 @dataclass
