@@ -318,9 +318,13 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`primitives.integrations.search_integrations` is the app discovery "
             "surface for both Native Unity-deploy packages and Third-party "
             "provider-backed apps. It answers support, deployment activation, "
-            "provider connection, and sync/materialization status. Provider "
-            "tools execute through Orchestra policy/audit after materialization; "
-            "native package functions keep their existing custom function, MCP, "
+            "provider connection, and sync/materialization status. Each result "
+            "includes a `connections` array and `account_count` when multiple "
+            "accounts are linked to the same app; pass `connection_id` on "
+            "tool calls when usage mode is `explicit`, or rely on Console "
+            "`primary` / `pool` selection otherwise. Provider tools execute "
+            "through Orchestra policy/audit after materialization; native "
+            "package functions keep their existing custom function, MCP, "
             "guidance, and computer-use routing."
         ),
         use_when=(
@@ -328,14 +332,15 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "HubSpot, Salesforce, Google Drive, Gmail, Slack, Notion, Clay, "
             "or a native deployment package. Also use it when a user asks "
             "whether an integration is available, native vs third-party, "
-            "enabled for this assistant, connected, missing secrets/scopes, "
-            "expired, or blocked by policy."
+            "enabled for this assistant, connected (including which accounts), "
+            "missing secrets/scopes, expired, or blocked by policy."
         ),
         examples=(
             "'Find recent HubSpot leads', 'Search Salesforce opportunities', "
             "'Look up Google Drive files modified this week', 'Search Gmail "
             "for invoices from Acme', 'Send this approved update to Slack', "
-            "'Which CRM integrations are connected?'"
+            "'Which CRM integrations are connected?', "
+            "'Which HubSpot accounts are linked?'"
         ),
         special_note=(
             "Use `search_integrations` to answer whether an app is supported, "

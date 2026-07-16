@@ -228,6 +228,8 @@ class IntegrationPrimitives:
     # single helper is catalog/status discovery only, not execution discovery.
     _PRIMITIVE_METHODS: tuple[str, ...] = (
         "search_integrations",
+        "get_app_usage_mode",
+        "set_app_usage_mode",
         "review_tool_permissions",
         "update_tool_permissions",
         "resolve_tool_execution",
@@ -320,7 +322,7 @@ class IntegrationPrimitives:
                 "error": connections.get("error"),
                 "results": [],
             }
-        connection_by_app: dict[str, dict[str, Any]] = {}
+        connections_by_app: dict[str, list[dict[str, Any]]] = {}
         for connection in connections or []:
             if not isinstance(connection, dict):
                 continue
@@ -328,9 +330,7 @@ class IntegrationPrimitives:
             if not isinstance(app_slug, str):
                 continue
             normalized = _normalize_app_slug(app_slug)
-            existing = connection_by_app.get(normalized)
-            if existing is None or connection.get("status") == "connected":
-                connection_by_app[normalized] = connection
+            connections_by_app.setdefault(normalized, []).append(connection)
         if not raw_results:
             return {
                 "status": "ok",
@@ -352,10 +352,14 @@ class IntegrationPrimitives:
                 if source_type == "native" and isinstance(app_slug, str)
                 else None
             )
-            connection_row = (
-                connection_by_app.get(_normalize_app_slug(app_slug))
+            connection_rows = (
+                connections_by_app.get(_normalize_app_slug(app_slug), [])
                 if isinstance(app_slug, str)
-                else None
+                else []
+            )
+            connection_row = next(
+                (row for row in connection_rows if row.get("status") == "connected"),
+                connection_rows[0] if connection_rows else None,
             )
             materialized_rows = (
                 self._materialized_function_rows_for_native_app(manifest_row)
@@ -411,6 +415,18 @@ class IntegrationPrimitives:
                     if isinstance(connection_row, dict)
                     else None
                 ),
+                "connections": [
+                    {
+                        "connection_id": row.get("connection_id"),
+                        "status": row.get("status"),
+                        "external_account_label": row.get("external_account_label"),
+                        "backend_id": row.get("backend_id"),
+                        "provider_connection_id": row.get("provider_connection_id"),
+                    }
+                    for row in connection_rows
+                    if isinstance(row, dict)
+                ],
+                "account_count": len(connection_rows),
                 "auth_modes": app.get("auth_modes") or [],
                 "tool_count": app.get("tool_count", 0),
                 "materialized_function_count": materialized_function_count,
@@ -623,8 +639,12 @@ class IntegrationPrimitives:
         Returns
         -------
         Any
-            Orchestra response listing connection IDs, app slugs, status,
-            granted scopes, health metadata, and account labels when available.
+            Orchestra response listing every connection row for the owner
+            (ids, app slugs, status, labels). Multiple accounts for one app
+            appear as separate rows — use ``connection_id`` when executing
+            under ``explicit`` usage mode. Prefer
+            ``search_integrations`` / ``search_tools`` when you want
+            per-app ``connections`` arrays already grouped.
 
         Notes
         -----
@@ -634,6 +654,59 @@ class IntegrationPrimitives:
         """
 
         return integration_ops.list_connections(
+            **self._effective_owner_scope(
+                owner_scope=owner_scope,
+                org_id=org_id,
+                team_id=team_id,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            ),
+        )
+
+    async def get_app_usage_mode(
+        self,
+        canonical_app_slug: str,
+        *,
+        owner_scope: Optional[str] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        assistant_id: Optional[int] = None,
+    ) -> Any:
+        """Return the account selection mode for an app (``primary``/``explicit``/``pool``)."""
+
+        return integration_ops.get_app_preference(
+            canonical_app_slug,
+            **self._effective_owner_scope(
+                owner_scope=owner_scope,
+                org_id=org_id,
+                team_id=team_id,
+                user_id=user_id,
+                assistant_id=assistant_id,
+            ),
+        )
+
+    async def set_app_usage_mode(
+        self,
+        canonical_app_slug: str,
+        *,
+        usage_mode: str,
+        owner_scope: Optional[str] = None,
+        org_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+        user_id: Optional[str] = None,
+        assistant_id: Optional[int] = None,
+    ) -> Any:
+        """Set account selection mode for an app.
+
+        ``primary`` uses the latest live connection, ``explicit`` requires
+        ``connection_id`` on execute, and ``pool`` round-robins across live
+        accounts (useful for sharing API rate limits).
+        """
+
+        return integration_ops.update_app_preference(
+            canonical_app_slug,
+            usage_mode=usage_mode,
             **self._effective_owner_scope(
                 owner_scope=owner_scope,
                 org_id=org_id,
@@ -723,13 +796,19 @@ class IntegrationPrimitives:
         connections = integration_ops.list_connections(**effective_scope)
         if isinstance(connections, dict) and connections.get("error"):
             return connections
-        connected_apps = {
-            _normalize_app_slug(connection.get("canonical_app_slug"))
-            for connection in connections or []
-            if isinstance(connection, dict)
-            and connection.get("status") == "connected"
-            and connection.get("canonical_app_slug")
-        }
+        connected_by_app: dict[str, list[dict[str, Any]]] = {}
+        for connection in connections or []:
+            if not isinstance(connection, dict):
+                continue
+            if connection.get("status") != "connected":
+                continue
+            slug = connection.get("canonical_app_slug")
+            if not slug:
+                continue
+            connected_by_app.setdefault(_normalize_app_slug(slug), []).append(
+                connection,
+            )
+        connected_apps = set(connected_by_app)
         results = []
         for row in rows:
             metadata = integration_metadata(row)
@@ -739,6 +818,7 @@ class IntegrationPrimitives:
             )
             if not include_unconnected and activation_state != "connected_ready":
                 continue
+            app_connections = connected_by_app.get(app_slug, [])
             results.append(
                 {
                     "tool_id": integration_tool_id(row),
@@ -751,6 +831,17 @@ class IntegrationPrimitives:
                     "action_class": metadata.get("action_class"),
                     "confirmation_required": metadata.get("confirmation_required"),
                     "schema_available": metadata.get("schema_available", True),
+                    "available_connections": [
+                        {
+                            "connection_id": connection.get("connection_id"),
+                            "external_account_label": connection.get(
+                                "external_account_label",
+                            ),
+                            "status": connection.get("status"),
+                        }
+                        for connection in app_connections
+                    ],
+                    "account_count": len(app_connections),
                 },
             )
             if len(results) >= limit:
