@@ -100,7 +100,24 @@ class TaskBase(AuthoredRow):
         description=(
             "Whether this task should execute in the hidden headless lane instead of waking "
             "the live assistant runtime. Offline controls delivery only; entrypoint controls "
-            "whether execution is symbolic or agentic."
+            "whether execution is symbolic or agentic. Offline also means the live "
+            "ConversationManager is not present, so the run is not steerable from chat."
+        ),
+    )
+    requires_filesystem: bool = Field(
+        default=False,
+        description=(
+            "When true, the run must not start until assistant Local "
+            "(~/Unity/Local synced from the desktop workspace) is ready. "
+            "Independent of offline delivery and of requires_computer."
+        ),
+    )
+    requires_computer: bool = Field(
+        default=False,
+        description=(
+            "When true, the run must not start until a computer-use desktop "
+            "(managed assistant VM or equivalent) is connected and ready. "
+            "Independent of offline delivery and of requires_filesystem."
         ),
     )
     enabled: bool = Field(

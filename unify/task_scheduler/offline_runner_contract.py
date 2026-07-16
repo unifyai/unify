@@ -73,6 +73,8 @@ def build_offline_runner_env(
     entrypoint: int | None = None,
     destination: str | None = None,
     job_name: str = "",
+    requires_filesystem: bool = False,
+    requires_computer: bool = False,
     provider_event_operation_id: str | None = None,
     provider_event_run_id: int | None = None,
     provider_event_binding_id: str | None = None,
@@ -123,6 +125,8 @@ def build_offline_runner_env(
         "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
             str(source_contact_id) if source_contact_id is not None else ""
         ),
+        "UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM": ("1" if requires_filesystem else "0"),
+        "UNITY_OFFLINE_TASK_REQUIRES_COMPUTER": "1" if requires_computer else "0",
         "ASSISTANT_ID": str(assistant_id),
     }
     if source_contact_display_name:
