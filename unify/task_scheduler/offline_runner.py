@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+import signal
 import traceback
 from typing import Any
 
@@ -69,6 +70,7 @@ TASK_RUN_UPDATE_PATH = "/task-run/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
 SCHEDULER_MANAGED_SOURCE_TYPES = frozenset(RunSource)
+_SIGTERM_EXIT_CODE = 143
 
 
 @dataclass(frozen=True)
@@ -309,6 +311,44 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
             config.source_task_log_id,
             config.run_key,
         )
+
+
+def _install_sigterm_handler(config: OfflineTaskConfig) -> None:
+    """Terminalize an active Tasks source when Kubernetes sends SIGTERM."""
+
+    def _handle_sigterm(signum: int, frame: Any) -> None:
+        del signum, frame
+        error_text = (
+            "Received SIGTERM; terminalizing active Tasks source before process exit."
+        )
+        LOGGER.warning(
+            "Offline task runner received SIGTERM for task %s (run_key=%s)",
+            config.task_id,
+            config.run_key,
+        )
+        _mark_source_task_failed(config, error_text)
+        try:
+            _update_task_run(
+                config.assistant_id,
+                config.run_key,
+                source_task_log_id=config.source_task_log_id,
+                updates={
+                    "state": "failed",
+                    "completed_at": _now_iso(),
+                    "error": error_text,
+                    "result_summary": error_text,
+                },
+            )
+        except Exception:
+            LOGGER.exception(
+                "Failed to terminalize Tasks/Runs row on SIGTERM "
+                "(task_id=%s, run_key=%s)",
+                config.task_id,
+                config.run_key,
+            )
+        raise SystemExit(_SIGTERM_EXIT_CODE)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def _now_iso() -> str:
@@ -631,6 +671,7 @@ def main() -> int:
     """Run one offline task to completion and persist the final run state."""
 
     config = _load_config_from_env()
+    _install_sigterm_handler(config)
     LOGGER.info(
         "Starting offline task runner for task %s (function_id=%s, run_key=%s)",
         config.task_id,
