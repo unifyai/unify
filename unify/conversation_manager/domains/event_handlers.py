@@ -16,6 +16,7 @@ from unify.conversation_manager import assistant_jobs
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.comms_utils import (
+    post_call_utterances_to_orchestra,
     publish_system_error,
     publish_voice_enrollment_suggested,
 )
@@ -1524,6 +1525,38 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         local_message_id=message_id,
     )
 
+    # Unify Meet transcripts are first-class: Console reads them from
+    # Orchestra's call-utterance store, so every utterance is appended there
+    # in addition to the Transcripts mirror above.
+    if is_unify_meet:
+        call_key = (
+            cm.call_manager.unify_meet_call_session_id or cm.call_manager.room_name
+        )
+        if call_key:
+            utterance = {
+                "content": event.content,
+                "speaker_name": (
+                    sender_name
+                    if role == "user"
+                    else SESSION_DETAILS.assistant.name or "Assistant"
+                ),
+                "speaker_assistant_id": (
+                    int(SESSION_DETAILS.assistant.agent_id)
+                    if role == "assistant"
+                    and SESSION_DETAILS.assistant.agent_id is not None
+                    else None
+                ),
+                "spoken_at": event.timestamp.isoformat(),
+                "metadata": {"contact_id": contact_id},
+            }
+            asyncio.create_task(
+                asyncio.to_thread(
+                    post_call_utterances_to_orchestra,
+                    str(call_key),
+                    [utterance],
+                ),
+            )
+
     # A non-engaged (background) utterance is context, not a turn: the fast
     # brain emitted no reply and scheduled no slow-brain user run for it. A
     # debounced non-user-origin run lets the slow brain notice a background
@@ -2220,6 +2253,7 @@ def _credit_gate_reply_context(
     channel_id: str | None = None,
     team_id: str | None = None,
     thread_id: str | None = None,
+    group_id: str | None = None,
     thread_ts: str | None = None,
     guild_id: str | None = None,
     bot_id: str | None = None,
@@ -2240,6 +2274,7 @@ def _credit_gate_reply_context(
         "channel_id": channel_id,
         "team_id": team_id,
         "thread_id": thread_id,
+        "group_id": group_id,
         "thread_ts": thread_ts,
         "guild_id": guild_id,
         "bot_id": bot_id,
@@ -2295,6 +2330,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     channel_id = None
     team_id = None
     thread_id = None
+    group_id = None
     thread_ts = None
     event_ts = None
     message_id = None
@@ -2477,6 +2513,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.UNIFY_MESSAGE
             message_content = event.content
             attachments = event.attachments
+            thread_id = str(event.thread_id) if event.thread_id else None
+            team_id = str(event.team_id) if event.team_id else None
+            group_id = str(event.group_id) if event.group_id else None
             notif_content = f"Unify message sent to {sender_name}"
             role = "assistant"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -2488,6 +2527,9 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             medium = Medium.UNIFY_MESSAGE
             message_content = event.content
             attachments = event.attachments
+            thread_id = str(event.thread_id) if event.thread_id else None
+            team_id = str(event.team_id) if event.team_id else None
+            group_id = str(event.group_id) if event.group_id else None
             notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -2779,6 +2821,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            group_id=group_id,
             thread_ts=thread_ts,
             event_ts=event_ts,
             message_id=message_id,
@@ -2829,6 +2872,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
                 channel_id=channel_id,
                 team_id=team_id,
                 thread_id=thread_id,
+                group_id=group_id,
                 thread_ts=thread_ts,
                 guild_id=guild_id,
                 bot_id=bot_id,

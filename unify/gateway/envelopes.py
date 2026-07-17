@@ -165,26 +165,30 @@ class EmailEnvelope(BaseEnvelope):
 class UnifyMessageReceivedEvent(BaseInboundEvent):
     """Inbound app-to-assistant message (``thread: "unify_message"``).
 
-    Team / org-group chat messages travel on this same thread — every listed
+    Every Console chat message is scoped to one unified chat-store thread
+    (``thread_id``); ``chat_message_id`` is the stored message id. Team /
+    org-group chat messages travel on this same thread — every listed
     assistant receives a copy, like a large email CC chain. For those,
     ``team_id`` or ``group_id`` (+ sender identity fields) is set and
     ``contact_id`` may be omitted when the sender is not this assistant's
     owner: the runtime then resolves the sender against its Contacts table by
-    ``sender_email``. Plain 1:1 messages must carry ``contact_id``.
+    ``sender_email``. Assistant-DM messages must carry ``contact_id``.
     """
 
     contact_id: int | None = None
     body: str = ""
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    thread_id: int | None = None
+    chat_message_id: int | None = None
     team_id: int | None = None
     team_name: str = ""
     group_id: int | None = None
+    group_name: str = ""
     sender_kind: str = ""
     sender_user_id: str = ""
     sender_assistant_id: int | None = None
     sender_email: str = ""
     sender_name: str = ""
-    group_message_id: int | None = None
 
     @model_validator(mode="after")
     def _require_contact_or_team(self) -> "UnifyMessageReceivedEvent":

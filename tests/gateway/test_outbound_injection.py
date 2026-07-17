@@ -272,6 +272,13 @@ async def test_send_unify_message_routes_through_injected_transport(
     monkeypatch.setattr(comms_utils.SESSION_DETAILS.assistant, "agent_id", 42)
     _stub_settings(monkeypatch, env_suffix="-staging")
     monkeypatch.setattr(comms_utils, "_use_local_comms", lambda: False)
+    # No unified chat store in this sandbox: the send falls back to the
+    # direct assistant-topic publish, which must ride the injected transport.
+    monkeypatch.setattr(
+        comms_utils,
+        "_post_chat_message_to_orchestra",
+        lambda payload: {"success": False, "error": "orchestra config missing"},
+    )
     transport = InMemoryOutboundTransport()
     comms_utils.set_outbound_transport(transport)
 
