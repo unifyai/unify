@@ -1244,6 +1244,37 @@ class TranscriptManager(BaseTranscriptManager):
         except (TypeError, ValueError):
             return None
 
+    def resolve_message_id_by_chat_message_id(
+        self,
+        chat_message_id: int,
+        *,
+        destination: str | None = None,
+    ) -> int | None:
+        """Look up transcript message_id by unified chat-store message id.
+
+        Mirrored Console chat rows carry ``metadata.chat_message_id`` — the
+        id of the message in Orchestra's unified chat store — so store-scoped
+        events (e.g. reactions) can be mapped back to this assistant's own
+        Transcripts mirror.
+        """
+        try:
+            context = self._transcripts_context_for_destination(destination)
+        except ToolErrorException:
+            return None
+        rows = unisdk.get_logs(
+            context=context,
+            filter=f"metadata.chat_message_id == {int(chat_message_id)}",
+            limit=1,
+        )
+        if not rows:
+            return None
+        entries = getattr(rows[0], "entries", {}) or {}
+        message_id = entries.get("message_id")
+        try:
+            return int(message_id)
+        except (TypeError, ValueError):
+            return None
+
     # ──────────────────────────────────────────────────────────────────────
     #  Image tools
     # ──────────────────────────────────────────────────────────────────────
