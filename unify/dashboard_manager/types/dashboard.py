@@ -44,14 +44,18 @@ class DashboardRecordRow(AuthoredRow):
     """
 
     token: str = Field(description="Unique 12-char URL-safe token")
-    title: str = Field(description="Human-readable dashboard title")
+    title: str = Field(
+        description="Human-readable dashboard title",
+        json_schema_extra={"ui_editable": True},
+    )
     description: Optional[str] = Field(
         default=None,
         description="Optional longer description of the dashboard",
+        json_schema_extra={"ui_editable": True},
     )
     layout: str = Field(
         description="JSON-serialized list of TilePosition objects",
-        json_schema_extra={"unify_type": "str"},
+        json_schema_extra={"unify_type": "str", "ui_editable": True},
     )
     tile_count: int = Field(
         default=0,

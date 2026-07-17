@@ -105,18 +105,22 @@ class FileRecordFields(AuthoredRow):
     key_topics: str = Field(
         default="",
         description="Comma-separated key topics detected in the file.",
+        json_schema_extra={"ui_editable": True},
     )
     named_entities: str = Field(
         default="",
         description="Comma-separated named entities detected in the file.",
+        json_schema_extra={"ui_editable": True},
     )
     content_tags: str = Field(
         default="",
         description="Comma-separated content tags for retrieval.",
+        json_schema_extra={"ui_editable": True},
     )
     summary: Optional[str] = Field(
         default="",
         description="Short summary extracted from the document.",
+        json_schema_extra={"ui_editable": True},
     )
 
 
@@ -326,11 +330,20 @@ class DocumentFields(AuthoredRow):
         ...,
         description="Stable content type vocabulary for retrieval/navigation.",
     )
-    title: Optional[str] = Field(default=None, description="Heading or inferred title.")
-    content_text: Optional[str] = Field(default=None, description="Original raw text.")
+    title: Optional[str] = Field(
+        default=None,
+        description="Heading or inferred title.",
+        json_schema_extra={"ui_editable": True},
+    )
+    content_text: Optional[str] = Field(
+        default=None,
+        description="Original raw text.",
+        json_schema_extra={"ui_editable": True},
+    )
     summary: Optional[str] = Field(
         default=None,
         description="Rich summary used for embeddings.",
+        json_schema_extra={"ui_editable": True},
     )
 
 

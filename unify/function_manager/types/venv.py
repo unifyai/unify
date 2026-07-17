@@ -24,6 +24,7 @@ class VirtualEnv(AuthoredRow):
             "Human-readable name for the venv. For custom venvs (from source), "
             "this is the filename without .toml extension."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     venv: str = Field(
         ...,
@@ -31,6 +32,7 @@ class VirtualEnv(AuthoredRow):
             "The raw pyproject.toml content defining the virtual environment's "
             "dependencies and configuration."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     custom_hash: Optional[str] = Field(
         None,

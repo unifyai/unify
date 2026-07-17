@@ -42,18 +42,22 @@ class Knowledge(AuthoredRow):
         description="Short-form title of the claim (a few words)",
         min_length=1,
         max_length=200,
+        json_schema_extra={"ui_editable": True},
     )
     content: str = Field(
         description="Full claim text / body",
         min_length=1,
+        json_schema_extra={"ui_editable": True},
     )
     kind: KnowledgeKind = Field(
         default=KnowledgeKind.fact,
         description="Claim kind: fact, policy, definition, decision, constraint, insight, preference.",
+        json_schema_extra={"ui_editable": True},
     )
     topics: List[str] = Field(
         default_factory=list,
         description="Freeform topic tags for filtering and discovery.",
+        json_schema_extra={"ui_editable": True},
     )
     source_refs: List[SourceRef] = Field(
         default_factory=list,
@@ -68,22 +72,27 @@ class Knowledge(AuthoredRow):
         description="Optional confidence in [0, 1].",
         ge=0.0,
         le=1.0,
+        json_schema_extra={"ui_editable": True},
     )
     observed_at: Optional[datetime] = Field(
         None,
         description="When the underlying observation was made.",
+        json_schema_extra={"ui_editable": True},
     )
     valid_from: Optional[datetime] = Field(
         None,
         description="Start of the claim's validity window, if known.",
+        json_schema_extra={"ui_editable": True},
     )
     valid_until: Optional[datetime] = Field(
         None,
         description="End of the claim's validity window, if known.",
+        json_schema_extra={"ui_editable": True},
     )
     status: KnowledgeStatus = Field(
         default=KnowledgeStatus.active,
         description="Lifecycle status: active, superseded, or invalidated.",
+        json_schema_extra={"ui_editable": True},
     )
     supersedes_ids: List[int] = Field(
         default_factory=list,

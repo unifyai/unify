@@ -93,6 +93,11 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env(entrypoint=42)
         assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "42"
 
+    def test_function_id_zero_is_preserved(self):
+        """Entrypoint 0 is a valid symbolic id and must not be treated as missing."""
+        env = self._make_env(entrypoint=0)
+        assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "0"
+
     def test_destination_omitted_without_destination(self):
         env = self._make_env()
         assert "TASK_DESTINATION" not in env
