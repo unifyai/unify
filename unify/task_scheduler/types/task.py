@@ -34,9 +34,13 @@ class TaskBase(AuthoredRow):
         default=None,
         description="Shared-team destination for routed task writes, if any.",
     )
-    name: str = Field(description="Short title of the task")
+    name: str = Field(
+        description="Short title of the task",
+        json_schema_extra={"ui_editable": True},
+    )
     description: str = Field(
         description="Detailed explanation of what the task involves",
+        json_schema_extra={"ui_editable": True},
     )
     status: Status = Field(
         description=(
@@ -47,16 +51,17 @@ class TaskBase(AuthoredRow):
     schedule: Optional[Schedule] = Field(
         default=None,
         description="Optional scheduling information, including ideal start time.",
-        json_schema_extra={"unify_type": "dict"},
+        json_schema_extra={"unify_type": "dict", "ui_editable": True},
     )
     trigger: Optional[TaskTrigger] = Field(
         default=None,
         description="Event definition that starts the task (mutually exclusive with *schedule*)",
-        json_schema_extra={"unify_type": "dict"},
+        json_schema_extra={"unify_type": "dict", "ui_editable": True},
     )
     deadline: Optional[datetime] = Field(
         default=None,
         description="Due date/time for the task in ISO-8601 format",
+        json_schema_extra={"ui_editable": True},
     )
     max_runtime_seconds: Optional[int] = Field(
         default=None,
@@ -65,6 +70,7 @@ class TaskBase(AuthoredRow):
             "runtime, in seconds. None means the run is unbounded. Distinct "
             "from *deadline*, which is a calendar due date."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     repeat: Optional[List[RepeatPattern]] = Field(
         default=None,
@@ -75,9 +81,11 @@ class TaskBase(AuthoredRow):
             "entrypoint=null and execute from the natural-language description "
             "until a post-run review stores a stable function."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     priority: Priority = Field(
         description="Importance level of the task (low, normal, high, urgent)",
+        json_schema_extra={"ui_editable": True},
     )
     response_policy: Optional[str] = Field(
         default=None,
@@ -86,6 +94,7 @@ class TaskBase(AuthoredRow):
             "information visibility, who may interject/steer). When it conflicts with "
             "a contact's own response_policy, the task-level policy takes precedence."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     entrypoint: Optional[int] = Field(
         default=None,
@@ -94,6 +103,7 @@ class TaskBase(AuthoredRow):
             "executor. When null, the task is agentic: an Actor interprets the task name, description, "
             "and metadata at run time. Entrypoint availability is independent from live/offline delivery."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     offline: bool = Field(
         default=False,
@@ -103,6 +113,7 @@ class TaskBase(AuthoredRow):
             "whether execution is symbolic or agentic. Offline also means the live "
             "ConversationManager is not present, so the run is not steerable from chat."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     requires_filesystem: bool = Field(
         default=False,
@@ -111,6 +122,7 @@ class TaskBase(AuthoredRow):
             "(~/Unity/Local synced from the desktop workspace) is ready. "
             "Independent of offline delivery and of requires_computer."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     requires_computer: bool = Field(
         default=False,
@@ -119,6 +131,7 @@ class TaskBase(AuthoredRow):
             "(managed assistant VM or equivalent) is connected and ready. "
             "Independent of offline delivery and of requires_filesystem."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     enabled: bool = Field(
         default=True,
@@ -127,6 +140,7 @@ class TaskBase(AuthoredRow):
             "criteria do not activate the task, and manual execute is rejected until the "
             "task is re-enabled."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     activated_by: Optional[ActivatedBy] = Field(
         default=None,

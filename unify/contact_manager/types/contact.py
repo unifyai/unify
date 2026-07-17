@@ -28,21 +28,25 @@ VOICE_ENROLLMENT_FIELDS: dict[str, dict] = {
     "_voice_embedding": {
         "type": "list",
         "mutable": True,
+        "ui_editable": False,
         "description": "Speaker-embedding vector used for voice identification.",
     },
     "_voice_sample": {
         "type": "audio",
         "mutable": True,
+        "ui_editable": False,
         "description": "Enrollment audio sample backing the voice embedding.",
     },
     "_voice_enrolled_at": {
         "type": "datetime",
         "mutable": True,
+        "ui_editable": False,
         "description": "When the voice enrollment was captured.",
     },
     "_voice_enrollment_source": {
         "type": "str",
         "mutable": True,
+        "ui_editable": False,
         "description": "Origin of the voice enrollment: auto_call or manual_upload.",
     },
 }
@@ -132,49 +136,53 @@ class Contact(AuthoredRow):
         default=None,
         description="Contact's first name – letters/digits (any script) plus . ' - and space",
         pattern=UNICODE_NAME_RE,
+        json_schema_extra={"ui_editable": True},
     )
     surname: Optional[str] = Field(
         default=None,
         description="Contact's surname – letters/digits (any script) plus . ' - and space",
         pattern=UNICODE_NAME_RE,
+        json_schema_extra={"ui_editable": True},
     )
     email_address: Optional[str] = Field(
         default=None,
         description="Must contain exactly one @ with characters on either side",
         pattern=r"^[^@]+@[^@]+$",
-        json_schema_extra={"unique": True},
+        json_schema_extra={"unique": True, "ui_editable": True},
     )
     phone_number: Optional[str] = Field(
         default=None,
         description="Optional leading +, then digits only",
         pattern=r"^\+?[0-9]+$",
-        json_schema_extra={"unique": True},
+        json_schema_extra={"unique": True, "ui_editable": True},
     )
     whatsapp_number: Optional[str] = Field(
         default=None,
         description="WhatsApp number — optional leading +, then digits only",
         pattern=r"^\+?[0-9]+$",
-        json_schema_extra={"unique": True},
+        json_schema_extra={"unique": True, "ui_editable": True},
     )
     discord_id: Optional[str] = Field(
         default=None,
         description="Discord user snowflake ID (digits only)",
         pattern=r"^[0-9]+$",
-        json_schema_extra={"unique": True},
+        json_schema_extra={"unique": True, "ui_editable": True},
     )
     slack_user_id: Optional[str] = Field(
         default=None,
         description="Slack user ID (workteam-scoped, e.g. 'U01ABC234' — letters and digits, optionally underscore-separated)",
         pattern=r"^[A-Z0-9][A-Z0-9_]*$",
-        json_schema_extra={"unique": True},
+        json_schema_extra={"unique": True, "ui_editable": True},
     )
     bio: Optional[str] = Field(
         default=None,
         description="Concise biographic profile of the contact (role, background, why they matter).",
+        json_schema_extra={"ui_editable": True},
     )
     job_title: Optional[str] = Field(
         default=None,
         description="Free-text job title / specialization (e.g. 'Growth marketing').",
+        json_schema_extra={"ui_editable": True},
     )
     rolling_summary: Optional[str] = Field(
         default=None,
@@ -183,16 +191,19 @@ class Contact(AuthoredRow):
     should_respond: bool = Field(
         default=True,
         description="Whether the assistant should respond to inbound messages or calls from this contact.",
+        json_schema_extra={"ui_editable": True},
     )
     response_policy: Optional[str] = Field(
         default=None,
         description="Policy dictating how the assistant should respond to this contact.",
+        json_schema_extra={"ui_editable": True},
     )
 
     # IANA timezone identifier (e.g. "America/New_York", "Europe/London")
     timezone: Optional[str] = Field(
         default=None,
         description="IANA Timezone identifier (e.g., 'America/New_York', 'Europe/London').",
+        json_schema_extra={"ui_editable": True},
     )
 
     is_system: bool = Field(

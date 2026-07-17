@@ -29,6 +29,7 @@ class Secret(AuthoredRow):
     description: str = Field(
         default="",
         description="Human-readable description of the secret's purpose.",
+        json_schema_extra={"ui_editable": True},
     )
     destination: str = Field(
         default="personal",

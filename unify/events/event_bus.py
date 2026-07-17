@@ -491,11 +491,15 @@ class EventBus:
 
     # Common fields present on all events (from Event envelope)
     _COMMON_EVENT_FIELDS: Dict[str, Dict[str, Any]] = {
-        "row_id": {"type": "int", "mutable": False},
-        "event_id": {"type": "str", "mutable": False},
-        "calling_id": {"type": "str", "mutable": False},
-        "event_timestamp": {"type": "datetime", "mutable": False},
-        "payload_cls": {"type": "str", "mutable": False},
+        "row_id": {"type": "int", "mutable": False, "ui_editable": False},
+        "event_id": {"type": "str", "mutable": False, "ui_editable": False},
+        "calling_id": {"type": "str", "mutable": False, "ui_editable": False},
+        "event_timestamp": {
+            "type": "datetime",
+            "mutable": False,
+            "ui_editable": False,
+        },
+        "payload_cls": {"type": "str", "mutable": False, "ui_editable": False},
     }
 
     def _ensure_known_contexts(self) -> None:

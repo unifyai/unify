@@ -126,18 +126,23 @@ class TileRecordRow(AuthoredRow):
     """
 
     token: str = Field(description="Unique 12-char URL-safe token")
-    title: str = Field(description="Human-readable tile title")
+    title: str = Field(
+        description="Human-readable tile title",
+        json_schema_extra={"ui_editable": True},
+    )
     description: Optional[str] = Field(
         default=None,
         description="Optional longer description of the tile",
+        json_schema_extra={"ui_editable": True},
     )
     html_content: str = Field(
         description="Self-contained HTML visualization content",
-        json_schema_extra={"unify_type": "str"},
+        json_schema_extra={"unify_type": "str", "ui_editable": True},
     )
     has_data_bindings: bool = Field(
         default=False,
         description="Whether the tile uses the live data bridge",
+        json_schema_extra={"ui_editable": True},
     )
     data_scope: str = Field(
         default="dashboard",
@@ -147,10 +152,12 @@ class TileRecordRow(AuthoredRow):
             "share the same root, including team dashboards); 'team:<id>' "
             "pins reads to a different shared team than destination."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     data_binding_contexts: Optional[str] = Field(
         default=None,
         description="Comma-separated Unify context paths for data bindings",
+        json_schema_extra={"ui_editable": True},
     )
     on_data_script: Optional[str] = Field(
         default=None,
@@ -159,6 +166,7 @@ class TileRecordRow(AuthoredRow):
             "Console wraps this as (function(data){ ... })(results) after "
             "auto-executing the serialized data bindings."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     data_bindings_json: Optional[str] = Field(
         default=None,
@@ -167,6 +175,7 @@ class TileRecordRow(AuthoredRow):
             "discriminator). Console reads this to auto-generate bridge "
             "calls at render time."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     created_at: Optional[str] = Field(
         default=None,
