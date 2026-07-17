@@ -501,16 +501,16 @@ async def test_log_message_email_without_thread_id_creates_fresh_exchange():
 
 
 # ---------------------------------------------------------------------------
-# SMS exchange grouping: a 1:1 DM reuses one exchange while activity stays
-# within DM_EXCHANGE_GAP (keyed on contact_id), and a message after the gap
-# starts a fresh exchange. In-memory only (fresh after restart).
+# SMS exchange grouping: a 1:1 DM keeps a single exchange per contact from
+# start to end (keyed on contact_id) with no inactivity window, and recovers
+# that exchange from Exchanges metadata after a CM restart.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_log_message_groups_sms_by_contact_within_window():
-    """An inbound SMS and the assistant reply within the window share one
-    exchange (keyed on contact_id)."""
+async def test_log_message_groups_sms_by_contact():
+    """An inbound SMS and the assistant reply share one exchange (keyed on
+    contact_id)."""
     cm = _make_cm_for_log_message()
     contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
 
@@ -529,12 +529,13 @@ async def test_log_message_groups_sms_by_contact_within_window():
         await managers_utils.log_message(cm, reply)
         assert (
             _exchange_id_of_last_message(cm) == first_exchange
-        ), "SMS reply within the window must reuse the inbound exchange"
+        ), "SMS reply must reuse the inbound exchange"
 
 
 @pytest.mark.asyncio
-async def test_log_message_sms_new_exchange_after_gap():
-    """An SMS arriving after DM_EXCHANGE_GAP starts a fresh exchange."""
+async def test_log_message_sms_reuses_exchange_regardless_of_time():
+    """A 1:1 SMS reuses its exchange no matter how much time has passed — the
+    conversation with a contact has one exchange id from start to end."""
     cm = _make_cm_for_log_message()
     contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
 
@@ -553,24 +554,47 @@ async def test_log_message_sms_new_exchange_after_gap():
             first_exchange = _exchange_id_of_last_message(cm)
             assert first_exchange != UNASSIGNED
 
-            clock.return_value = (
-                base
-                + managers_utils.DM_EXCHANGE_GAP
-                + timedelta(
-                    minutes=1,
-                )
-            )
+            clock.return_value = base + timedelta(days=7)
             await managers_utils.log_message(cm, later)
             assert (
-                _exchange_id_of_last_message(cm) != first_exchange
-            ), "SMS after the inactivity gap must open a new exchange"
+                _exchange_id_of_last_message(cm) == first_exchange
+            ), "SMS must reuse the same exchange regardless of elapsed time"
+
+
+@pytest.mark.asyncio
+async def test_log_message_sms_recovers_exchange_after_restart():
+    """A cold in-memory cache (simulated restart) recovers the contact's SMS
+    exchange from Exchanges metadata rather than opening a duplicate."""
+    cm = _make_cm_for_log_message()
+    contact = {"contact_id": 1, "first_name": "Test", "surname": "User"}
+
+    first = SMSReceived(contact=contact, content="Before restart")
+    after_restart = SMSReceived(contact=contact, content="After restart")
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, first)
+        first_exchange = _exchange_id_of_last_message(cm)
+        assert first_exchange != UNASSIGNED
+
+        # Simulate a CM restart: the in-memory cache is empty but the
+        # Exchanges metadata persists.
+        cm._conversation_exchange_ids = {}
+
+        await managers_utils.log_message(cm, after_restart)
+        assert (
+            _exchange_id_of_last_message(cm) == first_exchange
+        ), "SMS DM must recover its exchange from metadata after restart"
 
 
 # ---------------------------------------------------------------------------
-# Slack exchange grouping: DMs group by contact_id (time-windowed); channels
-# group by the native (team_id, channel_id, thread_ts) thread, where a
-# top-level @mention keys on the message's own event_ts (the value the reply
-# threads under). In-memory only (fresh after restart).
+# Slack exchange grouping: DMs keep a single exchange per contact from start to
+# end (keyed on contact_id); channels group by the native (team_id, channel_id,
+# thread_ts) thread, where a top-level @mention keys on the message's own
+# event_ts (the value the reply threads under).
 # ---------------------------------------------------------------------------
 
 
