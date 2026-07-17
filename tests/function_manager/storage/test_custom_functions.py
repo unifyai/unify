@@ -10,6 +10,7 @@ from pathlib import Path
 
 from unify.function_manager.function_manager import FunctionManager
 from unify.function_manager.custom_functions import (
+    CustomFunctionCollectError,
     collect_custom_functions,
     compute_custom_functions_hash,
     collect_custom_venvs,
@@ -150,6 +151,27 @@ def test_collect_custom_functions_none_dir_returns_empty():
 
 def test_collect_custom_functions_missing_dir_returns_empty(tmp_path):
     assert collect_custom_functions(directory=tmp_path / "nonexistent") == {}
+
+
+def test_collect_custom_functions_fails_closed_on_import_error(tmp_path):
+    """A single unloadable module must abort collect (no partial snapshot)."""
+    fn_dir = tmp_path / "functions"
+    fn_dir.mkdir()
+    (fn_dir / "ok.py").write_text(_EXAMPLE_FUNCTIONS_PY)
+    (fn_dir / "broken.py").write_text(
+        "from nonexistent_package_xyz import something\n",
+    )
+    with pytest.raises(CustomFunctionCollectError, match="broken.py"):
+        collect_custom_functions(directory=fn_dir)
+
+
+def test_collect_functions_from_directories_fails_closed_on_import_error(tmp_path):
+    fn_dir = tmp_path / "functions"
+    fn_dir.mkdir()
+    (fn_dir / "ok.py").write_text(_EXAMPLE_FUNCTIONS_PY)
+    (fn_dir / "broken.py").write_text("raise RuntimeError('boom')\n")
+    with pytest.raises(CustomFunctionCollectError, match="broken.py"):
+        collect_functions_from_directories([fn_dir])
 
 
 # ────────────────────────────────────────────────────────────────────────────
