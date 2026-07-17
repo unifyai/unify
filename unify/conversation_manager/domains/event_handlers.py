@@ -1527,11 +1527,15 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
 
     # Unify Meet transcripts are first-class: Console reads them from
     # Orchestra's call-utterance store, so every utterance is appended there
-    # in addition to the Transcripts mirror above.
+    # in addition to the Transcripts mirror above. Every meet has a call
+    # session; its id is the only utterance key.
     if is_unify_meet:
-        call_key = (
-            cm.call_manager.unify_meet_call_session_id or cm.call_manager.room_name
-        )
+        call_key = cm.call_manager.unify_meet_call_session_id
+        if not call_key:
+            LOGGER.error(
+                "Unify Meet utterance dropped from the call store: no call "
+                "session id on the active meet",
+            )
         if call_key:
             utterance = {
                 "content": event.content,
