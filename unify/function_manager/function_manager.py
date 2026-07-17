@@ -4881,6 +4881,48 @@ class FunctionManager(BaseFunctionManager):
 
     # 2. Listing -------------------------------------------------------- #
 
+    def list_function_name_to_ids(self) -> Dict[str, int]:
+        """Return ``{name: function_id}`` without pulling implementations.
+
+        Used by deployment reconcile for guidance/task entrypoint resolution.
+        Prefer this over :meth:`list_functions` when only ids are needed.
+        """
+
+        mapping: Dict[str, int] = {}
+        for context in self._read_compositional_contexts():
+            try:
+                logs = unisdk.get_logs(
+                    context=context,
+                    filter=self._scoped_filter(None),
+                    from_fields=["name", "function_id"],
+                )
+            except Exception:
+                continue
+            for lg in logs:
+                entries = lg.entries or {}
+                name = entries.get("name")
+                function_id = entries.get("function_id")
+                if (
+                    isinstance(name, str)
+                    and name
+                    and function_id is not None
+                    and name not in mapping
+                ):
+                    mapping[name] = int(function_id)
+
+        if self._include_primitives:
+            for ent in self._primitive_logs():
+                name = ent.get("name")
+                function_id = ent.get("function_id")
+                if (
+                    isinstance(name, str)
+                    and name
+                    and function_id is not None
+                    and name not in mapping
+                ):
+                    mapping[name] = int(function_id)
+        return mapping
+
     @functools.wraps(BaseFunctionManager.list_functions, updated=())
     def list_functions(
         self,
