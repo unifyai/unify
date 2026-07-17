@@ -669,11 +669,16 @@ class TaskScheduler(BaseTaskScheduler):
         return store
 
     def _task_context_for_destination(self, destination: str | None) -> str:
-        """Resolve a write destination into a concrete Tasks context."""
+        """Resolve a write destination into a concrete Tasks context.
+
+        For team-owned assistants, ``personal`` / ``None`` is the owning-team
+        home (``Teams/{owner}/Tasks``), matching ContextRegistry shared-table
+        routing. Never short-circuit through a cached personal path — that
+        silently re-seeded ``{user}/{agent}/Tasks`` when session identity was
+        wrong at init time.
+        """
 
         destination = destination or os.environ.get("TASK_DESTINATION") or None
-        if destination in (None, PERSONAL_DESTINATION):
-            return self._personal_tasks_context
         root_context = ContextRegistry.write_root(
             self,
             "Tasks",
@@ -3391,11 +3396,20 @@ class TaskScheduler(BaseTaskScheduler):
             return False
 
         env_owner = (os.environ.get("OWNER_TEAM_ID") or "").strip()
-        if is_personal and env_owner:
+        if SESSION_DETAILS.team_owned:
+            owner_team_id = SESSION_DETAILS.owner_team_id
+            expected_prefix = f"Teams/{owner_team_id}/"
+            if not str(tasks_context).startswith(expected_prefix):
+                raise RuntimeError(
+                    "Refusing custom-tasks sync onto "
+                    f"{tasks_context!r} for team-owned assistant; expected under "
+                    f"Teams/{owner_team_id}/Tasks "
+                    "(destination 'personal' means the owning-team home).",
+                )
+        elif env_owner:
             raise RuntimeError(
-                "Refusing custom-tasks sync onto the personal Tasks root while "
-                f"OWNER_TEAM_ID={env_owner!r} is set; team-owned assistants must "
-                "materialize under Teams/{owner_team_id}/Tasks.",
+                "OWNER_TEAM_ID is set but SESSION_DETAILS.owner_team_id is missing; "
+                "refusing custom-tasks sync until team ownership is bound.",
             )
 
         previous_context = self._ctx
