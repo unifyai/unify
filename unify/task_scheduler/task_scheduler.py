@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import functools
 import logging
 import os
@@ -3375,6 +3376,128 @@ class TaskScheduler(BaseTaskScheduler):
         if sync_meta:
             self._write_log_entries(logs=log_ids, entries=sync_meta)
 
+    def _custom_task_sync_workers(self) -> int:
+        raw = (os.environ.get("UNITY_DEPLOY_TASK_SYNC_WORKERS") or "8").strip()
+        try:
+            workers = int(raw)
+        except ValueError:
+            workers = 8
+        return max(1, min(workers, 32))
+
+    def _upsert_one_custom_task(
+        self,
+        *,
+        custom_key: str,
+        source_data: Dict[str, Any],
+        db_tasks: Dict[str, Dict[str, Any]],
+        function_name_to_id: Dict[str, int],
+        insert_lock: threading.Lock,
+    ) -> None:
+        """Insert or update one custom task row (safe for parallel updates)."""
+
+        task_data = dict(source_data)
+        if custom_key in db_tasks:
+            db_entry = db_tasks[custom_key]
+            if db_entry.get("custom_hash") == task_data.get("custom_hash"):
+                logger.debug("Custom task unchanged: %s", custom_key)
+                return
+            task_id = int(db_entry["task_id"])
+            current_status = to_status(db_entry.get("status"))
+            if current_status == Status.active:
+                logger.warning(
+                    "Skipping update for active custom task key=%s task_id=%s",
+                    custom_key,
+                    task_id,
+                )
+                return
+            logger.info("Updating custom task: %s", custom_key)
+            try:
+                self._update_custom_task(
+                    task_id=task_id,
+                    data=task_data,
+                    function_name_to_id=function_name_to_id,
+                    current_status=current_status,
+                )
+            except RuntimeError:
+                logger.warning(
+                    "Skipping update for active custom task key=%s task_id=%s",
+                    custom_key,
+                    task_id,
+                )
+            return
+
+        with insert_lock:
+            existing = unisdk.get_logs(
+                context=self._ctx,
+                filter=f"custom_key == '{custom_key}' and instance_id == 0",
+                limit=1,
+            )
+            if existing:
+                logger.info(
+                    "Overwriting user-added task with custom definition: %s",
+                    custom_key,
+                )
+                task_id = int(existing[0].entries["task_id"])
+                try:
+                    self._delete_task(task_id=task_id, _root_applied=True)
+                except RuntimeError:
+                    logger.warning(
+                        "Skipping adopt for active task key=%s task_id=%s",
+                        custom_key,
+                        task_id,
+                    )
+                    return
+
+            logger.info("Inserting custom task: %s", custom_key)
+            self._insert_custom_task(
+                task_data,
+                function_name_to_id=function_name_to_id,
+            )
+
+    def _upsert_custom_tasks_parallel(
+        self,
+        *,
+        source_tasks: Dict[str, Dict[str, Any]],
+        db_tasks: Dict[str, Dict[str, Any]],
+        function_name_to_id: Dict[str, int],
+    ) -> None:
+        """Upsert custom tasks with bounded parallelism across independent keys."""
+
+        if not source_tasks:
+            return
+        workers = min(self._custom_task_sync_workers(), len(source_tasks))
+        insert_lock = threading.Lock()
+        if workers == 1:
+            for custom_key, source_data in source_tasks.items():
+                self._upsert_one_custom_task(
+                    custom_key=custom_key,
+                    source_data=source_data,
+                    db_tasks=db_tasks,
+                    function_name_to_id=function_name_to_id,
+                    insert_lock=insert_lock,
+                )
+            return
+
+        errors: list[BaseException] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    self._upsert_one_custom_task,
+                    custom_key=custom_key,
+                    source_data=source_data,
+                    db_tasks=db_tasks,
+                    function_name_to_id=function_name_to_id,
+                    insert_lock=insert_lock,
+                )
+                for custom_key, source_data in source_tasks.items()
+            ]
+            for future in as_completed(futures):
+                exc = future.exception()
+                if exc is not None:
+                    errors.append(exc)
+        if errors:
+            raise errors[0]
+
     def sync_custom_tasks(
         self,
         *,
@@ -3455,67 +3578,12 @@ class TaskScheduler(BaseTaskScheduler):
 
             function_name_to_id = function_name_to_id or {}
             db_tasks = self._get_custom_tasks_from_db()
-            processed_keys: set[str] = set()
-
-            for custom_key, source_data in source_tasks.items():
-                processed_keys.add(custom_key)
-                task_data = dict(source_data)
-
-                if custom_key in db_tasks:
-                    db_entry = db_tasks[custom_key]
-                    if db_entry.get("custom_hash") == task_data.get("custom_hash"):
-                        logger.debug("Custom task unchanged: %s", custom_key)
-                        continue
-                    task_id = int(db_entry["task_id"])
-                    current_status = to_status(db_entry.get("status"))
-                    if current_status == Status.active:
-                        logger.warning(
-                            "Skipping update for active custom task key=%s task_id=%s",
-                            custom_key,
-                            task_id,
-                        )
-                        continue
-                    logger.info("Updating custom task: %s", custom_key)
-                    try:
-                        self._update_custom_task(
-                            task_id=task_id,
-                            data=task_data,
-                            function_name_to_id=function_name_to_id,
-                            current_status=current_status,
-                        )
-                    except RuntimeError:
-                        logger.warning(
-                            "Skipping update for active custom task key=%s task_id=%s",
-                            custom_key,
-                            task_id,
-                        )
-                else:
-                    existing = unisdk.get_logs(
-                        context=self._ctx,
-                        filter=f"custom_key == '{custom_key}' and instance_id == 0",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(
-                            "Overwriting user-added task with custom definition: %s",
-                            custom_key,
-                        )
-                        task_id = int(existing[0].entries["task_id"])
-                        try:
-                            self._delete_task(task_id=task_id, _root_applied=True)
-                        except RuntimeError:
-                            logger.warning(
-                                "Skipping adopt for active task key=%s task_id=%s",
-                                custom_key,
-                                task_id,
-                            )
-                            continue
-
-                    logger.info("Inserting custom task: %s", custom_key)
-                    self._insert_custom_task(
-                        task_data,
-                        function_name_to_id=function_name_to_id,
-                    )
+            processed_keys: set[str] = set(source_tasks.keys())
+            self._upsert_custom_tasks_parallel(
+                source_tasks=source_tasks,
+                db_tasks=db_tasks,
+                function_name_to_id=function_name_to_id,
+            )
 
             for custom_key in db_tasks:
                 if custom_key not in processed_keys:

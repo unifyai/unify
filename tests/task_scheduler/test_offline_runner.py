@@ -24,13 +24,8 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
     )
     monkeypatch.setattr(
         offline_runner,
-        "_ensure_offline_client_bundle",
+        "_bootstrap_offline_runtime",
         lambda: None,
-    )
-    monkeypatch.setattr(
-        offline_runner.unify,
-        "ensure_initialised",
-        lambda *, project_name: None,
     )
 
 
@@ -92,10 +87,9 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
             assert task_id == 101
             assert trigger_attempt_token is None
             assert str(_activated_by) == "schedule"
-            assert events[:3] == [
+            assert events[:2] == [
                 "populate_from_env",
-                "ensure_client_bundle",
-                "ensure_initialised",
+                "bootstrap_offline_runtime",
             ]
             assert current_task_execution_delegate.get() is not None
             return _FakeHandle()
@@ -107,13 +101,8 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
     )
     monkeypatch.setattr(
         offline_runner,
-        "_ensure_offline_client_bundle",
-        lambda: events.append("ensure_client_bundle"),
-    )
-    monkeypatch.setattr(
-        offline_runner.unify,
-        "ensure_initialised",
-        lambda *, project_name: events.append("ensure_initialised"),
+        "_bootstrap_offline_runtime",
+        lambda: events.append("bootstrap_offline_runtime"),
     )
     monkeypatch.setattr(
         offline_runner,
@@ -134,8 +123,7 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
     assert updates == []
     assert events == [
         "populate_from_env",
-        "ensure_client_bundle",
-        "ensure_initialised",
+        "bootstrap_offline_runtime",
         "scheduler.execute",
         "handle.result",
     ]
@@ -289,6 +277,7 @@ def test_execute_offline_task_requires_desktop_env_when_resources_needed(monkeyp
 
     from unify.task_scheduler import offline_runner
 
+    _stub_runtime_initialization(monkeypatch, offline_runner)
     config = offline_runner.OfflineTaskConfig(
         assistant_id="42",
         run_key="offline:scheduled:42:101:rev:once",
