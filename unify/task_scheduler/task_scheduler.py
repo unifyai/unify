@@ -3390,6 +3390,14 @@ class TaskScheduler(BaseTaskScheduler):
             )
             return False
 
+        env_owner = (os.environ.get("OWNER_TEAM_ID") or "").strip()
+        if is_personal and env_owner:
+            raise RuntimeError(
+                "Refusing custom-tasks sync onto the personal Tasks root while "
+                f"OWNER_TEAM_ID={env_owner!r} is set; team-owned assistants must "
+                "materialize under Teams/{owner_team_id}/Tasks.",
+            )
+
         previous_context = self._ctx
         previous_store = self._store
         previous_active_root = self._active_task_root_context
