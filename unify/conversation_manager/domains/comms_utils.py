@@ -462,53 +462,72 @@ async def send_unify_message(
         return {"success": False, "error": str(e)}
 
 
-async def send_unify_meet_ring(
-    call_session_id: str,
-    reason: str = "",
-    contact_id: int = 1,
-) -> dict:
-    """Ring the owner on Unify Meet (the in-app live call).
+def create_assistant_call(opening_config: dict | None = None) -> dict:
+    """Ring the owner on Unify Meet by creating a call session in Orchestra.
 
-    The assistant cannot place the call itself - the owner's browser mints the
-    LiveKit token and joins the room. This publishes a ``unify_meet_incoming``
-    signal on the assistant's Pub/Sub topic so the Console shows a pinned
-    incoming-call window; when the owner clicks Answer, Console runs its normal
-    connect flow (token + ``/unify/meet`` dispatch) which lands as
-    ``UnifyMeetReceived`` here.     ``reason`` is the verbatim opener for how I open once answered; Console turns
-    it into a simulated opening config.
+    The assistant cannot place the call itself — the owner's browser answers
+    and joins the room. Orchestra persists a ringing ``assistant_dm`` call
+    session and publishes the ``call_incoming`` frame; when the owner answers,
+    Orchestra dispatches this runtime into the room (which lands here as
+    ``UnifyMeetReceived`` with the session and roster). ``opening_config``
+    is stored on the session and carried through that dispatch.
+
+    Returns ``{"success": True, "call_id": …, "room_name": …}`` on success.
     """
+    base_url = SETTINGS.ORCHESTRA_URL or ""
+    unify_key = SESSION_DETAILS.unify_key or ""
     agent_id = SESSION_DETAILS.assistant.agent_id
-    event_data = {
-        "call_session_id": call_session_id,
-        "reason": reason,
-        "contact_id": contact_id,
-    }
-
-    message_data = {"thread": "unify_meet_incoming", "event": event_data}
-
-    # Console always reads from the assistant's Pub/Sub topic, even in
-    # LOCAL_COMMS_MODE=local; the local outbox is a best-effort mirror.
-    if _use_local_comms():
-        try:
-            await _publish_local_outbox_async(message_data)
-        except Exception as e:
-            LOGGER.debug(
-                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
-            )
-
+    if not base_url or not unify_key or agent_id is None:
+        return {"success": False, "error": "orchestra config missing"}
     try:
-        message_id = _publish_to_assistant_topic(
-            agent_id=agent_id,
-            thread="unify_meet_incoming",
-            event=event_data,
+        from unisdk.utils import http
+
+        response = http.post(
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/calls",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            json={"opening_config": opening_config},
+            timeout=15,
         )
-        LOGGER.debug(
-            f"{ICONS['comms_outbound']} Unify Meet ring published with ID: {message_id}",
+        if 200 <= response.status_code < 300:
+            body = response.json()
+            return {
+                "success": True,
+                "call_id": body.get("call_id"),
+                "room_name": body.get("room_name"),
+            }
+        return {
+            "success": False,
+            "error": f"orchestra returned {response.status_code}: "
+            f"{getattr(response, 'text', '')}",
+        }
+    except Exception as exc:
+        LOGGER.error(f"{ICONS['comms_outbound']} Error ringing Unify Meet: {exc}")
+        return {"success": False, "error": str(exc)}
+
+
+def end_assistant_call(call_id: str) -> dict:
+    """End one of this assistant's call sessions (e.g. an unanswered ring)."""
+    base_url = SETTINGS.ORCHESTRA_URL or ""
+    unify_key = SESSION_DETAILS.unify_key or ""
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if not base_url or not unify_key or agent_id is None or not call_id:
+        return {"success": False, "error": "orchestra config missing"}
+    try:
+        from unisdk.utils import http
+
+        response = http.post(
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/calls/{call_id}/end",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            timeout=15,
         )
-        return {"success": bool(message_id)}
-    except Exception as e:
-        LOGGER.error(f"{ICONS['comms_outbound']} Error ringing Unify Meet: {e}")
-        return {"success": False, "error": str(e)}
+        if 200 <= response.status_code < 300:
+            return {"success": True}
+        return {
+            "success": False,
+            "error": f"orchestra returned {response.status_code}",
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def publish_system_error(error_message: str, error_type: str = "unknown") -> None:
