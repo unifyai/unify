@@ -530,25 +530,61 @@ def test_console_attachment_upload_response_has_expected_aliases(
 def test_console_message_dispatch_publishes_runtime_event(
     client: TestClient,
     gateway_context: GatewayContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from unify.gateway.adapters import internal
+
+    published_frames: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        internal,
+        "_publish_console_frame",
+        lambda **kwargs: published_frames.append(kwargs),
+    )
+
     response = client.post(
-        "/unify/message",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
-            "assistant_id": "123",
-            "contact_id": 456,
-            "body": "hello",
-            "attachments": [],
+            "kind": "assistant_dm",
+            "thread_id": 5,
+            "assistant_id": 123,
+            "message": {
+                "id": 1,
+                "thread_id": 5,
+                "kind": "assistant_dm",
+                "assistant_id": 123,
+                "sender_kind": "user",
+                "sender_user_id": "owner-user-1",
+                "sender_name": "Owner User",
+                "content": "hello",
+                "timestamp": "2026-07-07T12:00:00+00:00",
+            },
+            "fanout_assistant_ids": [123],
+            "assistant_event": {
+                "thread_id": 5,
+                "thread_kind": "assistant_dm",
+                "chat_message_id": 1,
+                "body": "hello",
+                "sender_user_id": "owner-user-1",
+                "sender_email": "owner@example.com",
+                "sender_name": "Owner User",
+            },
         },
     )
 
     assert response.status_code == 200
+    # The Console frame went to the per-assistant topic.
+    assert published_frames[0]["thread"] == "chat_message"
+    assert published_frames[0]["topic_name"].startswith("unity-123")
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
     _assistant_id, envelope, thread = sink.published[-1]
     assert thread == "inbound"
     assert envelope["thread"] == "unify_message"
     assert envelope["event"]["body"] == "hello"
+    assert envelope["event"]["thread_id"] == 5
+    # The sender is this assistant's owner, so contact_id resolves to boss.
+    assert envelope["event"]["contact_id"] == 456
 
 
 def test_console_org_chat_fans_out_group_message_envelopes(
@@ -560,10 +596,14 @@ def test_console_org_chat_fans_out_group_message_envelopes(
 
     published_frames: list[dict[str, Any]] = []
 
-    def fake_publish_frame(**kwargs: Any) -> None:
+    def fake_publish_console_frame(**kwargs: Any) -> None:
         published_frames.append(kwargs)
 
-    monkeypatch.setattr(internal, "_publish_org_chat_frame", fake_publish_frame)
+    monkeypatch.setattr(
+        internal,
+        "_publish_console_frame",
+        fake_publish_console_frame,
+    )
 
     message = {
         "message_id": 7,
@@ -577,7 +617,7 @@ def test_console_org_chat_fans_out_group_message_envelopes(
         "timestamp": "2026-07-07T12:00:00+00:00",
     }
     response = client.post(
-        "/unify/org-chat",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
             "kind": "team",
@@ -590,7 +630,7 @@ def test_console_org_chat_fans_out_group_message_envelopes(
                 "team_name": "Growth",
                 "organization_id": 11,
                 "body": "Morning everyone",
-                "group_message_id": 7,
+                "chat_message_id": 7,
                 "sender_user_id": "user-1",
                 "sender_email": "dana@example.com",
                 "sender_name": "Dana",
@@ -603,7 +643,7 @@ def test_console_org_chat_fans_out_group_message_envelopes(
 
     # The Console frame went to the org topic.
     assert len(published_frames) == 1
-    assert published_frames[0]["thread"] == "team_message"
+    assert published_frames[0]["thread"] == "chat_message"
     assert published_frames[0]["attributes"]["team_id"] == "3"
 
     # Each fan-out assistant received a standard unify_message envelope with
@@ -631,10 +671,14 @@ def test_console_org_chat_fans_out_group_kind_envelopes(
 
     published_frames: list[dict[str, Any]] = []
 
-    def fake_publish_frame(**kwargs: Any) -> None:
+    def fake_publish_console_frame(**kwargs: Any) -> None:
         published_frames.append(kwargs)
 
-    monkeypatch.setattr(internal, "_publish_org_chat_frame", fake_publish_frame)
+    monkeypatch.setattr(
+        internal,
+        "_publish_console_frame",
+        fake_publish_console_frame,
+    )
 
     message = {
         "message_id": 11,
@@ -648,7 +692,7 @@ def test_console_org_chat_fans_out_group_kind_envelopes(
         "timestamp": "2026-07-07T12:00:00+00:00",
     }
     response = client.post(
-        "/unify/org-chat",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
             "kind": "group",
@@ -660,7 +704,7 @@ def test_console_org_chat_fans_out_group_kind_envelopes(
                 "group_id": 9,
                 "organization_id": 11,
                 "body": "Hello group",
-                "group_message_id": 11,
+                "chat_message_id": 11,
                 "sender_user_id": "user-1",
                 "sender_email": "dana@example.com",
                 "sender_name": "Dana",
@@ -672,7 +716,7 @@ def test_console_org_chat_fans_out_group_kind_envelopes(
     assert response.json()["fanned_out"] == 1
 
     assert len(published_frames) == 1
-    assert published_frames[0]["thread"] == "group_message"
+    assert published_frames[0]["thread"] == "chat_message"
     assert published_frames[0]["attributes"]["group_id"] == "9"
 
     sink = gateway_context.envelope_sink
@@ -693,10 +737,10 @@ def test_console_org_chat_owner_sender_resolves_boss_contact(
 ) -> None:
     from unify.gateway.adapters import internal
 
-    monkeypatch.setattr(internal, "_publish_org_chat_frame", lambda **kwargs: None)
+    monkeypatch.setattr(internal, "_publish_console_frame", lambda **kwargs: None)
 
     response = client.post(
-        "/unify/org-chat",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
             "kind": "team",
@@ -709,7 +753,7 @@ def test_console_org_chat_owner_sender_resolves_boss_contact(
                 "team_name": "Growth",
                 "organization_id": 11,
                 "body": "hi team",
-                "group_message_id": 8,
+                "chat_message_id": 8,
                 # Matches the fake assistant's owner, so the fan-out resolves
                 # contact_id to the boss contact.
                 "sender_user_id": "owner-user-1",
@@ -737,12 +781,12 @@ def test_console_org_chat_dm_publishes_frame_only(
     published_frames: list[dict[str, Any]] = []
     monkeypatch.setattr(
         internal,
-        "_publish_org_chat_frame",
+        "_publish_console_frame",
         lambda **kwargs: published_frames.append(kwargs),
     )
 
     response = client.post(
-        "/unify/org-chat",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
             "kind": "dm",
@@ -762,7 +806,7 @@ def test_console_org_chat_dm_publishes_frame_only(
 
     assert response.status_code == 200
     assert response.json()["fanned_out"] == 0
-    assert published_frames[0]["thread"] == "dm_message"
+    assert published_frames[0]["thread"] == "chat_message"
     assert published_frames[0]["attributes"]["dm_user_a"] == "user-a"
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
@@ -773,26 +817,50 @@ def test_console_org_chat_dm_publishes_frame_only(
 def test_console_reaction_dispatch_publishes_runtime_event(
     client: TestClient,
     gateway_context: GatewayContext,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from unify.gateway.adapters import internal
+
+    published_frames: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        internal,
+        "_publish_console_frame",
+        lambda **kwargs: published_frames.append(kwargs),
+    )
+
     response = client.post(
-        "/unify/reaction",
+        "/unify/chat",
         headers=ADMIN_HEADERS,
         json={
-            "assistant_id": "123",
-            "contact_id": 456,
-            "target_message_id": 42,
+            "kind": "reaction",
+            "thread_kind": "assistant_dm",
+            "thread_id": 5,
+            "assistant_id": 123,
+            "reactor_user_id": "owner-user-1",
             "emoji": "👍",
+            "message": {
+                "id": 42,
+                "thread_id": 5,
+                "kind": "assistant_dm",
+                "assistant_id": 123,
+                "sender_kind": "assistant",
+                "content": "nice",
+                "reactions": [{"user_id": "owner-user-1", "emoji": "👍"}],
+            },
+            "fanout_assistant_ids": [123],
         },
     )
 
     assert response.status_code == 200
+    assert published_frames[0]["thread"] == "chat_reaction"
     sink = gateway_context.envelope_sink
     assert isinstance(sink, FakeEnvelopeSink)
     _assistant_id, envelope, thread = sink.published[-1]
     assert thread == "inbound"
     assert envelope["thread"] == "unify_message_reaction"
-    assert envelope["event"]["target_message_id"] == 42
+    assert envelope["event"]["chat_message_id"] == 42
     assert envelope["event"]["emoji"] == "👍"
+    assert envelope["event"]["contact_id"] == 456
 
 
 def test_console_meet_dispatch_publishes_runtime_event(

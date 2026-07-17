@@ -279,14 +279,18 @@ async def get_whatsapp_window(to_number: str) -> bool | None:
         return None
 
 
-def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
-    """Persist + publish one team-chat reply via Orchestra's admin API.
+def _post_chat_message_to_orchestra(payload: dict) -> dict:
+    """Persist + publish one Console chat message via Orchestra's unified API.
 
-    Team-chat replies do not go to the assistant's own topic (that is the
-    1:1 Console thread); Orchestra appends them to the team's GroupChat
-    context and publishes them on the per-organization topic so every
-    member's Console sees them. Orchestra never fans assistant replies out
-    to other runtimes, so AI messages cannot cascade.
+    Every Console chat surface (assistant DM, team room, org chat group) is
+    backed by the unified chat store; Orchestra persists the message, then
+    publishes the Console frame and fans it out to peer assistant runtimes
+    (never back to the author, so AI messages cannot cascade). The
+    Transcripts write stays with the runtime — it is the assistant's own
+    memory mirror, not the Console's history.
+
+    Returns ``{"success": True, "message": <stored payload>}`` on success;
+    the stored payload carries ``thread_id`` and ``id`` (chat_message_id).
     """
     base_url = SETTINGS.ORCHESTRA_URL or ""
     unify_key = SESSION_DETAILS.unify_key or ""
@@ -296,16 +300,20 @@ def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
     try:
         from unisdk.utils import http
 
-        # Assistant-scoped team post (own UNIFY_KEY; Orchestra verifies the
-        # assistant's team membership). assistant_id comes from the path.
+        # Assistant-scoped post (own UNIFY_KEY; Orchestra verifies thread
+        # membership). assistant_id comes from the path.
         response = http.post(
-            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/teams/{int(team_id)}/messages",
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/chat/messages",
             headers={"Authorization": f"Bearer {unify_key}"},
-            json={"content": content},
+            json=payload,
             timeout=15,
         )
         if 200 <= response.status_code < 300:
-            return {"success": True}
+            try:
+                stored = response.json()
+            except Exception:
+                stored = {}
+            return {"success": True, "message": stored}
         return {
             "success": False,
             "error": f"orchestra returned {response.status_code}: "
@@ -315,27 +323,28 @@ def _post_team_message_to_orchestra(team_id: int, content: str) -> dict:
         return {"success": False, "error": str(exc)}
 
 
-def _post_group_message_to_orchestra(group_id: int, content: str) -> dict:
-    """Persist + publish one org chat-group reply via Orchestra's API.
+def post_call_utterances_to_orchestra(
+    call_id: str,
+    utterances: list[dict],
+) -> dict:
+    """Append call-transcript utterances to Orchestra's first-class store.
 
-    Org chat-group replies do not go to the assistant's own topic (that is
-    the 1:1 Console thread); Orchestra appends them to the group's GroupChat
-    context and publishes them on the per-organization topic so every
-    member's Console sees them. Orchestra never fans assistant replies out
-    to other runtimes, so AI messages cannot cascade.
+    ``call_id`` is the org call-session id when one exists, otherwise the
+    LiveKit room name. Console reads call transcripts from this store —
+    never from the assistant's Transcripts mirror.
     """
     base_url = SETTINGS.ORCHESTRA_URL or ""
     unify_key = SESSION_DETAILS.unify_key or ""
     agent_id = SESSION_DETAILS.assistant.agent_id
-    if not base_url or not unify_key or agent_id is None:
+    if not base_url or not unify_key or agent_id is None or not call_id:
         return {"success": False, "error": "orchestra config missing"}
     try:
         from unisdk.utils import http
 
         response = http.post(
-            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/groups/{int(group_id)}/messages",
+            f"{base_url.rstrip('/')}/assistant/{int(agent_id)}/calls/utterances",
             headers={"Authorization": f"Bearer {unify_key}"},
-            json={"content": content},
+            json={"call_id": call_id, "utterances": utterances},
             timeout=15,
         )
         if 200 <= response.status_code < 300:
@@ -355,9 +364,15 @@ async def send_unify_message(
     attachment: dict | None = None,
     team_id: int | None = None,
     group_id: int | None = None,
+    thread_id: int | None = None,
 ) -> dict:
     """
     Send a unify message to a contact, optionally with an attachment.
+
+    Every send persists to Orchestra's unified chat store; Orchestra then
+    publishes the Console frame (assistant topic for DMs, org topic for
+    rooms). The runtime's own Transcripts mirror is written by the
+    ``UnifyMessageSent`` event handler, never read by Console.
 
     Args:
         content: The message content to send.
@@ -367,126 +382,83 @@ async def send_unify_message(
             - filename: The name of the file
             - url: Signed URL to download the file
         team_id: When set, the message is posted into that team's group chat
-            (via Orchestra) instead of the contact's 1:1 Console thread.
+            instead of the contact's 1:1 Console thread.
         group_id: When set, the message is posted into that org chat group
-            (via Orchestra) instead of the contact's 1:1 Console thread.
-            Preferred over ``team_id`` if both are set.
+            instead of the contact's 1:1 Console thread. Preferred over
+            ``team_id`` if both are set.
+        thread_id: Unified chat-store thread to post into (from an inbound
+            message's ``thread_id``). Takes precedence over team/group ids.
 
     Returns:
-        dict with "success" key indicating delivery status.
+        dict with "success" plus, on success, "thread_id" and
+        "chat_message_id" of the stored message.
     """
     content = normalize_outbound_plain_text(content)
 
-    if group_id is not None:
-        result = await asyncio.to_thread(
-            _post_group_message_to_orchestra,
-            group_id,
-            content,
-        )
-        if result.get("success"):
-            LOGGER.debug(
-                f"{ICONS['comms_outbound']} Group chat message posted to group {group_id}",
-            )
-        else:
-            LOGGER.error(
-                f"{ICONS['comms_outbound']} Error posting group chat message: "
-                f"{result.get('error')}",
-            )
-        return result
+    payload: dict = {"content": content}
+    if attachment:
+        payload["attachments"] = [attachment]
+    if thread_id is not None:
+        payload["thread_id"] = int(thread_id)
+    elif group_id is not None:
+        payload["group_id"] = int(group_id)
+    elif team_id is not None:
+        payload["team_id"] = int(team_id)
+    # No explicit scope: assistant DM with the owner (Orchestra default).
 
-    if team_id is not None:
-        result = await asyncio.to_thread(
-            _post_team_message_to_orchestra,
-            team_id,
-            content,
-        )
-        if result.get("success"):
-            LOGGER.debug(
-                f"{ICONS['comms_outbound']} Team chat message posted to team {team_id}",
-            )
-        else:
-            LOGGER.error(
-                f"{ICONS['comms_outbound']} Error posting team chat message: "
-                f"{result.get('error')}",
-            )
-        return result
+    result = await asyncio.to_thread(_post_chat_message_to_orchestra, payload)
+    stored = (result.get("message") or {}) if result.get("success") else {}
 
-    agent_id = SESSION_DETAILS.assistant.agent_id
-    event_data = {"content": content, "role": "assistant", "contact_id": contact_id}
+    event_data = {
+        "content": content,
+        "role": "assistant",
+        "contact_id": contact_id,
+    }
+    stored_thread_id = stored.get("thread_id") or thread_id
+    if stored_thread_id is not None:
+        event_data["thread_id"] = stored_thread_id
     if attachment:
         event_data["attachments"] = [attachment]
 
-    message_data = {
-        "thread": "unify_message_outbound",
-        "event": event_data,
-    }
-
-    # The Unify chat surface (Console) always reads outbound messages
-    # from the assistant's Pub/Sub topic, so we must publish there even
-    # when running in ``LOCAL_COMMS_MODE=local``.  The in-memory local
-    # outbox is kept as a best-effort side channel for the local Twilio
-    # / email simulators (and the existing test that pokes at it),
-    # which never consumed Pub/Sub.
+    # Best-effort mirror to the in-memory local outbox for the local comms
+    # simulators and tests, which never consumed Pub/Sub.
     if _use_local_comms():
         try:
-            await _publish_local_outbox_async(message_data)
+            await _publish_local_outbox_async(
+                {"thread": "unify_message_outbound", "event": event_data},
+            )
         except Exception as e:
             LOGGER.debug(
                 f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
             )
 
+    if result.get("success"):
+        LOGGER.debug(
+            f"{ICONS['comms_outbound']} Unify message stored "
+            f"(thread_id={stored.get('thread_id')}, id={stored.get('id')})",
+        )
+        return {
+            "success": True,
+            "thread_id": stored.get("thread_id"),
+            "chat_message_id": stored.get("id"),
+        }
+
+    # Sandbox runtimes without an Orchestra assistant identity (open-source
+    # local runs, test harnesses) have no unified chat store to post into;
+    # the direct assistant-topic publish remains their delivery surface.
+    LOGGER.warning(
+        f"{ICONS['comms_outbound']} Unify chat store post unavailable "
+        f"({result.get('error')}); publishing directly to the assistant topic",
+    )
     try:
         message_id = _publish_to_assistant_topic(
-            agent_id=agent_id,
+            agent_id=SESSION_DETAILS.assistant.agent_id,
             thread="unify_message_outbound",
             event=event_data,
-        )
-        LOGGER.debug(
-            f"{ICONS['comms_outbound']} Unify message published with ID: {message_id}",
         )
         return {"success": bool(message_id)}
     except Exception as e:
         LOGGER.error(f"{ICONS['comms_outbound']} Error sending unify message: {e}")
-        return {"success": False, "error": str(e)}
-
-
-async def publish_unify_reaction_outbound(
-    *,
-    contact_id: int,
-    target_message_id: int,
-    emoji: str | None,
-    action: str,
-    reactions: list[dict],
-) -> dict:
-    """Publish a reaction update to the assistant Pub/Sub topic for Console SSE."""
-    agent_id = SESSION_DETAILS.assistant.agent_id
-    event_data = {
-        "contact_id": contact_id,
-        "target_message_id": target_message_id,
-        "emoji": emoji,
-        "action": action,
-        "reactions": reactions,
-    }
-    message_data = {
-        "thread": "unify_message_reaction_outbound",
-        "event": event_data,
-    }
-    if _use_local_comms():
-        try:
-            await _publish_local_outbox_async(message_data)
-        except Exception as e:
-            LOGGER.debug(
-                f"{ICONS['comms_outbound']} Local outbox mirror failed (non-fatal): {e}",
-            )
-    try:
-        message_id = _publish_to_assistant_topic(
-            agent_id=agent_id,
-            thread="unify_message_reaction_outbound",
-            event=event_data,
-        )
-        return {"success": bool(message_id)}
-    except Exception as e:
-        LOGGER.error(f"{ICONS['comms_outbound']} Error publishing unify reaction: {e}")
         return {"success": False, "error": str(e)}
 
 

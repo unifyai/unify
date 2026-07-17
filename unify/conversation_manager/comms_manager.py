@@ -1260,17 +1260,19 @@ class CommsManager:
                             None,
                         )
                     group_id = event.get("group_id")
-                    # Team / org-group chat fan-out: the sender may be another
-                    # org member or a fellow assistant rather than this
-                    # assistant's owner, in which case the adapters layer
-                    # cannot resolve a per-assistant contact id. Assistant
-                    # senders resolve by their stable agent_id (teammate
-                    # contacts are provisioned at startup); humans resolve by
-                    # email — the identity org-member contacts are stored
-                    # under. Either way a teammate contact is provisioned on
-                    # first message if the startup sync has not covered the
-                    # sender yet.
-                    if contact is None and (team_id or group_id):
+                    # Chat fan-out: the sender may be another org member or a
+                    # fellow assistant rather than this assistant's owner (in
+                    # rooms, or an org member's assistant DM), in which case
+                    # the adapters layer cannot resolve a per-assistant
+                    # contact id. Assistant senders resolve by their stable
+                    # agent_id (teammate contacts are provisioned at
+                    # startup); humans resolve by email — the identity
+                    # org-member contacts are stored under. Either way a
+                    # teammate contact is provisioned on first message if the
+                    # startup sync has not covered the sender yet.
+                    if contact is None and (
+                        team_id or group_id or event.get("sender_email")
+                    ):
                         contact = _get_or_create_team_chat_sender_contact(
                             str(event.get("sender_name") or ""),
                             str(event.get("sender_email") or ""),
@@ -1286,12 +1288,22 @@ class CommsManager:
                         return
 
                     attachments = event.get("attachments") or []
+                    thread_id_value = event.get("thread_id")
+                    chat_message_id_value = event.get("chat_message_id")
                     await publish(
                         f"app:comms:{thread}_message",
                         events_map[thread](
                             content=content,
                             contact=contact,
                             attachments=attachments,
+                            thread_id=(
+                                int(thread_id_value) if thread_id_value else None
+                            ),
+                            chat_message_id=(
+                                int(chat_message_id_value)
+                                if chat_message_id_value
+                                else None
+                            ),
                             team_id=int(team_id) if team_id else None,
                             team_name=str(event.get("team_name") or ""),
                             group_id=int(group_id) if group_id else None,
@@ -1307,10 +1319,13 @@ class CommsManager:
                 if thread == "unify_message_reaction":
                     target_contact_id = event.get("contact_id")
                     target_message_id = event.get("target_message_id")
-                    if target_contact_id is None or target_message_id is None:
+                    chat_message_id_value = event.get("chat_message_id")
+                    if target_contact_id is None or (
+                        target_message_id is None and chat_message_id_value is None
+                    ):
                         LOGGER.error(
                             f"{DEFAULT_ICON} unify_message_reaction requires "
-                            "contact_id and target_message_id",
+                            "contact_id and target_message_id or chat_message_id",
                         )
                         ack_now()
                         return
@@ -1328,11 +1343,22 @@ class CommsManager:
                     emoji = event.get("emoji")
                     if emoji == "":
                         emoji = None
+                    reaction_thread_id = event.get("thread_id")
                     await publish(
                         "app:comms:unify_message_reaction",
                         UnifyMessageReactionChanged(
                             contact=contact,
-                            target_message_id=int(target_message_id),
+                            target_message_id=(
+                                int(target_message_id) if target_message_id else 0
+                            ),
+                            chat_message_id=(
+                                int(chat_message_id_value)
+                                if chat_message_id_value
+                                else None
+                            ),
+                            thread_id=(
+                                int(reaction_thread_id) if reaction_thread_id else None
+                            ),
                             emoji=emoji,
                         ).to_json(),
                     )
@@ -2358,6 +2384,8 @@ class CommsManager:
             if thread in (
                 "unify_message_outbound",
                 "unify_message_reaction_outbound",
+                "chat_message",
+                "chat_reaction",
                 "system_error",
                 "assistant_desktop_ready",
                 "comms_activity",
