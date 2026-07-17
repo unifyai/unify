@@ -51,6 +51,7 @@ SHARED_TABLE_MATCHERS: tuple[tuple[str, tuple[str, ...]], ...] = tuple(
 AUTHORING_ASSISTANT_ID_FIELD_INFO: dict[str, Any] = {
     "type": "int",
     "mutable": False,
+    "ui_editable": False,
     "description": "Assistant id that originally authored this row.",
 }
 
