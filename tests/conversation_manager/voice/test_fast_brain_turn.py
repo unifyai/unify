@@ -114,6 +114,37 @@ def test_build_messages_includes_interrupted_context_when_pending():
     assert "continuation" in system_text.lower()
 
 
+def test_build_messages_includes_peer_assistant_etiquette():
+    msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="T-W1N, can you pull up the deck?",
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+        peer_assistants=["T-W1N", "A-DA"],
+    )
+    system_text = "\n".join(m["content"] for m in msgs if m["role"] == "system")
+    assert "T-W1N, A-DA" in system_text
+    assert "Multi-assistant call" in system_text
+    assert "silence" in system_text
+
+    solo_msgs = build_fast_brain_turn_messages(
+        system_prompt="PERSONA",
+        history_messages=[],
+        user_text="hello",
+        pending_continuation=None,
+        already_deferred=False,
+        guidance="",
+        idle_status_smalltalk=False,
+        recent_assistant_text="",
+    )
+    solo_text = "\n".join(m["content"] for m in solo_msgs if m["role"] == "system")
+    assert "Multi-assistant call" not in solo_text
+
+
 @pytest.mark.asyncio
 async def test_empty_input_returns_default_without_llm(monkeypatch):
     def _boom(*a, **kw):

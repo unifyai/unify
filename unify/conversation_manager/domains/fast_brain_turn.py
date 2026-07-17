@@ -105,6 +105,23 @@ content if not silence.
 continuation is the strong default for greetings ("Hello?"), "go on", agreeing,
 partial overlap, or asking why you are calling — lean hard toward continuation."""
 
+_PEER_ASSISTANTS_CONTEXT = """\
+[system] Multi-assistant call. Other AI teammates are on this call with you:
+{peers}. Exactly one assistant should respond to each human turn. Decide
+whether THIS turn is yours before speaking:
+
+- If the speaker addressed a teammate by name, or a teammate was clearly asked
+  to handle it, choose classification silence — even for substantive turns.
+- If the speaker addressed YOU by name, or a teammate handed the turn to you
+  ("{{your name}}, can you take this?"), it is yours: respond normally.
+- If nobody was addressed by name, take the turn only when it is plainly about
+  work you own or directed at you by context; otherwise choose silence and let
+  the better-placed teammate answer.
+- Never answer on a teammate's behalf and never speak over them. If you have
+  nothing of your own to add, silence is the correct choice.
+- To pass a turn that suits a teammate better, use smalltalk with ONE short
+  hand-off line naming them (e.g. "{{teammate}}, that one's yours.")."""
+
 _CALL_BRIEFING_CONTEXT = """\
 [system] Active call briefing — context, not script. You are on this call for
 the reason below. NEVER read the briefing aloud or quote it verbatim; speak
@@ -318,12 +335,21 @@ def build_fast_brain_turn_messages(
     recent_assistant_text: str,
     hang_up_gate_reason: str | None = None,
     briefing: str = "",
+    peer_assistants: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
     messages.extend(dict(message) for message in history_messages)
     messages.append({"role": "system", "content": FAST_BRAIN_TURN_PROMPT})
+    peers = [name.strip() for name in peer_assistants if (name or "").strip()]
+    if peers:
+        messages.append(
+            {
+                "role": "system",
+                "content": _PEER_ASSISTANTS_CONTEXT.format(peers=", ".join(peers)),
+            },
+        )
     briefing = (briefing or "").strip()
     if briefing:
         messages.append(
@@ -501,6 +527,7 @@ async def select_fast_brain_turn(
     recent_assistant_text: str = "",
     hang_up_gate_reason: str | None = None,
     briefing: str = "",
+    peer_assistants: Sequence[str] = (),
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
     if not (user_text or "").strip():
@@ -526,6 +553,7 @@ async def select_fast_brain_turn(
         recent_assistant_text=recent_assistant_text,
         hang_up_gate_reason=hang_up_gate_reason,
         briefing=briefing,
+        peer_assistants=peer_assistants,
     )
 
     try:
