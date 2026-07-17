@@ -114,7 +114,9 @@ def build_offline_runner_env(
         "UNITY_OFFLINE_TASK_ID": str(task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(source_task_log_id),
         "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": str(activation_revision or ""),
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
+        "UNITY_OFFLINE_TASK_FUNCTION_ID": (
+            str(int(entrypoint)) if entrypoint is not None else ""
+        ),
         "UNITY_OFFLINE_TASK_REQUEST": request_text,
         "UNITY_OFFLINE_TASK_NAME": str(task_name or ""),
         "UNITY_OFFLINE_TASK_DESCRIPTION": str(task_description or ""),
