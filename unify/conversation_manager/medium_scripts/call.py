@@ -78,6 +78,10 @@ from unify.conversation_manager.medium_scripts.common import (
     FastBrainLogger,
     hydrate_fast_brain_history,
 )
+from unify.conversation_manager.medium_scripts.meet_floor import (
+    FLOOR_TOPIC,
+    MeetFloor,
+)
 from unify.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
     generate_screenshot_path,
@@ -321,6 +325,12 @@ class Assistant(Agent):
         self.speaker_tracker = speaker_tracker
         self.engaged_speakers = engaged_speakers
         self.realtime_scorer = realtime_scorer
+        # Speaking-floor coordination for multi-assistant org meets; None on
+        # every other channel (no gating overhead).
+        self.meet_floor: MeetFloor | None = None
+        # Live peer-assistant names on this call (multi-assistant etiquette).
+        # A closure over the meet roster so mid-call additions are seen.
+        self._peer_assistants_provider: Callable[[], list[str]] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -624,6 +634,7 @@ class Assistant(Agent):
             history_messages = (
                 history_provider() if history_provider is not None else []
             )
+            peers_provider = self._peer_assistants_provider
             resolved = await select_fast_brain_turn(
                 user_text=user_text,
                 system_prompt=self._fast_brain_system_prompt,
@@ -635,6 +646,9 @@ class Assistant(Agent):
                 recent_assistant_text=recent_assistant_text,
                 hang_up_gate_reason=self._hang_up_gate_reason,
                 briefing=self._call_briefing,
+                peer_assistants=(
+                    peers_provider() if peers_provider is not None else ()
+                ),
             )
 
             if (
@@ -894,6 +908,25 @@ class Assistant(Agent):
                 await utils.aio.cancel_and_wait(fwd)
 
     async def tts_node(
+        self,
+        text: AsyncIterable[str],
+        model_settings: ModelSettings,
+    ) -> AsyncIterable:
+        # Multi-assistant meets: hold the shared speaking floor for the whole
+        # playout so co-assistants never talk over each other. Fails open on
+        # timeout — coordination can degrade, speech can not deadlock.
+        if self.meet_floor is None:
+            async for frame in self._tts_node_unlocked(text, model_settings):
+                yield frame
+            return
+        await self.meet_floor.acquire()
+        try:
+            async for frame in self._tts_node_unlocked(text, model_settings):
+                yield frame
+        finally:
+            self.meet_floor.release_soon()
+
+    async def _tts_node_unlocked(
         self,
         text: AsyncIterable[str],
         model_settings: ModelSettings,
@@ -1531,6 +1564,17 @@ async def entrypoint(ctx: agents.JobContext):
     _log.session_start("Connecting to room…")
     await ctx.connect()
     _log.session_start("Connected to room")
+
+    # Console call tiles resolve this attribute to map the agent participant
+    # onto the right assistant cell in multi-party meets (the agents framework
+    # separately publishes `lk.agent.state` for the talking/working pose).
+    if SESSION_DETAILS.assistant.agent_id:
+        try:
+            await ctx.room.local_participant.set_attributes(
+                {"unify_assistant_id": str(SESSION_DETAILS.assistant.agent_id)},
+            )
+        except Exception as exc:
+            _log.session_start(f"Could not set assistant participant attributes: {exc}")
 
     # User screen share and webcam capture (subscribe to LiveKit room tracks automatically)
     screen_capture = UserTrackCaptureManager(
@@ -2850,6 +2894,59 @@ async def entrypoint(ctx: agents.JobContext):
     assistant._turn_engaged_provider = lambda: _speaker_is_engaged(
         _meet_last_speaker_id,
     )
+
+    # --- Multi-assistant speaking floor (org meets only) ---
+    # Assistants in a shared org room coordinate playout over the data channel
+    # so they never talk over each other. Solo calls skip the claim window via
+    # the peer probe, so 1:1 latency is unchanged.
+    if call_session_id and channel == "unify_meet":
+
+        def _peer_assistant_names() -> list[str]:
+            own_id = SESSION_DETAILS.assistant.agent_id
+            names: list[str] = []
+            for member in unify_meet_roster:
+                if member.get("kind") != "assistant":
+                    continue
+                member_id = member.get("assistant_id")
+                if member_id is not None and own_id is not None:
+                    if str(member_id) == str(own_id):
+                        continue
+                name = (member.get("display_name") or "").strip()
+                if name:
+                    names.append(name)
+            return names
+
+        assistant._peer_assistants_provider = _peer_assistant_names
+
+        def _floor_peers_present() -> bool:
+            remotes = getattr(ctx.room, "remote_participants", {}) or {}
+            for participant in remotes.values():
+                attrs = getattr(participant, "attributes", None) or {}
+                if attrs.get("unify_assistant_id") or attrs.get("lk.agent.state"):
+                    return True
+            return False
+
+        async def _publish_floor(payload: dict) -> None:
+            await ctx.room.local_participant.publish_data(
+                json.dumps(payload).encode(),
+                topic=FLOOR_TOPIC,
+                reliable=True,
+            )
+
+        assistant.meet_floor = MeetFloor(
+            local_id=str(SESSION_DETAILS.assistant.agent_id or os.getpid()),
+            publish=_publish_floor,
+            peer_probe=_floor_peers_present,
+            log=_log.info,
+        )
+
+        @ctx.room.on("data_received")
+        def _on_floor_data(packet) -> None:
+            if getattr(packet, "topic", "") != FLOOR_TOPIC:
+                return
+            if assistant.meet_floor is not None:
+                assistant.meet_floor.handle_message(bytes(packet.data))
+
     # The opener hold applies whenever an ``opener`` opening config is present,
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
     # permission-callback call), where ``outbound`` is False.

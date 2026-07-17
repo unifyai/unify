@@ -446,15 +446,39 @@ async def unify_meet_webhook(
         reason="unify_meet",
     )
     assistant_id = str(assistant_data["assistant_id"])
+    call_session_id = str(payload.get("call_session_id") or "").strip()
+    # Org multi-party rooms must not force agent_name = room_name (collides
+    # across assistants). Fall back to room only for classic 1:1 Meet.
+    livekit_agent_name = str(payload.get("livekit_agent_name") or "")
+    if not livekit_agent_name and not call_session_id:
+        livekit_agent_name = room_name
     event_data: dict[str, Any] = {
         "contacts": contacts,
         "assistant_id": assistant_id,
         "livekit_room": room_name,
-        "livekit_agent_name": payload.get("livekit_agent_name") or room_name,
     }
-    call_session_id = payload.get("call_session_id")
+    if livekit_agent_name:
+        event_data["livekit_agent_name"] = livekit_agent_name
     if call_session_id:
-        event_data["call_session_id"] = str(call_session_id)
+        event_data["call_session_id"] = call_session_id
+    raw_participants = payload.get("participants")
+    if isinstance(raw_participants, str):
+        raw_participants = parse_json_field(raw_participants)
+    if isinstance(raw_participants, list):
+        participants = [
+            {
+                "kind": raw.get("kind") or "human",
+                "user_id": raw.get("user_id"),
+                "assistant_id": raw.get("assistant_id"),
+                "display_name": raw.get("display_name") or "",
+                "contact_id": raw.get("contact_id"),
+                "email": raw.get("email"),
+            }
+            for raw in raw_participants
+            if isinstance(raw, dict)
+        ]
+        if participants:
+            event_data["participants"] = participants
     opening_config = payload.get("opening_config")
     if opening_config not in (None, ""):
         opening_config = parse_json_field(opening_config)

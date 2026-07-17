@@ -616,8 +616,17 @@ class LivekitCallManager:
         )
         return False
 
-    def _get_voice_profiles(self, contact: dict, boss: dict) -> dict[str, list[float]]:
+    def _get_voice_profiles(
+        self,
+        contact: dict,
+        boss: dict,
+        extra_contact_ids: list[int] | None = None,
+    ) -> dict[str, list[float]]:
         """Fetch enrolled voice embeddings for the call participants.
+
+        ``extra_contact_ids`` carries the full multi-party roster so every
+        enrolled human on an org call can be voice-identified, not just the
+        primary contact and boss.
 
         Best-effort: a backend hiccup here must never block call dispatch, so
         failures degrade to "no profiles" (speaker attribution disabled).
@@ -629,6 +638,7 @@ class LivekitCallManager:
             for c in (contact, boss)
             if c and c.get("contact_id") is not None
         }
+        contact_ids.update(int(cid) for cid in (extra_contact_ids or []))
         if not contact_ids:
             return {}
         try:
@@ -693,7 +703,18 @@ class LivekitCallManager:
                 "unify_key": SESSION_DETAILS.unify_key,
                 "agent_service_url": _resolve_agent_service_url(),
             }
-            meta_dict["voice_profiles"] = self._get_voice_profiles(contact, boss)
+            roster_contact_ids = [
+                int(p["contact_id"])
+                for p in (extra_metadata or {}).get("participants", [])
+                if isinstance(p, dict)
+                and p.get("contact_id") is not None
+                and p.get("kind") != "assistant"
+            ]
+            meta_dict["voice_profiles"] = self._get_voice_profiles(
+                contact,
+                boss,
+                extra_contact_ids=roster_contact_ids,
+            )
             if extra_metadata:
                 meta_dict.update(extra_metadata)
             metadata = json.dumps(meta_dict)
