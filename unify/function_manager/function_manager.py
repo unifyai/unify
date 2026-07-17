@@ -62,7 +62,7 @@ from .types.meta import FunctionsMeta
 from .types.venv import VirtualEnv
 from .base import BaseFunctionManager
 from .hash_utils import stable_hash_for_rows
-from ..common.model_to_fields import model_to_fields
+from ..common.model_to_fields import model_to_fields, with_ui_editable_forced_false
 from ..file_manager.managers.local import LocalFileManager
 from ..image_manager.image_manager import ImageHandle
 from ..manager_registry import ManagerRegistry
@@ -1699,7 +1699,12 @@ class FunctionManager(BaseFunctionManager):
             TableContext(
                 name=FUNCTIONS_PRIMITIVES_TABLE,
                 description="System action primitives with stable explicit IDs.",
-                fields=model_to_fields(Function),
+                # Primitives share the `Function` model with Compositional, but
+                # are never Console-UI-editable (implementation lives in Python,
+                # not in stored rows), so the allowlisted ui_editable=True
+                # annotations on `Function` (name, docstring, etc.) are
+                # overridden to False here.
+                fields=with_ui_editable_forced_false(model_to_fields(Function)),
                 unique_keys={"function_id": "int"},
                 # No auto_counting - primitives get explicit IDs from collect_primitives()
             ),

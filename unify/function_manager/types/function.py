@@ -27,8 +27,13 @@ class Function(AuthoredRow):
             "The language/interpreter for this function. "
             "Defaults to 'python' for backward compatibility."
         ),
+        json_schema_extra={"ui_editable": True},
     )
-    name: str = Field(..., description="The name of the function.")
+    name: str = Field(
+        ...,
+        description="The name of the function.",
+        json_schema_extra={"ui_editable": True},
+    )
     argspec: str = Field(
         ...,
         description=(
@@ -36,14 +41,20 @@ class Function(AuthoredRow):
             "Python: '(x: int, y: int) -> int'. "
             "Shell: '(input_file output_file --verbose)' or positional description."
         ),
+        json_schema_extra={"ui_editable": True},
     )
-    docstring: str = Field("", description="The docstring of the function.")
+    docstring: str = Field(
+        "",
+        description="The docstring of the function.",
+        json_schema_extra={"ui_editable": True},
+    )
     implementation: Optional[str] = Field(
         None,
         description=(
             "The full source code of the function. "
             "None for primitives (implementation lives in Python class)."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     depends_on: List[str] = Field(
         default_factory=list,
@@ -65,6 +76,7 @@ class Function(AuthoredRow):
     precondition: Optional[Dict[str, Any]] = Field(
         None,
         description="A dictionary representing the state required before the function can be run, e.g., {'url': '...'}.",
+        json_schema_extra={"ui_editable": True},
     )
 
     guidance_ids: List[int] = Field(
@@ -73,6 +85,7 @@ class Function(AuthoredRow):
             "List of Guidance.guidance_id values that reference this function; "
             "represents the inverse many-to-many relationship."
         ),
+        json_schema_extra={"ui_editable": True},
     )
 
     verify: bool = Field(
@@ -82,6 +95,7 @@ class Function(AuthoredRow):
             "If True, the Actor may check initial/final states or logs to ensure success. "
             "If verification fails, the Actor may reimplement and overwrite the function in the 'Functions' store."
         ),
+        json_schema_extra={"ui_editable": True},
     )
 
     # Primitive-specific fields
@@ -120,6 +134,7 @@ class Function(AuthoredRow):
             "executing this function. Only applies when language='python'. "
             "If None, uses the project's default environment."
         ),
+        json_schema_extra={"ui_editable": True},
     )
 
     windows_os_required: bool = Field(
@@ -129,6 +144,7 @@ class Function(AuthoredRow):
             "and desktop_mode='windows', routes to the remote Windows VM. "
             "Used for functions depending on Windows-only libraries like xlwings."
         ),
+        json_schema_extra={"ui_editable": True},
     )
 
     # Source-defined custom function tracking

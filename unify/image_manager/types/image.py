@@ -20,6 +20,7 @@ class Image(AuthoredRow):
     caption: Optional[str] = Field(
         default=None,
         description="Short description of the image contents",
+        json_schema_extra={"ui_editable": True},
     )
     data: str = Field(
         description="Image payload as base64 (PNG/JPEG) or a URL (GCS signed or https).",

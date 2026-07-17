@@ -83,6 +83,11 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
     - ``{"unify_type": "..."}`` — override the inferred Orchestra type
     - ``{"unique": True}`` — mark the field as unique in Orchestra
     - ``{"mutable": False}`` — mark the field immutable in Orchestra
+    - ``{"ui_editable": True}`` — allow the field to be edited from the
+      Console UI. Defaults to ``False`` (opt-in), independent of ``mutable``:
+      ``mutable`` governs whether the backend permits writes at all, while
+      ``ui_editable`` governs whether the Console data browser exposes an
+      edit control for the field.
 
     Examples
     --------
@@ -130,6 +135,12 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         if field_info and isinstance(extra, dict) and extra.get("unique"):
             entry["unique"] = True
 
+        # Opt-in only: Console UI edit controls are hidden unless explicitly
+        # allowlisted via `json_schema_extra={"ui_editable": True}`.
+        entry["ui_editable"] = False
+        if field_info and isinstance(extra, dict) and "ui_editable" in extra:
+            entry["ui_editable"] = bool(extra["ui_editable"])
+
         # Use Field description (not JSON Schema description which can be very long).
         # Orchestra StandardFieldDefinition.description max_length is 256; longer
         # values mis-route create_fields into JsonSchemaFieldDefinition and 400.
@@ -139,3 +150,21 @@ def model_to_fields(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         result[name] = entry
 
     return result
+
+
+def with_ui_editable_forced_false(
+    fields: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """
+    Return a copy of a `model_to_fields` output with every field's
+    ``ui_editable`` forced to ``False``.
+
+    Used when a single Pydantic model backs multiple Orchestra tables with
+    different editability semantics — e.g. `Function` backs both
+    `Functions/Compositional` (user-authored, some fields UI-editable) and
+    `Functions/Primitives` (system-defined, never UI-editable). Rather than
+    branching inside `model_to_fields` on which table is being provisioned,
+    callers provision the shared model once and force this override for the
+    read-only table.
+    """
+    return {name: {**entry, "ui_editable": False} for name, entry in fields.items()}

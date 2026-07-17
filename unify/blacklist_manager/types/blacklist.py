@@ -38,12 +38,15 @@ class BlackList(AuthoredRow):
     )
     medium: Medium = Field(
         description="The communication channel this contact detail applies to (e.g., email, sms_message, phone_call).",
+        json_schema_extra={"ui_editable": True},
     )
     contact_detail: str = Field(
         description="The concrete contact detail to block (e.g., an email address or a phone number).",
+        json_schema_extra={"ui_editable": True},
     )
     reason: str = Field(
         description="Why this contact detail is blacklisted (short context).",
+        json_schema_extra={"ui_editable": True},
     )
     destination: str = Field(
         default="personal",

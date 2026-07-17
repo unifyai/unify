@@ -22,16 +22,19 @@ class Guidance(AuthoredRow):
         description="Short-form title of the guidance (a few words)",
         min_length=1,
         max_length=200,
+        json_schema_extra={"ui_editable": True},
     )
     content: str = Field(
         description="Full description of the guidance; may align with images",
         min_length=1,
+        json_schema_extra={"ui_editable": True},
     )
     images: AnnotatedImageRefs = Field(
         default_factory=lambda: AnnotatedImageRefs.model_validate([]),
         description=(
             "List of annotated image references aligned to the text. Each entry must be an AnnotatedImageRef."
         ),
+        json_schema_extra={"ui_editable": True},
     )
 
     function_ids: List[int] = Field(
@@ -40,6 +43,7 @@ class Guidance(AuthoredRow):
             "List of Function.function_id values that this guidance is relevant for. "
             "Represents a many-to-many relationship between Guidance and Functions."
         ),
+        json_schema_extra={"ui_editable": True},
     )
     stale_reasons: List[StaleReason] = Field(
         default_factory=list,
