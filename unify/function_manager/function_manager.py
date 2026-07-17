@@ -43,6 +43,7 @@ from unisdk.utils.http import RequestError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
+from ..common.sync_lease import exclusive_sync_lease
 from ..common.federated_search import (
     FederatedSearchContext,
     federated_filter,
@@ -3642,6 +3643,7 @@ class FunctionManager(BaseFunctionManager):
             return exc.payload  # type: ignore[return-value]
 
         with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
             self._temporary_function_context(
                 "_venvs_ctx",
                 venv_context,
@@ -3764,6 +3766,7 @@ class FunctionManager(BaseFunctionManager):
             return exc.payload  # type: ignore[return-value]
 
         with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
             self._temporary_function_context(
                 "_compositional_ctx",
                 function_context,
@@ -3899,28 +3902,29 @@ class FunctionManager(BaseFunctionManager):
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
 
-        with (
-            self._temporary_function_context(
-                "_venvs_ctx",
-                venv_context,
-            ),
-            self._temporary_function_context("_meta_ctx", meta_context),
-        ):
-            venvs_hash_changed = self._get_stored_custom_venvs_hash() != (
-                compute_custom_venvs_hash(source_venvs=source_venvs or {})
+        with exclusive_sync_lease(f"{meta_context}:custom_sync"):
+            with (
+                self._temporary_function_context(
+                    "_venvs_ctx",
+                    venv_context,
+                ),
+                self._temporary_function_context("_meta_ctx", meta_context),
+            ):
+                venvs_hash_changed = self._get_stored_custom_venvs_hash() != (
+                    compute_custom_venvs_hash(source_venvs=source_venvs or {})
+                )
+
+            venv_name_to_id = self.sync_custom_venvs(
+                source_venvs=source_venvs,
+                destination=destination,
+            )
+            functions_changed = self.sync_custom_functions(
+                venv_name_to_id,
+                source_functions=source_functions,
+                destination=destination,
             )
 
-        venv_name_to_id = self.sync_custom_venvs(
-            source_venvs=source_venvs,
-            destination=destination,
-        )
-        functions_changed = self.sync_custom_functions(
-            venv_name_to_id,
-            source_functions=source_functions,
-            destination=destination,
-        )
-
-        return venvs_hash_changed or functions_changed
+            return venvs_hash_changed or functions_changed
 
     def list_primitives(self) -> Dict[str, Dict[str, Any]]:
         """

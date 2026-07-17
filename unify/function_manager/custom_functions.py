@@ -23,6 +23,15 @@ from .custom import CustomFunctionMetadata
 logger = logging.getLogger(__name__)
 
 
+class CustomFunctionCollectError(RuntimeError):
+    """Raised when a custom-function source module cannot be loaded.
+
+    Collect must succeed completely before ``sync_custom`` may run: a partial
+    snapshot would look like intentional removals and delete still-present
+    deployment-owned (``custom_hash``) functions upstream.
+    """
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Venv Collection
 # ────────────────────────────────────────────────────────────────────────────
@@ -163,12 +172,17 @@ def _get_function_docstring(func: Callable) -> str:
     return inspect.getdoc(func) or ""
 
 
-def _load_module_from_file(file_path: Path) -> Optional[Any]:
+def _load_module_from_file(file_path: Path) -> Any:
     """Dynamically load a Python module from a file path.
 
     Registers a synthetic parent package for the file's directory so that
     relative imports between sibling modules work
     (e.g. ``from .helpers import ...`` in a neighbouring file).
+
+    Raises:
+        CustomFunctionCollectError: If the module cannot be imported. Callers
+            that feed ``sync_custom`` must not swallow this — a skipped file
+            produces a false "removed from source" delete.
     """
     try:
         parent_dir = str(file_path.parent)
@@ -186,15 +200,21 @@ def _load_module_from_file(file_path: Path) -> Optional[Any]:
             file_path,
         )
         if spec is None or spec.loader is None:
-            return None
+            raise CustomFunctionCollectError(
+                f"Failed to load custom function module {file_path}: "
+                "no import spec/loader",
+            )
         module = importlib.util.module_from_spec(spec)
         module.__package__ = package_name
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
         return module
+    except CustomFunctionCollectError:
+        raise
     except Exception as e:
-        logger.warning(f"Failed to load custom function module {file_path}: {e}")
-        return None
+        raise CustomFunctionCollectError(
+            f"Failed to load custom function module {file_path}: {e}",
+        ) from e
 
 
 def _extract_functions_from_module(
@@ -243,6 +263,11 @@ def collect_custom_functions(
         - custom_hash, embedding_text, depends_on
         - is_primitive (always False), guidance_ids (always [])
         - windows_os_required
+
+    Raises:
+        CustomFunctionCollectError: If any non-private ``*.py`` in the
+            directory fails to import. Collect is fail-closed so callers
+            never pass a partial snapshot into destructive ``sync_custom``.
     """
     functions_folder = directory
     if functions_folder is None or not functions_folder.exists():
@@ -259,8 +284,6 @@ def collect_custom_functions(
             continue  # Skip __init__.py and private files
 
         module = _load_module_from_file(py_file)
-        if module is None:
-            continue
 
         for name, func, metadata in _extract_functions_from_module(module):
             implementation = _get_function_source(func)
@@ -363,6 +386,10 @@ def collect_functions_from_directories(
 
     Later directories override earlier ones when function names collide
     (more-specific level wins).
+
+    Raises:
+        CustomFunctionCollectError: If any directory's collect fails. The
+            merge never returns a partial snapshot for ``sync_custom``.
     """
     merged: Dict[str, Dict[str, Any]] = {}
     for d in directories:
@@ -421,8 +448,17 @@ def resolve_live_custom_callable(name: str) -> Optional[Callable]:
             for py_file in directory.glob("*.py"):
                 if py_file.name.startswith("_"):
                     continue
-                module = _load_module_from_file(py_file)
-                if module is None:
+                # Live resolution is best-effort: fall back to the stored
+                # source copy when a module cannot be imported. Collect /
+                # sync_custom remains fail-closed via _load_module_from_file.
+                try:
+                    module = _load_module_from_file(py_file)
+                except CustomFunctionCollectError as exc:
+                    logger.warning(
+                        "Skipping live callable load for %s: %s",
+                        py_file,
+                        exc,
+                    )
                     continue
                 for fn_name, func, _metadata in _extract_functions_from_module(
                     module,

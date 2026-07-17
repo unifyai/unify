@@ -36,6 +36,7 @@ from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
 from ..common.stale_reason import StaleReason, merge_stale_reasons
+from ..common.sync_lease import exclusive_sync_lease
 
 GUIDANCE_TABLE = "Guidance"
 GUIDANCE_META_TABLE = "Guidance/Meta"
@@ -1180,6 +1181,7 @@ class GuidanceManager(BaseGuidanceManager):
             return False
 
         with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
             self._temporary_guidance_context("_ctx", guidance_context),
             self._temporary_guidance_context("_meta_ctx", meta_context),
         ):
