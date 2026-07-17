@@ -13,14 +13,17 @@ The runner is intentionally small and procedural:
 1. Read the activation/run payload that Communication injected into env vars.
 2. Populate `SESSION_DETAILS` so shared primitives know which assistant is
    acting.
-3. Initialize Unity's normal runtime substrate for the assistant context.
+3. Boot the same non-ConversationManager assistant substrate as live wake
+   (workspace, unify.init, EventBus, eager managers, blocking deployment
+   reconcile, Secrets→env hydrate). Filesystem/VM stay opt-in via
+   ``requires_filesystem`` / ``requires_computer``.
 4. Enter `TaskScheduler.execute(...)` with a CodeActActor-backed execution
    delegate so scheduler lifecycle and recurring rearm semantics stay central.
 5. Persist the terminal run state through the scheduler-owned task run lifecycle.
 
-Communication owns orchestration and job creation. The task row owns whether
-execution is agentic or symbolic. This module is the thin bridge that starts
-the headless actor and keeps the durable run record up to date.
+There is no ConversationManager and no CM↔offline steering path if a live
+session later wakes. Communication owns orchestration and job creation. The
+task row owns whether execution is agentic or symbolic.
 """
 
 from __future__ import annotations
@@ -596,26 +599,15 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
         await delegate.close()
 
 
-def _ensure_offline_client_bundle() -> None:
-    """Fetch/register the assistant client bundle for offline @custom_function imports.
+def _bootstrap_offline_runtime() -> None:
+    """Boot live-parity assistant substrate without ConversationManager."""
 
-    Live assistants get this from the ConversationManager startup hook. Offline
-    jobs skip that hook, so the runner (and entrypoint.sh) must bootstrap the
-    GCS client tree before entrypoint bodies import
-    ``unify_deploy.assistant_deployments.clients.<client>.*``.
-    """
+    from unify.runtime.assistant_substrate import bootstrap_assistant_substrate
 
-    try:
-        from unify_deploy.client_bundle.bootstrap import (
-            ensure_offline_client_bundle,
-        )
-    except ImportError:
-        LOGGER.warning(
-            "unify_deploy.client_bundle.bootstrap unavailable; "
-            "skipping offline client-bundle registration",
-        )
-        return
-    ensure_offline_client_bundle()
+    bootstrap_assistant_substrate(
+        project_name=TASK_MACHINE_STATE_PROJECT,
+        reconcile_mode="blocking",
+    )
 
 
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
@@ -623,8 +615,7 @@ async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
 
     _ensure_desktop_env_for_resources(config)
     SESSION_DETAILS.populate_from_env()
-    _ensure_offline_client_bundle()
-    unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
+    _bootstrap_offline_runtime()
     if config.source_type is RunSource.provider_event:
         dispatch = _load_provider_event_dispatch_from_env()
         return await _execute_provider_event_offline_task(config, dispatch)
