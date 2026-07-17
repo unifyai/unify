@@ -680,9 +680,14 @@ class UserTrackCaptureManager:
     ) -> None:
         from livekit import rtc
 
-        self._latest_frame_data: tuple[bytes, int, int] | None = None
-        self._capture_task: asyncio.Task | None = None
-        self._stream = None
+        # Multi-party rooms can carry several publishers of the same source
+        # (two humans with cameras on, or a new presenter taking over the
+        # share). Each publication gets its own capture keyed by sid; the most
+        # recently subscribed publisher with a frame is the "focused" one that
+        # screenshots read — matching the Console's latest-presenter-wins
+        # focus layout.
+        self._captures: dict[str, dict] = {}
+        self._capture_order: list[str] = []
         self._on_track_change = on_track_change
         self._log = fb_logger
         self._room = room
@@ -706,6 +711,10 @@ class UserTrackCaptureManager:
         self._on_track_subscribed = _on_track_subscribed
         self._on_track_unsubscribed = _on_track_unsubscribed
 
+    @staticmethod
+    def _publication_sid(publication) -> str:
+        return str(getattr(publication, "sid", "") or id(publication))
+
     def _handle_track_subscribed(self, track, publication) -> None:
         from livekit import rtc
 
@@ -713,31 +722,46 @@ class UserTrackCaptureManager:
             track.kind == rtc.TrackKind.KIND_VIDEO
             and publication.source == self._rtc_source
         ):
+            sid = self._publication_sid(publication)
+            if sid in self._captures:
+                return
             if self._log:
                 self._log.screenshot_debug(
-                    f"{self._label} track subscribed, starting capture",
+                    f"{self._label} track subscribed ({sid}), starting capture "
+                    f"({len(self._captures) + 1} active)",
                 )
             stream = rtc.VideoStream(track, format=rtc.VideoBufferType.RGBA)
-            self._stream = stream
-            self._capture_task = asyncio.create_task(self._capture_loop(stream))
-            if self._on_track_change is not None:
+            capture: dict = {"stream": stream, "frame": None, "task": None}
+            capture["task"] = asyncio.create_task(
+                self._capture_loop(stream, capture),
+            )
+            first_active = not self._captures
+            self._captures[sid] = capture
+            self._capture_order.append(sid)
+            if first_active and self._on_track_change is not None:
                 asyncio.create_task(self._on_track_change(self._label, True))
 
     def _handle_track_unsubscribed(self, publication) -> None:
-        if publication.source == self._rtc_source:
-            if self._log:
-                self._log.screenshot_debug(
-                    f"{self._label} track unsubscribed, stopping capture",
-                )
-            self._latest_frame_data = None
-            if self._capture_task and not self._capture_task.done():
-                self._capture_task.cancel()
-                self._capture_task = None
-            self._stream = None
-            if self._on_track_change is not None:
-                asyncio.create_task(self._on_track_change(self._label, False))
+        if publication.source != self._rtc_source:
+            return
+        sid = self._publication_sid(publication)
+        capture = self._captures.pop(sid, None)
+        if capture is None:
+            return
+        if sid in self._capture_order:
+            self._capture_order.remove(sid)
+        if self._log:
+            self._log.screenshot_debug(
+                f"{self._label} track unsubscribed ({sid}), "
+                f"{len(self._captures)} still active",
+            )
+        task = capture.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        if not self._captures and self._on_track_change is not None:
+            asyncio.create_task(self._on_track_change(self._label, False))
 
-    async def _capture_loop(self, stream) -> None:
+    async def _capture_loop(self, stream, capture: dict) -> None:
         """Continuously capture frames, rate-limited to 1 per second."""
         import time
 
@@ -753,7 +777,7 @@ class UserTrackCaptureManager:
 
                 if frame.type != rtc.VideoBufferType.RGBA:
                     frame = frame.convert(rtc.VideoBufferType.RGBA)
-                self._latest_frame_data = (
+                capture["frame"] = (
                     bytes(frame.data),
                     frame.width,
                     frame.height,
@@ -769,13 +793,22 @@ class UserTrackCaptureManager:
             except Exception:
                 pass
 
+    def _focused_frame(self) -> tuple[bytes, int, int] | None:
+        """Latest frame from the most recently subscribed active publisher."""
+        for sid in reversed(self._capture_order):
+            capture = self._captures.get(sid)
+            if capture is not None and capture.get("frame") is not None:
+                return capture["frame"]
+        return None
+
     def capture_screenshot(self) -> str | None:
         """Convert the latest captured frame to a base64-encoded JPEG string.
 
-        Returns None if no screen share track is active or no frame has
-        been captured yet.
+        Returns None if no matching track is active or no frame has been
+        captured yet.
         """
-        if self._latest_frame_data is None:
+        frame_data = self._focused_frame()
+        if frame_data is None:
             return None
 
         import base64
@@ -783,7 +816,7 @@ class UserTrackCaptureManager:
 
         from PIL import Image
 
-        rgba_bytes, width, height = self._latest_frame_data
+        rgba_bytes, width, height = frame_data
         img = Image.frombytes("RGBA", (width, height), rgba_bytes, "raw")
         rgb = img.convert("RGB")
         buf = io.BytesIO()
@@ -791,21 +824,22 @@ class UserTrackCaptureManager:
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
     async def close(self) -> None:
-        """Cancel the capture loop and release resources."""
+        """Cancel every capture loop and release resources."""
         if self._closed:
             return
         self._closed = True
         self._room.off("track_subscribed", self._on_track_subscribed)
         self._room.off("track_unsubscribed", self._on_track_unsubscribed)
-        if self._capture_task and not self._capture_task.done():
-            self._capture_task.cancel()
-            try:
-                await self._capture_task
-            except asyncio.CancelledError:
-                pass
-        self._capture_task = None
-        self._latest_frame_data = None
-        self._stream = None
+        for capture in self._captures.values():
+            task = capture.get("task")
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._captures.clear()
+        self._capture_order.clear()
 
 
 # Backward-compatible alias used by call.py imports.
