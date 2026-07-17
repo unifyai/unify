@@ -1534,7 +1534,15 @@ class TaskScheduler(BaseTaskScheduler):
             )
             if not log_objs:
                 raise ValueError(f"No task instance ({task_id}.{instance_id}) found.")
-            assert len(log_objs) == 1, "Composite primary key must be unique."
+            if len(log_objs) != 1:
+                log_ids = [getattr(row, "id", None) for row in log_objs]
+                raise ValueError(
+                    "Composite primary key must be unique for "
+                    f"task_id={task_id}, instance_id={instance_id}; "
+                    f"found {len(log_objs)} rows with log ids {log_ids}. "
+                    "This usually means a fork allocated instance_id outside "
+                    "Tasks auto_counting while a clone reused the same id.",
+                )
 
             new_status_enum = (
                 new_status
@@ -1550,7 +1558,13 @@ class TaskScheduler(BaseTaskScheduler):
             )
 
     def _clone_task_instance(self, task: Task) -> None:
-        """Create the next instance for a triggerable or repeating task."""
+        """Create the next instance for a triggerable or repeating task.
+
+        Omits ``instance_id`` so Orchestra Tasks ``auto_counting`` assigns the
+        next id via ``context_counter``. Explicit REST forks must use that same
+        counter (see orchestra ``task_trigger_service._allocate_next_instance_id``);
+        a parallel ``max(instance_id)+1`` path can collide with this clone.
+        """
 
         clone_payload = task.model_dump(
             exclude={"instance_id", "activated_by"},
