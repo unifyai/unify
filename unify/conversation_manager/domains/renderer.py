@@ -1495,7 +1495,25 @@ class Renderer:
                 if tz_block:
                     tz_block_line = f"\n{tz_block}"
 
-            return f"{new_marker}[{message.name} @ {timestamp_str}]: {message.content}{attachments_line}{tz_block_line}"
+            # Room-scoped Unify messages (team group chat / org chat group)
+            # are visible to the whole room; annotate the scope so replies
+            # target the room via send_unify_message(team_id=/group_id=).
+            room_line = ""
+            if isinstance(message, UnifyMessage):
+                if message.group_id is not None:
+                    room_line = (
+                        f' [group chat group_id="{message.group_id}" — visible to '
+                        f"the whole group; reply with "
+                        f"send_unify_message(group_id={message.group_id})]"
+                    )
+                elif message.team_id is not None:
+                    room_line = (
+                        f' [team chat team_id="{message.team_id}" — visible to '
+                        f"the whole team; reply with "
+                        f"send_unify_message(team_id={message.team_id})]"
+                    )
+
+            return f"{new_marker}[{message.name} @ {timestamp_str}]:{room_line} {message.content}{attachments_line}{tz_block_line}"
 
         if isinstance(message, TeamsMessage):
             attachments_line = ""

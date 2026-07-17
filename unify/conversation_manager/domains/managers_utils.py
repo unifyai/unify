@@ -20,7 +20,6 @@ from unify.common.async_tool_loop import SteerableToolHandle
 from unify.contact_manager.types.contact import UNASSIGNED
 from unify.conversation_manager.domains.comms_utils import (
     publish_system_error,
-    publish_unify_reaction_outbound,
 )
 from unify.conversation_manager.event_broker import get_event_broker
 from unify.conversation_manager.events import *
@@ -265,6 +264,9 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     role="user",
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
+                    thread_id=getattr(cm_event, "thread_id", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    group_id=getattr(cm_event, "group_id", None),
                 )
             case "UnifyMessageSent":
                 entry = cm.contact_index.build_message(
@@ -275,6 +277,9 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     role="assistant",
                     timestamp=ts,
                     attachments=getattr(cm_event, "attachments", None),
+                    thread_id=getattr(cm_event, "thread_id", None),
+                    team_id=getattr(cm_event, "team_id", None),
+                    group_id=getattr(cm_event, "group_id", None),
                 )
 
             # --- API Messages ---
@@ -1052,20 +1057,24 @@ _DM_MEDIA = frozenset(
 )
 # Channels grouped by a native provider-supplied thread id. These reuse the
 # exchange for the whole thread with no inactivity window (a reply days later
-# still belongs to the thread).
+# still belongs to the thread). Unify Console chat keys on the unified
+# chat-store thread id, so a team room and the 1:1 assistant DM never share
+# an exchange.
 _PROVIDER_THREAD_MEDIA = frozenset(
     {
         Medium.DISCORD_CHANNEL_MESSAGE,
         Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
         Medium.SLACK_CHANNEL_MESSAGE,
         Medium.EMAIL,
+        Medium.UNIFY_MESSAGE,
     },
 )
 # Grouped mediums whose exchange is recovered from Exchanges metadata after the
 # in-memory cache is lost (e.g. a CM restart), so the conversation keeps a single
-# exchange id across restarts. DMs (keyed on the contact) and email (keyed on the
-# provider thread) are durable; group channels stay in-memory only.
-_DURABLE_MEDIA = frozenset(_DM_MEDIA | {Medium.EMAIL})
+# exchange id across restarts. DMs (keyed on the contact), email, and Unify
+# Console chat (keyed on their thread) are durable; group channels stay
+# in-memory only.
+_DURABLE_MEDIA = frozenset(_DM_MEDIA | {Medium.EMAIL, Medium.UNIFY_MESSAGE})
 
 
 def _derive_conversation_key(
@@ -1125,6 +1134,11 @@ def _derive_conversation_key(
         if not thread_id:
             return None
         return f"{medium.value}:thread:{thread_id}"
+    if medium == Medium.UNIFY_MESSAGE:
+        thread_id = getattr(event, "thread_id", None)
+        if not thread_id:
+            return None
+        return f"{medium.value}:thread:{thread_id}"
     return None
 
 
@@ -1143,6 +1157,7 @@ def _conversation_exchange_metadata(
         "tenant_id",
         "conversation_id",
         "team_id",
+        "group_id",
         "thread_ts",
         "event_ts",
         "thread_id",
@@ -1468,6 +1483,21 @@ async def log_message(
                     "cc": event.cc,
                     "bcc": event.bcc,
                 }
+            elif isinstance(event, (UnifyMessageReceived, UnifyMessageSent)):
+                # Mirror the unified chat-store scope onto the Transcripts
+                # row: thread_id keys the conversation, team_id/group_id mark
+                # room traffic (vs the private assistant DM), and
+                # chat_message_id links back to the store row (reactions).
+                metadata = {}
+                if event.thread_id is not None:
+                    metadata["thread_id"] = event.thread_id
+                if event.chat_message_id is not None:
+                    metadata["chat_message_id"] = event.chat_message_id
+                if event.team_id is not None:
+                    metadata["team_id"] = event.team_id
+                if event.group_id is not None:
+                    metadata["group_id"] = event.group_id
+                metadata = metadata or None
             elif isinstance(
                 event,
                 (
@@ -1482,6 +1512,17 @@ async def log_message(
                 if meet_participants_meta:
                     metadata = metadata or {}
                     metadata["meet_participants"] = meet_participants_meta
+                if isinstance(
+                    event,
+                    (InboundUnifyMeetUtterance, OutboundUnifyMeetUtterance),
+                ):
+                    call_key = (
+                        cm.call_manager.unify_meet_call_session_id
+                        or cm.call_manager.room_name
+                    )
+                    if call_key:
+                        metadata = metadata or {}
+                        metadata["call_id"] = call_key
 
             # Voice-derived speaker attribution (all diarized voice channels).
             dia_sid = getattr(event, "diarization_speaker_id", None)
@@ -1759,6 +1800,16 @@ async def log_reaction(
     primary_destination = implicit_destinations[0]
     target_message_id = int(getattr(event, "target_message_id", 0) or 0)
     if target_message_id <= 0:
+        chat_message_id = getattr(event, "chat_message_id", None)
+        if chat_message_id:
+            target_message_id = (
+                cm.transcript_manager.resolve_message_id_by_chat_message_id(
+                    int(chat_message_id),
+                    destination=primary_destination,
+                )
+                or 0
+            )
+    if target_message_id <= 0:
         provider_sid = getattr(event, "provider_message_sid", "") or ""
         target_message_id = (
             cm.transcript_manager.resolve_message_id_by_provider_sid(
@@ -1843,15 +1894,9 @@ async def log_reaction(
 
     await asyncio.to_thread(_persist_reaction)
 
-    if isinstance(event, UnifyMessageReactionChanged):
-        await publish_unify_reaction_outbound(
-            contact_id=contact_id,
-            target_message_id=target_message_id,
-            emoji=requested_emoji if action != "removed" else None,
-            action=action,
-            reactions=reactions,
-        )
-
+    # Console reaction frames are published by Orchestra when the reaction is
+    # toggled in the unified chat store; this handler only maintains the
+    # assistant's own Transcripts mirror.
     LOGGER.debug(
         f"{DEFAULT_ICON} Logged reaction on message_id={target_message_id} action={action}",
     )

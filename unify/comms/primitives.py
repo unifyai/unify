@@ -3365,6 +3365,8 @@ class CommsPrimitives:
                 contact=fresh_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
+                thread_id=response.get("thread_id"),
+                chat_message_id=response.get("chat_message_id"),
                 team_id=team_id,
                 group_id=group_id,
                 **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),

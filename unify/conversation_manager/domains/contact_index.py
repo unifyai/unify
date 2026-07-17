@@ -72,6 +72,11 @@ class UnifyMessage(CommsMessage):
     """A message from the Unify console chat interface, optionally with attachments.
 
     Each attachment is a dict with keys: id, filename, gs_url, content_type, size_bytes.
+
+    ``thread_id`` is the unified chat-store thread the message belongs to.
+    ``team_id`` / ``group_id`` mark room-scoped messages (team group chat /
+    org chat group) as opposed to a private 1:1 Console thread — replies to a
+    room must pass the same scope back to ``send_unify_message``.
     """
 
     name: str
@@ -79,6 +84,9 @@ class UnifyMessage(CommsMessage):
     timestamp: datetime
     role: str  # "user" or "assistant"
     attachments: list[dict] = field(default_factory=list)
+    thread_id: int | None = None
+    team_id: int | None = None
+    group_id: int | None = None
 
 
 @dataclass
@@ -580,6 +588,7 @@ class ContactIndex:
         channel_id: str | None = None,
         team_id: str | None = None,
         thread_id: str | None = None,
+        group_id: str | None = None,
         thread_ts: str | None = None,
         event_ts: str | None = None,
         message_id: str | None = None,
@@ -634,6 +643,9 @@ class ContactIndex:
                 timestamp=timestamp,
                 role=role,
                 attachments=attachments or [],
+                thread_id=int(thread_id) if thread_id else None,
+                team_id=int(team_id) if team_id else None,
+                group_id=int(group_id) if group_id else None,
             )
         elif thread_name == Medium.WHATSAPP_MESSAGE:
             message = WhatsAppMessage(
@@ -779,6 +791,7 @@ class ContactIndex:
         channel_id: str | None = None,
         team_id: str | None = None,
         thread_id: str | None = None,
+        group_id: str | None = None,
         thread_ts: str | None = None,
         event_ts: str | None = None,
         message_id: str | None = None,
@@ -813,6 +826,7 @@ class ContactIndex:
             channel_id=channel_id,
             team_id=team_id,
             thread_id=thread_id,
+            group_id=group_id,
             thread_ts=thread_ts,
             event_ts=event_ts,
             message_id=message_id,

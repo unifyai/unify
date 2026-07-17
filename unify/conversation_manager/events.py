@@ -1068,10 +1068,17 @@ class UnifyMessageReceived(Event):
     content: str
     # List of attachment dicts with full metadata (files saved to Attachments/).
     attachments: list[dict] = field(default_factory=list)
+    # Unified chat-store thread this message belongs to. Every Console chat
+    # surface (assistant DM, team, group) has one thread id; replies pass it
+    # back to ``send_unify_message`` so they land in the same room.
+    thread_id: int | None = None
+    # Unified chat-store id of this message (for reaction / edit targeting).
+    chat_message_id: int | None = None
     # Set when the message was posted in a team group chat (Console org
     # chat). Team chat is ordinary unify_message traffic — like a large
     # email CC chain, every team assistant receives a copy — but replies to
-    # the room must pass this team_id back to ``send_unify_message``.
+    # the room must pass this team_id (or thread_id) back to
+    # ``send_unify_message``.
     team_id: int | None = None
     team_name: str = ""
     # Set when the message was posted in an org chat group (non-team room).
@@ -1082,13 +1089,20 @@ class UnifyMessageReceived(Event):
 
 @dataclass
 class UnifyMessageReactionChanged(Event):
-    """A user reacted to a Unify console chat message."""
+    """A user reacted to a Unify console chat message.
+
+    ``chat_message_id`` is the unified chat-store id of the reacted message;
+    ``target_message_id`` (this assistant's own transcript message id) is
+    resolved from the mirror's ``metadata.chat_message_id`` when absent.
+    """
 
     topic: ClassVar[str | None] = "app:comms:unify_message_reaction"
     content_logged: ClassVar[bool] = True
 
     contact: dict
-    target_message_id: int
+    target_message_id: int = 0
+    chat_message_id: int | None = None
+    thread_id: int | None = None
     emoji: str | None = None
     action: Literal["added", "changed", "removed"] = "added"
     previous_emoji: str | None = None
@@ -1277,6 +1291,9 @@ class UnifyMessageSent(Event):
     content: str
     # List of attachment dicts with full metadata.
     attachments: list[dict] = field(default_factory=list)
+    # Unified chat-store thread the message was posted to, and its stored id.
+    thread_id: int | None = None
+    chat_message_id: int | None = None
     # When set, the outbound message was posted into a team or org chat
     # group room rather than a 1:1 Console thread.
     team_id: int | None = None
