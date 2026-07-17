@@ -283,10 +283,13 @@ def _build_task_machine_context_name(
     """
 
     if user_context is None and SESSION_DETAILS.team_owned:
-        return (
-            f"Teams/{SESSION_DETAILS.owner_team_id}/"
-            f"{TASKS_CONTEXT_NAME}/{leaf_name}"
-        )
+        owner_team_id = SESSION_DETAILS.owner_team_id
+        if owner_team_id is None:
+            raise RuntimeError(
+                "Team-owned assistant is missing SESSION_DETAILS.owner_team_id; "
+                "refusing to resolve task-machine contexts onto a personal root.",
+            )
+        return f"Teams/{owner_team_id}/{TASKS_CONTEXT_NAME}/{leaf_name}"
     resolved_user_context = _coerce_str(user_context) or SESSION_DETAILS.user_context
     resolved_assistant_context = (
         _coerce_str(assistant_context) or SESSION_DETAILS.assistant_context

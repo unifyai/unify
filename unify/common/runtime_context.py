@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import unisdk
 
 from unify.session_details import SESSION_DETAILS
@@ -37,6 +39,12 @@ def resolve_runtime_context_root(*, test: bool | None = None) -> str:
         return (
             f"Teams/{SESSION_DETAILS.owner_team_id}"
             f"/Assistants/{SESSION_DETAILS.assistant_context}"
+        )
+    env_owner = (os.environ.get("OWNER_TEAM_ID") or "").strip()
+    if env_owner:
+        raise RuntimeError(
+            "OWNER_TEAM_ID is set but SESSION_DETAILS.owner_team_id is missing; "
+            "refusing to bind a personal runtime root for a team-owned assistant.",
         )
     return f"{SESSION_DETAILS.user_context}/{SESSION_DETAILS.assistant_context}"
 
