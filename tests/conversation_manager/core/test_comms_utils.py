@@ -16,7 +16,6 @@ posting to COMMS_URL when the endpoint lives on the adapters service).
 from __future__ import annotations
 
 import base64
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -806,33 +805,75 @@ class TestLocalCommsBackends:
             _, publish_kwargs = mock_publisher.publish.call_args
             assert publish_kwargs.get("thread") == "assistant_desktop_ready"
 
-    @pytest.mark.asyncio
-    async def test_send_unify_meet_ring_publishes_incoming_thread(self):
-        """The Meet ring publishes a ``unify_meet_incoming`` frame carrying the
-        call session id and reason so the Console can show the Answer window."""
-        mock_publisher = MagicMock()
-        mock_publisher.topic_path.return_value = "projects/p/topics/unity-1"
-        mock_future = MagicMock()
-        mock_future.result.return_value = "ring-msg-1"
-        mock_publisher.publish.return_value = mock_future
+    def test_create_assistant_call_posts_ring_session(self):
+        """The Meet ring creates an Orchestra ``assistant_dm`` call session;
+        Orchestra owns the incoming frame and the answer-triggered dispatch."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {
+            "call_id": "sess-ring-1",
+            "room_name": "unity_call_sess-ring-1",
+            "status": "ringing",
+        }
 
-        with patch(
-            "unify.conversation_manager.domains.comms_utils._get_publisher",
-            return_value=mock_publisher,
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
         ):
-            result = await comms_utils.send_unify_meet_ring(
-                call_session_id="meet-ring-abc",
-                reason="Continuing onboarding on the live call.",
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = comms_utils.create_assistant_call(
+                opening_config={
+                    "mode": "opener",
+                    "opener_text": "Continuing onboarding on the live call.",
+                    "source": "unify_meet_ring",
+                },
             )
 
         assert result["success"] is True
-        mock_publisher.publish.assert_called_once()
-        args, publish_kwargs = mock_publisher.publish.call_args
-        assert publish_kwargs.get("thread") == "unify_meet_incoming"
-        published = json.loads(args[1].decode("utf-8"))
-        assert published["thread"] == "unify_meet_incoming"
-        assert published["event"]["call_session_id"] == "meet-ring-abc"
-        assert published["event"]["reason"] == "Continuing onboarding on the live call."
+        assert result["call_id"] == "sess-ring-1"
+        assert result["room_name"] == "unity_call_sess-ring-1"
+        url = mock_post.call_args.args[0]
+        assert url.endswith("/calls")
+        body = mock_post.call_args.kwargs["json"]
+        assert body["opening_config"]["mode"] == "opener"
+        assert body["opening_config"]["source"] == "unify_meet_ring"
+
+    def test_end_assistant_call_posts_end(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = comms_utils.end_assistant_call("sess-ring-1")
+
+        assert result["success"] is True
+        url = mock_post.call_args.args[0]
+        assert url.endswith("/calls/sess-ring-1/end")
 
     @pytest.mark.asyncio
     async def test_upload_unify_attachment_uses_adapters_url_even_in_local_comms_mode(
