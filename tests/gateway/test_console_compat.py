@@ -872,8 +872,12 @@ def test_console_meet_dispatch_publishes_runtime_event(
         headers=ADMIN_HEADERS,
         json={
             "assistant_id": "123",
-            "room_name": "room-1",
-            "livekit_agent_name": "room-1",
+            "room_name": "unity_call_abc",
+            "call_session_id": "abc",
+            "participants": [
+                {"kind": "human", "user_id": "u1", "display_name": "Boss"},
+                {"kind": "assistant", "assistant_id": 123, "display_name": "Dev"},
+            ],
         },
     )
 
@@ -882,7 +886,28 @@ def test_console_meet_dispatch_publishes_runtime_event(
     assert isinstance(sink, FakeEnvelopeSink)
     _assistant_id, envelope, _thread = sink.published[-1]
     assert envelope["thread"] == "unify_meet"
-    assert envelope["event"]["livekit_room"] == "room-1"
+    assert envelope["event"]["livekit_room"] == "unity_call_abc"
+    assert envelope["event"]["call_session_id"] == "abc"
+    assert [p["kind"] for p in envelope["event"]["participants"]] == [
+        "human",
+        "assistant",
+    ]
+    assert "livekit_agent_name" not in envelope["event"]
+
+
+def test_console_meet_dispatch_rejects_sessionless_payload(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/unify/meet",
+        headers=ADMIN_HEADERS,
+        json={
+            "assistant_id": "123",
+            "room_name": "room-1",
+        },
+    )
+
+    assert response.status_code == 400
 
 
 def test_console_system_event_publishes_runtime_event(
