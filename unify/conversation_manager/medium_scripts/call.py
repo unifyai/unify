@@ -2531,7 +2531,10 @@ async def entrypoint(ctx: agents.JobContext):
             await asyncio.to_thread(audio_bridge.stop)
         await screen_capture.close()
         await webcam_capture.close()
-        if channel != "unify_meet" or explicit_stop_requested:
+        # Unify Meet rooms belong to the call session, never to one agent:
+        # deleting on agent exit would kick remaining humans/co-assistants.
+        # Session end drives departures; LiveKit's empty timeout reaps rooms.
+        if channel != "unify_meet":
             await delete_livekit_room(ctx.room.name)
         await publish_call_ended(contact, channel, call_session_id=call_session_id)
 
@@ -4143,8 +4146,10 @@ if __name__ == "__main__":
         ],
     )
 
-    # Org multi-party rooms share one LiveKit room; each subprocess must
-    # register a distinct agent_name (never the shared org room name).
+    # Unify Meets always carry a call session (enforced at the adapters and
+    # comms-manager boundaries) and share one LiveKit room, so each agent
+    # registers a distinct per-assistant name. Channels that own their room
+    # (phone/WhatsApp/browser meets) register as the room itself.
     call_session_id = os.environ.get("CALL_SESSION_ID", "").strip()
     agent_name = room_name
     if call_session_id:

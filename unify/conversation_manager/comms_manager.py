@@ -2150,7 +2150,18 @@ class CommsManager:
                 )
 
                 if thread == "unify_meet":
+                    # Every meet dispatch carries the call session's roster;
+                    # the primary contact is the first human on it.
                     participants = event.get("participants") or []
+                    call_session_id = event.get("call_session_id")
+                    if not call_session_id or not participants:
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Dropping unify_meet envelope without "
+                            f"call session/roster (session={call_session_id!r}, "
+                            f"participants={len(participants)})",
+                        )
+                        ack_now()
+                        return
                     primary = None
                     for member in participants:
                         if (
@@ -2172,16 +2183,18 @@ class CommsManager:
                                 }
                             break
                     if primary is None:
-                        primary = next(
-                            (c for c in contacts if c.get("contact_id") == 1),
-                            contacts[0] if contacts else {"contact_id": 1},
+                        LOGGER.error(
+                            f"{DEFAULT_ICON} Dropping unify_meet envelope: roster "
+                            "has no human with a contact_id",
                         )
+                        ack_now()
+                        return
                     call_event = UnifyMeetReceived(
                         contact=primary,
                         room_name=event.get("livekit_room"),
                         opening_config=event.get("opening_config"),
-                        call_session_id=event.get("call_session_id"),
-                        participants=participants if participants else None,
+                        call_session_id=call_session_id,
+                        participants=participants,
                     )
                     event_topic = "app:comms:unify_meet_received"
                 elif thread == "whatsapp_call":

@@ -1224,18 +1224,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
     ) -> dict:
         """Ring the owner on Unify Meet and await an answer (no-answer -> text).
 
-        Publishes a ``unify_meet_incoming`` signal so the Console shows a pinned
-        incoming-call window with an Answer button. The assistant cannot join the
-        owner's browser for them; when they answer, Console's normal connect flow
-        lands here as ``UnifyMeetReceived``. ``opener`` is spoken verbatim once
-        the call connects; ``briefing`` is unspoken context the voice agent uses
-        to run the call's task itself; ``allow_hang_up`` pre-arms the hang-up
-        gate for calls expected to be short. If unanswered within
-        ``_MEET_RING_TIMEOUT_S``, a notification tells the brain to continue
-        over text.
+        Creates a ringing ``assistant_dm`` call session in Orchestra, which
+        publishes the incoming-call frame the Console rings on. The assistant
+        cannot join the owner's browser for them; when they answer, Orchestra
+        dispatches this runtime into the room (landing here as
+        ``UnifyMeetReceived``). ``opener`` is spoken verbatim once the call
+        connects; ``briefing`` is unspoken context the voice agent uses to run
+        the call's task itself; ``allow_hang_up`` pre-arms the hang-up gate for
+        calls expected to be short. If unanswered within
+        ``_MEET_RING_TIMEOUT_S``, the session is ended and a notification tells
+        the brain to continue over text.
         """
-        import uuid
-
         from unify.conversation_manager.domains import comms_utils
 
         reason = (opener or "").strip()
@@ -1247,25 +1246,28 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     "the call connects. No ring was sent."
                 ),
             }
-        # The opener round-trips through the Console's answer flow; the
-        # briefing and pre-armed gate stay queued here and are reattached by
-        # start_unify_meet when the owner answers.
+        # The opener rides the call session's opening config, which Orchestra
+        # replays on the answer-triggered dispatch; the briefing and pre-armed
+        # gate stay queued here and are reattached by start_unify_meet.
         self.call_manager.pending_briefing = (briefing or "").strip()
         self.call_manager.pending_hang_up_gate = " ".join(
             (allow_hang_up or "").split(),
         ).strip()
-        call_session_id = f"meet-ring-{uuid.uuid4().hex[:12]}"
-        self._pending_meet_ring = call_session_id
-        result = await comms_utils.send_unify_meet_ring(
-            call_session_id=call_session_id,
-            reason=reason,
+        result = await asyncio.to_thread(
+            comms_utils.create_assistant_call,
+            opening_config={
+                "mode": "opener",
+                "opener_text": reason,
+                "source": "unify_meet_ring",
+            },
         )
-        if not result.get("success"):
-            self._pending_meet_ring = None
+        call_session_id = result.get("call_id") or ""
+        if not result.get("success") or not call_session_id:
             return {
                 "status": "error",
                 "message": "Could not ring the Unify Meet right now.",
             }
+        self._pending_meet_ring = call_session_id
         asyncio.ensure_future(self._await_meet_ring_answer(call_session_id))
         return {
             "status": "ok",
@@ -1281,8 +1283,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if self._pending_meet_ring != call_session_id:
             return  # answered (or superseded) - nothing to do
         from unify.common.prompt_helpers import now as prompt_now
+        from unify.conversation_manager.domains import comms_utils
 
         self._pending_meet_ring = None
+        # End the ringing session so every Console surface clears the ring.
+        await asyncio.to_thread(comms_utils.end_assistant_call, call_session_id)
         # The ring died unanswered: drop its queued pre-armed gate so it
         # cannot leak into a later, unrelated call.
         self.call_manager.pending_hang_up_gate = ""
