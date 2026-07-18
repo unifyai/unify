@@ -457,6 +457,11 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
             and cm.mode == Mode.MEET
             and cm.call_manager.has_active_call
             and event.participants
+            # Only the ACTIVE call's dispatches are roster refreshes. A
+            # dispatch for a different session (e.g. a new call created
+            # while the previous one is still tearing down) must not be
+            # swallowed as a refresh of the dying call.
+            and event.call_session_id == cm.call_manager.unify_meet_call_session_id
         ):
             await cm.call_manager.refresh_unify_meet_roster(event.participants)
             return
