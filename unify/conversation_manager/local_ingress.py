@@ -302,10 +302,23 @@ class LocalCommsIngress:
         room_name = payload.get("room_name", "") or payload.get("livekit_room", "")
         if not room_name:
             raise web.HTTPBadRequest(text="room_name is required")
+        # Every meet envelope requires a call session and roster — the
+        # consumer drops session-less envelopes, so reject them here where
+        # the caller can see the error.
+        call_session_id = str(payload.get("call_session_id") or "").strip()
+        if not call_session_id:
+            raise web.HTTPBadRequest(text="call_session_id is required")
+        participants = payload.get("participants")
+        if isinstance(participants, str) and participants:
+            participants = json.loads(participants)
+        if not isinstance(participants, list) or not participants:
+            raise web.HTTPBadRequest(text="participants roster is required")
         event = {
             "assistant_id": self._current_assistant_id(),
             "contacts": payload.get("contacts") or [],
             "livekit_room": room_name,
+            "call_session_id": call_session_id,
+            "participants": participants,
             "timestamp": int(time.time() * 1000),
         }
         opening_config = payload.get("opening_config")
@@ -320,7 +333,7 @@ class LocalCommsIngress:
             payload.get("assistant_id"),
             event["assistant_id"],
             room_name,
-            payload.get("call_session_id") or "",
+            call_session_id,
             opening_config.get("mode") if isinstance(opening_config, dict) else None,
         )
         await self._dispatch_payload(

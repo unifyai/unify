@@ -204,7 +204,9 @@ async def unify_chat_webhook(
        never listed, which prevents AI reply loops.
     3. ``kind="reaction"`` publishes a ``chat_reaction`` frame plus
        ``unify_message_reaction`` envelopes to the listed assistants.
-    4. ``kind="org_call"`` publishes one Console-only ``org_call_*`` frame.
+    4. ``kind="call"`` publishes one Console-only ``call_*`` signaling frame,
+       routed by call scope: org scopes (dm/team/group) go to the org topic;
+       ``assistant_dm`` goes to the assistant topic.
     """
     require_gateway_admin(request)
     payload = await request_payload(request)
@@ -214,7 +216,7 @@ async def unify_chat_webhook(
     if isinstance(message, str):
         message = parse_json_field(message)
 
-    if kind == "org_call":
+    if kind == "call":
         action = payload.get("action")
         call = payload.get("call") or {}
         if isinstance(call, str):
@@ -228,19 +230,22 @@ async def unify_chat_webhook(
             "participant_left",
         }
         if action not in allowed_actions:
-            return Response(status_code=400, content="invalid org_call action")
-        if not organization_id or not call.get("call_id") or not call.get("room_name"):
+            return Response(status_code=400, content="invalid call action")
+        if not call.get("call_id") or not call.get("room_name"):
             return Response(
                 status_code=400,
-                content="organization_id, call.call_id, and call.room_name required",
+                content="call.call_id and call.room_name required",
             )
+        scope = str(call.get("scope") or "")
         participants = [str(uid) for uid in (call.get("user_ids") or []) if uid]
+        thread = f"call_{action}"
         attributes = {
-            "thread": f"org_call_{action}",
-            "organization_id": str(organization_id),
+            "thread": thread,
             "call_id": str(call["call_id"]),
             "user_ids": ",".join(participants),
         }
+        if organization_id:
+            attributes["organization_id"] = str(organization_id)
         if len(participants) >= 1:
             attributes["dm_user_a"] = participants[0]
         if len(participants) >= 2:
@@ -249,9 +254,30 @@ async def unify_chat_webhook(
             attributes["team_id"] = str(call["team_id"])
         if call.get("group_id") is not None:
             attributes["group_id"] = str(call["group_id"])
+
+        if scope == "assistant_dm":
+            # 1:1 assistant calls signal on the assistant topic — the same
+            # per-assistant stream the owner's Console chat panel follows.
+            assistant_ids = [str(a) for a in (call.get("assistant_ids") or []) if a]
+            if not assistant_ids:
+                return Response(
+                    status_code=400,
+                    content="assistant_dm call frames require assistant_ids",
+                )
+            for frame_assistant_id in assistant_ids:
+                _publish_console_frame(
+                    topic_name=f"unity-{frame_assistant_id}{SETTINGS.ENV_SUFFIX}",
+                    thread=thread,
+                    event=call,
+                    attributes={**attributes, "assistant_id": frame_assistant_id},
+                )
+            return _json_response({"published": True, "fanned_out": 0})
+
+        if not organization_id:
+            return Response(status_code=400, content="organization_id is required")
         _publish_console_frame(
             topic_name=f"unity-org-{organization_id}{SETTINGS.ENV_SUFFIX}",
-            thread=f"org_call_{action}",
+            thread=thread,
             event=call,
             attributes=attributes,
         )
@@ -262,7 +288,7 @@ async def unify_chat_webhook(
             status_code=400,
             content=(
                 "kind must be 'assistant_dm', 'dm', 'team', 'group', "
-                "'reaction', or 'org_call'"
+                "'reaction', or 'call'"
             ),
         )
     if not message:
