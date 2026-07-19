@@ -84,11 +84,11 @@ def join_tables_impl(
         pair_of_args=(
             {
                 "context": left_table,
-                **({} if left_where is None else {"filter_expr": left_where}),
+                **({} if left_where is None else {"filter": left_where}),
             },
             {
                 "context": right_table,
-                **({} if right_where is None else {"filter_expr": right_where}),
+                **({} if right_where is None else {"filter": right_where}),
             },
         ),
         join_expr=join_expr,
@@ -217,17 +217,17 @@ def filter_join_impl(
         pair_of_args=(
             {
                 "context": tables[0],
-                **({"filter_expr": left_where} if left_where else {}),
+                **({"filter": left_where} if left_where else {}),
             },
             {
                 "context": tables[1],
-                **({"filter_expr": right_where} if right_where else {}),
+                **({"filter": right_where} if right_where else {}),
             },
         ),
         join_expr=join_expr,
         mode=mode,
         columns=select,
-        filter_expr=result_where,
+        filter=result_where,
         limit=result_limit,
         offset=result_offset,
     )
@@ -308,11 +308,11 @@ def reduce_join_impl(
         pair_of_args=(
             {
                 "context": tables[0],
-                **({"filter_expr": left_where} if left_where else {}),
+                **({"filter": left_where} if left_where else {}),
             },
             {
                 "context": tables[1],
-                **({"filter_expr": right_where} if right_where else {}),
+                **({"filter": right_where} if right_where else {}),
             },
         ),
         join_expr=join_expr,
@@ -320,7 +320,7 @@ def reduce_join_impl(
         columns=select,
         metric=metric,
         key=columns,
-        filter_expr=result_where,
+        filter=result_where,
         group_by=group_by,
     )
 

@@ -88,7 +88,7 @@ def _build_project_config_dict(
     *,
     project_name: str,
     context: str,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     randomize: bool = False,
     exclude_fields: Optional[List[str]] = None,
     group_by: Optional[str] = None,
@@ -102,8 +102,8 @@ def _build_project_config_dict(
         "randomize": randomize,
     }
 
-    if filter_expr is not None:
-        result["filter_expr"] = filter_expr
+    if filter is not None:
+        result["filter"] = filter
     if exclude_fields is not None:
         result["exclude_fields"] = exclude_fields
     if group_by is not None:
@@ -184,7 +184,7 @@ def generate_plot(
     *,
     config: PlotConfig,
     context: str,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     project_name: Optional[str] = None,
     randomize: bool = False,
     exclude_fields: Optional[List[str]] = None,
@@ -203,7 +203,7 @@ def generate_plot(
         PlotConfig defining the visualization parameters.
     context : str
         Fully-qualified table context path.
-    filter_expr : str | None
+    filter : str | None
         Optional filter expression.
     project_name : str | None
         Unify project name. If None, uses the active project.
@@ -241,7 +241,7 @@ def generate_plot(
     project_config_dict = _build_project_config_dict(
         project_name=project_name,
         context=context,
-        filter_expr=filter_expr,
+        filter=filter,
         randomize=randomize,
         exclude_fields=exclude_fields,
         group_by=project_group_by,
@@ -314,7 +314,7 @@ def generate_plots_batch(
     *,
     contexts: List[str],
     config: PlotConfig,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     project_name: Optional[str] = None,
     randomize: bool = False,
     exclude_fields: Optional[List[str]] = None,
@@ -333,7 +333,7 @@ def generate_plots_batch(
         List of fully-qualified context paths.
     config : PlotConfig
         PlotConfig defining the visualization parameters.
-    filter_expr : str | None
+    filter : str | None
         Optional filter expression.
     project_name : str | None
         Unify project name. If None, uses the active project.
@@ -374,7 +374,7 @@ def generate_plots_batch(
         result = generate_plot(
             config=config,
             context=context,
-            filter_expr=filter_expr,
+            filter=filter,
             project_name=project_name,
             randomize=randomize,
             exclude_fields=exclude_fields,

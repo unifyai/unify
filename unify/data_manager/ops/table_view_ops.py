@@ -81,7 +81,7 @@ def _build_project_config_dict(
     *,
     project_name: str,
     context: str,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the project_config dictionary for the API request."""
     result: Dict[str, Any] = {
@@ -89,8 +89,8 @@ def _build_project_config_dict(
         "context": context,
     }
 
-    if filter_expr is not None:
-        result["filter_expr"] = filter_expr
+    if filter is not None:
+        result["filter"] = filter
 
     return result
 
@@ -162,7 +162,7 @@ def generate_table_view(
     *,
     config: TableViewConfig,
     context: str,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     project_name: Optional[str] = None,
     title: Optional[str] = None,
     title_suffix: Optional[str] = None,
@@ -176,7 +176,7 @@ def generate_table_view(
         Configuration defining columns, sorting, and row limits.
     context : str
         Fully-qualified table context path.
-    filter_expr : str | None
+    filter : str | None
         Optional filter expression.
     project_name : str | None
         Unify project name. If None, uses the active project.
@@ -207,7 +207,7 @@ def generate_table_view(
     project_config_dict = _build_project_config_dict(
         project_name=project_name,
         context=context,
-        filter_expr=filter_expr,
+        filter=filter,
     )
 
     request_body: Dict[str, Any] = {
@@ -277,7 +277,7 @@ def generate_table_views_batch(
     *,
     contexts: List[str],
     config: TableViewConfig,
-    filter_expr: Optional[str] = None,
+    filter: Optional[str] = None,
     project_name: Optional[str] = None,
     title: Optional[str] = None,
 ) -> List[TableViewResult]:
@@ -290,7 +290,7 @@ def generate_table_views_batch(
         List of fully-qualified context paths.
     config : TableViewConfig
         Configuration defining columns, sorting, and row limits.
-    filter_expr : str | None
+    filter : str | None
         Optional filter expression.
     project_name : str | None
         Unify project name. If None, uses the active project.
@@ -322,7 +322,7 @@ def generate_table_views_batch(
         result = generate_table_view(
             config=config,
             context=context,
-            filter_expr=filter_expr,
+            filter=filter,
             project_name=project_name,
             title=title,
             title_suffix=table_label if len(contexts) > 1 else None,
