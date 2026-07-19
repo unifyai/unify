@@ -251,7 +251,7 @@ def delete_file_table_rows(
     *,
     storage_id: str,
     table: str,
-    filter_expr: Optional[str],
+    filter: Optional[str],
 ) -> int:
     """Delete rows from a table context using storage_id.
 
@@ -262,11 +262,11 @@ def delete_file_table_rows(
     dm = file_manager._data_manager
     ctx = _ctx_for_table(file_manager, storage_id=storage_id, table=table)
 
-    if filter_expr is None:
+    if filter is None:
         # Delete all rows via a filter that matches everything
         return dm.delete_rows(context=ctx, filter="1 == 1")
     else:
-        return dm.delete_rows(context=ctx, filter=filter_expr)
+        return dm.delete_rows(context=ctx, filter=filter)
 
 
 def batch_insert_file_table_rows(
@@ -298,7 +298,7 @@ def delete_file_content_rows(
     file_manager: "FileManager",
     *,
     storage_id: str,
-    filter_expr: Optional[str],
+    filter: Optional[str],
 ) -> int:
     """Delete rows from a Content context using storage_id.
 
@@ -309,11 +309,11 @@ def delete_file_content_rows(
     dm = file_manager._data_manager
     ctx = _ctx_for_content(file_manager, storage_id=storage_id)
 
-    if filter_expr is None:
+    if filter is None:
         # Delete all rows
         return dm.delete_rows(context=ctx, filter="1 == 1")
     else:
-        return dm.delete_rows(context=ctx, filter=filter_expr)
+        return dm.delete_rows(context=ctx, filter=filter)
 
 
 # ---------- High-level create helpers (ensure + insert) ------------------------
