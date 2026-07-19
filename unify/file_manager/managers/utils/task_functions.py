@@ -411,13 +411,13 @@ def execute_ingest_content(
                 delete_file_content_rows(
                     file_manager,
                     storage_id=storage_id,
-                    filter_expr=f"file_id == {file_id}",
+                    filter=f"file_id == {file_id}",
                 )
             else:
                 delete_file_content_rows(
                     file_manager,
                     storage_id=storage_id,
-                    filter_expr=None,
+                    filter=None,
                 )
         except Exception as e:
             logger.warning(f"[TaskFn] Failed to delete existing rows: {e}")

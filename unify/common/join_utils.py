@@ -103,11 +103,11 @@ def create_join(
         pair_of_args=(
             {
                 "context": left_context,
-                **({} if left_where is None else {"filter_expr": left_where}),
+                **({} if left_where is None else {"filter": left_where}),
             },
             {
                 "context": right_context,
-                **({} if right_where is None else {"filter_expr": right_where}),
+                **({} if right_where is None else {"filter": right_where}),
             },
         ),
         join_expr=join_expr,
