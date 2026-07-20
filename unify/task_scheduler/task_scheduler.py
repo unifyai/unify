@@ -76,6 +76,7 @@ from .machine_state import (
 from .prompt_builders import (
     build_ask_prompt,
     build_provider_event_run_guidelines,
+    build_provider_event_task_request,
     build_task_execution_request,
     build_task_run_guidelines,
     build_update_prompt,
@@ -1323,9 +1324,16 @@ class TaskScheduler(BaseTaskScheduler):
                 activated_by=reason,
             )
 
+        # Agentic runs only see request text; symbolic runs already get the
+        # payload via entrypoint_kwargs["provider_event_context"].
+        task_request = (
+            build_provider_event_task_request(instance, provider_event_context)
+            if instance.entrypoint is None
+            else build_task_execution_request(instance)
+        )
         return await ActiveTask.create(
             fallback_actor,
-            task_description=build_task_execution_request(instance),
+            task_description=task_request,
             task_id=instance.task_id,
             instance_id=instance.instance_id,
             scheduler=self,
@@ -1338,7 +1346,7 @@ class TaskScheduler(BaseTaskScheduler):
                         "task_execution_context",
                         {},
                     ),
-                    "task_request": build_task_execution_request(instance),
+                    "task_request": task_request,
                 }
                 if instance.entrypoint is not None
                 else None
