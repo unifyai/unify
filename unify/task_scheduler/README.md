@@ -96,6 +96,16 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 ### Execution handle
 
 - `ActiveTask`: the `SteerableToolHandle` returned by `execute`. Mirrors task status to the Tasks row as execution proceeds and handles cancellation interjections.
+- Durable executions materialize a `Tasks/Runs` row (unique `run_key`) and stamp EventBus payloads with `task_id` / `instance_id` / `run_key` plus a `Task.run(...)` hierarchy segment.
+- In `EVENTBUS_ORCHESTRA_PERSIST_MODE=allowlist`, Orchestra keeps a **dense** `Events/ManagerMethod` + `Events/ToolLoop` tree only while that lineage is set; interactive traffic stays on the tool allowlist. Join without duplicating payloads:
+
+```python
+from unify.task_scheduler.task_run_events import fetch_task_run_events
+
+tree = fetch_task_run_events(run_key, events_base_context="{user}/{assistant}/Events")
+```
+
+  Runs may live under `Teams/{id}/Tasks/Runs` while Events stay under the executing assistant’s `…/Events/*` — join is by `run_key` value. Not yet exposed on `primitives.tasks.*`.
 
 
 ### Entrypoints and description-driven execution
