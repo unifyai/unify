@@ -84,6 +84,24 @@ All env vars are read from `~/.unity/unity/.env` (OSS install) or `.env` at the 
 
 For Event Tree and Manager Logs in the GUI/REPL, set `EVENTBUS_PUBLISHING_ENABLED=true`.
 
+### Orchestra-only execution logging (optional)
+
+To persist **only** `execute_code` / `execute_function` EventBus rows to Orchestra
+(while keeping Live Actions Pub/Sub at full fidelity when streaming is on):
+
+```bash
+export EVENTBUS_PUBLISHING_ENABLED=true
+export EVENTBUS_ORCHESTRA_PERSIST_MODE=allowlist
+export EVENTBUS_ORCHESTRA_PERSIST_TOOLS=execute_code,execute_function
+# optional Live Actions stream (unchanged by the allowlist):
+# export EVENTBUS_PUBSUB_STREAMING=true
+```
+
+`EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every
+event to `Events/*`” behavior when publishing is enabled. Task-scoped runs
+annotate hierarchy with `Task.run(task_id=…,instance_id=…)` and payload fields
+`task_id` / `instance_id` / `run_key` for later diagnostics.
+
 ## Troubleshooting
 
 ### Event Tree is empty / Manager Logs show "(no logs)"

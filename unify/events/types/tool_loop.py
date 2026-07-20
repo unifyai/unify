@@ -145,3 +145,16 @@ class ToolLoopPayload(BaseModel):
         default=None,
         description="Sparse mapping of tool_name -> human-readable label for tool calls in this event only",
     )
+    # Optional durable-task attribution (set when published under ActiveTask).
+    task_id: Optional[int] = Field(
+        default=None,
+        description="Owning TaskScheduler task_id when this loop ran under a task",
+    )
+    instance_id: Optional[int] = Field(
+        default=None,
+        description="Owning TaskScheduler instance_id when this loop ran under a task",
+    )
+    run_key: Optional[str] = Field(
+        default=None,
+        description="Owning Tasks/Runs run_key when known",
+    )

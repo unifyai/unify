@@ -131,6 +131,17 @@ class ProductionSettings(BaseSettings):
     # reduce noise. Enable in production deployments.
     EVENTBUS_PUBLISHING_ENABLED: bool = False
 
+    # Orchestra ``Events/*`` persistence mode when publishing is enabled:
+    # - ``all``: write every published event to Orchestra (legacy behavior)
+    # - ``allowlist``: write only ManagerMethod/ToolLoop events whose method
+    #   or tool name is listed in EVENTBUS_ORCHESTRA_PERSIST_TOOLS
+    # Pub/Sub Live Actions streaming is independent (see EVENTBUS_PUBSUB_STREAMING).
+    EVENTBUS_ORCHESTRA_PERSIST_MODE: Literal["all", "allowlist"] = "all"
+
+    # Comma-separated tool/method names when EVENTBUS_ORCHESTRA_PERSIST_MODE
+    # is ``allowlist`` (default: CodeAct execution boundaries + tool results).
+    EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "execute_code,execute_function"
+
     # ─────────────────────────────────────────────────────────────────────────
     # EventBus Pub/Sub Streaming (Live Actions)
     # ─────────────────────────────────────────────────────────────────────────
@@ -139,6 +150,7 @@ class ProductionSettings(BaseSettings):
     # This enables real-time frontend rendering of the agent's activity tree
     # without polling Orchestra. Requires GCP credentials and a provisioned
     # Pub/Sub topic. Disabled by default; enable in production deployments.
+    # Stream filters (stream_filters.py) apply here only — not to Orchestra.
     EVENTBUS_PUBSUB_STREAMING: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -254,6 +266,18 @@ class ProductionSettings(BaseSettings):
     @classmethod
     def parse_deploy_env_field(cls, v: Any) -> str:
         return _parse_deploy_env(v)
+
+    @field_validator("EVENTBUS_ORCHESTRA_PERSIST_MODE", mode="before")
+    @classmethod
+    def parse_orchestra_persist_mode(cls, v: Any) -> str:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "all"
+        normalized = str(v).strip().lower()
+        if normalized not in {"all", "allowlist"}:
+            raise ValueError(
+                "EVENTBUS_ORCHESTRA_PERSIST_MODE must be 'all' or 'allowlist'",
+            )
+        return normalized
 
     model_config = SettingsConfigDict(
         env_file=".env",
