@@ -753,7 +753,7 @@ async def _handle_provider_event_dispatch_requested_event(
             _ConversationTaskExecutionDelegate(actor),
         )
     try:
-        outcome = await handle_provider_event_live_dispatch(request)
+        outcome, handle = await handle_provider_event_live_dispatch(request)
     except (
         ProviderEventDispatchValidationError,
         ProviderEventDispatchAuthorizationError,
@@ -787,15 +787,13 @@ async def _handle_provider_event_dispatch_requested_event(
             f"captured_task_revision={outcome.captured_task_revision}"
         ),
     )
-    if not outcome.adopted_only and outcome.status == "started":
-        cm.notifications_bar.push_notif(
-            "Tasks",
-            (
-                f"Provider event started task {event.task_id} "
-                f"(operation {event.operation_id})."
-            ),
-            event.timestamp,
+    if handle is not None and not outcome.adopted_only and outcome.status == "started":
+        query = (
+            f"Provider event started task {event.task_id} "
+            f"(operation {event.operation_id})."
         )
+        await _register_live_task_handle(cm, handle=handle, query=query)
+        cm.notifications_bar.push_notif("Tasks", query, event.timestamp)
     return False
 
 

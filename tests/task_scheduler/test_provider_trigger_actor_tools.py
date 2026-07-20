@@ -14,8 +14,14 @@ from tests.helpers import _handle_project
 from tests.provider_trigger_delivery import create_github_composio_connection
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler import typed_tasks_client
-from unify.task_scheduler.provider_trigger_actor import CONNECTION_SUMMARY_KEYS
+from unify.task_scheduler.provider_trigger_actor import (
+    CATALOG_REPORTING_NOTE,
+    CATALOG_VISIBILITY,
+    CONNECTION_SUMMARY_KEYS,
+    EMPTY_CONNECTIONS_NOTE,
+)
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.status import Status
 
 _FIXTURE_DIR = (
@@ -43,35 +49,6 @@ def _provider_event_trigger(*, connection_id: str) -> dict[str, Any]:
     )
     payload["connection_id"] = connection_id
     return payload
-
-
-def _mirror_orchestra_task(
-    scheduler: TaskScheduler,
-    *,
-    orchestra_task: dict[str, Any],
-) -> int:
-    """Mirror one Orchestra typed task row into the local Tasks store."""
-
-    scheduler._sync_provider_event_task_row(typed_response=orchestra_task)
-    return int(orchestra_task["task_id"])
-
-
-def _seed_non_provider_task(scheduler: TaskScheduler) -> int:
-    next_task_id = int(scheduler._store.get_metric_max(key="task_id") or 0) + 1
-    with scheduler._use_task_destination(None):
-        scheduler._store.log(
-            entries={
-                "task_id": next_task_id,
-                "instance_id": 0,
-                "name": "Scheduled follow-up",
-                "description": "A scheduled task without provider triggers.",
-                "status": Status.scheduled.value,
-                "enabled": True,
-                "priority": "normal",
-            },
-            new=True,
-        )
-    return next_task_id
 
 
 @pytest.fixture
@@ -106,6 +83,8 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
     assert catalog["outcome"] == "provider trigger catalog listed"
     triggers = catalog["details"].get("triggers") or []
     assert catalog["details"].get("available") is not False
+    assert catalog["details"].get("visibility") == CATALOG_VISIBILITY
+    assert catalog["details"].get("reporting_note") == CATALOG_REPORTING_NOTE
     github_trigger = next(
         (
             item
@@ -134,12 +113,21 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
         backend_id="composio",
     )
     assert connections["outcome"] == "provider trigger connections listed"
+    assert "reporting_note" not in connections["details"]
     for connection in connections["details"].get("connections") or []:
         assert set(connection).issubset(CONNECTION_SUMMARY_KEYS)
         assert not _SECRET_KEYS.intersection(connection)
         serialized = json.dumps(connection)
         for secret_key in _SECRET_KEYS:
             assert secret_key not in serialized
+
+    missing = scheduler._list_provider_trigger_connections(
+        canonical_app_slug="google_calendar",
+        backend_id="composio",
+    )
+    assert missing["outcome"] == "provider trigger connections listed"
+    assert missing["details"].get("connections") == []
+    assert missing["details"].get("reporting_note") == EMPTY_CONNECTIONS_NOTE
 
 
 @pytest.mark.requires_orchestra
@@ -149,20 +137,21 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
 ) -> None:
     scheduler, agent_id, connection = orchestra_assistant_and_scheduler
 
-    created = typed_tasks_client.create_task(
-        payload={
-            "name": "GitHub issue triage",
-            "description": "Triage new GitHub issues.",
-            "status": "triggerable",
-            "trigger": _provider_event_trigger(
-                connection_id=connection["connection_id"],
-            ),
-            "enabled": True,
-            "offline": False,
-            "priority": "normal",
-        },
+    created = scheduler._create_task(
+        name="GitHub issue triage",
+        description="Triage new GitHub issues.",
+        trigger=_provider_event_trigger(
+            connection_id=connection["connection_id"],
+        ),
+        enabled=True,
+        offline=False,
+        priority=Priority.normal,
     )
-    task_id = _mirror_orchestra_task(scheduler, orchestra_task=created)
+    task_id = int(created["details"]["task_id"])
+    seeded = scheduler._get_provider_event_task_or_raise(task_id)
+    assert int(seeded.task_revision) == 1
+    assert seeded.status == Status.triggerable
+    assert seeded.provider_event_binding_id
 
     scheduler._update_task(
         task_id=task_id,
@@ -170,7 +159,7 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     )
     refreshed = typed_tasks_client.get_task(task_id=task_id)
     assert refreshed["task_revision"] == 2
-    task = scheduler._get_task_or_raise(task_id)
+    task = scheduler._get_provider_event_task_or_raise(task_id)
     assert int(task.task_revision) == 2
 
     paused = scheduler._pause_provider_trigger(
@@ -203,7 +192,7 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     with pytest.raises(ValueError, match="Task not found"):
         typed_tasks_client.get_task(task_id=task_id)
     with pytest.raises(ValueError, match="No task found with id="):
-        scheduler._get_task_or_raise(task_id)
+        scheduler._get_provider_event_task_or_raise(task_id)
 
 
 @pytest.mark.requires_orchestra
@@ -226,7 +215,7 @@ def test_provider_trigger_health_and_event_context_tools_are_actor_safe(
             "priority": "normal",
         },
     )
-    task_id = _mirror_orchestra_task(scheduler, orchestra_task=created)
+    task_id = int(created["task_id"])
 
     health = scheduler._get_provider_trigger_health(task_id=task_id)
     assert health["outcome"] == "provider trigger health inspected"
@@ -235,10 +224,18 @@ def test_provider_trigger_health_and_event_context_tools_are_actor_safe(
     assert details["task_revision"] == created["task_revision"]
     assert "manual_run_available" in details
 
+    plain = typed_tasks_client.create_task(
+        payload={
+            "name": "Scheduled follow-up",
+            "description": "A scheduled task without provider triggers.",
+            "status": "scheduled",
+            "enabled": True,
+            "offline": False,
+            "priority": "normal",
+        },
+    )
     with pytest.raises(ValueError, match="does not have a provider-event trigger"):
-        scheduler._get_provider_trigger_health(
-            task_id=_seed_non_provider_task(scheduler),
-        )
+        scheduler._get_provider_trigger_health(task_id=int(plain["task_id"]))
 
     stale_delete = scheduler._delete_provider_event_context(
         task_id=task_id,

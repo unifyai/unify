@@ -24,6 +24,18 @@ CONNECTION_SUMMARY_KEYS = frozenset(
     },
 )
 
+CATALOG_VISIBILITY = "connection_gated"
+CATALOG_REPORTING_NOTE = (
+    "This catalog lists triggers only for apps with an active connection on "
+    "this assistant. Absence does not prove the provider lacks that trigger. "
+    "If an app has no eligible connection, tell the user to connect it first "
+    "and re-check before claiming those trigger types are unavailable."
+)
+EMPTY_CONNECTIONS_NOTE = (
+    "No active eligible connections matched this filter. Guide the user to "
+    "connect that integration first, then re-list connections and the catalog."
+)
+
 
 def task_revision_conflict_outcome(
     exc: TaskRevisionConflictError,
@@ -84,6 +96,26 @@ def summarize_connection(connection: dict[str, Any]) -> dict[str, Any]:
     return {
         key: connection[key] for key in CONNECTION_SUMMARY_KEYS if key in connection
     }
+
+
+def annotate_provider_trigger_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Attach connection-gated reporting metadata for actor-facing catalog results."""
+
+    details = dict(catalog)
+    details["visibility"] = CATALOG_VISIBILITY
+    details["reporting_note"] = CATALOG_REPORTING_NOTE
+    return details
+
+
+def annotate_provider_trigger_connections(
+    connections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Wrap connection list details, noting empty active-connection filters."""
+
+    details: dict[str, Any] = {"connections": connections}
+    if not connections:
+        details["reporting_note"] = EMPTY_CONNECTIONS_NOTE
+    return details
 
 
 def describe_provider_trigger(

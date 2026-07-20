@@ -50,15 +50,6 @@ def _provider_event_trigger(
     return payload
 
 
-def _mirror_orchestra_task(
-    scheduler: TaskScheduler,
-    *,
-    orchestra_task: dict[str, Any],
-) -> int:
-    scheduler._sync_provider_event_task_row(typed_response=orchestra_task)
-    return int(orchestra_task["task_id"])
-
-
 def _fetch_binding_health(*, assistant_id: int, task_id: int) -> dict[str, Any]:
     response = requests.get(
         f"{orchestra_api_base()}/v0/assistants/{assistant_id}/tasks/{task_id}/trigger-health",
@@ -156,7 +147,7 @@ def test_actor_enable_and_stub_delivery_create_one_provider_run(
             "priority": "normal",
         },
     )
-    task_id = _mirror_orchestra_task(scheduler, orchestra_task=created)
+    task_id = int(created["task_id"])
     binding_id = created.get("provider_event_binding_id")
     assert binding_id
 
@@ -240,7 +231,7 @@ def test_actor_non_matching_stub_delivery_creates_no_run(
             "priority": "normal",
         },
     )
-    task_id = _mirror_orchestra_task(scheduler, orchestra_task=created)
+    task_id = int(created["task_id"])
     binding_id = created.get("provider_event_binding_id")
     assert binding_id
 

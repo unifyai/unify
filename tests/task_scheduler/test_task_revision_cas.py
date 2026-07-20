@@ -13,6 +13,7 @@ from unisdk import BASE_URL
 from unisdk.utils import http
 from unisdk.utils.http import RequestError
 
+from tests.provider_trigger_delivery import create_github_composio_connection
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.trigger import ProviderEventTrigger, parse_task_trigger
 from unify.task_scheduler.types.priority import Priority
@@ -31,12 +32,15 @@ _FIXTURE_DIR = (
 )
 
 
-def _provider_event_trigger() -> dict:
-    return json.loads(
+def _provider_event_trigger(*, connection_id: str | None = None) -> dict:
+    payload = json.loads(
         (_FIXTURE_DIR / "task_trigger.provider_event.v1.json").read_text(
             encoding="utf-8",
         ),
     )
+    if connection_id is not None:
+        payload["connection_id"] = connection_id
+    return payload
 
 
 def _provider_event_task(*, task_revision: int | None = 1) -> Task:
@@ -89,6 +93,7 @@ def test_provider_event_authored_patch_round_trip_via_typed_tasks_api() -> None:
         config={"create_infra": False},
     )
     agent_id = int(assistant["agent_id"])
+    connection = create_github_composio_connection(assistant_id=agent_id)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {os.environ.get('UNIFY_KEY', 'local-test-api-key')}",
@@ -102,7 +107,9 @@ def test_provider_event_authored_patch_round_trip_via_typed_tasks_api() -> None:
             "name": "GitHub issue triage",
             "description": "Triage new GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",
@@ -128,6 +135,7 @@ def test_stale_if_match_raises_task_revision_conflict() -> None:
         config={"create_infra": False},
     )
     agent_id = int(assistant["agent_id"])
+    connection = create_github_composio_connection(assistant_id=agent_id)
     headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {os.environ.get('UNIFY_KEY', 'local-test-api-key')}",
@@ -141,7 +149,9 @@ def test_stale_if_match_raises_task_revision_conflict() -> None:
             "name": "GitHub issue handler",
             "description": "Handle GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",
@@ -173,6 +183,7 @@ def test_log_seam_rejects_authored_provider_event_update() -> None:
         config={"create_infra": False},
     )
     agent_id = int(assistant["agent_id"])
+    connection = create_github_composio_connection(assistant_id=agent_id)
     user_id = os.environ.get(
         "AUTH_ACCOUNT_USER_ID",
         "67abcd12-1fac-4a8f-afe9-c54698c96971",
@@ -191,7 +202,9 @@ def test_log_seam_rejects_authored_provider_event_update() -> None:
             "name": "GitHub issue triage",
             "description": "Triage new GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",
@@ -231,41 +244,35 @@ def _orchestra_assistant_scheduler():
         config={"create_infra": False},
     )
     agent_id = int(assistant["agent_id"])
+    connection = create_github_composio_connection(assistant_id=agent_id)
     original_agent_id = SESSION_DETAILS.assistant.agent_id
     SESSION_DETAILS.assistant.agent_id = agent_id
     scheduler = TaskScheduler()
     try:
-        yield scheduler, agent_id
+        yield scheduler, agent_id, connection
     finally:
         SESSION_DETAILS.assistant.agent_id = original_agent_id
-
-
-def _mirror_orchestra_task_row(
-    scheduler: TaskScheduler,
-    *,
-    orchestra_task: dict,
-) -> int:
-    scheduler._sync_provider_event_task_row(typed_response=orchestra_task)
-    return int(orchestra_task["task_id"])
 
 
 @pytest.mark.requires_orchestra
 def test_pause_provider_trigger_returns_revision_conflict_outcome(
     _orchestra_assistant_scheduler,
 ) -> None:
-    scheduler, _agent_id = _orchestra_assistant_scheduler
+    scheduler, _agent_id, connection = _orchestra_assistant_scheduler
     created = typed_tasks_client.create_task(
         payload={
             "name": "GitHub issue triage",
             "description": "Triage new GitHub issues.",
             "status": "triggerable",
-            "trigger": _provider_event_trigger(),
+            "trigger": _provider_event_trigger(
+                connection_id=connection["connection_id"],
+            ),
             "enabled": True,
             "offline": False,
             "priority": "normal",
         },
     )
-    task_id = _mirror_orchestra_task_row(scheduler, orchestra_task=created)
+    task_id = int(created["task_id"])
     conflict = scheduler._pause_provider_trigger(
         task_id=task_id,
         task_revision=0,
