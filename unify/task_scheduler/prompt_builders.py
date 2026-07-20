@@ -226,6 +226,8 @@ def build_ask_prompt(
                     if context_fname
                     else ""
                 ),
+                "The catalog and connection list are connection-gated: they only show apps with an active connection on this assistant.",
+                "If the user asks about an app with no eligible connection or no triggers listed, say that clearly, guide them to connect the integration first, then re-check — do not claim the provider lacks that trigger globally.",
                 "Request full source_body only when the user explicitly asks to inspect raw event data.",
             ],
         )
