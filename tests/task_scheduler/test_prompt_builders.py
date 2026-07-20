@@ -127,6 +127,8 @@ def test_build_update_prompt_includes_provider_event_guidance() -> None:
     assert "Provider-event triggers" in prompt
     assert "task_revision_conflict" in prompt
     assert "pause_provider_trigger" in prompt
+    assert "provider_event_context" in prompt
+    assert "**kwargs" in prompt
 
 
 def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
