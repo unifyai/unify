@@ -113,8 +113,8 @@ def _fake_function_manager() -> FunctionManager:
     )
     fm._inserted_rows = []
     fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows)
-    fm._count_provider_integration_rows_for_app = (
-        lambda **_kwargs: len(fm._inserted_rows)
+    fm._count_provider_integration_rows_for_app = lambda **_kwargs: len(
+        fm._inserted_rows,
     )
     return fm
 
