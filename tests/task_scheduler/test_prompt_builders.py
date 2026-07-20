@@ -142,3 +142,6 @@ def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
     assert "Provider-event triggers (read-only)" in prompt
     assert "list_provider_trigger_catalog" in prompt
     assert "get_provider_trigger_health" in prompt
+    assert "connection-gated" in prompt
+    assert "connect the integration first" in prompt
+    assert "do not claim the provider lacks that trigger globally" in prompt
