@@ -14,7 +14,12 @@ from tests.helpers import _handle_project
 from tests.provider_trigger_delivery import create_github_composio_connection
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler import typed_tasks_client
-from unify.task_scheduler.provider_trigger_actor import CONNECTION_SUMMARY_KEYS
+from unify.task_scheduler.provider_trigger_actor import (
+    CATALOG_REPORTING_NOTE,
+    CATALOG_VISIBILITY,
+    CONNECTION_SUMMARY_KEYS,
+    EMPTY_CONNECTIONS_NOTE,
+)
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.status import Status
@@ -78,6 +83,8 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
     assert catalog["outcome"] == "provider trigger catalog listed"
     triggers = catalog["details"].get("triggers") or []
     assert catalog["details"].get("available") is not False
+    assert catalog["details"].get("visibility") == CATALOG_VISIBILITY
+    assert catalog["details"].get("reporting_note") == CATALOG_REPORTING_NOTE
     github_trigger = next(
         (
             item
@@ -106,12 +113,21 @@ def test_provider_trigger_discovery_tools_use_typed_api_and_redact_connections(
         backend_id="composio",
     )
     assert connections["outcome"] == "provider trigger connections listed"
+    assert "reporting_note" not in connections["details"]
     for connection in connections["details"].get("connections") or []:
         assert set(connection).issubset(CONNECTION_SUMMARY_KEYS)
         assert not _SECRET_KEYS.intersection(connection)
         serialized = json.dumps(connection)
         for secret_key in _SECRET_KEYS:
             assert secret_key not in serialized
+
+    missing = scheduler._list_provider_trigger_connections(
+        canonical_app_slug="google_calendar",
+        backend_id="composio",
+    )
+    assert missing["outcome"] == "provider trigger connections listed"
+    assert missing["details"].get("connections") == []
+    assert missing["details"].get("reporting_note") == EMPTY_CONNECTIONS_NOTE
 
 
 @pytest.mark.requires_orchestra
