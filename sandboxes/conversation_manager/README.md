@@ -86,8 +86,8 @@ For Event Tree and Manager Logs in the GUI/REPL, set `EVENTBUS_PUBLISHING_ENABLE
 
 ### Orchestra-only execution logging (optional)
 
-To persist **only** `execute_code` / `execute_function` EventBus rows to Orchestra
-(while keeping Live Actions Pub/Sub at full fidelity when streaming is on):
+To keep interactive EventBus traffic sparse in Orchestra while still retaining a
+**dense ManagerMethod + ToolLoop tree under ActiveTask runs**:
 
 ```bash
 export EVENTBUS_PUBLISHING_ENABLED=true
@@ -97,10 +97,30 @@ export EVENTBUS_ORCHESTRA_PERSIST_TOOLS=execute_code,execute_function
 # export EVENTBUS_PUBSUB_STREAMING=true
 ```
 
+In ``allowlist`` mode:
+
+- **Outside** a task run: only allowlisted tools (default ``execute_code`` /
+  ``execute_function``) are written to ``Events/*``.
+- **Inside** an ``ActiveTask`` (``CURRENT_TASK_RUN_LINEAGE`` / payload
+  ``run_key`` + ``task_id``/``instance_id``): the full ManagerMethod + ToolLoop
+  tree is persisted and stamped for join from ``Tasks/Runs``.
+
 `EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every
-event to `Events/*`” behavior when publishing is enabled. Task-scoped runs
-annotate hierarchy with `Task.run(task_id=…,instance_id=…)` and payload fields
-`task_id` / `instance_id` / `run_key` for later diagnostics.
+event to `Events/*`” behavior when publishing is enabled.
+
+Load a run’s tree later via ``run_key`` (no content duplication on the Run row):
+
+```python
+from unify.task_scheduler.task_run_events import fetch_task_run_events
+
+tree = fetch_task_run_events(
+    run_key,  # Tasks/Runs.run_key
+    events_base_context="{user}/{assistant}/Events",
+)
+# tree.manager_methods / tree.tool_loops — nest via hierarchy / hierarchy_label
+```
+
+This helper is not yet on ``primitives.tasks.*``.
 
 ## Troubleshooting
 

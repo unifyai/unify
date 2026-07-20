@@ -133,13 +133,16 @@ class ProductionSettings(BaseSettings):
 
     # Orchestra ``Events/*`` persistence mode when publishing is enabled:
     # - ``all``: write every published event to Orchestra (legacy behavior)
-    # - ``allowlist``: write only ManagerMethod/ToolLoop events whose method
-    #   or tool name is listed in EVENTBUS_ORCHESTRA_PERSIST_TOOLS
+    # - ``allowlist``: write ManagerMethod/ToolLoop events whose method or
+    #   tool name is listed in EVENTBUS_ORCHESTRA_PERSIST_TOOLS, **plus** the
+    #   full ManagerMethod + ToolLoop tree when the payload carries task-run
+    #   lineage (``run_key`` / ``task_id``+``instance_id`` under an ActiveTask)
     # Pub/Sub Live Actions streaming is independent (see EVENTBUS_PUBSUB_STREAMING).
     EVENTBUS_ORCHESTRA_PERSIST_MODE: Literal["all", "allowlist"] = "all"
 
     # Comma-separated tool/method names when EVENTBUS_ORCHESTRA_PERSIST_MODE
-    # is ``allowlist`` (default: CodeAct execution boundaries + tool results).
+    # is ``allowlist`` and the event is **not** under a task-run lineage
+    # (default: CodeAct execution boundaries + tool results).
     EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "execute_code,execute_function"
 
     # ─────────────────────────────────────────────────────────────────────────

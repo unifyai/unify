@@ -129,3 +129,49 @@ def test_allowlist_drops_other_event_types():
         mode="allowlist",
         tools=tools,
     )
+
+
+def test_allowlist_dense_under_task_run_lineage():
+    """Task-attributed ManagerMethod/ToolLoop persist fully under allowlist."""
+
+    tools = frozenset({"execute_code", "execute_function"})
+    assert should_persist_to_orchestra(
+        "ManagerMethod",
+        {
+            "method": "act",
+            "manager": "CodeActActor",
+            "task_id": 5,
+            "instance_id": 1,
+            "run_key": "live:scheduled:1:5:abc:once",
+        },
+        mode="allowlist",
+        tools=tools,
+    )
+    assert should_persist_to_orchestra(
+        "ManagerMethod",
+        {
+            "method": "ask",
+            "manager": "ContactManager",
+            "task_id": 5,
+            "instance_id": 1,
+        },
+        mode="allowlist",
+        tools=tools,
+    )
+    assert should_persist_to_orchestra(
+        "ToolLoop",
+        {
+            "kind": ToolLoopKind.THOUGHT.value,
+            "message": {"role": "assistant", "content": "thinking"},
+            "run_key": "live:scheduled:1:5:abc:once",
+        },
+        mode="allowlist",
+        tools=tools,
+    )
+    # Other event types stay sparse even with lineage fields.
+    assert not should_persist_to_orchestra(
+        "LLM",
+        {"model": "gpt", "task_id": 5, "instance_id": 1, "run_key": "rk"},
+        mode="allowlist",
+        tools=tools,
+    )

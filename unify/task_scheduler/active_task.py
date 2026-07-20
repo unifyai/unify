@@ -29,6 +29,7 @@ from unify.events.task_run_lineage import (
 from .machine_state import (
     TaskRunProvenance,
     TaskRunReference,
+    build_task_run_key,
     create_or_adopt_live_task_run,
     update_task_run_record,
 )
@@ -39,6 +40,20 @@ from ..common.handle_wrappers import HandleWrapperMixin
 
 logger = logging.getLogger(__name__)
 _TASK_RUN_SUMMARY_LIMIT = 4000
+
+
+def _resolve_active_task_run_key(
+    *,
+    task_run_reference: TaskRunReference | None,
+    task_run_provenance: TaskRunProvenance | None,
+) -> str | None:
+    """Return the durable Tasks/Runs join key for EventBus lineage."""
+
+    if task_run_reference is not None and task_run_reference.run_key:
+        return str(task_run_reference.run_key)
+    if task_run_provenance is not None:
+        return str(build_task_run_key(task_run_provenance))
+    return None
 
 
 def _now_iso() -> str:
@@ -189,18 +204,47 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         delegate = current_task_execution_delegate.get()
         review_token = None
         lineage_tokens = None
+        # Materialize/adopt the durable Tasks/Runs row before EventBus lineage
+        # so every nested event can carry the join key ``run_key``.
+        materialized_task_run_reference = task_run_reference
+        if materialized_task_run_reference is None and task_run_provenance is not None:
+            try:
+                materialized_task_run_reference = await asyncio.to_thread(
+                    create_or_adopt_live_task_run,
+                    task_run_provenance,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to materialize live task run before execution started "
+                    "(task_id=%s, instance_id=%s)",
+                    task_id,
+                    instance_id,
+                )
         if task_id is not None and instance_id is not None:
-            run_key = None
-            if task_run_reference is not None:
-                run_key = task_run_reference.run_key
-            elif task_run_provenance is not None:
-                from .machine_state import build_task_run_key
-
-                run_key = build_task_run_key(task_run_provenance)
+            run_key = _resolve_active_task_run_key(
+                task_run_reference=materialized_task_run_reference,
+                task_run_provenance=task_run_provenance,
+            )
+            if not run_key and (
+                materialized_task_run_reference is not None
+                or task_run_provenance is not None
+            ):
+                raise RuntimeError(
+                    "ActiveTask EventBus lineage requires a non-empty run_key when a "
+                    f"Tasks/Runs row is adopted or materialized (task_id={task_id}, "
+                    f"instance_id={instance_id}).",
+                )
+            if not run_key:
+                logger.error(
+                    "ActiveTask started without run_key; Events will not join "
+                    "Tasks/Runs (task_id=%s, instance_id=%s)",
+                    task_id,
+                    instance_id,
+                )
             lineage_tokens = push_task_run_lineage(
                 task_id=int(task_id),
                 instance_id=int(instance_id),
-                run_key=str(run_key) if run_key else None,
+                run_key=run_key,
             )
         if task_entrypoint_review is not None:
             review_token = current_post_run_review_context.set(
@@ -248,10 +292,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         persist=False,
                     )
             except Exception as exc:
-                if task_run_reference is not None:
+                if materialized_task_run_reference is not None:
                     await asyncio.to_thread(
                         update_task_run_record,
-                        task_run_reference,
+                        materialized_task_run_reference,
                         {
                             "state": "failed",
                             "completed_at": _now_iso(),
@@ -267,20 +311,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         finally:
             if review_token is not None:
                 current_post_run_review_context.reset(review_token)
-        materialized_task_run_reference = task_run_reference
-        if materialized_task_run_reference is None and task_run_provenance is not None:
-            try:
-                materialized_task_run_reference = await asyncio.to_thread(
-                    create_or_adopt_live_task_run,
-                    task_run_provenance,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to materialize live task run after execution started "
-                    "(task_id=%s, instance_id=%s)",
-                    task_id,
-                    instance_id,
-                )
         instance = cls(
             actor_steerable_handle,  # type: ignore[arg-type]
             task_id=task_id,
