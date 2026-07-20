@@ -961,11 +961,17 @@ const MEET_PREPARE_MAX_ITERATIONS = 3;
 const MEET_JOIN_MAX_ITERATIONS = 3;
 const MEET_PRESENT_MAX_ITERATIONS = 3;
 
+// Backoff between iterations that failed on a transient error (LLM/vision proxy
+// blip, a stale locator on a re-rendering page). Short so a bounded loop that
+// keeps failing still returns well within the join timeout.
+const MAGNITUDE_LOOP_RETRY_BACKOFF_MS = 750;
+
 async function runMagnitudeLoop(
   agent: BrowserAgent,
   task: string,
   maxIterations: number,
   label: string,
+  swallowErrors: boolean = true,
 ): Promise<void> {
   const memory = new AgentMemory({ promptCaching: true });
 
@@ -974,30 +980,58 @@ async function runMagnitudeLoop(
       console.log(`[${label}] Iteration ${iteration + 1}: re-observing...`);
     }
 
-    await agent.recordConnectorObservations(memory);
-    const context = await agent.buildContext(memory);
-    const { reasoning, actions } = await agent.models.partialAct(context, task, [], agent.actions);
+    // Each of these join/prepare steps is a best-effort UI nudge; the caller
+    // classifies the real outcome from the DOM afterwards. A transient failure
+    // inside an iteration (e.g. the vision proxy returning a non-JSON 5xx that
+    // surfaces as a BAML parse error, or a locator going stale mid-render) must
+    // NOT abort the whole join — that produced misleading `join_exception`
+    // 500s even when the browser had actually landed in the meeting. Swallow
+    // per-iteration errors, back off, and let the loop budget + DOM check
+    // decide. Terminal outcomes are still reported by the caller's DOM
+    // classification, never by an exception escaping this loop.
+    try {
+      await agent.recordConnectorObservations(memory);
+      const context = await agent.buildContext(memory);
+      const { reasoning, actions } = await agent.models.partialAct(context, task, [], agent.actions);
 
-    console.log(`[${label}] Iteration ${iteration + 1} reasoning: ${reasoning}`);
-    console.log(`[${label}] Planned ${actions.length} action(s): ${actions.map(a => a.variant).join(', ')}`);
-    memory.recordThought(reasoning);
+      console.log(`[${label}] Iteration ${iteration + 1} reasoning: ${reasoning}`);
+      console.log(`[${label}] Planned ${actions.length} action(s): ${actions.map(a => a.variant).join(', ')}`);
+      memory.recordThought(reasoning);
 
-    if (actions.length === 0) {
-      console.log(`[${label}] LLM planned zero actions — stopping.`);
-      break;
-    }
+      if (actions.length === 0) {
+        console.log(`[${label}] LLM planned zero actions — stopping.`);
+        break;
+      }
 
-    const taskDone = actions.some(a => a.variant === 'task:done');
+      const taskDone = actions.some(a => a.variant === 'task:done');
 
-    for (const action of actions) {
-      const actionDef = agent.identifyAction(action);
-      console.log(`[${label}] Executing: ${actionDef.render(action)}`);
-      await agent.exec(action, memory);
-    }
+      for (const action of actions) {
+        const actionDef = agent.identifyAction(action);
+        console.log(`[${label}] Executing: ${actionDef.render(action)}`);
+        await agent.exec(action, memory);
+      }
 
-    if (taskDone) {
-      console.log(`[${label}] LLM signalled task:done.`);
-      break;
+      if (taskDone) {
+        console.log(`[${label}] LLM signalled task:done.`);
+        break;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isLast = iteration >= maxIterations - 1;
+      // Callers that drive their own exception-based fallback (e.g. Teams audio
+      // config, where a throw signals the pre-join audio UI is absent) opt out
+      // of swallowing by passing swallowErrors=false.
+      if (!swallowErrors) {
+        console.warn(`[${label}] Iteration ${iteration + 1} failed: ${message} — propagating.`);
+        throw err;
+      }
+      console.warn(
+        `[${label}] Iteration ${iteration + 1} failed (non-fatal): ${message}` +
+          (isLast ? ' — iteration budget exhausted, continuing to outcome check.' : ' — retrying.'),
+      );
+      if (!isLast) {
+        await sleep(MAGNITUDE_LOOP_RETRY_BACKOFF_MS);
+      }
     }
   }
 }
@@ -3534,11 +3568,15 @@ async function teamsMeetJoinFlow(agent: BrowserAgent, displayName: string): Prom
   // to an in-meeting fallback after join.
   console.log('[teamsmeet/join] Phase 1b: configuring pre-join audio devices...');
   let preJoinAudioOk = true;
+  // These steps opt out of runMagnitudeLoop's error swallowing (swallowErrors=false):
+  // a throw is the signal that the pre-join audio UI is absent (business Teams),
+  // which triggers the in-meeting fallback below. The surrounding try/catch keeps
+  // that failure local — it never becomes a join_exception.
   try {
-    await runMagnitudeLoop(agent, TEAMS_ENSURE_COMPUTER_AUDIO_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/audio-computer');
-    await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic');
-    await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker');
-    await runMagnitudeLoop(agent, TEAMS_ENSURE_MIC_UNMUTED_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/mic-unmuted');
+    await runMagnitudeLoop(agent, TEAMS_ENSURE_COMPUTER_AUDIO_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/audio-computer', false);
+    await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic', false);
+    await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker', false);
+    await runMagnitudeLoop(agent, TEAMS_ENSURE_MIC_UNMUTED_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/mic-unmuted', false);
   } catch (err) {
     preJoinAudioOk = false;
     console.log(`[teamsmeet/join] Phase 1b: pre-join audio setup failed — will retry in-meeting: ${err}`);
@@ -3555,9 +3593,9 @@ async function teamsMeetJoinFlow(agent: BrowserAgent, displayName: string): Prom
     await sleep(2500);
     console.log('[teamsmeet/join] Phase 2b: pre-join audio failed — configuring via in-meeting Settings...');
     try {
-      await runMagnitudeLoop(agent, TEAMS_AUDIO_SETTINGS_TASK, TEAMS_AUDIO_OPEN_MAX_ITERATIONS, 'teamsmeet/audio-open');
-      await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic-fallback');
-      await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker-fallback');
+      await runMagnitudeLoop(agent, TEAMS_AUDIO_SETTINGS_TASK, TEAMS_AUDIO_OPEN_MAX_ITERATIONS, 'teamsmeet/audio-open', false);
+      await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic-fallback', false);
+      await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker-fallback', false);
     } catch (err) {
       console.log(`[teamsmeet/join] Phase 2b: in-meeting audio fallback also failed — using defaults: ${err}`);
     }
