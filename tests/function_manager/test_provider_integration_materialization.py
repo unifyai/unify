@@ -113,6 +113,9 @@ def _fake_function_manager() -> FunctionManager:
     )
     fm._inserted_rows = []
     fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows)
+    fm._count_provider_integration_rows_for_app = (
+        lambda **_kwargs: len(fm._inserted_rows)
+    )
     return fm
 
 
@@ -429,8 +432,7 @@ def test_staging_sync_logs_skipped_state(monkeypatch, caplog) -> None:
     assert "reason=integrations_not_in_scope" in caplog.text
 
 
-def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
-    monkeypatch.setattr(SETTINGS, "DEPLOY_ENV", "staging")
+def test_sync_fails_when_write_verification_mismatches(monkeypatch, caplog) -> None:
     client = FakeIntegrationOps()
     monkeypatch.setattr(
         "unify.integrations.ops.list_connections",
@@ -440,14 +442,10 @@ def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
         "unify.function_manager.function_manager.list_catalog_tools",
         lambda **_kwargs: list(client.results),
     )
-    monkeypatch.setattr(
-        "unify.function_manager.function_manager.list_private_fields",
-        lambda _context: [],
-    )
-    monkeypatch.setattr("unisdk.get_logs", lambda **_kwargs: [])
     fm = _fake_function_manager()
     fm._primitives_ctx = "Functions/Primitives"
     fm._insert_primitives = lambda _rows: None
+    fm._count_provider_integration_rows_for_app = lambda **_kwargs: 0
     sync_logger = _capture_function_manager_logs(caplog)
 
     try:
@@ -455,12 +453,11 @@ def test_staging_sync_logs_insert_mismatch(monkeypatch, caplog) -> None:
     finally:
         sync_logger.removeHandler(caplog.handler)
 
-    assert result["status"] == "synced"
-    assert "Provider integration sync insert attempt key=composio:hubspot rows=1" in (
-        caplog.text
-    )
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "provider_write_verification_mismatch"
+    assert "expected_rows=1 observed_rows=0" in result["error"]["message"]
+    assert not hasattr(fm, "_stored_hashes")
     assert "Provider integration write verification mismatch" in caplog.text
-    assert "expected_rows=1 observed_rows=0" in caplog.text
 
 
 def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
