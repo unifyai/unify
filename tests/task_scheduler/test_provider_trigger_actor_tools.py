@@ -135,6 +135,7 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     seeded = scheduler._get_provider_event_task_or_raise(task_id)
     assert int(seeded.task_revision) == 1
     assert seeded.status == Status.triggerable
+    assert seeded.provider_event_binding_id
 
     scheduler._update_task(
         task_id=task_id,
