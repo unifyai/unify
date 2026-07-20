@@ -446,6 +446,7 @@ def build_update_prompt(
             ),
             "Pin the exact authorized connection and provider_trigger_slug from the catalog.",
             "Do not use communication-trigger shape (`medium`, `from_contact_ids`) for provider events.",
+            "If a provider-event task later gets a stored symbolic entrypoint, that function must accept `provider_event_context` (or `**kwargs`); otherwise runtime drops the event payload.",
             (
                 f"Pause automation only: `{pause_trigger_fname}(task_id=<id>, task_revision=<rev>)`. "
                 f"Resume: `{resume_trigger_fname}(task_id=<id>, task_revision=<rev>)`."
