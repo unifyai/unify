@@ -843,33 +843,46 @@ const startBrowserOnVm = async (
 }
 
 // --- Google Meet browser launcher ---
-const startGoogleMeetBrowser = async (meetUrl: string): Promise<BrowserAgent> => {
+const startGoogleMeetBrowser = async (
+  meetUrl: string,
+  storageStateName?: string,
+): Promise<BrowserAgent> => {
   try {
+    // ``storageStateName`` (when set) loads ~/.magnitude/browser_states/<name>.json
+    // (cookies + localStorage) before the first page renders, so the meet
+    // browser joins as a signed-in account instead of an anonymous guest that
+    // Google turns away with "You can't join this video call". It is a sibling
+    // key of launchOptions/contextOptions, read by magnitude-core's
+    // BrowserProvider — the same shape getLaunchOptions() produces.
+    const browser: any = {
+      launchOptions: {
+        headless: false,
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          "--disable-features=IsolateOrigins,site-per-process",
+          '--auto-select-desktop-capture-source="Entire screen"',
+          '--auto-select-tab-capture-source-by-title=Desktop',
+        ],
+        env: {
+          ...process.env,
+          PULSE_SINK: "agent_sink",
+          PULSE_SOURCE: "meet_mic",
+        },
+        downloadsPath: defaultBrowserPaths.downloadsPath || undefined,
+        tracesDir: defaultBrowserPaths.tracesDir || undefined,
+      },
+      contextOptions: {
+        viewport: null,
+        ignoreHTTPSErrors: true,
+        permissions: ['camera', 'microphone'],
+      },
+    };
+    if (storageStateName) {
+      browser.storageStateName = storageStateName;
+    }
     const agent = await startBrowserAgent({
       url: meetUrl,
-      browser: {
-        launchOptions: {
-          headless: false,
-          args: [
-            "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
-            '--auto-select-desktop-capture-source="Entire screen"',
-            '--auto-select-tab-capture-source-by-title=Desktop',
-          ],
-          env: {
-            ...process.env,
-            PULSE_SINK: "agent_sink",
-            PULSE_SOURCE: "meet_mic",
-          },
-          downloadsPath: defaultBrowserPaths.downloadsPath || undefined,
-          tracesDir: defaultBrowserPaths.tracesDir || undefined,
-        },
-        contextOptions: {
-          viewport: null,
-          ignoreHTTPSErrors: true,
-          permissions: ['camera', 'microphone'],
-        },
-      },
+      browser,
       narrate: true,
       llm: getLlmConfig()
     });
@@ -3071,18 +3084,26 @@ app.post('/resume', isAgentReady, async (req: Request, res: Response) => {
 // --- Google Meet endpoints ---
 
 app.post('/googlemeet/join', auth, async (req: Request, res: Response) => {
-  const { meetUrl, displayName } = req.body;
+  const { meetUrl, displayName, storageStateName } = req.body;
   if (!meetUrl) {
     return res.status(400).json({ error: 'bad_request', message: 'meetUrl is required.' });
   }
 
   const name = displayName || 'Unity Assistant';
+  // Signed-in join: an explicit body value wins, else fall back to the pod's
+  // configured default. Empty/absent => anonymous guest join (unchanged).
+  const stateName =
+    typeof storageStateName === 'string' && storageStateName
+      ? storageStateName
+      : process.env.MEET_GOOGLE_STORAGE_STATE || undefined;
   const sessionId = randomUUID();
   const t0 = Date.now();
-  console.log(`[googlemeet/join] BEGIN sessionId=${sessionId} url=${meetUrl}`);
+  console.log(
+    `[googlemeet/join] BEGIN sessionId=${sessionId} url=${meetUrl} authed=${stateName ? `yes(${stateName})` : 'no'}`,
+  );
 
   try {
-    const agent = await startGoogleMeetBrowser(meetUrl);
+    const agent = await startGoogleMeetBrowser(meetUrl, stateName);
 
     const result = await googleMeetJoinFlow(agent, name);
     console.log(`[googlemeet/join] Join flow completed: status=${result.status}${result.status === 'error' ? ` reason="${result.reason}"` : ''} [${Date.now() - t0}ms]`);
