@@ -923,12 +923,15 @@ type GoogleMeetJoinResult =
   | { status: 'active' | 'lobby' }
   | { status: 'error'; reason: string };
 
-const MEET_PREPARE_TASK = (displayName: string) =>
-  `You are on a Google Meet pre-join screen. Complete these steps in order:\n` +
-  `1. Dismiss any popups, tooltips, or overlays (e.g. "Got it" button, cookie banners).\n` +
-  `2. If there is a "Your name" text input, clear it and type: ${displayName}\n` +
-  `3. Turn OFF the camera if it is on (click its toggle button). Leave the microphone ON.\n` +
-  `Do NOT change audio device selections — they are handled separately.\n` +
+const MEET_PREPARE_TASK =
+  `You are on a Google Meet meeting entry flow, before the pre-join screen is fully ready.\n` +
+  `The browser is signed in to a Google account, so there is no name field to fill.\n` +
+  `Complete these steps in order, skipping any that do not apply:\n` +
+  `1. Dismiss any popups, tooltips, or overlays (e.g. "Got it" button, cookie banners, download-the-app prompts).\n` +
+  `2. Turn OFF the camera if its toggle is currently on. Leave the microphone toggle alone.\n` +
+  `Stop as soon as the pre-join screen (with an "Ask to join" / "Join now" button) is visible and stable.\n` +
+  `Do NOT click "Ask to join", "Join now", or "Join" — joining is handled in a separate later step.\n` +
+  `Do NOT change or open any audio device selections — they are handled separately.\n` +
   `Ignore any warnings about camera/microphone not being found — those are expected.\n` +
   `If the page shows a fatal error like "invalid meeting link" or "this meeting has ended", do nothing — just stop.`;
 
@@ -1133,16 +1136,17 @@ const MEET_SELECT_SPEAKER_TASK = (speakerLabel: string) =>
 
 const MEET_AUDIO_MAX_ITERATIONS = 3;
 
-async function googleMeetJoinFlow(agent: BrowserAgent, displayName: string): Promise<GoogleMeetJoinResult> {
+async function googleMeetJoinFlow(agent: BrowserAgent): Promise<GoogleMeetJoinResult> {
   const page = agent.page;
   await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
 
   const pageUrl = page.url?.() ?? 'unknown';
   console.log(`[googlemeet/join] Page loaded: url=${pageUrl}`);
 
-  // Phase 1: LLM handles variable UI (popups, name, camera)
+  // Phase 1: pre-join prep (popups, camera off). The browser joins signed in
+  // via persistent storage state, so there is no name field to fill.
   console.log('[googlemeet/join] Phase 1: prepare...');
-  await runMagnitudeLoop(agent, MEET_PREPARE_TASK(displayName), MEET_PREPARE_MAX_ITERATIONS, 'googlemeet/prepare');
+  await runMagnitudeLoop(agent, MEET_PREPARE_TASK, MEET_PREPARE_MAX_ITERATIONS, 'googlemeet/prepare');
 
   // Phase 1b: Audio device selection — Playwright opens Settings, LLM handles each step
   console.log('[googlemeet/join] Phase 1b: opening Settings for audio device selection...');
@@ -3139,7 +3143,7 @@ app.post('/googlemeet/join', auth, async (req: Request, res: Response) => {
   try {
     const agent = await startGoogleMeetBrowser(meetUrl, stateName);
 
-    const result = await googleMeetJoinFlow(agent, name);
+    const result = await googleMeetJoinFlow(agent);
     console.log(`[googlemeet/join] Join flow completed: status=${result.status}${result.status === 'error' ? ` reason="${result.reason}"` : ''} [${Date.now() - t0}ms]`);
 
     if (result.status === 'error') {
