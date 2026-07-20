@@ -1246,6 +1246,7 @@ class TaskScheduler(BaseTaskScheduler):
             definition=definition,
             operation_id=request.operation_id,
             captured_task_revision=captured_task_revision,
+            binding_id=request.binding_id,
         )
         source_task_log_id = self._get_log_by_task_instance(
             task_id=instance.task_id,
@@ -1384,6 +1385,7 @@ class TaskScheduler(BaseTaskScheduler):
         definition: Task,
         operation_id: str,
         captured_task_revision: int,
+        binding_id: str | None = None,
     ) -> Task:
         """Create or adopt one execution instance keyed by operation identity."""
 
@@ -1400,6 +1402,15 @@ class TaskScheduler(BaseTaskScheduler):
                 launch_identity=launch_identity,
             )
 
+        resolved_binding_id = (
+            binding_id or definition.provider_event_binding_id or ""
+        ).strip() or None
+        if resolved_binding_id is None:
+            raise ValueError(
+                "provider_event_binding_id is required to create a captured "
+                "provider-event instance.",
+            )
+
         clone_payload = definition.model_dump(
             exclude={"instance_id", "activated_by", "info"},
             mode="json",
@@ -1408,6 +1419,7 @@ class TaskScheduler(BaseTaskScheduler):
         clone_payload["task_id"] = definition.task_id
         clone_payload["task_revision"] = captured_task_revision
         clone_payload["info"] = launch_identity
+        clone_payload["provider_event_binding_id"] = resolved_binding_id
         with self._use_task_destination(definition.destination):
             created = self._store.log(entries=clone_payload, new=True)
         if self._num_tasks_cached is not None:
@@ -2788,6 +2800,7 @@ class TaskScheduler(BaseTaskScheduler):
         }
         for key in (
             "task_revision",
+            "provider_event_binding_id",
             "name",
             "description",
             "status",
