@@ -3261,22 +3261,49 @@ class FunctionManager(BaseFunctionManager):
                 key,
                 len(rows),
             )
-            self._insert_primitives(rows)
-            if staging_diagnostics_enabled():
-                observed_rows = self._count_provider_integration_rows_for_app(
-                    backend_id=backend_id,
-                    app_slug=item_app,
+            try:
+                self._insert_primitives(rows)
+            except Exception as exc:
+                logger.error(
+                    "Provider integration sync insert failed key=%s rows=%d error=%s",
+                    key,
+                    len(rows),
+                    exc,
                 )
-                if observed_rows is not None and observed_rows != len(rows):
-                    logger.warning(
-                        (
-                            "Provider integration write verification mismatch "
-                            "key=%s expected_rows=%d observed_rows=%d"
+                return {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_primitive_insert_failed",
+                        "message": (
+                            f"Failed to insert provider primitives for {key}: {exc}"
                         ),
-                        key,
-                        len(rows),
-                        observed_rows,
-                    )
+                    },
+                    "apps": changed_apps,
+                    "unchanged_apps": unchanged_apps,
+                    "removed_apps": removed_apps,
+                }
+            # ponytail: full get_logs re-read to count; swap for cheap count API.
+            observed_rows = self._count_provider_integration_rows_for_app(
+                backend_id=backend_id,
+                app_slug=item_app,
+            )
+            if observed_rows is None or observed_rows != len(rows):
+                message = (
+                    "Provider integration write verification mismatch "
+                    f"key={key} expected_rows={len(rows)} "
+                    f"observed_rows={observed_rows}"
+                )
+                logger.error(message)
+                return {
+                    "status": "error",
+                    "error": {
+                        "code": "provider_write_verification_mismatch",
+                        "message": message,
+                    },
+                    "apps": changed_apps,
+                    "unchanged_apps": unchanged_apps,
+                    "removed_apps": removed_apps,
+                }
             new_hashes[key] = expected_hash
             changed_apps.append(
                 {"key": key, "rows": len(rows), "rows_deleted": deleted},
@@ -3371,6 +3398,7 @@ class FunctionManager(BaseFunctionManager):
             logger.debug(f"Inserted {len(entries)} primitives")
         except Exception as e:
             logger.error(f"Failed to insert primitives: {e}")
+            raise
 
     # ------------------------------------------------------------------ #
     #  Custom Functions Sync                                              #
