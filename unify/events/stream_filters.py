@@ -4,7 +4,8 @@ Rules that identify events which are internal bookkeeping artifacts and
 should be suppressed from the real-time Pub/Sub stream (and its SSE
 frontend feed) to save bandwidth and reduce UI clutter.
 
-Unify context logs remain **unfiltered** -- these rules only gate the
+Unify context (Orchestra) logs are gated separately by
+``persist_filters.should_persist_to_orchestra`` — these rules only gate the
 Pub/Sub publishing path in ``EventBus.publish()``.
 
 Two categories of filtering exist:

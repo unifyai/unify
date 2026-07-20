@@ -1,5 +1,10 @@
 """In‑process, asyncio‑friendly event stream **prefilled from Unify logs** and
 restricted to Pydantic payload types declared in *events/types/*.
+
+Orchestra persistence (``Events/*``) can be narrowed independently of Pub/Sub
+Live Actions via ``EVENTBUS_ORCHESTRA_PERSIST_MODE`` /
+``EVENTBUS_ORCHESTRA_PERSIST_TOOLS`` (see ``persist_filters``). Stream noise
+rules in ``stream_filters`` affect Pub/Sub only.
 """
 
 from __future__ import annotations
@@ -45,7 +50,9 @@ from ..common.global_docstrings import CLEAR_METHOD_DOCSTRING
 from ..common.log_utils import _inject_private_fields, payload_from_log_entries
 from ..common.model_to_fields import model_to_fields
 from ..logger import LOGGER
+from .persist_filters import should_persist_to_orchestra
 from .stream_filters import is_streaming_noise
+from .task_run_lineage import enrich_payload_with_task_run_lineage
 
 # ---------------------------------------------------------------------------
 # Context-variable to track the *root* sequence number of a callback cascade.
@@ -935,6 +942,8 @@ class EventBus:
             if isinstance(event.payload, BaseModel)
             else Event._to_python(event.payload)
         )
+        if isinstance(payload_dict, dict):
+            enrich_payload_with_task_run_lineage(payload_dict)
 
         # Base entries for the log write (before private field injection)
         base_entries = {
@@ -950,14 +959,21 @@ class EventBus:
         # spread into columns for queryability. ``type`` is retained as a column
         # (not just implied by the context name) so ``type``-predicated search
         # filters resolve against the per-type context read path.
-        specific_entries = _inject_private_fields(
-            {
-                **base_entries,
-                "type": event.type,
-                **payload_dict,
-            },
-        )
-        self._pending_writes.append((specific_entries, self._specific_ctxs[event.type]))
+        #
+        # Orchestra persistence can be narrowed via
+        # EVENTBUS_ORCHESTRA_PERSIST_MODE / EVENTBUS_ORCHESTRA_PERSIST_TOOLS
+        # without affecting in-memory deques or Pub/Sub Live Actions.
+        if should_persist_to_orchestra(event.type, payload_dict):
+            specific_entries = _inject_private_fields(
+                {
+                    **base_entries,
+                    "type": event.type,
+                    **payload_dict,
+                },
+            )
+            self._pending_writes.append(
+                (specific_entries, self._specific_ctxs[event.type]),
+            )
 
         # ── Stream action events to Pub/Sub for real-time frontend rendering ─
         if event.type in self._ACTION_EVENT_TYPES:

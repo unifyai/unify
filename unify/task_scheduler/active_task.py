@@ -22,6 +22,10 @@ from unify.common.task_execution_context import (
     current_task_execution_delegate,
 )
 from unify.common._async_tool.messages import forward_handle_call
+from unify.events.task_run_lineage import (
+    push_task_run_lineage,
+    reset_task_run_lineage,
+)
 from .machine_state import (
     TaskRunProvenance,
     TaskRunReference,
@@ -147,6 +151,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         self._was_stopped: bool = False
         self._last_intent: Optional[str] = None
         self._last_intent_reason: Optional[str] = None
+        self._task_run_lineage_tokens = None
 
         # Register the underlying actor handle for standardized wrapper discovery
         self._wrap_handle(actor_handle)
@@ -183,6 +188,20 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         """
         delegate = current_task_execution_delegate.get()
         review_token = None
+        lineage_tokens = None
+        if task_id is not None and instance_id is not None:
+            run_key = None
+            if task_run_reference is not None:
+                run_key = task_run_reference.run_key
+            elif task_run_provenance is not None:
+                from .machine_state import build_task_run_key
+
+                run_key = build_task_run_key(task_run_provenance)
+            lineage_tokens = push_task_run_lineage(
+                task_id=int(task_id),
+                instance_id=int(instance_id),
+                run_key=str(run_key) if run_key else None,
+            )
         if task_entrypoint_review is not None:
             review_token = current_post_run_review_context.set(
                 PostRunReviewContext(
@@ -242,6 +261,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                             ),
                         },
                     )
+                reset_task_run_lineage(lineage_tokens)
+                lineage_tokens = None
                 raise
         finally:
             if review_token is not None:
@@ -260,13 +281,15 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     task_id,
                     instance_id,
                 )
-        return cls(
+        instance = cls(
             actor_steerable_handle,  # type: ignore[arg-type]
             task_id=task_id,
             instance_id=instance_id,
             scheduler=scheduler,
             task_run_reference=materialized_task_run_reference,
         )
+        instance._task_run_lineage_tokens = lineage_tokens
+        return instance
 
     @functools.wraps(BaseActiveTask.ask, updated=())
     async def ask(
@@ -318,6 +341,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     result_summary=f"Task cancelled: {stop_reason}",
                 ),
             )
+            reset_task_run_lineage(self._task_run_lineage_tokens)
+            self._task_run_lineage_tokens = None
             return
 
         await self._actor_handle.interject(message)  # type: ignore[arg-type]
@@ -351,6 +376,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             ),
         )
         asyncio.create_task(self._save_final_summary("cancelled"))
+        reset_task_run_lineage(self._task_run_lineage_tokens)
+        self._task_run_lineage_tokens = None
 
     @functools.wraps(BaseActiveTask.pause, updated=())
     async def pause(self) -> Optional[str]:
@@ -474,36 +501,40 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 )
 
         finally:
-            if (
-                final_status
-                and not self._was_stopped
-                and self._scheduler
-                and self._task_id is not None
-                and self._instance_id is not None
-            ):
-                self._scheduler._update_task_status_instance(  # type: ignore[attr-defined]
-                    task_id=self._task_id,
-                    instance_id=self._instance_id,
-                    new_status=final_status,
-                )
-                await self._persist_task_run_terminal_state(
-                    state=final_status,
-                    result_summary=ret,
-                    error=str(error) if error is not None else None,
-                )
+            try:
+                if (
+                    final_status
+                    and not self._was_stopped
+                    and self._scheduler
+                    and self._task_id is not None
+                    and self._instance_id is not None
+                ):
+                    self._scheduler._update_task_status_instance(  # type: ignore[attr-defined]
+                        task_id=self._task_id,
+                        instance_id=self._instance_id,
+                        new_status=final_status,
+                    )
+                    await self._persist_task_run_terminal_state(
+                        state=final_status,
+                        result_summary=ret,
+                        error=str(error) if error is not None else None,
+                    )
 
-                if not getattr(self, "_summary_scheduled", False):
-                    try:
-                        logger.info(
-                            "--- Scheduling save_final_summary for %s.%s with status: %s ---",
-                            self._task_id,
-                            self._instance_id,
-                            final_status,
-                        )
-                        asyncio.create_task(self._save_final_summary(final_status))
-                        self._summary_scheduled = True  # type: ignore[attr-defined]
-                    except Exception as summary_e:
-                        logger.error("Error creating summary task: %s", summary_e)
+                    if not getattr(self, "_summary_scheduled", False):
+                        try:
+                            logger.info(
+                                "--- Scheduling save_final_summary for %s.%s with status: %s ---",
+                                self._task_id,
+                                self._instance_id,
+                                final_status,
+                            )
+                            asyncio.create_task(self._save_final_summary(final_status))
+                            self._summary_scheduled = True  # type: ignore[attr-defined]
+                        except Exception as summary_e:
+                            logger.error("Error creating summary task: %s", summary_e)
+            finally:
+                reset_task_run_lineage(self._task_run_lineage_tokens)
+                self._task_run_lineage_tokens = None
 
         if error and final_status == "failed":
             raise error
