@@ -8,6 +8,7 @@ through Orchestra before instance start I/O.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
@@ -29,6 +30,9 @@ from unify.task_scheduler.provider_event_dispatch import (
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
 
+if TYPE_CHECKING:
+    from unify.common.async_tool_loop import SteerableToolHandle
+
 
 def resolve_captured_task_revision(*, task_id: int) -> int:
     """Return the authored task revision captured for one live dispatch."""
@@ -43,8 +47,13 @@ def resolve_captured_task_revision(*, task_id: int) -> int:
 
 async def handle_provider_event_live_dispatch(
     request: ProviderEventDispatchRequest,
-) -> LiveProviderEventDispatchOutcome:
-    """Validate, claim through Orchestra, and start at most one live instance."""
+) -> tuple[LiveProviderEventDispatchOutcome, SteerableToolHandle | None]:
+    """Validate, claim through Orchestra, and start at most one live instance.
+
+    On a successful start, return the live ``ActiveTask`` handle so the caller
+    can await completion (task status + run terminal state). Adopt-only and
+    already-terminal claims return ``None`` for the handle.
+    """
 
     validate_provider_event_dispatch_request(
         request,
@@ -68,21 +77,24 @@ async def handle_provider_event_live_dispatch(
         launch_identity=launch_identity,
     )
     if claimed.status in {"started", "terminal"} or claimed.adopted_only:
-        return LiveProviderEventDispatchOutcome(
-            operation_id=claimed.operation_id,
-            run_id=claimed.run_id,
-            run_key=claimed.run_key,
-            captured_task_revision=captured_task_revision,
-            status=claimed.status,
-            fencing_token=claimed.fencing_token,
-            adopted_only=True,
-            launch_identity=claimed.launch_identity or launch_identity,
-            terminal_reason=claimed.terminal_reason,
+        return (
+            LiveProviderEventDispatchOutcome(
+                operation_id=claimed.operation_id,
+                run_id=claimed.run_id,
+                run_key=claimed.run_key,
+                captured_task_revision=captured_task_revision,
+                status=claimed.status,
+                fencing_token=claimed.fencing_token,
+                adopted_only=True,
+                launch_identity=claimed.launch_identity or launch_identity,
+                terminal_reason=claimed.terminal_reason,
+            ),
+            None,
         )
 
     scheduler = TaskScheduler()
     try:
-        await scheduler.start_provider_event_instance(
+        handle = await scheduler.start_provider_event_instance(
             request=request,
             captured_task_revision=captured_task_revision,
             provider_event_context=untrusted,
@@ -100,10 +112,11 @@ async def handle_provider_event_live_dispatch(
     except ProviderEventDispatchAuthorizationError:
         raise
 
-    return await asyncio.to_thread(
+    outcome = await asyncio.to_thread(
         report_provider_event_dispatch_started,
         operation_id=request.operation_id,
         fencing_token=claimed.fencing_token,
         launch_identity=launch_identity,
         captured_task_revision=captured_task_revision,
     )
+    return outcome, handle
