@@ -4747,17 +4747,23 @@ class CodeActActor(BaseCodeActActor):
             "wait for the user to provide instructions via interjection."
         )
 
-        # Clarification queues:
-        # - When enabled, we ensure the handle has queues (either provided by caller or newly created).
-        # - When disabled, we do not provide queues and we do not wire queue injection into environments.
-        clarification_up_q: Optional[asyncio.Queue[str]]
-        clarification_down_q: Optional[asyncio.Queue[str]]
+        # Clarification queues for sandbox env injection (managers called from
+        # execute_code). Separate from the tool-loop clarification_queues below:
+        # auto-created env queues are unread on the CM→act path, so the loop
+        # gets (None, None) unless the caller supplied queues explicitly.
+        caller_supplied_clarification_queues = (
+            clarification_enabled
+            and _clarification_up_q is not None
+            and _clarification_down_q is not None
+        )
+        env_clarification_up_q: Optional[asyncio.Queue[str]]
+        env_clarification_down_q: Optional[asyncio.Queue[str]]
         if clarification_enabled:
-            clarification_up_q = _clarification_up_q or asyncio.Queue()
-            clarification_down_q = _clarification_down_q or asyncio.Queue()
+            env_clarification_up_q = _clarification_up_q or asyncio.Queue()
+            env_clarification_down_q = _clarification_down_q or asyncio.Queue()
         else:
-            clarification_up_q = None
-            clarification_down_q = None
+            env_clarification_up_q = None
+            env_clarification_down_q = None
 
         # Create per-call environments so clarification queues are not stored on shared actor environments.
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] copying environments")
@@ -4781,8 +4787,8 @@ class CodeActActor(BaseCodeActActor):
                 if _CompositeEnv is not None and isinstance(env, _CompositeEnv):
                     sandbox_envs[ns] = _CompositeEnv(
                         env.sub_environments,
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
                 if _ComputerEnvironment is not None and isinstance(
@@ -4791,8 +4797,8 @@ class CodeActActor(BaseCodeActActor):
                 ):
                     sandbox_envs[ns] = _ComputerEnvironment(
                         env._computer_primitives,
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
                 if _StateManagerEnvironment is not None and isinstance(
@@ -4801,8 +4807,8 @@ class CodeActActor(BaseCodeActActor):
                 ):
                     sandbox_envs[ns] = _StateManagerEnvironment(
                         env.get_instance(),
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
             except Exception:
@@ -4812,9 +4818,9 @@ class CodeActActor(BaseCodeActActor):
             try:
                 env_copy = copy.copy(env)
                 if hasattr(env_copy, "_clarification_up_q"):
-                    setattr(env_copy, "_clarification_up_q", clarification_up_q)
+                    setattr(env_copy, "_clarification_up_q", env_clarification_up_q)
                 if hasattr(env_copy, "_clarification_down_q"):
-                    setattr(env_copy, "_clarification_down_q", clarification_down_q)
+                    setattr(env_copy, "_clarification_down_q", env_clarification_down_q)
                 sandbox_envs[ns] = env_copy
             except Exception:
                 sandbox_envs[ns] = env
@@ -5189,8 +5195,14 @@ class CodeActActor(BaseCodeActActor):
         _clar_queues = None
         _on_clar_req = None
         _on_clar_ans = None
-        if clarification_up_q is not None and clarification_down_q is not None:
-            _clar_queues = (clarification_up_q, clarification_down_q)
+        if clarification_enabled:
+            # (None, None) still injects request_clarification; the tool then
+            # uses per-call hidden queues so CM sees handle._clar_q events.
+            _clar_queues = (
+                (env_clarification_up_q, env_clarification_down_q)
+                if caller_supplied_clarification_queues
+                else (None, None)
+            )
 
             async def _on_clar_req(q: str):
                 try:
