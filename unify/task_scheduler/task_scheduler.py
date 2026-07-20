@@ -1351,9 +1351,9 @@ class TaskScheduler(BaseTaskScheduler):
     def _get_provider_event_definition(self, *, task_id: int) -> Task:
         """Return the authored definition row for one provider-event task.
 
-        Concurrent captured instances must not be mistaken for the definition.
-        Prefer the lowest ``instance_id`` that still carries the provider-event
-        trigger and is not an operation-scoped captured row.
+        Prefer a non-captured Tasks-store definition when present. Fall back to
+        the typed Tasks API for definitions authored only through that path.
+        Captured execution instances are never returned here.
         """
 
         from unify.task_scheduler.provider_event_dispatch import (
@@ -1361,8 +1361,6 @@ class TaskScheduler(BaseTaskScheduler):
         )
 
         rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
-        if not rows:
-            raise ValueError(f"No task found with id={task_id}")
         definitions = [
             row
             for row in rows
@@ -1371,9 +1369,14 @@ class TaskScheduler(BaseTaskScheduler):
                 _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
             )
         ]
-        if not definitions:
-            raise ProviderEventDispatchValidationError("task_trigger_mismatch")
-        return sorted(definitions, key=lambda row: row.instance_id)[0]
+        if definitions:
+            return sorted(definitions, key=lambda row: row.instance_id)[0]
+        try:
+            return self._get_provider_event_task_or_raise(task_id)
+        except ValueError as exc:
+            if not rows:
+                raise ValueError(f"No task found with id={task_id}") from exc
+            raise ProviderEventDispatchValidationError("task_trigger_mismatch") from exc
 
     def _create_provider_event_captured_instance(
         self,
@@ -1854,12 +1857,11 @@ class TaskScheduler(BaseTaskScheduler):
         if trigger is not None and isinstance(trigger, ProviderEventTrigger):
             created = typed_tasks_client.create_task(payload=task_details)
             task_id = int(created["task_id"])
-            self._sync_provider_event_task_row(typed_response=created)
         else:
             log = self._store.log(entries=task_details, new=True)
             task_id = int(log.entries["task_id"])
-        if self._num_tasks_cached is not None:
-            self._num_tasks_cached += 1
+            if self._num_tasks_cached is not None:
+                self._num_tasks_cached += 1
 
         return {
             "outcome": "task created successfully",
@@ -1969,7 +1971,8 @@ class TaskScheduler(BaseTaskScheduler):
             )
             if resolved_destination is None:
                 resolved_destination = (
-                    self._get_task_or_raise(task_id).destination or PERSONAL_DESTINATION
+                    self._resolve_task_for_mutation(task_id).destination
+                    or PERSONAL_DESTINATION
                 )
             with self._use_task_destination(resolved_destination):
                 return self._delete_task(
@@ -1979,7 +1982,7 @@ class TaskScheduler(BaseTaskScheduler):
                 )
 
         self._ensure_not_active_task(task_id)
-        task = self._get_task_or_raise(task_id)
+        task = self._resolve_task_for_mutation(task_id)
         log_ids = self._store.get_rows(
             filter=f"task_id == {task_id}",
             return_ids_only=True,
@@ -1996,7 +1999,8 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             except TaskRevisionConflictError as exc:
                 return task_revision_conflict_outcome(exc)
-            self._store.delete(logs=log_ids)
+            if log_ids:
+                self._store.delete(logs=log_ids)
         else:
             self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
@@ -2124,7 +2128,8 @@ class TaskScheduler(BaseTaskScheduler):
             )
             if resolved_destination is None:
                 resolved_destination = (
-                    self._get_task_or_raise(task_id).destination or PERSONAL_DESTINATION
+                    self._resolve_task_for_mutation(task_id).destination
+                    or PERSONAL_DESTINATION
                 )
             with self._use_task_destination(resolved_destination):
                 return self._update_task(
@@ -2153,7 +2158,7 @@ class TaskScheduler(BaseTaskScheduler):
         requires_filesystem_provided = requires_filesystem is not _UNSET
         requires_computer_provided = requires_computer is not _UNSET
         enabled_provided = enabled is not _UNSET
-        task = self._get_task_or_raise(task_id)
+        task = self._resolve_task_for_mutation(task_id)
 
         if (
             name is None
@@ -2382,14 +2387,13 @@ class TaskScheduler(BaseTaskScheduler):
                     f"Task {task_id} is missing task_revision; re-read before updating.",
                 )
             try:
-                updated = typed_tasks_client.patch_task(
+                typed_tasks_client.patch_task(
                     task_id=task_id,
                     expected_task_revision=int(task.task_revision),
                     updates=authored_entries,
                 )
             except TaskRevisionConflictError as exc:
                 return task_revision_conflict_outcome(exc)
-            self._sync_provider_event_task_row(typed_response=updated)
             return {"detail": "Provider-event authored update applied."}
         if runtime_entries:
             return self._write_log_entries(
@@ -2509,44 +2513,6 @@ class TaskScheduler(BaseTaskScheduler):
             entries=entries,
         )
 
-    def _sync_provider_event_task_row(
-        self,
-        *,
-        typed_response: dict[str, Any],
-    ) -> None:
-        """Mirror one typed Tasks API row into the local Tasks store."""
-
-        task_id = int(typed_response["task_id"])
-        log_ids = self._store.get_rows(
-            filter=f"task_id == {task_id} and instance_id == 0",
-            return_ids_only=True,
-        )
-        entries = {
-            key: typed_response[key]
-            for key in (
-                "task_revision",
-                "name",
-                "description",
-                "status",
-                "trigger",
-                "enabled",
-                "offline",
-                "priority",
-                "entrypoint",
-            )
-            if key in typed_response and typed_response[key] is not None
-        }
-        if log_ids:
-            self._write_log_entries(logs=log_ids, entries=entries)
-            return
-        payload = {
-            "task_id": task_id,
-            "instance_id": 0,
-            **entries,
-        }
-        with self._use_task_destination(None):
-            self._store.log(entries=payload, new=True)
-
     def _list_provider_trigger_catalog(self) -> ToolOutcome:
         """List staged provider triggers for this assistant's connected apps."""
 
@@ -2599,11 +2565,7 @@ class TaskScheduler(BaseTaskScheduler):
         health, coverage windows, and remediation guidance for actor responses.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         health = typed_tasks_client.get_trigger_health(task_id=task_id)
         return {
             "outcome": "provider trigger health inspected",
@@ -2623,11 +2585,7 @@ class TaskScheduler(BaseTaskScheduler):
         source_body only when the user explicitly requests advanced inspection.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         context = typed_tasks_client.get_event_context(
             task_id=task_id,
             run_id=run_id,
@@ -2652,11 +2610,7 @@ class TaskScheduler(BaseTaskScheduler):
         disabling the global task.enabled gate or blocking manual execution.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         try:
             updated = typed_tasks_client.pause_trigger(
                 task_id=task_id,
@@ -2664,7 +2618,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         except TaskRevisionConflictError as exc:
             return task_revision_conflict_outcome(exc)
-        self._sync_provider_event_task_row(typed_response=updated)
         return {
             "outcome": "provider trigger paused",
             "details": {
@@ -2685,11 +2638,7 @@ class TaskScheduler(BaseTaskScheduler):
         schedules reconciliation for the active subscription generation.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         try:
             updated = typed_tasks_client.resume_trigger(
                 task_id=task_id,
@@ -2697,7 +2646,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         except TaskRevisionConflictError as exc:
             return task_revision_conflict_outcome(exc)
-        self._sync_provider_event_task_row(typed_response=updated)
         return {
             "outcome": "provider trigger resumed",
             "details": {
@@ -2713,11 +2661,7 @@ class TaskScheduler(BaseTaskScheduler):
         authored task revision or mutating trigger intent directly.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         result = typed_tasks_client.retry_trigger(task_id=task_id)
         return {
             "outcome": "provider trigger reconciliation requested",
@@ -2736,11 +2680,7 @@ class TaskScheduler(BaseTaskScheduler):
         keeping credentials and backend details out of the actor response.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        self._get_provider_event_task_or_raise(task_id)
         context = typed_tasks_client.export_event_context(
             task_id=task_id,
             run_id=run_id,
@@ -2766,11 +2706,7 @@ class TaskScheduler(BaseTaskScheduler):
         deletion under the current authored task revision when supplied.
         """
 
-        task = self._get_task_or_raise(task_id)
-        if not self._task_has_provider_event_trigger(task):
-            raise ValueError(
-                f"Task {task_id} does not have a provider-event trigger.",
-            )
+        task = self._get_provider_event_task_or_raise(task_id)
         if task.task_revision is None:
             raise ValueError(
                 f"Task {task_id} is missing task_revision; re-read before deleting context.",
@@ -2842,6 +2778,66 @@ class TaskScheduler(BaseTaskScheduler):
 
         handle.result = wrapped_result  # type: ignore[assignment]
         return handle
+
+    def _task_from_typed_response(self, typed_response: dict[str, Any]) -> Task:
+        """Build one Task from a typed Tasks API row."""
+
+        entries = {
+            "task_id": int(typed_response["task_id"]),
+            "instance_id": 0,
+        }
+        for key in (
+            "task_revision",
+            "name",
+            "description",
+            "status",
+            "trigger",
+            "schedule",
+            "enabled",
+            "offline",
+            "priority",
+            "entrypoint",
+            "requires_filesystem",
+            "requires_computer",
+        ):
+            if key in typed_response and typed_response[key] is not None:
+                entries[key] = typed_response[key]
+        entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
+        return Task(**self._sanitize_activation(entries))
+
+    def _get_provider_event_task_or_raise(self, task_id: int) -> Task:
+        """Return one provider-event task from the typed Tasks API.
+
+        Authored provider-event rows are owned by the typed Tasks API. Tool
+        paths that mutate or inspect that contract must not depend on a Tasks
+        log mirror in the current session root.
+        """
+
+        try:
+            typed_response = typed_tasks_client.get_task(task_id=task_id)
+        except ValueError as exc:
+            if str(exc) == "Task not found.":
+                raise ValueError(f"No task found with id={task_id}") from exc
+            raise
+        task = self._task_from_typed_response(typed_response)
+        if not self._task_has_provider_event_trigger(task):
+            raise ValueError(
+                f"Task {task_id} does not have a provider-event trigger.",
+            )
+        return task
+
+    def _resolve_task_for_mutation(self, task_id: int) -> Task:
+        """Resolve one task for authored update/delete, preferring typed CAS."""
+
+        try:
+            task = self._get_task_or_raise(task_id)
+        except ValueError as exc:
+            if "multiple task roots" in str(exc):
+                raise
+            return self._get_provider_event_task_or_raise(task_id)
+        if self._task_has_provider_event_trigger(task):
+            return self._get_provider_event_task_or_raise(task_id)
+        return task
 
     def _get_task_or_raise(self, task_id: int) -> Task:
         """Fetch exactly one task id or raise when it is missing or ambiguous."""
