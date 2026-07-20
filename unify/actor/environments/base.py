@@ -159,6 +159,63 @@ def _callable_accepts_clarification_kwargs(fn: Any) -> bool:
     return False
 
 
+_CLAR_GLOBAL_MISSING = object()
+
+
+def bind_sandbox_clarification_queues(
+    global_state: Dict[str, Any],
+    up_q: asyncio.Queue[str],
+    down_q: Optional[asyncio.Queue[str]],
+) -> Dict[str, Any]:
+    """Point sandbox manager injectors at one tool-call's clarification queues.
+
+    Used by ``execute_code`` / ``execute_function`` so nested manager
+    clarifications write into the outer tool's per-call channel (mailbox A)
+    that the async tool loop already watches. Returns a token for
+    :func:`restore_sandbox_clarification_queues`.
+    """
+    previous_injectors: Dict[str, tuple[Any, Any]] = {}
+    for key, val in list(global_state.items()):
+        if isinstance(val, _ClarificationQueueInjector):
+            previous_injectors[key] = (val._clar_up_q, val._clar_down_q)
+            object.__setattr__(val, "_clar_up_q", up_q)
+            object.__setattr__(val, "_clar_down_q", down_q)
+    previous_globals = (
+        global_state.get("__clarification_up_q__", _CLAR_GLOBAL_MISSING),
+        global_state.get("__clarification_down_q__", _CLAR_GLOBAL_MISSING),
+    )
+    global_state["__clarification_up_q__"] = up_q
+    global_state["__clarification_down_q__"] = down_q
+    return {
+        "injectors": previous_injectors,
+        "globals": previous_globals,
+    }
+
+
+def restore_sandbox_clarification_queues(
+    global_state: Dict[str, Any],
+    token: Dict[str, Any],
+) -> None:
+    """Undo :func:`bind_sandbox_clarification_queues`."""
+    for key, (prev_up, prev_down) in (token.get("injectors") or {}).items():
+        val = global_state.get(key)
+        if isinstance(val, _ClarificationQueueInjector):
+            object.__setattr__(val, "_clar_up_q", prev_up)
+            object.__setattr__(val, "_clar_down_q", prev_down)
+    prev_up, prev_down = token.get("globals") or (
+        _CLAR_GLOBAL_MISSING,
+        _CLAR_GLOBAL_MISSING,
+    )
+    if prev_up is _CLAR_GLOBAL_MISSING:
+        global_state.pop("__clarification_up_q__", None)
+    else:
+        global_state["__clarification_up_q__"] = prev_up
+    if prev_down is _CLAR_GLOBAL_MISSING:
+        global_state.pop("__clarification_down_q__", None)
+    else:
+        global_state["__clarification_down_q__"] = prev_down
+
+
 class _ClarificationQueueInjector:
     """
     Lightweight wrapper that injects clarification queues into manager calls.
