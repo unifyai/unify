@@ -82,6 +82,8 @@ from .prompt_builders import (
     build_update_prompt,
 )
 from .provider_trigger_actor import (
+    annotate_provider_trigger_catalog,
+    annotate_provider_trigger_connections,
     describe_provider_trigger,
     list_eligible_provider_trigger_connections,
     task_revision_conflict_outcome,
@@ -2539,7 +2541,9 @@ class TaskScheduler(BaseTaskScheduler):
         catalog = typed_tasks_client.get_trigger_catalog()
         return {
             "outcome": "provider trigger catalog listed",
-            "details": catalog,
+            "details": annotate_provider_trigger_catalog(
+                catalog if isinstance(catalog, dict) else {},
+            ),
         }
 
     def _list_provider_trigger_connections(
@@ -2556,7 +2560,7 @@ class TaskScheduler(BaseTaskScheduler):
         )
         return {
             "outcome": "provider trigger connections listed",
-            "details": {"connections": connections},
+            "details": annotate_provider_trigger_connections(connections),
         }
 
     def _describe_provider_trigger(
