@@ -2792,6 +2792,46 @@ class CodeActActor(BaseCodeActActor):
         except asyncio.CancelledError:
             pass
 
+    @staticmethod
+    def _sandbox_clarification_binding(
+        *,
+        clarification_up_q: asyncio.Queue[str] | None,
+        clarification_down_q: asyncio.Queue[str] | None,
+    ):
+        """Bind per-call clarification queues onto the live sandbox for one tool call.
+
+        Nested manager clarifications then write into the outer tool's
+        ``clar_up_queue`` (mailbox A) watched by the async tool loop.
+        """
+        from contextlib import contextmanager
+
+        from unify.actor.environments.base import (
+            bind_sandbox_clarification_queues,
+            restore_sandbox_clarification_queues,
+        )
+
+        @contextmanager
+        def _binding():
+            if clarification_up_q is None or clarification_down_q is None:
+                yield
+                return
+            try:
+                sb = _CURRENT_SANDBOX.get()
+            except Exception:
+                yield
+                return
+            token = bind_sandbox_clarification_queues(
+                sb.global_state,
+                clarification_up_q,
+                clarification_down_q,
+            )
+            try:
+                yield
+            finally:
+                restore_sandbox_clarification_queues(sb.global_state, token)
+
+        return _binding()
+
     def _build_tools(self) -> Dict[str, Callable[..., Awaitable[Any]]]:
         """Builds the dictionary of tools available to the LLM."""
 
@@ -2814,6 +2854,8 @@ class CodeActActor(BaseCodeActActor):
             surface: str = "local",
             user_id: str | None = None,
             _notification_up_q: asyncio.Queue[dict] | None = None,
+            _clarification_up_q: asyncio.Queue[str] | None = None,
+            _clarification_down_q: asyncio.Queue[str] | None = None,
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
             """
@@ -3049,34 +3091,38 @@ class CodeActActor(BaseCodeActActor):
 
                 _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
                 try:
-                    try:
-                        out = await self._session_executor.execute(
-                            code=code,
-                            language=str(language),  # type: ignore[arg-type]
-                            state_mode=state_mode,  # type: ignore[arg-type]
-                            session_id=session_id,
-                            venv_id=venv_id,
-                            primitives=primitives,
-                            computer_primitives=computer_primitives,
-                            notification_q=notification_q,
-                        )
-                    except Exception as e:
-                        exec_exc = e
-                        tb = traceback.format_exc()
-                        tb_str = tb
-                        out = {
-                            "stdout": "",
-                            "stderr": "",
-                            "result": None,
-                            "error": tb,
-                            "language": language,
-                            "state_mode": state_mode,
-                            "session_id": session_id,
-                            "session_name": session_name,
-                            "venv_id": venv_id,
-                            "session_created": False,
-                            "duration_ms": 0,
-                        }
+                    with self._sandbox_clarification_binding(
+                        clarification_up_q=_clarification_up_q,
+                        clarification_down_q=_clarification_down_q,
+                    ):
+                        try:
+                            out = await self._session_executor.execute(
+                                code=code,
+                                language=str(language),  # type: ignore[arg-type]
+                                state_mode=state_mode,  # type: ignore[arg-type]
+                                session_id=session_id,
+                                venv_id=venv_id,
+                                primitives=primitives,
+                                computer_primitives=computer_primitives,
+                                notification_q=notification_q,
+                            )
+                        except Exception as e:
+                            exec_exc = e
+                            tb = traceback.format_exc()
+                            tb_str = tb
+                            out = {
+                                "stdout": "",
+                                "stderr": "",
+                                "result": None,
+                                "error": tb,
+                                "language": language,
+                                "state_mode": state_mode,
+                                "session_id": session_id,
+                                "session_name": session_name,
+                                "venv_id": venv_id,
+                                "session_created": False,
+                                "duration_ms": 0,
+                            }
                 finally:
                     _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
@@ -3558,6 +3604,8 @@ class CodeActActor(BaseCodeActActor):
                 session_id: int | None = None,
                 session_name: str | None = None,
                 _notification_up_q: asyncio.Queue[dict] | None = None,
+                _clarification_up_q: asyncio.Queue[str] | None = None,
+                _clarification_down_q: asyncio.Queue[str] | None = None,
                 _parent_chat_context: list[dict] | None = None,
             ) -> Any:
                 """
@@ -3798,121 +3846,125 @@ class CodeActActor(BaseCodeActActor):
                     except Exception:
                         pass
 
-                    if (
-                        isinstance(function_data, dict)
-                        and function_data.get("is_primitive")
-                        and is_provider_backed_function(function_data)
+                    with self._sandbox_clarification_binding(
+                        clarification_up_q=_clarification_up_q,
+                        clarification_down_q=_clarification_down_q,
                     ):
-                        _ef_log.debug(
-                            f"⏱️ [execute_function +{_ef_ms()}] "
-                            "provider primitive direct execute start",
-                        )
-                        try:
-                            direct_result = (
-                                await self.function_manager.execute_function(
-                                    function_name=function_name,
-                                    call_kwargs=call_kwargs,
-                                    target_venv_id=None,
-                                    state_mode=state_mode,  # type: ignore[arg-type]
-                                    session_id=session_id or 0,
-                                    extra_namespaces=(
-                                        {"primitives": primitives}
-                                        if primitives is not None
-                                        else None
-                                    ),
-                                    _parent_chat_context=_parent_chat_context,
-                                )
-                            )
-                            if (
-                                isinstance(direct_result, dict)
-                                and direct_result.get("status")
-                                == "confirmation_required"
-                            ):
-                                direct_result = build_pending_approval_payload(
-                                    function_name=function_name,
-                                    function_data=function_data,
-                                    call_kwargs=call_kwargs,
-                                    provider_envelope=direct_result,
-                                )
-                                if notification_q is not None:
-                                    await notification_q.put(direct_result)
-                            out = {
-                                "stdout": [],
-                                "stderr": [],
-                                "result": direct_result,
-                                "error": None,
-                                "language": "python",
-                                "state_mode": state_mode,
-                                "session_id": session_id,
-                                "session_name": session_name,
-                                "venv_id": resolved_venv_id,
-                                "session_created": False,
-                                "duration_ms": int(
-                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
-                                ),
-                            }
+                        if (
+                            isinstance(function_data, dict)
+                            and function_data.get("is_primitive")
+                            and is_provider_backed_function(function_data)
+                        ):
                             _ef_log.debug(
                                 f"⏱️ [execute_function +{_ef_ms()}] "
-                                "provider primitive direct execute done",
+                                "provider primitive direct execute start",
                             )
-                        except Exception:
-                            exec_exc = sys.exc_info()[1]
-                            tb = traceback.format_exc()
-                            tb_str = tb
-                            out = {
-                                "stdout": [],
-                                "stderr": [],
-                                "result": None,
-                                "error": tb,
-                                "language": "python",
-                                "state_mode": state_mode,
-                                "session_id": session_id,
-                                "session_name": session_name,
-                                "venv_id": resolved_venv_id,
-                                "session_created": False,
-                                "duration_ms": int(
-                                    (_ef_time.perf_counter() - _ef_t0) * 1000,
-                                ),
-                            }
-                    else:
-                        _ef_log.debug(
-                            f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
-                        )
-                        _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
-                        try:
                             try:
-                                out = await self._session_executor.execute(
-                                    code=code,
-                                    language=str(language),  # type: ignore[arg-type]
-                                    state_mode=state_mode,  # type: ignore[arg-type]
-                                    session_id=session_id,
-                                    venv_id=resolved_venv_id,
-                                    primitives=primitives,
-                                    computer_primitives=computer_primitives,
-                                    notification_q=notification_q,
+                                direct_result = (
+                                    await self.function_manager.execute_function(
+                                        function_name=function_name,
+                                        call_kwargs=call_kwargs,
+                                        target_venv_id=None,
+                                        state_mode=state_mode,  # type: ignore[arg-type]
+                                        session_id=session_id or 0,
+                                        extra_namespaces=(
+                                            {"primitives": primitives}
+                                            if primitives is not None
+                                            else None
+                                        ),
+                                        _parent_chat_context=_parent_chat_context,
+                                    )
                                 )
-                                _ef_log.debug(
-                                    f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
-                                )
-                            except Exception as e:
-                                exec_exc = e
-                                tb = traceback.format_exc()
-                                tb_str = tb
+                                if (
+                                    isinstance(direct_result, dict)
+                                    and direct_result.get("status")
+                                    == "confirmation_required"
+                                ):
+                                    direct_result = build_pending_approval_payload(
+                                        function_name=function_name,
+                                        function_data=function_data,
+                                        call_kwargs=call_kwargs,
+                                        provider_envelope=direct_result,
+                                    )
+                                    if notification_q is not None:
+                                        await notification_q.put(direct_result)
                                 out = {
-                                    "stdout": "",
-                                    "stderr": "",
-                                    "result": None,
-                                    "error": tb,
-                                    "language": language,
+                                    "stdout": [],
+                                    "stderr": [],
+                                    "result": direct_result,
+                                    "error": None,
+                                    "language": "python",
                                     "state_mode": state_mode,
                                     "session_id": session_id,
                                     "session_name": session_name,
                                     "venv_id": resolved_venv_id,
                                     "session_created": False,
-                                    "duration_ms": 0,
+                                    "duration_ms": int(
+                                        (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                    ),
                                 }
-                        finally:
-                            _PARENT_CHAT_CONTEXT.reset(_pcc_token)
+                                _ef_log.debug(
+                                    f"⏱️ [execute_function +{_ef_ms()}] "
+                                    "provider primitive direct execute done",
+                                )
+                            except Exception:
+                                exec_exc = sys.exc_info()[1]
+                                tb = traceback.format_exc()
+                                tb_str = tb
+                                out = {
+                                    "stdout": [],
+                                    "stderr": [],
+                                    "result": None,
+                                    "error": tb,
+                                    "language": "python",
+                                    "state_mode": state_mode,
+                                    "session_id": session_id,
+                                    "session_name": session_name,
+                                    "venv_id": resolved_venv_id,
+                                    "session_created": False,
+                                    "duration_ms": int(
+                                        (_ef_time.perf_counter() - _ef_t0) * 1000,
+                                    ),
+                                }
+                        else:
+                            _ef_log.debug(
+                                f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute start",
+                            )
+                            _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
+                            try:
+                                try:
+                                    out = await self._session_executor.execute(
+                                        code=code,
+                                        language=str(language),  # type: ignore[arg-type]
+                                        state_mode=state_mode,  # type: ignore[arg-type]
+                                        session_id=session_id,
+                                        venv_id=resolved_venv_id,
+                                        primitives=primitives,
+                                        computer_primitives=computer_primitives,
+                                        notification_q=notification_q,
+                                    )
+                                    _ef_log.debug(
+                                        f"⏱️ [execute_function +{_ef_ms()}] sandbox.execute done",
+                                    )
+                                except Exception as e:
+                                    exec_exc = e
+                                    tb = traceback.format_exc()
+                                    tb_str = tb
+                                    out = {
+                                        "stdout": "",
+                                        "stderr": "",
+                                        "result": None,
+                                        "error": tb,
+                                        "language": language,
+                                        "state_mode": state_mode,
+                                        "session_id": session_id,
+                                        "session_name": session_name,
+                                        "venv_id": resolved_venv_id,
+                                        "session_created": False,
+                                        "duration_ms": 0,
+                                    }
+                            finally:
+                                _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
                     # Enrich with session name.
                     if out.get("session_id") is not None:
@@ -4747,17 +4799,23 @@ class CodeActActor(BaseCodeActActor):
             "wait for the user to provide instructions via interjection."
         )
 
-        # Clarification queues:
-        # - When enabled, we ensure the handle has queues (either provided by caller or newly created).
-        # - When disabled, we do not provide queues and we do not wire queue injection into environments.
-        clarification_up_q: Optional[asyncio.Queue[str]]
-        clarification_down_q: Optional[asyncio.Queue[str]]
+        # Clarification queues for sandbox env injection (managers called from
+        # execute_code). Separate from the tool-loop clarification_queues below:
+        # auto-created env queues are unread on the CM→act path, so the loop
+        # gets (None, None) unless the caller supplied queues explicitly.
+        caller_supplied_clarification_queues = (
+            clarification_enabled
+            and _clarification_up_q is not None
+            and _clarification_down_q is not None
+        )
+        env_clarification_up_q: Optional[asyncio.Queue[str]]
+        env_clarification_down_q: Optional[asyncio.Queue[str]]
         if clarification_enabled:
-            clarification_up_q = _clarification_up_q or asyncio.Queue()
-            clarification_down_q = _clarification_down_q or asyncio.Queue()
+            env_clarification_up_q = _clarification_up_q or asyncio.Queue()
+            env_clarification_down_q = _clarification_down_q or asyncio.Queue()
         else:
-            clarification_up_q = None
-            clarification_down_q = None
+            env_clarification_up_q = None
+            env_clarification_down_q = None
 
         # Create per-call environments so clarification queues are not stored on shared actor environments.
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] copying environments")
@@ -4781,8 +4839,8 @@ class CodeActActor(BaseCodeActActor):
                 if _CompositeEnv is not None and isinstance(env, _CompositeEnv):
                     sandbox_envs[ns] = _CompositeEnv(
                         env.sub_environments,
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
                 if _ComputerEnvironment is not None and isinstance(
@@ -4791,8 +4849,8 @@ class CodeActActor(BaseCodeActActor):
                 ):
                     sandbox_envs[ns] = _ComputerEnvironment(
                         env._computer_primitives,
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
                 if _StateManagerEnvironment is not None and isinstance(
@@ -4801,8 +4859,8 @@ class CodeActActor(BaseCodeActActor):
                 ):
                     sandbox_envs[ns] = _StateManagerEnvironment(
                         env.get_instance(),
-                        clarification_up_q=clarification_up_q,
-                        clarification_down_q=clarification_down_q,
+                        clarification_up_q=env_clarification_up_q,
+                        clarification_down_q=env_clarification_down_q,
                     )
                     continue
             except Exception:
@@ -4812,9 +4870,9 @@ class CodeActActor(BaseCodeActActor):
             try:
                 env_copy = copy.copy(env)
                 if hasattr(env_copy, "_clarification_up_q"):
-                    setattr(env_copy, "_clarification_up_q", clarification_up_q)
+                    setattr(env_copy, "_clarification_up_q", env_clarification_up_q)
                 if hasattr(env_copy, "_clarification_down_q"):
-                    setattr(env_copy, "_clarification_down_q", clarification_down_q)
+                    setattr(env_copy, "_clarification_down_q", env_clarification_down_q)
                 sandbox_envs[ns] = env_copy
             except Exception:
                 sandbox_envs[ns] = env
@@ -5189,8 +5247,14 @@ class CodeActActor(BaseCodeActActor):
         _clar_queues = None
         _on_clar_req = None
         _on_clar_ans = None
-        if clarification_up_q is not None and clarification_down_q is not None:
-            _clar_queues = (clarification_up_q, clarification_down_q)
+        if clarification_enabled:
+            # (None, None) still injects request_clarification; the tool then
+            # uses per-call hidden queues so CM sees handle._clar_q events.
+            _clar_queues = (
+                (env_clarification_up_q, env_clarification_down_q)
+                if caller_supplied_clarification_queues
+                else (None, None)
+            )
 
             async def _on_clar_req(q: str):
                 try:

@@ -816,21 +816,29 @@ def make_request_clarification_tool(
 
     Behaviour and integration notes
     --------------------------------
-    - This tool is only available when clarification queues are provided by the
-      outer tool loop. If those queues are not present in a given loop, that
-      loop MUST NOT ask the user questions in its final response. Instead, it
-      should proceed with sensible defaults or best guesses, and briefly state
-      those assumptions. If an inner tool (invoked by this outer loop) asks for
-      clarification but the outer loop has no clarification tool, the outer loop
-      must explicitly inform the inner tool that no clarification channel is
-      available and either (a) instruct the inner tool to use safe defaults, or
-      (b) pass down concrete, sensible best‑guess values.
+    - Prefers caller-supplied / outer ``up_q``/``down_q`` when present so nested
+      manager loops keep writing into the parent tool's clarification channel.
+    - Otherwise uses loop-injected per-call ``_clarification_up_q`` /
+      ``_clarification_down_q`` (same mailbox as other tools) so
+      ``_handle_clarification`` can surface the question on the handle's
+      ``_clar_q`` for ConversationManager.
+    - If neither channel is available, the loop MUST NOT ask the user
+      questions in its final response. Proceed with sensible defaults and
+      state those assumptions. If an inner tool asks for clarification but
+      the outer loop has no clarification tool, tell the inner tool that no
+      channel is available and either (a) instruct safe defaults, or
+      (b) pass concrete best-guess values.
 
     - Raises RuntimeError if queues are missing at call time.
     - Optionally invokes async/sync callbacks on request/answer events.
     """
 
-    async def _request(question: str) -> str:
+    async def _request(
+        question: str,
+        *,
+        _clarification_up_q: "asyncio.Queue[str] | None" = None,
+        _clarification_down_q: "asyncio.Queue[str] | None" = None,
+    ) -> str:
         """Ask the caller a clarifying question and block until they answer.
 
         Use this when you need additional information from the process that
@@ -858,7 +866,12 @@ def make_request_clarification_tool(
         str
             The caller's answer.
         """
-        if up_q is None or down_q is None:
+        # Outer/closure queues win when present (nested manager → parent tool
+        # channel). Otherwise use the per-call hidden queues so this loop's
+        # clar_waiters → _handle_clarification → handle._clar_q path runs.
+        use_up = up_q if up_q is not None else _clarification_up_q
+        use_down = down_q if down_q is not None else _clarification_down_q
+        if use_up is None or use_down is None:
             raise RuntimeError(
                 "Clarification queues not supplied – cannot request clarification in this context.",
             )
@@ -868,8 +881,8 @@ def make_request_clarification_tool(
             if asyncio.iscoroutine(maybe):
                 await maybe
 
-        await up_q.put(question)
-        answer = await down_q.get()
+        await use_up.put(question)
+        answer = await use_down.get()
 
         # Emit answer event if provided
         if on_answer is not None:

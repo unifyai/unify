@@ -1116,6 +1116,78 @@ class LivekitCallManager:
                     return False
                 await asyncio.sleep(AGENT_SERVICE_READY_POLL_INTERVAL_S)
 
+    async def _hydrate_meet_browser_state(
+        self,
+        base_url: str,
+        auth_key: str,
+        storage_state_name: str,
+    ) -> bool:
+        """Push a signed-in browser state to the pod-local agent-service.
+
+        Fetches ``<storage_state_name>.json`` from the durable GCS store
+        (``MEET_BROWSER_STATE_BUCKET``) and uploads it via the agent-service's
+        ``PUT /browser-states/<name>`` transport so the meet browser loads it
+        (cookies + localStorage) before joining, appearing as a signed-in
+        account instead of an anonymous guest. Best-effort: any failure logs a
+        warning and returns False, leaving the browser to join anonymously
+        (surfaced downstream as ``meet_join_blocked`` when no host admits it).
+        """
+        bucket = (os.environ.get("MEET_BROWSER_STATE_BUCKET") or "").strip()
+        if not bucket:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] MEET_GOOGLE_STORAGE_STATE "
+                f"set ({storage_state_name}) but MEET_BROWSER_STATE_BUCKET is "
+                "empty; joining without a signed-in session",
+            )
+            return False
+
+        blob_name = f"{storage_state_name}.json"
+
+        def _download() -> str:
+            from google.cloud import storage
+
+            client = storage.Client()
+            return client.bucket(bucket).blob(blob_name).download_as_text()
+
+        try:
+            state = await asyncio.to_thread(_download)
+        except Exception as exc:  # best-effort: fall back to anonymous join
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] could not fetch browser "
+                f"state gs://{bucket}/{blob_name}: {exc!r}; joining anonymously",
+            )
+            return False
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                    f"{base_url}/browser-states/{storage_state_name}",
+                    json={"state": state},
+                    headers={"authorization": f"Bearer {auth_key}"},
+                    timeout=aiohttp.ClientTimeout(total=15.0),
+                ) as put_resp:
+                    if put_resp.status not in (200, 204):
+                        detail = await put_resp.text()
+                        LOGGER.warning(
+                            f"{ICONS['ipc']} [LivekitCallManager] agent-service "
+                            f"rejected browser state {storage_state_name} (HTTP "
+                            f"{put_resp.status}): {detail}; joining anonymously",
+                        )
+                        return False
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] failed to upload browser "
+                f"state {storage_state_name} to agent-service: {exc!r}; joining "
+                "anonymously",
+            )
+            return False
+
+        LOGGER.info(
+            f"{ICONS['ipc']} [LivekitCallManager] hydrated signed-in browser "
+            f"state {storage_state_name} (gs://{bucket}/{blob_name})",
+        )
+        return True
+
     async def _start_meet(
         self,
         channel: str,
@@ -1289,6 +1361,31 @@ class LivekitCallManager:
         # handler leaves ``_meet_joining`` stuck True with no teardown and shows
         # up as "Unhandled error processing GoogleMeetReceived". Catch it, tear
         # down, and return a clean failure the handler can retry.
+        # Signed-in browser session (Google Meet only for now): pull the twin
+        # account's saved storage state from the durable store and push it to
+        # the pod-local agent-service so the browser joins authenticated rather
+        # than as an anonymous guest — which Google turns away with "You can't
+        # join this video call" when no host is present. Best-effort: a miss
+        # falls back to an anonymous join.
+        storage_state_name: str | None = None
+        if channel == "google_meet":
+            storage_state_name = (
+                os.environ.get("MEET_GOOGLE_STORAGE_STATE") or ""
+            ).strip() or None
+            if storage_state_name:
+                await self._hydrate_meet_browser_state(
+                    base_url,
+                    auth_key,
+                    storage_state_name,
+                )
+
+        join_payload: dict[str, str] = {
+            "meetUrl": meet_url,
+            "displayName": display_name,
+        }
+        if storage_state_name:
+            join_payload["storageStateName"] = storage_state_name
+
         resp = None
         body = None
         for connect_attempt in range(MEET_JOIN_CONNECT_RETRIES + 1):
@@ -1296,7 +1393,7 @@ class LivekitCallManager:
                 async with aiohttp.ClientSession() as session:
                     resp = await session.post(
                         f"{base_url}/{meet_path}/join",
-                        json={"meetUrl": meet_url, "displayName": display_name},
+                        json=join_payload,
                         headers={"authorization": f"Bearer {auth_key}"},
                         timeout=aiohttp.ClientTimeout(total=MEET_JOIN_HTTP_TIMEOUT_S),
                     )

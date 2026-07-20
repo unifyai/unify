@@ -2697,29 +2697,27 @@ async def entrypoint(ctx: agents.JobContext):
         """
         from datetime import datetime, timezone
 
-        if screen_capture._latest_frame_data is not None:
-            b64 = screen_capture.capture_screenshot()
-            if b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=b64,
-                        utterance="",
-                        timestamp=datetime.now(timezone.utc),
-                        source="user",
-                    ),
-                )
+        b64 = screen_capture.capture_screenshot()
+        if b64:
+            _handle_screenshot(
+                ScreenshotEntry(
+                    b64=b64,
+                    utterance="",
+                    timestamp=datetime.now(timezone.utc),
+                    source="user",
+                ),
+            )
 
-        if webcam_capture._latest_frame_data is not None:
-            b64 = webcam_capture.capture_screenshot()
-            if b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=b64,
-                        utterance="",
-                        timestamp=datetime.now(timezone.utc),
-                        source="webcam",
-                    ),
-                )
+        b64 = webcam_capture.capture_screenshot()
+        if b64:
+            _handle_screenshot(
+                ScreenshotEntry(
+                    b64=b64,
+                    utterance="",
+                    timestamp=datetime.now(timezone.utc),
+                    source="webcam",
+                ),
+            )
 
         if assistant_screen_share_active:
             entry = await capture_assistant_screenshot(

@@ -203,6 +203,53 @@ async def test_sync_requested_handler_schedules_domain_sync(
 
 
 @pytest.mark.anyio
+async def test_sync_requested_handler_maps_function_manager_error_to_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    function_manager = FakeFunctionManager()
+    function_manager.result = {
+        "status": "error",
+        "error": {
+            "code": "provider_write_verification_mismatch",
+            "message": "expected_rows=1 observed_rows=0",
+        },
+    }
+    event_broker = FakeEventBroker()
+    monkeypatch.setattr(
+        "unify.manager_registry.ManagerRegistry.get_function_manager",
+        lambda **kwargs: function_manager,
+    )
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        FakeIntegrationOps().list_connections,
+    )
+    cm = SimpleNamespace(
+        integration_sync_coordinator=IntegrationSyncCoordinator(owner_scope={}),
+        notifications_bar=NotificationBar(),
+        event_broker=event_broker,
+    )
+
+    should_wake = await _handle_integration_tools_sync_requested(
+        IntegrationToolsSyncRequested(
+            app_slug="Salesforce",
+            app_display_name="Salesforce",
+            connection_id="conn-salesforce",
+        ),
+        cm,
+    )
+    await cm.integration_sync_coordinator._tasks["salesforce"]
+    await asyncio.sleep(0)
+
+    assert should_wake is True
+    state = cm.integration_sync_coordinator.snapshot()["salesforce"]
+    assert state.status == "failed"
+    assert state.error == "expected_rows=1 observed_rows=0"
+    assert event_broker.published[-1][0].endswith("integration_tools_sync_failed")
+    published = json.loads(event_broker.published[-1][1])
+    assert published["payload"]["error"] == "expected_rows=1 observed_rows=0"
+
+
+@pytest.mark.anyio
 async def test_cleanup_sync_maps_to_removed_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

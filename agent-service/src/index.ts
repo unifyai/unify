@@ -843,33 +843,46 @@ const startBrowserOnVm = async (
 }
 
 // --- Google Meet browser launcher ---
-const startGoogleMeetBrowser = async (meetUrl: string): Promise<BrowserAgent> => {
+const startGoogleMeetBrowser = async (
+  meetUrl: string,
+  storageStateName?: string,
+): Promise<BrowserAgent> => {
   try {
+    // ``storageStateName`` (when set) loads ~/.magnitude/browser_states/<name>.json
+    // (cookies + localStorage) before the first page renders, so the meet
+    // browser joins as a signed-in account instead of an anonymous guest that
+    // Google turns away with "You can't join this video call". It is a sibling
+    // key of launchOptions/contextOptions, read by magnitude-core's
+    // BrowserProvider — the same shape getLaunchOptions() produces.
+    const browser: any = {
+      launchOptions: {
+        headless: false,
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          "--disable-features=IsolateOrigins,site-per-process",
+          '--auto-select-desktop-capture-source="Entire screen"',
+          '--auto-select-tab-capture-source-by-title=Desktop',
+        ],
+        env: {
+          ...process.env,
+          PULSE_SINK: "agent_sink",
+          PULSE_SOURCE: "meet_mic",
+        },
+        downloadsPath: defaultBrowserPaths.downloadsPath || undefined,
+        tracesDir: defaultBrowserPaths.tracesDir || undefined,
+      },
+      contextOptions: {
+        viewport: null,
+        ignoreHTTPSErrors: true,
+        permissions: ['camera', 'microphone'],
+      },
+    };
+    if (storageStateName) {
+      browser.storageStateName = storageStateName;
+    }
     const agent = await startBrowserAgent({
       url: meetUrl,
-      browser: {
-        launchOptions: {
-          headless: false,
-          args: [
-            "--disable-blink-features=AutomationControlled",
-            "--disable-features=IsolateOrigins,site-per-process",
-            '--auto-select-desktop-capture-source="Entire screen"',
-            '--auto-select-tab-capture-source-by-title=Desktop',
-          ],
-          env: {
-            ...process.env,
-            PULSE_SINK: "agent_sink",
-            PULSE_SOURCE: "meet_mic",
-          },
-          downloadsPath: defaultBrowserPaths.downloadsPath || undefined,
-          tracesDir: defaultBrowserPaths.tracesDir || undefined,
-        },
-        contextOptions: {
-          viewport: null,
-          ignoreHTTPSErrors: true,
-          permissions: ['camera', 'microphone'],
-        },
-      },
+      browser,
       narrate: true,
       llm: getLlmConfig()
     });
@@ -910,12 +923,15 @@ type GoogleMeetJoinResult =
   | { status: 'active' | 'lobby' }
   | { status: 'error'; reason: string };
 
-const MEET_PREPARE_TASK = (displayName: string) =>
-  `You are on a Google Meet pre-join screen. Complete these steps in order:\n` +
-  `1. Dismiss any popups, tooltips, or overlays (e.g. "Got it" button, cookie banners).\n` +
-  `2. If there is a "Your name" text input, clear it and type: ${displayName}\n` +
-  `3. Turn OFF the camera if it is on (click its toggle button). Leave the microphone ON.\n` +
-  `Do NOT change audio device selections — they are handled separately.\n` +
+const MEET_PREPARE_TASK =
+  `You are on a Google Meet meeting entry flow, before the pre-join screen is fully ready.\n` +
+  `The browser is signed in to a Google account, so there is no name field to fill.\n` +
+  `Complete these steps in order, skipping any that do not apply:\n` +
+  `1. Dismiss any popups, tooltips, or overlays (e.g. "Got it" button, cookie banners, download-the-app prompts).\n` +
+  `2. Turn OFF the camera if its toggle is currently on. Leave the microphone toggle alone.\n` +
+  `Stop as soon as the pre-join screen (with an "Ask to join" / "Join now" button) is visible and stable.\n` +
+  `Do NOT click "Ask to join", "Join now", or "Join" — joining is handled in a separate later step.\n` +
+  `Do NOT change or open any audio device selections — they are handled separately.\n` +
   `Ignore any warnings about camera/microphone not being found — those are expected.\n` +
   `If the page shows a fatal error like "invalid meeting link" or "this meeting has ended", do nothing — just stop.`;
 
@@ -948,11 +964,17 @@ const MEET_PREPARE_MAX_ITERATIONS = 3;
 const MEET_JOIN_MAX_ITERATIONS = 3;
 const MEET_PRESENT_MAX_ITERATIONS = 3;
 
+// Backoff between iterations that failed on a transient error (LLM/vision proxy
+// blip, a stale locator on a re-rendering page). Short so a bounded loop that
+// keeps failing still returns well within the join timeout.
+const MAGNITUDE_LOOP_RETRY_BACKOFF_MS = 750;
+
 async function runMagnitudeLoop(
   agent: BrowserAgent,
   task: string,
   maxIterations: number,
   label: string,
+  swallowErrors: boolean = true,
 ): Promise<void> {
   const memory = new AgentMemory({ promptCaching: true });
 
@@ -961,30 +983,58 @@ async function runMagnitudeLoop(
       console.log(`[${label}] Iteration ${iteration + 1}: re-observing...`);
     }
 
-    await agent.recordConnectorObservations(memory);
-    const context = await agent.buildContext(memory);
-    const { reasoning, actions } = await agent.models.partialAct(context, task, [], agent.actions);
+    // Each of these join/prepare steps is a best-effort UI nudge; the caller
+    // classifies the real outcome from the DOM afterwards. A transient failure
+    // inside an iteration (e.g. the vision proxy returning a non-JSON 5xx that
+    // surfaces as a BAML parse error, or a locator going stale mid-render) must
+    // NOT abort the whole join — that produced misleading `join_exception`
+    // 500s even when the browser had actually landed in the meeting. Swallow
+    // per-iteration errors, back off, and let the loop budget + DOM check
+    // decide. Terminal outcomes are still reported by the caller's DOM
+    // classification, never by an exception escaping this loop.
+    try {
+      await agent.recordConnectorObservations(memory);
+      const context = await agent.buildContext(memory);
+      const { reasoning, actions } = await agent.models.partialAct(context, task, [], agent.actions);
 
-    console.log(`[${label}] Iteration ${iteration + 1} reasoning: ${reasoning}`);
-    console.log(`[${label}] Planned ${actions.length} action(s): ${actions.map(a => a.variant).join(', ')}`);
-    memory.recordThought(reasoning);
+      console.log(`[${label}] Iteration ${iteration + 1} reasoning: ${reasoning}`);
+      console.log(`[${label}] Planned ${actions.length} action(s): ${actions.map(a => a.variant).join(', ')}`);
+      memory.recordThought(reasoning);
 
-    if (actions.length === 0) {
-      console.log(`[${label}] LLM planned zero actions — stopping.`);
-      break;
-    }
+      if (actions.length === 0) {
+        console.log(`[${label}] LLM planned zero actions — stopping.`);
+        break;
+      }
 
-    const taskDone = actions.some(a => a.variant === 'task:done');
+      const taskDone = actions.some(a => a.variant === 'task:done');
 
-    for (const action of actions) {
-      const actionDef = agent.identifyAction(action);
-      console.log(`[${label}] Executing: ${actionDef.render(action)}`);
-      await agent.exec(action, memory);
-    }
+      for (const action of actions) {
+        const actionDef = agent.identifyAction(action);
+        console.log(`[${label}] Executing: ${actionDef.render(action)}`);
+        await agent.exec(action, memory);
+      }
 
-    if (taskDone) {
-      console.log(`[${label}] LLM signalled task:done.`);
-      break;
+      if (taskDone) {
+        console.log(`[${label}] LLM signalled task:done.`);
+        break;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isLast = iteration >= maxIterations - 1;
+      // Callers that drive their own exception-based fallback (e.g. Teams audio
+      // config, where a throw signals the pre-join audio UI is absent) opt out
+      // of swallowing by passing swallowErrors=false.
+      if (!swallowErrors) {
+        console.warn(`[${label}] Iteration ${iteration + 1} failed: ${message} — propagating.`);
+        throw err;
+      }
+      console.warn(
+        `[${label}] Iteration ${iteration + 1} failed (non-fatal): ${message}` +
+          (isLast ? ' — iteration budget exhausted, continuing to outcome check.' : ' — retrying.'),
+      );
+      if (!isLast) {
+        await sleep(MAGNITUDE_LOOP_RETRY_BACKOFF_MS);
+      }
     }
   }
 }
@@ -1086,16 +1136,17 @@ const MEET_SELECT_SPEAKER_TASK = (speakerLabel: string) =>
 
 const MEET_AUDIO_MAX_ITERATIONS = 3;
 
-async function googleMeetJoinFlow(agent: BrowserAgent, displayName: string): Promise<GoogleMeetJoinResult> {
+async function googleMeetJoinFlow(agent: BrowserAgent): Promise<GoogleMeetJoinResult> {
   const page = agent.page;
   await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
 
   const pageUrl = page.url?.() ?? 'unknown';
   console.log(`[googlemeet/join] Page loaded: url=${pageUrl}`);
 
-  // Phase 1: LLM handles variable UI (popups, name, camera)
+  // Phase 1: pre-join prep (popups, camera off). The browser joins signed in
+  // via persistent storage state, so there is no name field to fill.
   console.log('[googlemeet/join] Phase 1: prepare...');
-  await runMagnitudeLoop(agent, MEET_PREPARE_TASK(displayName), MEET_PREPARE_MAX_ITERATIONS, 'googlemeet/prepare');
+  await runMagnitudeLoop(agent, MEET_PREPARE_TASK, MEET_PREPARE_MAX_ITERATIONS, 'googlemeet/prepare');
 
   // Phase 1b: Audio device selection — Playwright opens Settings, LLM handles each step
   console.log('[googlemeet/join] Phase 1b: opening Settings for audio device selection...');
@@ -3071,20 +3122,28 @@ app.post('/resume', isAgentReady, async (req: Request, res: Response) => {
 // --- Google Meet endpoints ---
 
 app.post('/googlemeet/join', auth, async (req: Request, res: Response) => {
-  const { meetUrl, displayName } = req.body;
+  const { meetUrl, displayName, storageStateName } = req.body;
   if (!meetUrl) {
     return res.status(400).json({ error: 'bad_request', message: 'meetUrl is required.' });
   }
 
   const name = displayName || 'Unity Assistant';
+  // Signed-in join: an explicit body value wins, else fall back to the pod's
+  // configured default. Empty/absent => anonymous guest join (unchanged).
+  const stateName =
+    typeof storageStateName === 'string' && storageStateName
+      ? storageStateName
+      : process.env.MEET_GOOGLE_STORAGE_STATE || undefined;
   const sessionId = randomUUID();
   const t0 = Date.now();
-  console.log(`[googlemeet/join] BEGIN sessionId=${sessionId} url=${meetUrl}`);
+  console.log(
+    `[googlemeet/join] BEGIN sessionId=${sessionId} url=${meetUrl} authed=${stateName ? `yes(${stateName})` : 'no'}`,
+  );
 
   try {
-    const agent = await startGoogleMeetBrowser(meetUrl);
+    const agent = await startGoogleMeetBrowser(meetUrl, stateName);
 
-    const result = await googleMeetJoinFlow(agent, name);
+    const result = await googleMeetJoinFlow(agent);
     console.log(`[googlemeet/join] Join flow completed: status=${result.status}${result.status === 'error' ? ` reason="${result.reason}"` : ''} [${Date.now() - t0}ms]`);
 
     if (result.status === 'error') {
@@ -3513,11 +3572,15 @@ async function teamsMeetJoinFlow(agent: BrowserAgent, displayName: string): Prom
   // to an in-meeting fallback after join.
   console.log('[teamsmeet/join] Phase 1b: configuring pre-join audio devices...');
   let preJoinAudioOk = true;
+  // These steps opt out of runMagnitudeLoop's error swallowing (swallowErrors=false):
+  // a throw is the signal that the pre-join audio UI is absent (business Teams),
+  // which triggers the in-meeting fallback below. The surrounding try/catch keeps
+  // that failure local — it never becomes a join_exception.
   try {
-    await runMagnitudeLoop(agent, TEAMS_ENSURE_COMPUTER_AUDIO_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/audio-computer');
-    await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic');
-    await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker');
-    await runMagnitudeLoop(agent, TEAMS_ENSURE_MIC_UNMUTED_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/mic-unmuted');
+    await runMagnitudeLoop(agent, TEAMS_ENSURE_COMPUTER_AUDIO_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/audio-computer', false);
+    await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic', false);
+    await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker', false);
+    await runMagnitudeLoop(agent, TEAMS_ENSURE_MIC_UNMUTED_TASK, TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/mic-unmuted', false);
   } catch (err) {
     preJoinAudioOk = false;
     console.log(`[teamsmeet/join] Phase 1b: pre-join audio setup failed — will retry in-meeting: ${err}`);
@@ -3534,9 +3597,9 @@ async function teamsMeetJoinFlow(agent: BrowserAgent, displayName: string): Prom
     await sleep(2500);
     console.log('[teamsmeet/join] Phase 2b: pre-join audio failed — configuring via in-meeting Settings...');
     try {
-      await runMagnitudeLoop(agent, TEAMS_AUDIO_SETTINGS_TASK, TEAMS_AUDIO_OPEN_MAX_ITERATIONS, 'teamsmeet/audio-open');
-      await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic-fallback');
-      await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker-fallback');
+      await runMagnitudeLoop(agent, TEAMS_AUDIO_SETTINGS_TASK, TEAMS_AUDIO_OPEN_MAX_ITERATIONS, 'teamsmeet/audio-open', false);
+      await runMagnitudeLoop(agent, TEAMS_SELECT_MIC_TASK('agent_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-mic-fallback', false);
+      await runMagnitudeLoop(agent, TEAMS_SELECT_SPEAKER_TASK('meet_sink'), TEAMS_AUDIO_STEP_MAX_ITERATIONS, 'teamsmeet/select-speaker-fallback', false);
     } catch (err) {
       console.log(`[teamsmeet/join] Phase 2b: in-meeting audio fallback also failed — using defaults: ${err}`);
     }

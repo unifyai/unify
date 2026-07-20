@@ -38,6 +38,7 @@ def _seed_provider_event_definition(
     *,
     task_revision: int = 5,
     enabled: bool = True,
+    provider_event_binding_id: str | None = "binding-1",
 ) -> int:
     """Persist one authored provider-event definition via the Tasks store.
 
@@ -57,6 +58,8 @@ def _seed_provider_event_definition(
         "task_revision": task_revision,
         "priority": "normal",
     }
+    if provider_event_binding_id is not None:
+        payload["provider_event_binding_id"] = provider_event_binding_id
     with scheduler._use_task_destination(None):
         scheduler._store.log(entries=payload, new=True)
     return next_task_id
@@ -92,12 +95,20 @@ async def test_provider_event_captured_instance_leaves_definition_unarmed():
         definition=definition_before,
         operation_id="op-captured-1",
         captured_task_revision=5,
+        binding_id="binding-1",
     )
     assert instance.task_id == task_id
     assert instance.instance_id != definition_before.instance_id
     assert instance.task_revision == 5
     assert instance.info == "provider_event_operation:op-captured-1"
     assert instance.status == Status.triggerable
+    assert instance.provider_event_binding_id == "binding-1"
+    reread = next(
+        row
+        for row in scheduler._filter_tasks(filter=f"task_id == {task_id}")
+        if row.instance_id == instance.instance_id
+    )
+    assert reread.provider_event_binding_id == "binding-1"
 
     scheduler._update_task_status_instance(
         task_id=instance.task_id,
@@ -115,6 +126,53 @@ async def test_provider_event_captured_instance_leaves_definition_unarmed():
     active = [row for row in instances if row.status == Status.active]
     assert len(active) == 1
     assert active[0].instance_id == instance.instance_id
+
+
+@_handle_project
+def test_captured_instance_uses_request_binding_when_definition_lacks_it():
+    scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
+    task_id = _seed_provider_event_definition(
+        scheduler,
+        task_revision=5,
+        provider_event_binding_id=None,
+    )
+    definition = scheduler._get_task_or_raise(task_id)
+    assert definition.provider_event_binding_id is None
+
+    instance = scheduler._create_provider_event_captured_instance(
+        definition=definition,
+        operation_id="op-binding-from-request",
+        captured_task_revision=5,
+        binding_id="binding-from-dispatch",
+    )
+    assert instance.provider_event_binding_id == "binding-from-dispatch"
+    reread = next(
+        row
+        for row in scheduler._filter_tasks(filter=f"task_id == {task_id}")
+        if row.instance_id == instance.instance_id
+    )
+    assert reread.provider_event_binding_id == "binding-from-dispatch"
+
+
+@_handle_project
+def test_captured_instance_requires_provider_event_binding_id():
+    scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
+    task_id = _seed_provider_event_definition(
+        scheduler,
+        task_revision=5,
+        provider_event_binding_id=None,
+    )
+    definition = scheduler._get_task_or_raise(task_id)
+
+    with pytest.raises(ValueError, match="provider_event_binding_id is required"):
+        scheduler._create_provider_event_captured_instance(
+            definition=definition,
+            operation_id="op-missing-binding",
+            captured_task_revision=5,
+        )
+    rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
+    assert len(rows) == 1
+    assert rows[0].instance_id == 0
 
 
 @pytest.mark.asyncio
