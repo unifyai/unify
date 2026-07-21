@@ -46,7 +46,7 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env()
         required = {
             "UNITY_OFFLINE_TASK_MODE",
-            "UNITY_OFFLINE_TASK_RUN_KEY",
+            "UNITY_OFFLINE_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
             "UNITY_OFFLINE_TASK_REVISION",
@@ -409,7 +409,7 @@ def _original_communication_env_builder(
 
     return {
         "UNITY_OFFLINE_TASK_MODE": "actor",
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),

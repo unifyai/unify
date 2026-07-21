@@ -141,7 +141,7 @@ class ProductionSettings(BaseSettings):
     EVENTBUS_ORCHESTRA_PERSIST_MODE: Literal["all", "allowlist"] = "all"
 
     # Comma-separated tool/method names when EVENTBUS_ORCHESTRA_PERSIST_MODE
-    # is ``allowlist`` and the event is **not** under a task-run lineage
+    # is ``allowlist`` and the event is **not** under a execution lineage
     # (default: CodeAct execution boundaries + tool results).
     EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "execute_code,execute_function"
 

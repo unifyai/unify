@@ -44,7 +44,7 @@ _OPERATION_COUNTER = 0
 def offline_tracking_enabled() -> bool:
     """Return whether the current process should use offline outbound tracking."""
 
-    return bool(os.environ.get("UNITY_OFFLINE_TASK_RUN_KEY", "").strip())
+    return bool(os.environ.get("UNITY_OFFLINE_RUN_KEY", "").strip())
 
 
 def _now_iso() -> str:
@@ -222,7 +222,7 @@ def reserve_outbound_operation(
         return OfflineOutboundDecision()
 
     assistant_id = _coerce_text(SESSION_DETAILS.assistant.agent_id)
-    task_run_key = _coerce_text(os.environ.get("UNITY_OFFLINE_TASK_RUN_KEY"))
+    task_run_key = _coerce_text(os.environ.get("UNITY_OFFLINE_RUN_KEY"))
     if not assistant_id or not task_run_key:
         return OfflineOutboundDecision(
             response={

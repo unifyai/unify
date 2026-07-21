@@ -197,7 +197,7 @@ def test_actor_enable_and_stub_delivery_create_one_provider_run(
 
     run_key = fetch_latest_receipt_run_key(binding_id=binding_id)
     run_response = requests.post(
-        f"{orchestra_api_base()}/v0/task-run/get",
+        f"{orchestra_api_base()}/v0/task-execution/get",
         headers={"Authorization": f"Bearer {orchestra_api_key()}"},
         json={
             "project_name": "Assistants",

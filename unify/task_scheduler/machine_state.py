@@ -42,9 +42,9 @@ _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
 # Assistant-scoped task-machine routes (authenticated with the assistant's own
 # UNIFY_KEY; Orchestra enforces ownership). Not the /admin/* variants.
-_TASK_RUN_CREATE_OR_ADOPT_PATH = "/task-run/create-or-adopt"
-_TASK_RUN_LATEST_PATH = "/task-run/latest"
-_TASK_RUN_UPDATE_PATH = "/task-run/update"
+_TASK_EXECUTION_CREATE_OR_ADOPT_PATH = "/task-execution/create-or-adopt"
+_TASK_EXECUTION_LATEST_PATH = "/task-execution/latest"
+_TASK_EXECUTION_UPDATE_PATH = "/task-execution/update"
 _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
     "/task-outbound-operation/create-or-adopt"
 )
@@ -436,7 +436,7 @@ def create_or_adopt_live_task_run(
 
     run_key = build_task_run_key(provenance)
     response_body = _orchestra_admin_post(
-        _TASK_RUN_CREATE_OR_ADOPT_PATH,
+        _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
         _drop_none_values(
             {
                 "project_name": TASK_MACHINE_STATE_PROJECT,
@@ -482,7 +482,7 @@ def update_task_run_record(
     if run_reference is None:
         return
     _orchestra_admin_post(
-        _TASK_RUN_UPDATE_PATH,
+        _TASK_EXECUTION_UPDATE_PATH,
         _drop_none_values(
             {
                 "project_name": TASK_MACHINE_STATE_PROJECT,
@@ -507,7 +507,7 @@ def latest_task_run_reference_for_source(
     if not normalized_assistant_id:
         return None
     response_body = _orchestra_admin_post(
-        _TASK_RUN_LATEST_PATH,
+        _TASK_EXECUTION_LATEST_PATH,
         {
             "project_name": TASK_MACHINE_STATE_PROJECT,
             "assistant_id": normalized_assistant_id,
@@ -911,7 +911,7 @@ def _orchestra_admin_post(
     unify_key = SESSION_DETAILS.unify_key
     if not orchestra_url or not unify_key:
         logger.warning(
-            "Skipping task-run persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
+            "Skipping task-execution persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
         )
         return None
     response = requests.post(

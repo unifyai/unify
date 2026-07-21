@@ -5,7 +5,7 @@ import pytest
 
 def _seed_env(monkeypatch, *, wake="dashboard_action"):
     monkeypatch.setenv("ASSISTANT_ID", "42")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_RUN_KEY", "offline:scheduled:42:101:rev")
+    monkeypatch.setenv("UNITY_OFFLINE_RUN_KEY", "offline:scheduled:42:101:rev")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
@@ -139,7 +139,7 @@ def test_offline_runner_explicit_uses_activated_by_explicit(monkeypatch):
 
     _seed_env(monkeypatch, wake="explicit")
     monkeypatch.setenv(
-        "UNITY_OFFLINE_TASK_RUN_KEY",
+        "UNITY_OFFLINE_RUN_KEY",
         "offline:explicit:42:101:rev:abc123",
     )
     monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_REF", "req-rest-1")

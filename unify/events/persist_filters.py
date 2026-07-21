@@ -99,7 +99,7 @@ def should_persist_to_orchestra(
         ``SETTINGS.EVENTBUS_ORCHESTRA_PERSIST_TOOLS``.
 
     In ``allowlist`` mode, any ``ManagerMethod`` / ``ToolLoop`` payload that
-    already carries task-run lineage is persisted (dense tree under an
+    already carries execution lineage is persisted (dense tree under an
     ``ActiveTask``). Other event types and non-attributed ManagerMethod /
     ToolLoop rows still follow the tool allowlist.
     """

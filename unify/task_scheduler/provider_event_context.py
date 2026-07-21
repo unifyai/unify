@@ -22,7 +22,7 @@ from unify.task_scheduler.provider_event_dispatch import (
 
 PROVIDER_EVENT_CONTEXT_AUDIENCE = "orchestra:event-context"
 _EVENT_CONTEXT_PATH = "/provider-event/event-context"
-_TASK_RUN_GET_PATH = "/task-run/get"
+_TASK_EXECUTION_GET_PATH = "/task-execution/get"
 _ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 _HTTP_TIMEOUT_SECONDS = 30
 
@@ -101,7 +101,7 @@ def verify_precreated_provider_event_run(
     """Require the Orchestra run referenced by one provider-event dispatch."""
 
     response = requests.post(
-        _orchestra_url(_TASK_RUN_GET_PATH),
+        _orchestra_url(_TASK_EXECUTION_GET_PATH),
         headers=_orchestra_headers(),
         json={
             "project_name": _ORCHESTRA_TASK_MACHINE_PROJECT,

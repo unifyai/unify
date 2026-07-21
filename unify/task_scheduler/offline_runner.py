@@ -67,7 +67,7 @@ from unify.task_scheduler.provider_event_execution import resolve_captured_task_
 from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.types.run_source import RunSource
 
-TASK_RUN_UPDATE_PATH = "/task-run/update"
+TASK_EXECUTION_UPDATE_PATH = "/task-execution/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
 SCHEDULER_MANAGED_WAKES = frozenset(Wake)
@@ -174,7 +174,7 @@ def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
     return ProviderEventDispatchRequest(
         operation_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_OPERATION_ID"),
         run_id=int(_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RUN_ID")),
-        run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
+        run_key=_require_env("UNITY_OFFLINE_RUN_KEY"),
         assistant_id=_require_env("ASSISTANT_ID"),
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         binding_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
@@ -197,7 +197,7 @@ def _load_config_from_env() -> OfflineTaskConfig:
         raise RuntimeError(f"Invalid TASK_DESTINATION: {raw_destination}") from exc
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
-        run_key=_require_env("UNITY_OFFLINE_TASK_RUN_KEY"),
+        run_key=_require_env("UNITY_OFFLINE_RUN_KEY"),
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
         request=_require_env("UNITY_OFFLINE_TASK_REQUEST"),
@@ -219,7 +219,7 @@ def _load_config_from_env() -> OfflineTaskConfig:
 
 
 def _orchestra_admin_headers() -> dict[str, str]:
-    """Return auth headers for Orchestra task-run APIs.
+    """Return auth headers for Orchestra task-execution APIs.
 
     Offline runner Jobs carry the assistant's own ``UNIFY_KEY`` (injected by
     task activation); Orchestra scopes the run update to that assistant.
@@ -263,7 +263,7 @@ def _update_task_run(
 
     orchestra_url = _require_env("ORCHESTRA_URL")
     response = requests.post(
-        f"{orchestra_url}{TASK_RUN_UPDATE_PATH}",
+        f"{orchestra_url}{TASK_EXECUTION_UPDATE_PATH}",
         json=_task_run_update_payload(
             assistant_id,
             run_key,
