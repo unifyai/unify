@@ -32,6 +32,9 @@ def filter_impl(
     descending: bool = False,
     return_ids_only: bool = False,
     include_ids: bool = False,
+    hydrate: Optional[str] = None,
+    hydrate_fields: Optional[List[str]] = None,
+    materialize: Optional[bool] = None,
 ) -> Union[List[Dict[str, Any]], List[int]]:
     """
     Implementation of filter operation.
@@ -62,6 +65,13 @@ def filter_impl(
         When True (and ``return_ids_only`` is False), each row dict includes
         ``_log_id`` with the Orchestra log id. Mutually exclusive with
         ``return_ids_only``.
+    hydrate : str | None
+        External field hydrate mode passed to Orchestra (``none`` /
+        ``stale_ok`` / ``force``). When None, Orchestra defaults apply.
+    hydrate_fields : list[str] | None
+        Optional subset of external fields to hydrate.
+    materialize : bool | None
+        Whether Orchestra should persist hydrated values.
 
     Returns
     -------
@@ -79,13 +89,14 @@ def filter_impl(
         raise ValueError("return_ids_only and include_ids are mutually exclusive")
 
     logger.debug(
-        "Filtering context=%s filter=%s limit=%d offset=%d return_ids_only=%s include_ids=%s",
+        "Filtering context=%s filter=%s limit=%d offset=%d return_ids_only=%s include_ids=%s hydrate=%s",
         context,
         filter,
         limit,
         offset,
         return_ids_only,
         include_ids,
+        hydrate,
     )
 
     filter_expr = normalize_filter_expr(filter)
@@ -113,6 +124,9 @@ def filter_impl(
         offset=offset,
         sorting=sorting,
         return_ids_only=return_ids_only,
+        hydrate=hydrate,
+        hydrate_fields=hydrate_fields,
+        materialize=materialize,
     )
 
     # If return_ids_only, logs is already a list of IDs
