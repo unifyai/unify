@@ -973,6 +973,29 @@ class BaseDataManager(BaseStateManager):
             Write destination (same semantics as ``create_derived_column``).
         """
 
+    @abstractmethod
+    def request_external_write(
+        self,
+        context: str,
+        *,
+        payload: Dict[str, Any],
+        idempotency_key: str,
+        field_name: Optional[str] = None,
+        connector_id: Optional[str] = None,
+        binding: Optional[Dict[str, Any]] = None,
+        log_event_ids: Optional[List[int]] = None,
+        deliver: str = "async",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Enqueue an external through-write intent (Orchestra outbox).
+
+        Prefer ``field_name`` of an ``external_entry`` column so the write
+        binding is loaded server-side. Use ``deliver="sync"`` only for
+        short-path tests; production should enqueue async and drain via
+        ``POST /admin/external_writes/drain``.
+        """
+
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────

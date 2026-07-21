@@ -455,6 +455,36 @@ class SimulatedDataManager(BaseDataManager):
             "column_type": column_type,
         }
 
+    @functools.wraps(BaseDataManager.request_external_write, updated=())
+    def request_external_write(
+        self,
+        context: str,
+        *,
+        payload: Dict[str, Any],
+        idempotency_key: str,
+        field_name: Optional[str] = None,
+        connector_id: Optional[str] = None,
+        binding: Optional[Dict[str, Any]] = None,
+        log_event_ids: Optional[List[int]] = None,
+        deliver: str = "async",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        return {
+            "id": None,
+            "status": "confirmed" if deliver == "sync" else "pending",
+            "connector_id": connector_id,
+            "field_name": field_name,
+            "idempotency_key": idempotency_key,
+            "attempts": 1 if deliver == "sync" else 0,
+            "last_error": None,
+            "result": {"simulated": True, "payload": payload},
+            "log_event_ids": list(log_event_ids or []),
+            "created_at": None,
+            "confirmed_at": None,
+            "binding": binding,
+            "context": self._resolve_context(context),
+        }
+
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────

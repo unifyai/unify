@@ -39,6 +39,7 @@ from unify.data_manager.ops.table_ops import (
     rename_column_impl,
     create_derived_column_impl,
     create_external_column_impl,
+    request_external_write_impl,
 )
 from unify.data_manager.ops.query_ops import (
     filter_impl,
@@ -729,6 +730,38 @@ class DataManager(BaseDataManager):
             connector_id=connector_id,
             binding=binding,
             column_type=column_type,
+        )
+
+    @functools.wraps(BaseDataManager.request_external_write, updated=())
+    def request_external_write(
+        self,
+        context: str,
+        *,
+        payload: Dict[str, Any],
+        idempotency_key: str,
+        field_name: Optional[str] = None,
+        connector_id: Optional[str] = None,
+        binding: Optional[Dict[str, Any]] = None,
+        log_event_ids: Optional[List[int]] = None,
+        deliver: str = "async",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        try:
+            resolved = self._resolve_context_for_write(
+                context,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return self._tool_error(exc)  # type: ignore[return-value]
+        return request_external_write_impl(
+            resolved,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            field_name=field_name,
+            connector_id=connector_id,
+            binding=binding,
+            log_event_ids=log_event_ids,
+            deliver=deliver,
         )
 
     # ──────────────────────────────────────────────────────────────────────────
