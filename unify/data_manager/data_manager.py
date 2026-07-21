@@ -38,6 +38,7 @@ from unify.data_manager.ops.table_ops import (
     delete_column_impl,
     rename_column_impl,
     create_derived_column_impl,
+    create_external_column_impl,
 )
 from unify.data_manager.ops.query_ops import (
     filter_impl,
@@ -704,6 +705,32 @@ class DataManager(BaseDataManager):
             equation=equation,
         )
 
+    @functools.wraps(BaseDataManager.create_external_column, updated=())
+    def create_external_column(
+        self,
+        context: str,
+        *,
+        column_name: str,
+        connector_id: str,
+        binding: Dict[str, Any],
+        column_type: str = "Any",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        try:
+            resolved = self._resolve_context_for_write(
+                context,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return self._tool_error(exc)  # type: ignore[return-value]
+        return create_external_column_impl(
+            resolved,
+            column_name=column_name,
+            connector_id=connector_id,
+            binding=binding,
+            column_type=column_type,
+        )
+
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────
@@ -722,6 +749,9 @@ class DataManager(BaseDataManager):
         descending: bool = False,
         return_ids_only: bool = False,
         include_ids: bool = False,
+        hydrate: Optional[str] = None,
+        hydrate_fields: Optional[List[str]] = None,
+        materialize: Optional[bool] = None,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         if return_ids_only and include_ids:
             raise ValueError("return_ids_only and include_ids are mutually exclusive")
@@ -743,6 +773,9 @@ class DataManager(BaseDataManager):
                 descending=descending,
                 return_ids_only=return_ids_only,
                 include_ids=include_ids,
+                hydrate=hydrate,
+                hydrate_fields=hydrate_fields,
+                materialize=materialize,
             )
 
         sorting = None
