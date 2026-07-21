@@ -108,17 +108,25 @@ In ``allowlist`` mode:
 `EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every
 event to `Events/*`” behavior when publishing is enabled.
 
-Load a run’s tree later via ``run_key`` (no content duplication on the Execution row):
+Load a run’s EventBus tree **one level at a time** (avoid saturating the
+observation with a full dump):
 
 ```python
-from unify.task_scheduler.task_run_events import fetch_task_run_events
-# or: await primitives.tasks.get_execution_events(run_key=...)
+kids = await primitives.tasks.get_run_event_children(run_key=run_key)
+# drill: await primitives.tasks.get_run_event_children(run_key=..., parent=kids["children"][0]["node_id"])
+# detail: await primitives.tasks.get_run_event(run_key=..., node_id=...)
+```
+
+Or use the low-level helper:
+
+```python
+from unify.task_scheduler.task_run_events import fetch_task_run_events, project_immediate_children
 
 tree = fetch_task_run_events(
     run_key,  # Tasks/Executions.run_key
     events_base_context="{user}/{assistant}/Events",
 )
-# tree.manager_methods / tree.tool_loops — nest via hierarchy / hierarchy_label
+children = project_immediate_children(tree.rows, run_key=run_key)
 ```
 
 ## Troubleshooting

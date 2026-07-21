@@ -54,10 +54,12 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
     """
     Public contract for a task‑list manager.
 
-    Managers expose three user‑facing methods:
+    Managers expose user‑facing methods:
     • `ask` – answer questions about the current task list (read‑only)
     • `update` – create, modify, delete, or reschedule tasks
     • `execute` – start task execution and return a live steerable handle
+    • `get_run_event_children` / `get_run_event` – depth‑1 EventBus diagnostics
+      for a ``Tasks/Executions`` ``run_key``
 
     Implementations choose their storage and execution strategy; this base
     class defines the required behavior and method signatures.
@@ -313,6 +315,77 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         ValueError
             When ``task_id`` cannot be found, is not runnable, or is disabled
             (``enabled=False``). Disabled tasks must be re-enabled before execute.
+        """
+
+    @abstractmethod
+    def get_run_event_children(
+        self,
+        *,
+        run_key: str,
+        parent: str | None = None,
+        limit: int = 50,
+        events_base_context: str | None = None,
+    ) -> Dict[str, Any]:
+        """Return **immediate** EventBus children for one ``Tasks/Executions`` run.
+
+        Depth-1 only: each call lists the next hierarchy level under ``parent``
+        (or under the root ``Task.run(...)`` segment when ``parent`` is omitted).
+        Expand further with another call using a child's ``node_id`` as ``parent``.
+        Never returns the full tree in one shot — assign the result in
+        ``execute_code`` and drill selectively; prefer a short last expression
+        over ``print``-ing large payloads.
+
+        Parameters
+        ----------
+        run_key : str
+            ``Tasks/Executions.run_key`` join key stamped on Event payloads.
+        parent : str | None
+            Hierarchy prefix / ``node_id`` from a previous child stub. ``None``
+            lists children of the run's ``Task.run(...)`` root.
+        limit : int
+            Max children returned (default 50).
+        events_base_context : str | None
+            Optional Events root override (tests). Default:
+            ``{user}/{assistant}/Events`` from the session.
+
+        Returns
+        -------
+        dict
+            ``{run_key, parent, events_base_context, children: [stubs...]}``.
+            Stubs are compact (segment, method/kind/phase, truncated error,
+            ``has_children``, ``event_ids``) — no ToolLoop message bodies.
+        """
+
+    @abstractmethod
+    def get_run_event(
+        self,
+        *,
+        run_key: str,
+        node_id: str,
+        event_id: str | None = None,
+        events_base_context: str | None = None,
+    ) -> Dict[str, Any]:
+        """Return near-raw EventBus row(s) for **one** hierarchy node only.
+
+        Use after ``get_run_event_children`` when a specific node needs payload
+        detail (e.g. a failed ``execute_code``). Does not include descendants.
+
+        Parameters
+        ----------
+        run_key : str
+            ``Tasks/Executions.run_key``.
+        node_id : str
+            Exact hierarchy prefix from a child stub (``node_id``).
+        event_id : str | None
+            Optional id from the stub's ``event_ids`` when multiple rows share
+            the node (e.g. ManagerMethod incoming vs outgoing).
+        events_base_context : str | None
+            Optional Events root override (tests).
+
+        Returns
+        -------
+        dict
+            ``{run_key, node_id, events_base_context, events: [rows...]}``.
         """
 
     @abstractmethod

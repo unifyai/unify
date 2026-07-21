@@ -104,17 +104,24 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 - Vocabulary: `wake` ∈ {scheduled, triggered, explicit, provider_event};
   `delivery` ∈ {live, offline}. Recurrence creates the *next* Execution when
   the current one **starts**.
-- EventBus stamps `task_id` + `run_key` (no `instance_id`). Load the tree with:
+- EventBus stamps `task_id` + `run_key` (no `instance_id`). Diagnose a run with
+  **depth-1** primitives (never dump the full forest in one call):
 
 ```python
-from unify.task_scheduler.task_run_events import fetch_task_run_events
-# or: await primitives.tasks.get_execution_events(run_key=...)
-
-tree = fetch_task_run_events(run_key, events_base_context="{user}/{assistant}/Events")
+kids = await primitives.tasks.get_run_event_children(run_key=rk)
+failed = [c for c in kids["children"] if c.get("error")]
+if failed:
+    detail = await primitives.tasks.get_run_event(
+        run_key=rk,
+        node_id=failed[0]["node_id"],
+    )
+# Prefer a short last expression over printing large payloads.
+f"children={len(kids['children'])} failed={len(failed)}"
 ```
 
-  Runs may live under `Teams/{id}/Tasks/Executions` while Events stay under the
-  executing assistant’s `…/Events/*` — join is by `run_key` value.
+  Executions may live under `Teams/{id}/Tasks/Executions` while Events stay under the
+  executing assistant’s `…/Events/*` — join is by `run_key` value. Low-level helper:
+  `unify.task_scheduler.task_run_events.fetch_task_run_events` / `project_immediate_children`.
 
 
 ### Entrypoints and description-driven execution

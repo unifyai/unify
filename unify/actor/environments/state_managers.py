@@ -112,6 +112,8 @@ class StateManagerEnvironment(BaseEnvironment):
             "search_files",
             "describe",
             "list_columns",
+            "get_run_event_children",
+            "get_run_event",
         }
 
         tools: Dict[str, ToolMetadata] = {}
