@@ -954,6 +954,31 @@ class BaseDataManager(BaseStateManager):
         Create a REST-bound external column (Orchestra ``external_entry``).
 
         Values are hydrated lazily on read via ``filter(..., hydrate=...)``.
+        The remote API is the source of truth for the bound field; keep local
+        columns for join keys and workflow state only — do **not** full-mirror
+        a remote database into Orchestra.
+
+        ``binding["auth_secret_ref"]`` is the *name* of a secret in the tenant
+        ``Secrets`` vault owned by this table's context
+        (``Teams/{id}/Secrets`` or ``{user}/{agent}/Secrets``). Never put the
+        secret value in the binding JSON. Plant secrets via
+        ``primitives.secrets`` (or an out-of-band provisioner) before hydrate
+        / through-write.
+
+        Binding sketch (connector ``http.generic``)::
+
+            {
+              "auth_secret_ref": "MY_API_TOKEN",  # pragma: allowlist secret
+              "auth": {"placement": "bearer"},  # or query + param
+              "inputs": [{"name": "item_id", "column": "item_id"}],
+              "cache": {"ttl_seconds": 300},
+              "http": {
+                "method": "GET",
+                "url_template": "https://api.example.com/items/{item_id}",
+                "response_jsonpath": "$.status",
+              },
+            }
+
         See Orchestra ``docs/external-field-bindings.md``.
 
         Parameters
@@ -965,8 +990,9 @@ class BaseDataManager(BaseStateManager):
         connector_id : str
             Registered connector id (e.g. ``http.generic``).
         binding : dict
-            Binding config (inputs, cache, http, on_error, …). ``connector_id``
-            is also accepted inside ``binding``; the explicit argument wins.
+            Binding config (inputs, cache, http, on_error, auth, …).
+            ``connector_id`` is also accepted inside ``binding``; the explicit
+            argument wins. Never inline secret values.
         column_type : str, default ``Any``
             Declared Orchestra field type for the hydrated value.
         destination : str | None
@@ -991,9 +1017,12 @@ class BaseDataManager(BaseStateManager):
         Enqueue an external through-write intent (Orchestra outbox).
 
         Prefer ``field_name`` of an ``external_entry`` column so the write
-        binding is loaded server-side. Use ``deliver="sync"`` only for
-        short-path tests; production should enqueue async and drain via
-        ``POST /admin/external_writes/drain``.
+        binding (including ``auth_secret_ref``) is loaded server-side. Auth
+        resolves from the tenant Secrets vault at deliver time (async drain
+        or ``deliver="sync"``).
+
+        Use ``deliver="sync"`` for latency-sensitive ticks; otherwise enqueue
+        async and let ``POST /admin/external_writes/drain`` deliver.
         """
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1102,6 +1131,22 @@ class BaseDataManager(BaseStateManager):
             ``update_by_ids`` / ``delete_rows`` call needs stable ids.
             Mutually exclusive with ``return_ids_only``. Requires a single
             resolved context (not federated multi-source reads).
+
+        hydrate : str | None, default ``None``
+            External-column hydrate mode passed to Orchestra:
+            ``none`` (skip), ``stale_ok`` (default server behavior when
+            omitted on some paths), or ``force`` (always re-fetch). Use when
+            reading ``external_entry`` columns so remote values are fresh
+            enough for the decision.
+
+        hydrate_fields : list[str] | None, default ``None``
+            Optional subset of external field names to hydrate. When
+            ``None``, all active external columns on the context hydrate.
+
+        materialize : bool | None, default ``None``
+            When ``True``, Orchestra persists hydrated values and cache
+            sidecars into ``LogEvent.data`` so later filters can use them.
+            Prefer ``True`` for fields you will filter/sort on later.
 
         Returns
         -------
