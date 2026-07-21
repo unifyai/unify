@@ -195,7 +195,7 @@ def test_normalize_repeat_patterns_collapses_full_day_half_hour_slots():
 
 
 @_handle_project
-def test_clone_task_instance_rearms_recurring_scheduled_task():
+def test_rearm_task_definition_rearms_recurring_scheduled_task():
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -209,15 +209,14 @@ def test_clone_task_instance_rearms_recurring_scheduled_task():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
+    scheduler._rearm_task_definition(current)
 
     task_rows = scheduler._filter_tasks(filter="task_id == 0")
-    latest = max(task_rows, key=lambda task: task.instance_id)
-    assert len(task_rows) == 2
-    assert latest.instance_id == 1
-    assert latest.status == Status.scheduled
-    assert latest.schedule_start_at == initial_start + timedelta(days=1)
-    assert latest.entrypoint is None
+    assert len(task_rows) == 1
+    row = task_rows[0]
+    assert row.status == Status.scheduled
+    assert row.schedule_start_at == initial_start + timedelta(days=1)
+    assert row.entrypoint is None
 
 
 def test_max_jitter_seconds_reads_patterns_and_dicts():
@@ -234,7 +233,7 @@ def test_max_jitter_seconds_reads_patterns_and_dicts():
 
 
 @_handle_project
-def test_clone_task_instance_applies_jitter_without_drift():
+def test_rearm_task_definition_applies_jitter_without_drift():
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -247,26 +246,17 @@ def test_clone_task_instance_applies_jitter_without_drift():
         repeat=[RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800)],
     )
 
-    # First re-arm: canonical is initial + 1 day, dispatch is jittered forward.
-    scheduler._clone_task_instance(scheduler._get_task_or_raise(0))
-    inst1 = max(
-        scheduler._filter_tasks(filter="task_id == 0"),
-        key=lambda t: t.instance_id,
-    )
+    scheduler._rearm_task_definition(scheduler._get_task_or_raise(0))
+    row1 = scheduler._get_task_or_raise(0)
     canonical_1 = initial_start + timedelta(days=1)
-    applied_1 = inst1.schedule.jitter_applied_seconds
+    applied_1 = row1.schedule.jitter_applied_seconds
     assert applied_1 is not None and 0.0 <= applied_1 <= 1800.0
-    assert inst1.schedule_start_at == canonical_1 + timedelta(seconds=applied_1)
+    assert row1.schedule_start_at == canonical_1 + timedelta(seconds=applied_1)
 
-    # Second re-arm anchors on the CANONICAL slot, not the jittered dispatch —
-    # so the canonical does not drift by the previous jitter offset.
-    scheduler._clone_task_instance(inst1)
-    inst2 = max(
-        scheduler._filter_tasks(filter="task_id == 0"),
-        key=lambda t: t.instance_id,
-    )
-    applied_2 = inst2.schedule.jitter_applied_seconds or 0.0
-    canonical_2 = inst2.schedule_start_at - timedelta(seconds=applied_2)
+    scheduler._rearm_task_definition(row1)
+    row2 = scheduler._get_task_or_raise(0)
+    applied_2 = row2.schedule.jitter_applied_seconds or 0.0
+    canonical_2 = row2.schedule_start_at - timedelta(seconds=applied_2)
     assert canonical_2 == initial_start + timedelta(days=2)
 
 
@@ -285,22 +275,18 @@ def test_entrypoint_review_records_symbolic_candidate_without_offline_promotion(
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
-    result = scheduler._attach_entrypoint_to_future_instances(
+    scheduler._rearm_task_definition(current)
+    result = scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The successful run revealed a stable workflow.",
     )
 
-    rows = scheduler._filter_tasks(filter="task_id == 0")
-    current_row = min(rows, key=lambda task: task.instance_id)
-    future_row = max(rows, key=lambda task: task.instance_id)
+    row = scheduler._get_task_or_raise(0)
 
     assert result["outcome"] == "candidate_recorded"
-    assert current_row.entrypoint is None
-    assert future_row.entrypoint == 321
-    assert future_row.offline is False
+    assert row.entrypoint == 321
+    assert row.offline is False
     assert result["certification_status"] == "required_before_offline_promotion"
 
 
@@ -319,17 +305,15 @@ def test_offline_promotion_requires_passing_certification():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
-    scheduler._attach_entrypoint_to_future_instances(
+    scheduler._rearm_task_definition(current)
+    scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The successful run revealed a stable workflow.",
     )
 
-    rejected = scheduler._promote_symbolic_candidate_to_offline(
+    rejected = scheduler._promote_definition_to_offline(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         certification_metadata={},
         certification_result={
@@ -338,14 +322,11 @@ def test_offline_promotion_requires_passing_certification():
         },
     )
 
-    future_row = max(
-        scheduler._filter_tasks(filter="task_id == 0"),
-        key=lambda task: task.instance_id,
-    )
+    row = scheduler._get_task_or_raise(0)
     assert rejected["outcome"] == "certification_rejected"
     assert "missing_certification_evidence" in rejected["rejection_reasons"]
-    assert future_row.entrypoint == 321
-    assert future_row.offline is False
+    assert row.entrypoint == 321
+    assert row.offline is False
 
 
 @_handle_project
@@ -363,10 +344,9 @@ def test_offline_promotion_rejects_failed_certification_attestation():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
-    scheduler._attach_entrypoint_to_future_instances(
+    scheduler._rearm_task_definition(current)
+    scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The successful run revealed a stable workflow.",
     )
@@ -375,9 +355,8 @@ def test_offline_promotion_rejects_failed_certification_attestation():
         "no_static_runtime_assumptions"
     ] = False
 
-    rejected = scheduler._promote_symbolic_candidate_to_offline(
+    rejected = scheduler._promote_definition_to_offline(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         certification_metadata=metadata,
         certification_result={
@@ -408,10 +387,9 @@ def test_offline_promotion_rejects_ad_hoc_primitive_replacements():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
-    scheduler._attach_entrypoint_to_future_instances(
+    scheduler._rearm_task_definition(current)
+    scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The successful run revealed a stable workflow.",
     )
@@ -420,9 +398,8 @@ def test_offline_promotion_rejects_ad_hoc_primitive_replacements():
         "ad_hoc_replacements"
     ] = ["replaced primitives.web.ask with urllib scraping"]
 
-    rejected = scheduler._promote_symbolic_candidate_to_offline(
+    rejected = scheduler._promote_definition_to_offline(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         certification_metadata=metadata,
         certification_result={
@@ -450,17 +427,15 @@ def test_passing_certification_promotes_candidate_future_instances_offline():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
-    scheduler._attach_entrypoint_to_future_instances(
+    scheduler._rearm_task_definition(current)
+    scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The successful run revealed a stable workflow.",
     )
 
-    promoted = scheduler._promote_symbolic_candidate_to_offline(
+    promoted = scheduler._promote_definition_to_offline(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         certification_metadata=_passing_certification_metadata(),
         certification_result={
@@ -470,18 +445,15 @@ def test_passing_certification_promotes_candidate_future_instances_offline():
         },
     )
 
-    future_row = max(
-        scheduler._filter_tasks(filter="task_id == 0"),
-        key=lambda task: task.instance_id,
-    )
+    row = scheduler._get_task_or_raise(0)
     assert promoted["outcome"] == "offline_promoted"
-    assert future_row.entrypoint == 321
-    assert future_row.offline is True
+    assert row.entrypoint == 321
+    assert row.offline is True
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_recurring_execution_clones_before_entrypoint_review_patch():
+async def test_recurring_execution_rearms_before_entrypoint_review_patch():
     scheduler = TaskScheduler(actor=SimulatedActor(steps=0))
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -497,42 +469,30 @@ async def test_recurring_execution_clones_before_entrypoint_review_patch():
     handle = await scheduler.execute(task_id=0)
     await handle.result()
 
-    rows_after_run = sorted(
-        scheduler._filter_tasks(filter="task_id == 0"),
-        key=lambda task: task.instance_id,
-    )
-    assert [row.instance_id for row in rows_after_run] == [0, 1]
-    assert rows_after_run[0].entrypoint is None
-    assert rows_after_run[1].entrypoint is None
+    row_after_run = scheduler._get_task_or_raise(0)
+    assert row_after_run.entrypoint is None
+    assert row_after_run.schedule_start_at == initial_start + timedelta(days=1)
 
-    result = scheduler._attach_entrypoint_to_future_instances(
+    result = scheduler._attach_entrypoint_to_definition(
         task_id=0,
-        completed_instance_id=0,
         function_id=321,
         rationale="The completed run was stable enough to reuse.",
     )
     assert result["outcome"] == "candidate_recorded"
 
-    patched_next = [
-        row
-        for row in scheduler._filter_tasks(filter="task_id == 0")
-        if row.instance_id == 1
-    ][0]
-    assert patched_next.entrypoint == 321
-    assert patched_next.offline is False
+    patched = scheduler._get_task_or_raise(0)
+    assert patched.entrypoint == 321
+    assert patched.offline is False
 
-    scheduler._clone_task_instance(patched_next)
-    cloned_from_patched = [
-        row
-        for row in scheduler._filter_tasks(filter="task_id == 0")
-        if row.instance_id == 2
-    ][0]
-    assert cloned_from_patched.entrypoint == 321
-    assert cloned_from_patched.offline is False
+    scheduler._rearm_task_definition(patched)
+    rearmed = scheduler._get_task_or_raise(0)
+    assert rearmed.entrypoint == 321
+    assert rearmed.offline is False
+    assert rearmed.schedule_start_at == initial_start + timedelta(days=2)
 
 
 @_handle_project
-def test_clone_task_instance_stops_when_repeat_count_is_exhausted():
+def test_rearm_task_definition_stops_when_repeat_count_is_exhausted():
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -546,7 +506,9 @@ def test_clone_task_instance_stops_when_repeat_count_is_exhausted():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._clone_task_instance(current)
+    before = current.schedule_start_at
+    scheduler._rearm_task_definition(current)
 
     task_rows = scheduler._filter_tasks(filter="task_id == 0")
     assert len(task_rows) == 1
+    assert task_rows[0].schedule_start_at == before

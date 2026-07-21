@@ -1,10 +1,9 @@
 """Read-only helpers for Orchestra-projected assistant task machine state.
 
-The user-authored `Tasks` context remains the source of truth for scheduler
-mutations. Orchestra mirrors the machine-facing activation and run state into
-`Tasks/Activations` and `Tasks/Runs`; Unity reads those contexts to validate
-scheduled wakeups and to narrow triggered-task candidates without polling the
-full user task table.
+The user-authored ``Tasks`` context is the definition source of truth.
+Orchestra projects each wake attempt into ``Tasks/Executions``; Unity reads
+that context to validate scheduled wakeups and to narrow triggered-task
+candidates without polling the full user task table.
 """
 
 from __future__ import annotations
@@ -32,49 +31,53 @@ from unify.task_scheduler.resource_requirements import (
 )
 from unify.task_scheduler.storage import TasksStore
 from unify.task_scheduler.types.activated_by import ActivatedBy
+from unify.task_scheduler.types.execution import Delivery, ExecutionState, Wake
 from unify.task_scheduler.types.run_source import RunSource
 
 TASKS_CONTEXT_NAME = "Tasks"
-TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
-TASK_RUNS_CONTEXT_NAME = "Tasks/Runs"
+TASK_EXECUTIONS_CONTEXT_NAME = "Tasks/Executions"
 TASK_OUTBOUND_OPERATIONS_CONTEXT_NAME = "Tasks/OutboundOperations"
-_TASK_ACTIVATIONS_CONTEXT_LEAF = "Activations"
-_TASK_RUNS_CONTEXT_LEAF = "Runs"
+_TASK_EXECUTIONS_CONTEXT_LEAF = "Executions"
 _TASK_OUTBOUND_OPERATIONS_CONTEXT_LEAF = "OutboundOperations"
 TASK_MACHINE_STATE_PROJECT = "Assistants"
 # Assistant-scoped task-machine routes (authenticated with the assistant's own
 # UNIFY_KEY; Orchestra enforces ownership). Not the /admin/* variants.
-_TASK_RUN_CREATE_OR_ADOPT_PATH = "/task-run/create-or-adopt"
-_TASK_RUN_LATEST_PATH = "/task-run/latest"
-_TASK_RUN_UPDATE_PATH = "/task-run/update"
+_TASK_EXECUTION_CREATE_OR_ADOPT_PATH = "/task-execution/create-or-adopt"
+_TASK_EXECUTION_LATEST_PATH = "/task-execution/latest"
+_TASK_EXECUTION_UPDATE_PATH = "/task-execution/update"
 _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
     "/task-outbound-operation/create-or-adopt"
 )
 _TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/task-outbound-operation/update"
 _TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
-_ACTIVATION_QUERY_FIELDS = [
+_EXECUTION_QUERY_FIELDS = [
     "assistant_id",
     "destination",
-    "activation_key",
+    "run_key",
     "task_id",
     "source_task_log_id",
-    "activation_kind",
-    "execution_mode",
-    "status",
+    "wake",
+    "delivery",
+    "state",
     "task_name",
     "task_description",
-    "next_due_at",
+    "scheduled_for",
     "trigger_medium",
     "trigger_from_contact_ids",
     "trigger_omit_contact_ids",
     "trigger_recurring",
     "entrypoint",
     "repeat",
-    "activation_revision",
+    "revision",
     "requires_filesystem",
     "requires_computer",
 ]
 _DEFAULT_TRIGGER_PAGE_SIZE = 200
+_OPEN_EXECUTION_STATES = (
+    ExecutionState.scheduled,
+    ExecutionState.triggerable,
+    ExecutionState.running,
+)
 _PENDING_LIVE_TASK_RUNS: dict[tuple[int, str | None], "TaskRunProvenance"] = {}
 _PENDING_TRIGGER_LIVE_TASK_RUNS: dict[str, "TaskRunProvenance"] = {}
 
@@ -83,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 def _canonical_destination_or_none(destination: object) -> str | None:
     """Return canonical destination when valid, otherwise ``None``."""
+
     try:
         return ContextRegistry.canonical_destination(destination)
     except ValueError:
@@ -92,33 +96,24 @@ def _canonical_destination_or_none(destination: object) -> str | None:
 def invalidate_task_machine_state_reads() -> None:
     """Invalidate cached task machine-state readers after membership changes."""
 
-    # Activation/run stores are intentionally lightweight and reconstructed per
-    # read today. The explicit hook keeps membership-update handling aligned with
-    # any future cache while preserving the current no-cache behavior.
     return None
 
 
 @dataclass(frozen=True)
-class TaskActivationSnapshot:
-    """Machine-facing activation facts for one assistant/task pair.
+class TaskExecutionSnapshot:
+    """Machine-facing execution facts for one assistant/task wake."""
 
-    Attributes capture the projected activation contract Unity consumes for due
-    validation and trigger matching. The snapshot is intentionally read-only and
-    mirrors the Orchestra row closely so callers can reason about staleness and
-    execution routing without re-reading the user-authored `Tasks` context.
-    """
-
-    assistant_id: str | None
-    activation_key: str
+    run_key: str
     task_id: int
+    assistant_id: str | None = None
     destination: str | None = None
     source_task_log_id: int | None = None
-    activation_kind: str | None = None
-    execution_mode: str | None = None
-    status: str | None = None
+    wake: str | None = None
+    delivery: str | None = None
+    state: str | None = None
     task_name: str | None = None
     task_description: str | None = None
-    next_due_at: str | None = None
+    scheduled_for: str | None = None
     trigger_medium: str | None = None
     trigger_from_contact_ids: list[int] = field(default_factory=list)
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
@@ -128,19 +123,19 @@ class TaskActivationSnapshot:
     requires_filesystem: bool = False
     requires_computer: bool = False
     repeat: list[Any] | None = None
-    activation_revision: str | None = None
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
 class TaskRunProvenance:
-    """Live or offline provenance facts used to materialize one task run row."""
+    """Live or offline provenance facts used to materialize one execution row."""
 
     assistant_id: str
     task_id: int
-    source_type: RunSource
-    execution_mode: str = "live"
+    wake: Wake
+    delivery: Delivery = Delivery.live
     source_task_log_id: int | None = None
-    activation_revision: str | None = None
+    revision: str | None = None
     destination: str | None = None
     scheduled_for: str | None = None
     source_medium: str | None = None
@@ -154,17 +149,10 @@ class TaskRunProvenance:
 
 @dataclass(frozen=True)
 class TaskRunReference:
-    """Stable identifiers needed to patch a materialized task run later.
-
-    ``source_task_log_id`` pins the task's own surface so team-task runs
-    (which live under ``Teams/{id}/Tasks/Runs``) resolve on update exactly
-    as they did on creation.
-    """
+    """Stable identifiers needed to patch a materialized execution later."""
 
     assistant_id: str
     run_key: str
-    # Routing metadata, not identity: excluded from equality so references
-    # compare by (assistant_id, run_key) alone.
     source_task_log_id: int | None = field(default=None, compare=False)
 
 
@@ -186,16 +174,10 @@ class TaskOutboundOperationProvenance:
 
 @dataclass(frozen=True)
 class TaskOutboundOperationReference:
-    """Stable identifiers needed to patch one outbound ledger row later.
-
-    ``source_task_log_id`` pins the task's own surface so team-task rows
-    resolve on update exactly as they did on creation.
-    """
+    """Stable identifiers needed to patch one outbound ledger row later."""
 
     assistant_id: str
     operation_key: str
-    # Routing metadata, not identity: excluded from equality so references
-    # compare by (assistant_id, operation_key) alone.
     source_task_log_id: int | None = field(default=None, compare=False)
 
 
@@ -208,48 +190,15 @@ class TaskOutboundOperationRecord:
     created: bool
 
 
-def build_activation_key(
-    *,
-    assistant_id: str | int | None,
-    task_id: int,
-    destination: str | None = None,
-) -> str:
-    """Return the executor-scoped activation key used by Orchestra."""
-
-    normalized_assistant_id = _coerce_str(assistant_id)
-    destination_label = _coerce_str(_canonical_destination_or_none(destination))
-    if normalized_assistant_id:
-        if destination_label:
-            return f"{normalized_assistant_id}:{destination_label}:{task_id}"
-        return f"{normalized_assistant_id}:{task_id}"
-    if destination_label:
-        return f"{destination_label}:{task_id}"
-    return str(task_id)
-
-
-def build_task_activation_context_name(
+def build_task_executions_context_name(
     *,
     user_context: str | None = None,
     assistant_context: str | None = None,
 ) -> str:
-    """Return the assistant-scoped Orchestra context for activation reads."""
+    """Return the assistant-scoped Orchestra context for execution reads."""
 
     return _build_task_machine_context_name(
-        leaf_name=_TASK_ACTIVATIONS_CONTEXT_LEAF,
-        user_context=user_context,
-        assistant_context=assistant_context,
-    )
-
-
-def build_task_runs_context_name(
-    *,
-    user_context: str | None = None,
-    assistant_context: str | None = None,
-) -> str:
-    """Return the assistant-scoped Orchestra context for run reads/writes."""
-
-    return _build_task_machine_context_name(
-        leaf_name=_TASK_RUNS_CONTEXT_LEAF,
+        leaf_name=_TASK_EXECUTIONS_CONTEXT_LEAF,
         user_context=user_context,
         assistant_context=assistant_context,
     )
@@ -275,12 +224,7 @@ def _build_task_machine_context_name(
     user_context: str | None = None,
     assistant_context: str | None = None,
 ) -> str:
-    """Return one assistant-scoped task-machine context path.
-
-    Team-owned assistants have no ``{user}/{agent}`` root: their task-machine
-    surfaces live on the owning team's shared Tasks tree, matching where
-    team task runs are already created and updated.
-    """
+    """Return one assistant-scoped task-machine context path."""
 
     if user_context is None and SESSION_DETAILS.team_owned:
         owner_team_id = SESSION_DETAILS.owner_team_id
@@ -305,12 +249,13 @@ def remember_live_task_run_provenance(provenance: TaskRunProvenance) -> None:
 
     provenance = replace(
         provenance,
-        source_type=RunSource.normalize(provenance.source_type),
+        wake=Wake.normalize(provenance.wake),
+        delivery=Delivery.normalize(provenance.delivery),
     )
     normalized_attempt_token = _normalize_pending_trigger_attempt_token(
         provenance.attempt_token,
     )
-    if provenance.source_type is RunSource.triggered and normalized_attempt_token:
+    if provenance.wake is Wake.triggered and normalized_attempt_token:
         _PENDING_TRIGGER_LIVE_TASK_RUNS[normalized_attempt_token] = provenance
         return
     _PENDING_LIVE_TASK_RUNS[
@@ -322,15 +267,15 @@ def peek_live_task_run_provenance(
     *,
     assistant_id: str | int | None,
     task_id: int,
-    source_type: RunSource | str,
+    wake: Wake | RunSource | str,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
 ) -> TaskRunProvenance | None:
     """Return pending provenance for one task without claiming it."""
 
-    source_type = RunSource.normalize(source_type)
+    wake = _normalize_wake(wake)
     pending: TaskRunProvenance | None
-    if source_type is RunSource.triggered:
+    if wake is Wake.triggered:
         normalized_attempt_token = _normalize_pending_trigger_attempt_token(
             trigger_attempt_token,
         )
@@ -345,7 +290,7 @@ def peek_live_task_run_provenance(
             matches = [
                 item
                 for item in _PENDING_LIVE_TASK_RUNS.values()
-                if item.task_id == task_id and item.source_type is source_type
+                if item.task_id == task_id and item.wake is wake
             ]
             if len(matches) == 1:
                 pending = matches[0]
@@ -363,19 +308,19 @@ def consume_live_task_run_provenance(
     *,
     assistant_id: str | int | None,
     task_id: int,
-    source_type: RunSource | str,
+    wake: Wake | RunSource | str,
     source_task_log_id: int | None = None,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
 ) -> TaskRunProvenance | None:
     """Claim the pending live-run provenance for one task, or build a fallback."""
 
-    source_type = RunSource.normalize(source_type)
+    wake = _normalize_wake(wake)
     normalized_assistant_id = _coerce_str(assistant_id)
     pending = _claim_pending_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
-        source_type=source_type,
+        wake=wake,
         destination=destination,
         trigger_attempt_token=trigger_attempt_token,
     )
@@ -383,37 +328,32 @@ def consume_live_task_run_provenance(
         return pending
     if not normalized_assistant_id:
         return None
-    activation = None
-    if source_type in {RunSource.scheduled, RunSource.triggered}:
-        activation = get_task_activation(
+    execution = None
+    if wake in {Wake.scheduled, Wake.triggered}:
+        execution = get_open_task_execution(
             assistant_id=normalized_assistant_id,
             task_id=task_id,
             destination=destination,
+            wake=wake,
         )
     return TaskRunProvenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
-        source_type=source_type,
-        execution_mode="live",
+        wake=wake,
+        delivery=Delivery.live,
         source_task_log_id=source_task_log_id
-        or (activation.source_task_log_id if activation is not None else None),
-        activation_revision=(
-            activation.activation_revision if activation is not None else None
-        ),
-        destination=(activation.destination if activation is not None else None),
+        or (execution.source_task_log_id if execution is not None else None),
+        revision=(execution.revision if execution is not None else None),
+        destination=(execution.destination if execution is not None else None),
         scheduled_for=(
-            activation.next_due_at
-            if source_type is RunSource.scheduled and activation
-            else None
+            execution.scheduled_for if wake is Wake.scheduled and execution else None
         ),
         source_medium=(
-            activation.trigger_medium
-            if source_type is RunSource.triggered and activation
-            else None
+            execution.trigger_medium if wake is Wake.triggered and execution else None
         ),
-        task_name=(activation.task_name if activation is not None else None),
+        task_name=(execution.task_name if execution is not None else None),
         task_description=(
-            activation.task_description if activation is not None else None
+            execution.task_description if execution is not None else None
         ),
     )
 
@@ -422,15 +362,14 @@ def _claim_pending_live_task_run_provenance(
     *,
     assistant_id: str | None,
     task_id: int,
-    source_type: RunSource | str,
+    wake: Wake,
     destination: str | None,
     trigger_attempt_token: str | None,
 ) -> TaskRunProvenance | None:
     """Claim one pending provenance entry without misattributing another attempt."""
 
-    source_type = RunSource.normalize(source_type)
     pending: TaskRunProvenance | None
-    if source_type is RunSource.triggered:
+    if wake is Wake.triggered:
         normalized_attempt_token = _normalize_pending_trigger_attempt_token(
             trigger_attempt_token,
         )
@@ -447,20 +386,20 @@ def _claim_pending_live_task_run_provenance(
     if pending.task_id != task_id:
         logger.warning(
             "Discarding pending live task provenance for mismatched task id "
-            "(expected=%s, actual=%s, source_type=%s)",
+            "(expected=%s, actual=%s, wake=%s)",
             task_id,
             pending.task_id,
-            source_type,
+            wake,
         )
         return None
     if assistant_id and pending.assistant_id != assistant_id:
         logger.warning(
             "Discarding pending live task provenance for mismatched assistant "
-            "(expected=%s, actual=%s, task_id=%s, source_type=%s)",
+            "(expected=%s, actual=%s, task_id=%s, wake=%s)",
             assistant_id,
             pending.assistant_id,
             task_id,
-            source_type,
+            wake,
         )
         return None
     return pending
@@ -481,12 +420,11 @@ def _normalize_pending_trigger_attempt_token(attempt_token: str | None) -> str |
     return _normalize_run_key_component(attempt_token)
 
 
-def source_type_from_activation_reason(
-    reason: ActivatedBy | str | None,
-) -> RunSource:
-    """Normalize scheduler activation reasons into the persisted run source type."""
+def wake_from_activation_reason(reason: ActivatedBy | str | None) -> Wake:
+    """Normalize scheduler activation reasons into execution wake vocabulary."""
 
-    return RunSource.from_activation_reason(reason)
+    source = RunSource.from_activation_reason(reason)
+    return Wake.normalize(source.value)
 
 
 def create_or_adopt_live_task_run(
@@ -494,11 +432,11 @@ def create_or_adopt_live_task_run(
     *,
     started_at: str | None = None,
 ) -> TaskRunReference | None:
-    """Create or adopt one live run row at the moment execution begins."""
+    """Create or adopt one live execution row at the moment execution begins."""
 
     run_key = build_task_run_key(provenance)
     response_body = _orchestra_admin_post(
-        _TASK_RUN_CREATE_OR_ADOPT_PATH,
+        _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
         _drop_none_values(
             {
                 "project_name": TASK_MACHINE_STATE_PROJECT,
@@ -506,9 +444,9 @@ def create_or_adopt_live_task_run(
                 "assistant_id": provenance.assistant_id,
                 "task_id": provenance.task_id,
                 "source_task_log_id": provenance.source_task_log_id,
-                "source_type": provenance.source_type,
-                "execution_mode": provenance.execution_mode,
-                "activation_revision": provenance.activation_revision,
+                "wake": provenance.wake.value,
+                "delivery": provenance.delivery.value,
+                "revision": provenance.revision,
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
                 "source_medium": provenance.source_medium,
@@ -518,7 +456,7 @@ def create_or_adopt_live_task_run(
                 "task_name": provenance.task_name,
                 "task_description": provenance.task_description,
                 "started_at": started_at or _now_iso(),
-                "state": "running",
+                "state": ExecutionState.running.value,
             },
         ),
     )
@@ -539,12 +477,12 @@ def update_task_run_record(
     run_reference: TaskRunReference | None,
     updates: Mapping[str, Any],
 ) -> None:
-    """Patch one previously materialized task run row back in Orchestra."""
+    """Patch one previously materialized execution row back in Orchestra."""
 
     if run_reference is None:
         return
     _orchestra_admin_post(
-        _TASK_RUN_UPDATE_PATH,
+        _TASK_EXECUTION_UPDATE_PATH,
         _drop_none_values(
             {
                 "project_name": TASK_MACHINE_STATE_PROJECT,
@@ -563,13 +501,13 @@ def latest_task_run_reference_for_source(
     task_id: int,
     source_task_log_id: int,
 ) -> TaskRunReference | None:
-    """Return the latest run row tied to one physical source task row."""
+    """Return the latest execution row tied to one physical source task row."""
 
     normalized_assistant_id = _coerce_str(assistant_id)
     if not normalized_assistant_id:
         return None
     response_body = _orchestra_admin_post(
-        _TASK_RUN_LATEST_PATH,
+        _TASK_EXECUTION_LATEST_PATH,
         {
             "project_name": TASK_MACHINE_STATE_PROJECT,
             "assistant_id": normalized_assistant_id,
@@ -663,16 +601,10 @@ def update_task_outbound_operation_record(
 
 
 def build_task_run_key(provenance: TaskRunProvenance) -> str:
-    """Build the canonical run-key shape shared across live and offline lanes.
-
-    The trigger-attempt token is intentionally excluded from the persisted key.
-    It only disambiguates pending live trigger provenance before execution
-    starts; once a run is materialized, live and offline lanes share the same
-    provenance-based identity contract.
-    """
+    """Build the canonical run-key shape shared across live and offline lanes."""
 
     revision_digest = hashlib.sha256(
-        str(provenance.activation_revision or "").encode("utf-8"),
+        str(provenance.revision or "").encode("utf-8"),
     ).hexdigest()[:12]
     destination_part = (
         f"{_normalize_run_key_component(provenance.destination)}:"
@@ -695,8 +627,10 @@ def build_task_run_key(provenance: TaskRunProvenance) -> str:
             hashlib.sha256(provenance.source_ref.encode("utf-8")).hexdigest()[:12],
         )
     tail = "-".join(tail_parts) or "once"
+    wake = Wake.normalize(provenance.wake)
+    delivery = Delivery.normalize(provenance.delivery)
     return (
-        f"{provenance.execution_mode}:{provenance.source_type}:"
+        f"{delivery.value}:{wake.value}:"
         f"{provenance.assistant_id}:{destination_part}{provenance.task_id}:"
         f"{revision_digest}:{tail}"
     )
@@ -726,13 +660,15 @@ def build_task_outbound_operation_key(
     )
 
 
-def get_task_activation(
+def get_open_task_execution(
     *,
     assistant_id: str | int | None,
     task_id: int,
     destination: str | None = None,
-) -> TaskActivationSnapshot | None:
-    """Return the current activation row for one assistant/task pair, if any."""
+    wake: Wake | str | None = None,
+    run_key: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return the current open execution row for one assistant/task pair, if any."""
 
     normalized_destination = _canonical_destination_or_none(destination)
     if normalized_destination is None and destination not in (
@@ -741,151 +677,162 @@ def get_task_activation(
         PERSONAL_DESTINATION,
     ):
         return None
-    activation_key = build_activation_key(
-        assistant_id=assistant_id,
-        task_id=task_id,
-        destination=normalized_destination,
-    )
-    rows = _activation_store().get_rows(
-        filter=f"activation_key == '{activation_key}'",
+    normalized_assistant_id = _coerce_str(assistant_id)
+    if run_key:
+        filter_clauses = [f"run_key == '{run_key}'"]
+    else:
+        if not normalized_assistant_id:
+            return None
+        filter_clauses = [
+            f"assistant_id == '{normalized_assistant_id}'",
+            f"task_id == {int(task_id)}",
+            _open_execution_state_filter(),
+        ]
+        normalized_wake = _coerce_str(wake.value if isinstance(wake, Wake) else wake)
+        if normalized_wake:
+            filter_clauses.append(f"wake == '{normalized_wake}'")
+        if normalized_destination is not None:
+            filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
         limit=1,
-        include_fields=_ACTIVATION_QUERY_FIELDS,
+        include_fields=_EXECUTION_QUERY_FIELDS,
     )
     if not rows:
         return None
-    return _row_to_activation(rows[0])
+    return _row_to_execution(rows[0])
 
 
-def list_scheduled_activations(
+def list_scheduled_executions(
     *,
     assistant_id: str | int | None,
     limit: int = _DEFAULT_TRIGGER_PAGE_SIZE,
-) -> list[TaskActivationSnapshot]:
-    """List scheduled activations with a future due time for one assistant.
-
-    Filters on the same Orchestra-projected ``Tasks/Activations`` context that
-    feeds trigger matching, but scopes to ``activation_kind == 'scheduled'``
-    rows that carry a ``next_due_at``. Used by the in-process
-    ``LocalActivationScheduler`` to arm its timer wheel on boot and during
-    periodic reconciliation.
-    """
+) -> list[TaskExecutionSnapshot]:
+    """List scheduled open executions with a future due time for one assistant."""
 
     normalized_assistant_id = _coerce_str(assistant_id)
     if not normalized_assistant_id:
         return []
     filter_clauses = [
         f"assistant_id == '{normalized_assistant_id}'",
-        "activation_kind == 'scheduled'",
-        "next_due_at != None",
+        f"wake == '{Wake.scheduled.value}'",
+        "scheduled_for != None",
+        _open_execution_state_filter(),
     ]
-    rows = _activation_store().get_rows(
+    rows = _execution_store().get_rows(
         filter=" and ".join(filter_clauses),
         limit=limit,
-        include_fields=_ACTIVATION_QUERY_FIELDS,
+        include_fields=_EXECUTION_QUERY_FIELDS,
     )
-    activations: list[TaskActivationSnapshot] = []
+    executions: list[TaskExecutionSnapshot] = []
     for row in rows:
-        activation = _row_to_activation(row)
-        if activation is not None:
-            activations.append(activation)
-    return activations
+        execution = _row_to_execution(row)
+        if execution is not None:
+            executions.append(execution)
+    return executions
 
 
-def list_trigger_activations(
+def list_trigger_executions(
     *,
     assistant_id: str | int | None,
     medium: str | None = None,
     limit: int = _DEFAULT_TRIGGER_PAGE_SIZE,
-) -> list[TaskActivationSnapshot]:
-    """List trigger activations for one assistant, optionally scoped by medium."""
+) -> list[TaskExecutionSnapshot]:
+    """List trigger executions for one assistant, optionally scoped by medium."""
 
     normalized_assistant_id = _coerce_str(assistant_id)
     if not normalized_assistant_id:
         return []
     filter_clauses = [
         f"assistant_id == '{normalized_assistant_id}'",
-        "activation_kind == 'triggered'",
+        f"wake == '{Wake.triggered.value}'",
+        _open_execution_state_filter(),
     ]
     normalized_medium = _coerce_str(medium)
     if normalized_medium:
         filter_clauses.append(f"trigger_medium == '{normalized_medium}'")
-    rows = _activation_store().get_rows(
+    rows = _execution_store().get_rows(
         filter=" and ".join(filter_clauses),
         limit=limit,
-        include_fields=_ACTIVATION_QUERY_FIELDS,
+        include_fields=_EXECUTION_QUERY_FIELDS,
     )
-    activations: list[TaskActivationSnapshot] = []
+    executions: list[TaskExecutionSnapshot] = []
     for row in rows:
-        activation = _row_to_activation(row)
+        execution = _row_to_execution(row)
         destination_team_id = (
-            _destination_team_id(activation.destination)
-            if activation is not None
+            _destination_team_id(execution.destination)
+            if execution is not None
             else None
         )
-        if activation is not None and (
+        if execution is not None and (
             destination_team_id is None
             or destination_team_id in set(SESSION_DETAILS.team_ids)
         ):
-            activations.append(activation)
-    return activations
+            executions.append(execution)
+    return executions
 
 
-def validate_task_due_activation(
+def validate_task_due_execution(
     *,
     assistant_id: str | int | None,
     task_id: int,
-    activation_revision: str,
+    revision: str,
     source_task_log_id: int,
     scheduled_for: str,
     destination: str | None = None,
-) -> tuple[TaskActivationSnapshot | None, str | None]:
-    """Validate that a live due event still matches the current activation.
-
-    ``task_due`` deliveries are live-only: offline activations never route
-    through the ConversationManager, so an offline activation here means the
-    task changed execution mode after the delivery was materialized.
-    """
+) -> tuple[TaskExecutionSnapshot | None, str | None]:
+    """Validate that a live due event still matches the current open execution."""
 
     try:
         normalized_destination = ContextRegistry.canonical_destination(destination)
     except ValueError:
         return None, "invalid_destination"
-    activation = get_task_activation(
+    execution = get_open_task_execution(
         assistant_id=assistant_id,
         task_id=task_id,
         destination=normalized_destination,
+        wake=Wake.scheduled,
     )
-    if activation is None:
-        return None, "activation_missing"
-    if activation.activation_kind != "scheduled":
-        return None, "activation_kind_changed"
-    if activation.execution_mode != "live":
-        return None, "execution_mode_changed"
-    if activation.activation_revision != activation_revision:
-        return None, "activation_revision_mismatch"
-    if activation.destination != normalized_destination:
+    if execution is None:
+        return None, "execution_missing"
+    if execution.wake != Wake.scheduled.value:
+        return None, "wake_changed"
+    if execution.delivery != Delivery.live.value:
+        return None, "delivery_changed"
+    if execution.revision != revision:
+        return None, "revision_mismatch"
+    if execution.destination != normalized_destination:
         return None, "destination_mismatch"
-    destination_team_id = _destination_team_id(activation.destination)
+    destination_team_id = _destination_team_id(execution.destination)
     if destination_team_id is not None and destination_team_id not in set(
         SESSION_DETAILS.team_ids,
     ):
         return None, "destination_membership_revoked"
-    if activation.source_task_log_id != source_task_log_id:
+    if execution.source_task_log_id != source_task_log_id:
         return None, "source_task_log_id_mismatch"
     if _normalize_datetime_string(
-        activation.next_due_at,
+        execution.scheduled_for,
     ) != _normalize_datetime_string(scheduled_for):
         return None, "scheduled_for_mismatch"
-    return activation, None
+    return execution, None
 
 
-def _activation_store() -> TasksStore:
-    """Return a lightweight reader for the internal activations context."""
+def _execution_store() -> TasksStore:
+    """Return a lightweight reader for the internal executions context."""
 
     return TasksStore(
-        build_task_activation_context_name(),
+        build_task_executions_context_name(),
         project=TASK_MACHINE_STATE_PROJECT,
     )
+
+
+def _open_execution_state_filter() -> str:
+    """Return a filter clause matching open execution states."""
+
+    quoted = " or ".join(
+        f"state == '{state.value}'" for state in _OPEN_EXECUTION_STATES
+    )
+    return f"({quoted})"
 
 
 def _destination_team_id(destination: str | None) -> int | None:
@@ -897,8 +844,8 @@ def _destination_team_id(destination: str | None) -> int | None:
     return int(normalized_destination[len(TEAM_DESTINATION_PREFIX) :])
 
 
-def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
-    """Convert a Unify log row or raw mapping into a typed activation snapshot."""
+def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
+    """Convert a Unify log row or raw mapping into a typed execution snapshot."""
 
     entries = getattr(row, "entries", row)
     if not isinstance(entries, Mapping):
@@ -906,29 +853,27 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
     task_id = _coerce_int(entries.get("task_id"))
     if task_id is None:
         return None
+    run_key = _coerce_str(entries.get("run_key"))
+    if not run_key:
+        return None
     assistant_id = _coerce_str(entries.get("assistant_id"))
     raw_destination = _coerce_str(entries.get("destination"))
     try:
         destination = ContextRegistry.canonical_destination(raw_destination)
     except ValueError:
         return None
-    activation_key = _coerce_str(entries.get("activation_key")) or build_activation_key(
-        assistant_id=assistant_id,
+    return TaskExecutionSnapshot(
+        run_key=run_key,
         task_id=task_id,
-        destination=destination,
-    )
-    return TaskActivationSnapshot(
         assistant_id=assistant_id,
-        activation_key=activation_key,
-        task_id=task_id,
         destination=destination,
         source_task_log_id=_coerce_int(entries.get("source_task_log_id")),
-        activation_kind=_coerce_str(entries.get("activation_kind")),
-        execution_mode=_coerce_str(entries.get("execution_mode")),
-        status=_coerce_str(entries.get("status")),
+        wake=_coerce_str(entries.get("wake")),
+        delivery=_coerce_str(entries.get("delivery")),
+        state=_coerce_str(entries.get("state")),
         task_name=_coerce_str(entries.get("task_name")),
         task_description=_coerce_str(entries.get("task_description")),
-        next_due_at=_coerce_str(entries.get("next_due_at")),
+        scheduled_for=_coerce_str(entries.get("scheduled_for")),
         trigger_medium=_coerce_str(entries.get("trigger_medium")),
         trigger_from_contact_ids=_coerce_int_list(
             entries.get("trigger_from_contact_ids"),
@@ -940,27 +885,33 @@ def _row_to_activation(row: Any) -> TaskActivationSnapshot | None:
         entrypoint=_coerce_int(entries.get("entrypoint")),
         max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
         repeat=_coerce_list(entries.get("repeat")),
-        activation_revision=_coerce_str(entries.get("activation_revision")),
+        revision=_coerce_str(entries.get("revision")),
         requires_filesystem=resolve_requires_filesystem(entries),
         requires_computer=resolve_requires_computer(entries),
     )
+
+
+def _normalize_wake(value: Wake | RunSource | str) -> Wake:
+    """Normalize wake values from legacy run-source call sites."""
+
+    if isinstance(value, Wake):
+        return value
+    if isinstance(value, RunSource):
+        return Wake.normalize(value.value)
+    return Wake.normalize(value)
 
 
 def _orchestra_admin_post(
     path: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    """POST one task-machine payload back to Orchestra as this assistant.
-
-    Authenticates with the assistant's own ``UNIFY_KEY``; Orchestra scopes the
-    operation to the assistant referenced in the payload (ownership-checked).
-    """
+    """POST one task-machine payload back to Orchestra as this assistant."""
 
     orchestra_url = (SETTINGS.ORCHESTRA_URL or "").rstrip("/")
     unify_key = SESSION_DETAILS.unify_key
     if not orchestra_url or not unify_key:
         logger.warning(
-            "Skipping task-run persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
+            "Skipping task-execution persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
         )
         return None
     response = requests.post(
@@ -1016,7 +967,7 @@ def _now_iso() -> str:
 
 
 def _coerce_int(value: Any) -> int | None:
-    """Best-effort integer coercion for JSON-backed activation rows."""
+    """Best-effort integer coercion for JSON-backed execution rows."""
 
     if value in (None, ""):
         return None

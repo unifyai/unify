@@ -28,6 +28,7 @@ from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.status import Status
+from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.types.trigger import Trigger
 from unify.conversation_manager.cm_types import Medium
 from unify.common.task_execution_context import (
@@ -58,9 +59,10 @@ async def _make_scheduler_with_task(description: str, *, steps: int = 1):
 
 
 def _source_log_id(scheduler: TaskScheduler, task_id: int, instance_id: int = 0) -> int:
+    del instance_id
     return scheduler._get_log_by_task_instance(
         task_id=task_id,
-        instance_id=instance_id,
+        instance_id=0,
     ).id
 
 
@@ -99,7 +101,7 @@ async def test_execute_uses_trigger_source_type_when_attempt_token_present(monke
 
     assert captured["task_id"] == task_id
     assert captured["assistant_id"] == 42
-    assert captured["source_type"] == "triggered"
+    assert captured["wake"] == Wake.triggered
     assert captured["trigger_attempt_token"] == "trigger-123"
 
 
@@ -125,8 +127,8 @@ async def test_execute_materializes_live_run_after_actor_start(monkeypatch):
         lambda **_: TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="explicit",
-            execution_mode="live",
+            wake=Wake.explicit,
+            delivery=Delivery.live,
         ),
     )
 
@@ -163,8 +165,8 @@ async def test_execute_materializes_live_run_after_actor_start(monkeypatch):
     assert isinstance(provenance, TaskRunProvenance)
     assert provenance.task_id == task_id
     assert provenance.assistant_id == "42"
-    assert provenance.execution_mode == "live"
-    assert events == ["act", "materialize"]
+    assert provenance.delivery == Delivery.live
+    assert events == ["materialize", "act"]
 
 
 @pytest.mark.asyncio
@@ -193,10 +195,10 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="scheduled",
-            execution_mode="live",
+            wake=Wake.scheduled,
+            delivery=Delivery.live,
             source_task_log_id=_source_log_id(scheduler, task_id),
-            activation_revision="rev-scheduled",
+            revision="rev-scheduled",
             scheduled_for=scheduled_for,
             task_name="Scheduled report",
             task_description="Send the scheduled report.",
@@ -229,8 +231,8 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
 
     provenance = captured["provenance"]
     assert isinstance(provenance, TaskRunProvenance)
-    assert provenance.source_type == "scheduled"
-    assert provenance.execution_mode == "live"
+    assert provenance.wake == Wake.scheduled
+    assert provenance.delivery == Delivery.live
     assert provenance.scheduled_for == scheduled_for
     assert run_updates
     assert run_updates[-1][0] == TaskRunReference(
@@ -240,13 +242,11 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
     assert run_updates[-1][1]["state"] == "completed"
     assert run_updates[-1][1]["completed_at"]
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda task: task.instance_id,
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.scheduled
+    assert row.schedule_start_at > datetime.fromisoformat(
+        scheduled_for.replace("Z", "+00:00"),
     )
-    assert [row.instance_id for row in rows] == [0, 1]
-    assert rows[0].status == Status.completed
-    assert rows[1].status == Status.scheduled
 
 
 @pytest.mark.asyncio
@@ -292,10 +292,10 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="scheduled",
-            execution_mode="live",
+            wake=Wake.scheduled,
+            delivery=Delivery.live,
             source_task_log_id=_source_log_id(scheduler, task_id),
-            activation_revision="rev-live-delegate",
+            revision="rev-live-delegate",
             scheduled_for=scheduled_for,
             task_name="Delegate live report",
             task_description="Send the live delegated report.",
@@ -328,20 +328,18 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
     assert "Send the live delegated report." in delegate_kwargs["task_description"]
     provenance = captured["provenance"]
     assert isinstance(provenance, TaskRunProvenance)
-    assert provenance.execution_mode == "live"
+    assert provenance.delivery == Delivery.live
     assert run_updates[-1][0] == TaskRunReference(
         assistant_id="42",
         run_key="live:scheduled:42:delegate:once",
     )
     assert run_updates[-1][1]["state"] == "completed"
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda task: task.instance_id,
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.scheduled
+    assert row.schedule_start_at > datetime.fromisoformat(
+        scheduled_for.replace("Z", "+00:00"),
     )
-    assert [row.instance_id for row in rows] == [0, 1]
-    assert rows[0].status == Status.completed
-    assert rows[1].status == Status.scheduled
 
 
 @pytest.mark.asyncio
@@ -400,16 +398,16 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     monkeypatch.setattr(
         offline_runner,
         "_build_offline_actor",
-        _FakeOfflineActor,
+        lambda _config: _FakeOfflineActor(),
     )
     remember_live_task_run_provenance(
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="scheduled",
-            execution_mode="offline",
+            wake=Wake.scheduled,
+            delivery=Delivery.offline,
             source_task_log_id=_source_log_id(scheduler, task_id),
-            activation_revision="rev-offline-delegate",
+            revision="rev-offline-delegate",
             scheduled_for=scheduled_for,
             task_name="Offline report",
             task_description="Send the offline delegated report.",
@@ -432,9 +430,9 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
         task_id=task_id,
         function_id=777,
         request="Send the offline delegated report.",
-        source_type="scheduled",
+        wake=Wake.scheduled,
         source_task_log_id=_source_log_id(scheduler, task_id),
-        activation_revision="rev-offline-delegate",
+        revision="rev-offline-delegate",
         task_name="Offline report",
         task_description="Send the offline delegated report.",
         scheduled_for=scheduled_for,
@@ -460,7 +458,7 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     assert captured["actor_closed"] is True
     provenance = captured["provenance"]
     assert isinstance(provenance, TaskRunProvenance)
-    assert provenance.execution_mode == "offline"
+    assert provenance.delivery == Delivery.offline
     assert run_updates[-1][0] == TaskRunReference(
         assistant_id="42",
         run_key="offline:scheduled:42:delegate:once",
@@ -468,34 +466,31 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     assert run_updates[-1][1]["state"] == "completed"
     assert '"result": "sent"' in run_updates[-1][1]["result_summary"]
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda task: task.instance_id,
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.scheduled
+    assert row.schedule_start_at > datetime.fromisoformat(
+        scheduled_for.replace("Z", "+00:00"),
     )
-    assert [row.instance_id for row in rows] == [0, 1]
-    assert rows[0].status == Status.completed
-    assert rows[1].status == Status.scheduled
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", [None, 777])
 @_handle_project
-async def test_offline_recurring_execution_uses_physical_source_instance(
+async def test_offline_recurring_execution_rearms_definition_between_runs(
     monkeypatch,
     entrypoint,
 ):
     from unify.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
+    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
+        days=1,
+    )
     task_id = scheduler._create_task(
         name=f"Offline recurring {'symbolic' if entrypoint else 'agentic'}",
-        description="Run the offline recurring physical instance.",
+        description="Run the offline recurring definition.",
         status=Status.scheduled,
-        schedule=Schedule(
-            start_at=(
-                datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
-            ).isoformat(),
-        ),
+        schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         entrypoint=entrypoint,
         offline=True,
@@ -515,15 +510,19 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
             return None
 
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
-    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
+    monkeypatch.setattr(
+        offline_runner,
+        "_build_offline_actor",
+        lambda _config: _FakeOfflineActor(),
+    )
     monkeypatch.setattr(
         "unify.task_scheduler.active_task.create_or_adopt_live_task_run",
         lambda provenance: TaskRunReference(
             assistant_id=provenance.assistant_id,
             run_key=(
-                f"{provenance.execution_mode}:{provenance.source_type}:"
+                f"{provenance.delivery.value}:{provenance.wake.value}:"
                 f"{provenance.assistant_id}:{provenance.task_id}:"
-                f"{provenance.activation_revision}"
+                f"{provenance.revision}"
             ),
         ),
     )
@@ -532,24 +531,21 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
         lambda run_reference, updates: None,
     )
 
-    for instance_id in range(3):
-        row = [
-            task
-            for task in scheduler._filter_tasks(filter=f"task_id == {task_id}")
-            if task.instance_id == instance_id
-        ][0]
+    for run_index in range(3):
+        row = scheduler._get_task_or_raise(task_id)
+        scheduled_for = row.schedule_start_at.isoformat()
         config = offline_runner.OfflineTaskConfig(
             assistant_id="42",
-            run_key=f"offline:scheduled:42:{task_id}:instance-{instance_id}",
+            run_key=f"offline:scheduled:42:{task_id}:run-{run_index}",
             task_id=task_id,
             function_id=entrypoint,
-            request="Run the offline recurring physical instance.",
-            source_type="scheduled",
-            source_task_log_id=_source_log_id(scheduler, task_id, instance_id),
-            activation_revision=f"rev-instance-{instance_id}",
+            request="Run the offline recurring definition.",
+            wake=Wake.scheduled,
+            source_task_log_id=_source_log_id(scheduler, task_id),
+            revision=f"rev-run-{run_index}",
             task_name=row.name,
             task_description=row.description,
-            scheduled_for=row.schedule_start_at.isoformat(),
+            scheduled_for=scheduled_for,
         )
         delegate = offline_runner._OfflineTaskExecutionDelegate(config)
         token = current_task_execution_delegate.set(delegate)
@@ -563,59 +559,45 @@ async def test_offline_recurring_execution_uses_physical_source_instance(
             current_task_execution_delegate.reset(token)
             await delegate.close()
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda task: task.instance_id,
-    )
-    assert [row.instance_id for row in rows] == [0, 1, 2, 3]
-    assert [row.status for row in rows[:3]] == [
-        Status.completed,
-        Status.completed,
-        Status.completed,
-    ]
-    assert rows[3].status == Status.scheduled
-    for index, call in enumerate(captured):
-        assert f"Instance id: {index}" in call["request"]
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.scheduled
+    assert row.schedule_start_at == initial_start + timedelta(days=3)
+    assert len(captured) == 3
+    for call in captured:
         kwargs = call["kwargs"]
         if entrypoint is None:
             assert kwargs["entrypoint"] is None
             assert kwargs["entrypoint_kwargs"] is None
         else:
             assert kwargs["entrypoint"] == entrypoint
-            assert kwargs["entrypoint_kwargs"]["instance_id"] == index
+            assert kwargs["entrypoint_kwargs"]["task_id"] == task_id
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_offline_scheduled_execution_allows_concurrent_same_task_instances(
+async def test_offline_scheduled_execution_allows_concurrent_same_task_runs(
     monkeypatch,
 ):
-    """A later offline instance may run while an earlier instance is still active."""
+    """A later offline run may complete while the definition row is still active."""
 
     from unify.task_scheduler import offline_runner
 
     scheduler = TaskScheduler()
+    past = (
+        datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+    ).isoformat()
     task_id = scheduler._create_task(
-        name="Offline concurrent same-task instances",
-        description="Run the current scheduled instance.",
+        name="Offline concurrent same-task runs",
+        description="Run the current scheduled definition.",
         status=Status.scheduled,
-        schedule=Schedule(
-            start_at=(
-                datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
-            ).isoformat(),
-        ),
+        schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         offline=True,
     )["details"]["task_id"]
-    first = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
-    scheduler._clone_task_instance(first)
-    first_source_log_id = _source_log_id(scheduler, task_id, 0)
-    second_source_log_id = _source_log_id(scheduler, task_id, 1)
-    scheduler._update_task_status_instance(
+    source_log_id = _source_log_id(scheduler, task_id)
+    scheduler._update_task_definition_status(
         task_id=task_id,
-        instance_id=0,
         new_status=Status.active,
-        activated_by=ActivatedBy.schedule,
     )
 
     class _Handle:
@@ -630,15 +612,19 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_instances
             return None
 
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
-    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
+    monkeypatch.setattr(
+        offline_runner,
+        "_build_offline_actor",
+        lambda _config: _FakeOfflineActor(),
+    )
     monkeypatch.setattr(
         "unify.task_scheduler.active_task.create_or_adopt_live_task_run",
         lambda provenance: TaskRunReference(
             assistant_id=provenance.assistant_id,
             run_key=(
-                f"{provenance.execution_mode}:{provenance.source_type}:"
+                f"{provenance.delivery.value}:{provenance.wake.value}:"
                 f"{provenance.assistant_id}:{provenance.task_id}:"
-                f"{provenance.activation_revision}"
+                f"{provenance.revision}"
             ),
         ),
     )
@@ -647,20 +633,16 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_instances
         lambda run_reference, updates: None,
     )
 
-    current = [
-        task
-        for task in scheduler._filter_tasks(filter=f"task_id == {task_id}")
-        if task.instance_id == 1
-    ][0]
+    current = scheduler._get_task_or_raise(task_id)
     config = offline_runner.OfflineTaskConfig(
         assistant_id="42",
-        run_key=f"offline:scheduled:42:{task_id}:instance-1",
+        run_key=f"offline:scheduled:42:{task_id}:concurrent",
         task_id=task_id,
         function_id=None,
-        request="Run the current scheduled instance.",
-        source_type="scheduled",
-        source_task_log_id=second_source_log_id,
-        activation_revision="rev-instance-1",
+        request="Run the current scheduled definition.",
+        wake=Wake.scheduled,
+        source_task_log_id=source_log_id,
+        revision="rev-concurrent",
         task_name=current.name,
         task_description=current.description,
         scheduled_for=current.schedule_start_at.isoformat(),
@@ -669,10 +651,10 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_instances
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="scheduled",
-            execution_mode="offline",
-            source_task_log_id=second_source_log_id,
-            activation_revision="rev-instance-1",
+            wake=Wake.scheduled,
+            delivery=Delivery.offline,
+            source_task_log_id=source_log_id,
+            revision="rev-concurrent",
             scheduled_for=current.schedule_start_at.isoformat(),
             task_name=current.name,
             task_description=current.description,
@@ -690,14 +672,8 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_instances
         current_task_execution_delegate.reset(token)
         await delegate.close()
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda task: task.instance_id,
-    )
-    assert first_source_log_id != second_source_log_id
-    assert rows[0].status == Status.active
-    assert rows[1].status == Status.completed
-    assert rows[2].status == Status.scheduled
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.scheduled
 
 
 @pytest.mark.asyncio
@@ -747,7 +723,7 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
     monkeypatch.setattr(
         offline_runner,
         "_build_offline_actor",
-        _FakeOfflineActor,
+        lambda _config: _FakeOfflineActor(),
     )
     monkeypatch.setattr(
         "unify.task_scheduler.active_task.create_or_adopt_live_task_run",
@@ -766,9 +742,9 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
         task_id=task_id,
         function_id=777,
         request="Send the triggered offline delegated report.",
-        source_type="triggered",
+        wake=Wake.triggered,
         source_task_log_id=_source_log_id(scheduler, task_id),
-        activation_revision="rev-triggered-offline-delegate",
+        revision="rev-triggered-offline-delegate",
         task_name="Triggered offline report",
         task_description="Send the triggered offline delegated report.",
         source_ref="sms-message-123",
@@ -780,8 +756,8 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
 
     provenance = captured["provenance"]
     assert isinstance(provenance, TaskRunProvenance)
-    assert provenance.source_type == "triggered"
-    assert provenance.execution_mode == "offline"
+    assert provenance.wake == Wake.triggered
+    assert provenance.delivery == Delivery.offline
     assert provenance.source_ref == "sms-message-123"
     assert provenance.source_medium == "sms"
     assert provenance.source_contact_id == "123"
@@ -830,9 +806,8 @@ async def test_symbolic_task_execution_passes_deterministic_entrypoint_kwargs(
     entrypoint_kwargs = captured["entrypoint_kwargs"]
     assert isinstance(entrypoint_kwargs, dict)
     assert entrypoint_kwargs["task_id"] == task_id
-    assert entrypoint_kwargs["instance_id"] == 0
-    assert entrypoint_kwargs["execution_style"] == "symbolic"
-    assert entrypoint_kwargs["delivery_mode"] == "live"
+    assert entrypoint_kwargs["delivery"] == "live"
+    assert entrypoint_kwargs["wake"] == Wake.explicit.value
     assert entrypoint_kwargs["task_execution_context"]["task_id"] == task_id
 
 
@@ -880,18 +855,14 @@ async def test_task_execution_routes_all_delivery_and_style_combinations(
 
     assert captured["entrypoint"] == entrypoint
     assert f"Task id: {task_id}" in captured["task_description"]
-    assert "Instance id: 0" in captured["task_description"]
     if entrypoint is None:
         assert captured["entrypoint_kwargs"] is None
     else:
         entrypoint_kwargs = captured["entrypoint_kwargs"]
         assert isinstance(entrypoint_kwargs, dict)
-        assert entrypoint_kwargs["delivery_mode"] == delivery_mode
-        assert entrypoint_kwargs["execution_style"] == execution_style
-        assert (
-            entrypoint_kwargs["task_execution_context"]["delivery_mode"]
-            == delivery_mode
-        )
+        assert entrypoint_kwargs["delivery"] == delivery_mode
+        assert entrypoint_kwargs["wake"] == Wake.explicit.value
+        assert entrypoint_kwargs["task_execution_context"]["delivery"] == delivery_mode
 
 
 # --------------------------------------------------------------------------- #
@@ -1029,25 +1000,36 @@ async def test_execute_result_and_done():
 
 
 @pytest.mark.asyncio
-@pytest.mark.llm_call
+@pytest.mark.asyncio
 @_handle_project
-async def test_execute_sets_activated_by_explicit():
-    """Starting a task explicitly via execute should set activated_by='explicit'."""
+async def test_execute_one_shot_completes_definition():
+    """Explicit execute on a one-shot definition leaves the row completed."""
 
-    actor = SimulatedActor(steps=None, duration=None)
-    ts = TaskScheduler(actor=actor)
+    scheduler = TaskScheduler()
+    task_id = scheduler._create_task(
+        name="Simple task",
+        description="Simple task",
+    )[
+        "details"
+    ]["task_id"]
 
-    name = "Simple task"
-    task_id = ts._create_task(name=name, description=name)["details"]["task_id"]
+    class _Handle:
+        async def result(self):
+            return "done"
 
-    # Start by id (fast-path)
-    handle = await ts.execute(task_id=task_id)
-    await handle.stop(cancel=False)
-    await handle.result()
+    class _Delegate:
+        async def start_task_run(self, **kwargs):
+            return _Handle()
 
-    # Verify activated_by on the activated instance (may already be completed)
-    rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert any(r.activated_by == ActivatedBy.explicit for r in rows)
+    token = current_task_execution_delegate.set(_Delegate())
+    try:
+        handle = await scheduler.execute(task_id=task_id)
+        await handle.result()
+    finally:
+        current_task_execution_delegate.reset(token)
+
+    row = scheduler._get_task_or_raise(task_id)
+    assert row.status == Status.completed
 
 
 @pytest.mark.asyncio
@@ -1245,22 +1227,12 @@ async def test_execute_allows_concurrent_instances_of_same_task():
     handle_0 = await ts.execute(task_id=task_id)
     handle_1 = None
     try:
-        rows_after_first = sorted(
-            ts._filter_tasks(filter=f"task_id == {task_id}"),
-            key=lambda t: t.instance_id,
-        )
-        assert rows_after_first[0].status == Status.active
-        assert any(r.status == Status.scheduled for r in rows_after_first[1:])
+        assert ts._get_task_or_raise(task_id).status == Status.active
 
         handle_1 = await ts.execute(task_id=task_id)
 
-        rows = sorted(
-            ts._filter_tasks(filter=f"task_id == {task_id}"),
-            key=lambda t: t.instance_id,
-        )
-        active_instances = {r.instance_id for r in rows if r.status == Status.active}
-        assert 0 in active_instances
-        assert 1 in active_instances
+        assert handle_1 is not None
+        assert len(ts._filter_tasks(filter=f"task_id == {task_id}")) == 1
     finally:
         await handle_0.stop(cancel=False)
         await handle_0.result()
@@ -1289,11 +1261,9 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
-    scheduler._update_task_status_instance(
+    scheduler._update_task_definition_status(
         task_id=task_id_a,
-        instance_id=0,
         new_status=Status.active,
-        activated_by=ActivatedBy.schedule,
     )
 
     # Task B: offline scheduled task to execute while task A is active.
@@ -1320,7 +1290,11 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
             return None
 
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
-    monkeypatch.setattr(offline_runner, "_build_offline_actor", _FakeOfflineActor)
+    monkeypatch.setattr(
+        offline_runner,
+        "_build_offline_actor",
+        lambda _config: _FakeOfflineActor(),
+    )
     monkeypatch.setattr(
         "unify.task_scheduler.active_task.create_or_adopt_live_task_run",
         lambda provenance: TaskRunReference(
@@ -1339,9 +1313,9 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         task_id=task_id_b,
         function_id=None,
         request=task_b.description,
-        source_type="scheduled",
+        wake=Wake.scheduled,
         source_task_log_id=source_log_id_b,
-        activation_revision="rev-b-concurrent",
+        revision="rev-b-concurrent",
         task_name=task_b.name,
         task_description=task_b.description,
         scheduled_for=task_b.schedule_start_at.isoformat(),
@@ -1350,10 +1324,10 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id_b,
-            source_type="scheduled",
-            execution_mode="offline",
+            wake=Wake.scheduled,
+            delivery=Delivery.offline,
             source_task_log_id=source_log_id_b,
-            activation_revision="rev-b-concurrent",
+            revision="rev-b-concurrent",
             scheduled_for=task_b.schedule_start_at.isoformat(),
             task_name=task_b.name,
             task_description=task_b.description,
@@ -1373,8 +1347,8 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
 
     rows_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")
     assert any(
-        r.status == Status.completed for r in rows_b
-    ), "Task B should have completed"
+        r.status == Status.scheduled for r in rows_b
+    ), "Task B should re-arm to scheduled after offline execution"
 
     rows_a = scheduler._filter_tasks(filter=f"task_id == {task_id_a}")
     assert any(
@@ -1384,55 +1358,61 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_execute_blocks_restart_of_already_active_source_instance(monkeypatch):
-    """Activation provenance for an already-active instance must not restart it."""
+async def test_execute_allows_restart_while_definition_active(monkeypatch):
+    """Definition-only Tasks: an active definition does not block another Execution.
+
+    Concurrency / idempotency is keyed by Execution ``run_key``, not by the
+    single definition row's ``active`` status.
+    """
 
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
 
-    actor = SimulatedActor(steps=None, duration=None)
-    scheduler = TaskScheduler(actor=actor)
+    scheduler = TaskScheduler()
     past = (
         datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
     ).isoformat()
     task_id = scheduler._create_task(
-        name="Same-instance restart guard",
-        description="Same-instance restart guard",
+        name="Definition active restart ok",
+        description="Definition active restart ok",
         status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
-    first = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
-    scheduler._clone_task_instance(first)
-    source_log_id = _source_log_id(scheduler, task_id, 0)
-    scheduler._update_task_status_instance(
+    source_log_id = _source_log_id(scheduler, task_id)
+    scheduler._update_task_definition_status(
         task_id=task_id,
-        instance_id=0,
         new_status=Status.active,
-        activated_by=ActivatedBy.schedule,
     )
     remember_live_task_run_provenance(
         TaskRunProvenance(
             assistant_id="42",
             task_id=task_id,
-            source_type="scheduled",
-            execution_mode="live",
+            wake=Wake.scheduled,
+            delivery=Delivery.live,
             source_task_log_id=source_log_id,
-            activation_revision="rev-same-instance",
+            revision="rev-same-definition",
             scheduled_for=past,
-            task_name="Same-instance restart guard",
-            task_description="Same-instance restart guard",
+            task_name="Definition active restart ok",
+            task_description="Definition active restart ok",
         ),
     )
 
-    with pytest.raises(RuntimeError, match="already active"):
-        await scheduler.execute(
+    class _Handle:
+        async def result(self):
+            return "done"
+
+    class _Delegate:
+        async def start_task_run(self, **kwargs):
+            return _Handle()
+
+    token = current_task_execution_delegate.set(_Delegate())
+    try:
+        handle = await scheduler.execute(
             task_id=task_id,
             _activated_by=ActivatedBy.schedule,
         )
+        await handle.result()
+    finally:
+        current_task_execution_delegate.reset(token)
 
-    rows = sorted(
-        scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-        key=lambda t: t.instance_id,
-    )
-    assert rows[0].status == Status.active
-    assert rows[1].status == Status.scheduled
+    assert scheduler._get_task_or_raise(task_id).status == Status.scheduled

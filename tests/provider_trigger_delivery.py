@@ -79,6 +79,56 @@ def orchestra_api_key() -> str:
     return os.getenv("UNIFY_KEY", "local-test-api-key")
 
 
+def orchestra_admin_key() -> str:
+    return os.getenv("ORCHESTRA_ADMIN_KEY", "local-admin-key")
+
+
+def ensure_provider_trigger_catalog_seeded(
+    *,
+    environments: tuple[str, ...] = ("selfhost", "staging"),
+    backends: tuple[str, ...] = ("composio",),
+) -> None:
+    """Import fixture-backed provider trigger catalogs for local Orchestra runs."""
+
+    base = orchestra_api_base()
+    headers = {"Authorization": f"Bearer {orchestra_admin_key()}"}
+    for backend_id in backends:
+        for environment in environments:
+            response = requests.post(
+                f"{base}/v0/admin/provider-trigger-catalog/import/{backend_id}",
+                params={"environment": environment},
+                headers=headers,
+                timeout=120,
+            )
+            response.raise_for_status()
+
+
+def ensure_pipedream_provider_trigger_catalog_seeded() -> None:
+    """Import the Pipedream trigger catalog when the local backend is enabled."""
+
+    ensure_pipedream_integration_backend_enabled()
+    ensure_provider_trigger_catalog_seeded(backends=("pipedream",))
+
+
+def ensure_provider_trigger_test_prerequisites() -> None:
+    """Seed catalogs and verify provider-trigger topology is usable locally."""
+
+    ensure_provider_trigger_catalog_seeded()
+    catalog = requests.get(
+        f"{orchestra_api_base()}/v0/admin/provider-trigger-catalog/bootstrap",
+        headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
+        timeout=30,
+    )
+    catalog.raise_for_status()
+    bootstrap = catalog.json().get("bootstrap_states") or []
+    if not bootstrap:
+        raise RuntimeError(
+            "provider trigger catalog bootstrap is empty after import; "
+            "restart local Orchestra with SELF_HOST=1 and "
+            "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://orchestra.example",
+        )
+
+
 def _orchestra_db_container() -> str:
     return os.getenv("ORCHESTRA_DB_CONTAINER", "orchestra-local-db")
 

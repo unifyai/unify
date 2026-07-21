@@ -3,6 +3,11 @@
 Unlike ``stream_filters`` (Pub/Sub / Live Actions only), these rules gate
 which events are written to Unify ``Events/*`` contexts. In-memory deques,
 subscriptions, and Pub/Sub streaming are unaffected.
+
+In ``allowlist`` mode, ManagerMethod/ToolLoop events that carry task-run
+lineage fields (``run_key``, or ``task_id`` + ``run_key``) are persisted
+in full so ``Tasks/Executions`` can join a dense execution tree via ``run_key``.
+Non-task traffic stays on the tool allowlist.
 """
 
 from __future__ import annotations
@@ -20,6 +25,9 @@ _TOOL_LOOP_MATCH_KINDS: frozenset[str] = frozenset(
         ToolLoopKind.TOOL_RESULT.value,
     },
 )
+_TASK_RUN_DENSE_EVENT_TYPES: frozenset[str] = frozenset(
+    {"ManagerMethod", "ToolLoop"},
+)
 
 
 def parse_persist_tools(raw: str | None) -> frozenset[str]:
@@ -29,6 +37,20 @@ def parse_persist_tools(raw: str | None) -> frozenset[str]:
         return _DEFAULT_ALLOWLIST_TOOLS
     names = {part.strip() for part in str(raw).split(",") if part.strip()}
     return frozenset(names) if names else _DEFAULT_ALLOWLIST_TOOLS
+
+
+def payload_has_task_run_lineage(payload_dict: Mapping[str, Any]) -> bool:
+    """Return True when a payload is attributed to a TaskScheduler run.
+
+    Prefer payload fields stamped by ``enrich_payload_with_task_run_lineage``
+    (applied in ``EventBus.publish`` before this gate) over reading ContextVars.
+    """
+
+    run_key = payload_dict.get("run_key")
+    if not isinstance(run_key, str) or not run_key.strip():
+        return False
+    task_id = payload_dict.get("task_id")
+    return task_id is not None
 
 
 def _tool_names_from_tool_loop_message(message: Any) -> set[str]:
@@ -75,6 +97,11 @@ def should_persist_to_orchestra(
     tools:
         Allowlisted tool/method names. When omitted, parses
         ``SETTINGS.EVENTBUS_ORCHESTRA_PERSIST_TOOLS``.
+
+    In ``allowlist`` mode, any ``ManagerMethod`` / ``ToolLoop`` payload that
+    already carries execution lineage is persisted (dense tree under an
+    ``ActiveTask``). Other event types and non-attributed ManagerMethod /
+    ToolLoop rows still follow the tool allowlist.
     """
 
     if mode is None or tools is None:
@@ -87,6 +114,11 @@ def should_persist_to_orchestra(
 
     normalized_mode = (mode or "all").strip().lower()
     if normalized_mode != "allowlist":
+        return True
+
+    if event_type in _TASK_RUN_DENSE_EVENT_TYPES and payload_has_task_run_lineage(
+        payload_dict,
+    ):
         return True
 
     allow = tools if tools is not None else _DEFAULT_ALLOWLIST_TOOLS

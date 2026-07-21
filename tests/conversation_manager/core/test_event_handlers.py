@@ -83,7 +83,7 @@ from unify.contact_manager.simulated import SimulatedContactManager
 from unify.conversation_manager.domains.contact_index import ContactIndex
 from unify.conversation_manager.domains.notifications import NotificationBar
 from unify.conversation_manager.cm_types import Medium, Mode
-from unify.task_scheduler.machine_state import TaskActivationSnapshot
+from unify.task_scheduler.machine_state import TaskExecutionSnapshot
 
 # =============================================================================
 # Test Fixtures
@@ -2495,7 +2495,7 @@ class TestTaskDueEventHandlers:
         event = TaskDue(
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Morning briefing",
             task_summary="Prepare the morning update before the user checks in.",
@@ -2505,23 +2505,23 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "unify.conversation_manager.domains.task_execution.validate_task_due_execution",
                 return_value=(
-                    TaskActivationSnapshot(
+                    TaskExecutionSnapshot(
                         assistant_id="42",
-                        activation_key="42:101",
+                        run_key="42:101",
                         task_id=101,
                         source_task_log_id=555,
-                        activation_revision="rev-1",
+                        revision="rev-1",
                     ),
                     None,
                 ),
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+                "unify.conversation_manager.domains.task_execution.remember_live_task_run_provenance",
             ) as mock_remember_provenance,
             patch(
-                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "unify.conversation_manager.domains.task_execution._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ) as mock_start_execution,
         ):
@@ -2535,7 +2535,7 @@ class TestTaskDueEventHandlers:
         assert "started automatically" in notification
         remembered = mock_remember_provenance.call_args.args[0]
         assert remembered.assistant_id == "42"
-        assert remembered.source_type == "scheduled"
+        assert remembered.wake.value == "scheduled"
         assert remembered.scheduled_for == "2026-04-10T09:00:00+00:00"
         mock_start_execution.assert_awaited_once()
         mock_cm.request_llm_run.assert_not_called()
@@ -2550,35 +2550,35 @@ class TestTaskDueEventHandlers:
         validation.
         """
 
-        from unify.conversation_manager.domains.task_activation import (
+        from unify.conversation_manager.domains.task_execution import (
             _handle_task_due_event,
         )
 
         event = TaskDue(
             task_id=9,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="GTM stargazer poll",
         )
-        offline_activation = TaskActivationSnapshot(
+        offline_activation = TaskExecutionSnapshot(
             assistant_id="42",
-            activation_key="42:9",
+            run_key="42:9",
             task_id=9,
             source_task_log_id=555,
-            activation_kind="scheduled",
-            execution_mode="offline",
-            activation_revision="rev-1",
-            next_due_at="2026-04-10T09:00:00+00:00",
+            wake="scheduled",
+            delivery="offline",
+            revision="rev-1",
+            scheduled_for="2026-04-10T09:00:00+00:00",
         )
 
         with (
             patch(
-                "unify.task_scheduler.machine_state.get_task_activation",
+                "unify.task_scheduler.machine_state.get_open_task_execution",
                 return_value=offline_activation,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "unify.conversation_manager.domains.task_execution._start_live_task_due_execution",
             ) as mock_start_execution,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
@@ -2590,7 +2590,7 @@ class TestTaskDueEventHandlers:
     async def test_task_due_requires_scheduled_for(self):
         """scheduled_for is part of every task_due delivery's identity."""
 
-        from unify.conversation_manager.domains.task_activation import (
+        from unify.conversation_manager.domains.task_execution import (
             _task_due_event_from_wake_reason,
         )
 
@@ -2598,9 +2598,9 @@ class TestTaskDueEventHandlers:
             "type": "task_due",
             "task_id": 9,
             "source_task_log_id": 555,
-            "activation_revision": "rev-1",
+            "revision": "rev-1",
             "scheduled_for": "",
-            "source_type": "scheduled",
+            "wake": "scheduled",
         }
         assert _task_due_event_from_wake_reason(wake_reason) is None
 
@@ -2612,7 +2612,7 @@ class TestTaskDueEventHandlers:
         """Direct due-task start should preserve scheduled activation provenance."""
 
         from unify.common.task_execution_context import current_task_execution_delegate
-        from unify.conversation_manager.domains.task_activation import (
+        from unify.conversation_manager.domains.task_execution import (
             _start_live_task_due_execution,
         )
         from unify.task_scheduler.types.activated_by import ActivatedBy
@@ -2620,16 +2620,16 @@ class TestTaskDueEventHandlers:
         event = TaskDue(
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Morning briefing",
         )
-        activation = TaskActivationSnapshot(
+        activation = TaskExecutionSnapshot(
             assistant_id="42",
-            activation_key="42:101",
+            run_key="42:101",
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             task_name="Morning briefing",
         )
         mock_cm.actor = MagicMock()
@@ -2649,19 +2649,19 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
                 return_value=fake_scheduler,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
                 new=_noop,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
                 new=_noop,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
                 new=_noop,
             ),
         ):
@@ -2682,7 +2682,7 @@ class TestTaskDueEventHandlers:
         """Due-task startup should exercise the real scheduler/delegate boundary."""
 
         from unify.actor.simulated import SimulatedActor
-        from unify.conversation_manager.domains.task_activation import (
+        from unify.conversation_manager.domains.task_execution import (
             _start_live_task_due_execution,
         )
         from unify.task_scheduler import task_scheduler as task_scheduler_module
@@ -2692,7 +2692,6 @@ class TestTaskDueEventHandlers:
             remember_live_task_run_provenance,
         )
         from unify.task_scheduler.task_scheduler import TaskScheduler
-        from unify.task_scheduler.types.activated_by import ActivatedBy
         from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
         from unify.task_scheduler.types.schedule import Schedule
         from unify.task_scheduler.types.status import Status
@@ -2732,16 +2731,16 @@ class TestTaskDueEventHandlers:
         event = TaskDue(
             task_id=task_id,
             source_task_log_id=source_task_log_id,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Scheduled integration report",
         )
-        activation = TaskActivationSnapshot(
+        activation = TaskExecutionSnapshot(
             assistant_id="42",
-            activation_key=f"42:{task_id}",
+            run_key=f"42:{task_id}",
             task_id=task_id,
             source_task_log_id=source_task_log_id,
-            activation_revision="rev-1",
+            revision="rev-1",
             task_name="Scheduled integration report",
         )
         mock_cm.actor = actor
@@ -2755,10 +2754,10 @@ class TestTaskDueEventHandlers:
             TaskRunProvenance(
                 assistant_id="42",
                 task_id=task_id,
-                source_type="scheduled",
-                execution_mode="live",
+                wake="scheduled",
+                delivery="live",
                 source_task_log_id=source_task_log_id,
-                activation_revision="rev-1",
+                revision="rev-1",
                 scheduled_for="2026-04-10T09:00:00+00:00",
                 task_name="Scheduled integration report",
                 task_description="Prepare the scheduled report.",
@@ -2781,19 +2780,19 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
                 return_value=scheduler,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_result",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
                 new=_noop,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_notifications",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
                 new=_noop,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.managers_utils.actor_watch_clarifications",
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
                 new=_noop,
             ),
         ):
@@ -2804,53 +2803,49 @@ class TestTaskDueEventHandlers:
         assert calls[0]["guidelines"] is not None
         assert calls[0]["persist"] is False
 
-        rows = sorted(
-            scheduler._filter_tasks(filter=f"task_id == {task_id}"),
-            key=lambda task: task.instance_id,
-        )
-        assert [row.instance_id for row in rows] == [0, 1]
+        rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
+        assert len(rows) == 1
+        assert rows[0].instance_id == 0
         assert rows[0].status == Status.active
-        assert rows[0].activated_by == ActivatedBy.schedule
-        assert rows[1].status == Status.scheduled
 
     @pytest.mark.asyncio
     async def test_task_due_start_failure_surfaces_error_without_llm_prompt(
         self,
         mock_cm,
     ):
-        from unify.conversation_manager.domains.task_activation import (
+        from unify.conversation_manager.domains.task_execution import (
             _handle_task_due_event,
         )
 
         event = TaskDue(
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Morning briefing",
         )
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "unify.conversation_manager.domains.task_execution.validate_task_due_execution",
                 return_value=(
-                    TaskActivationSnapshot(
+                    TaskExecutionSnapshot(
                         assistant_id="42",
-                        activation_key="42:101",
+                        run_key="42:101",
                         task_id=101,
                         source_task_log_id=555,
-                        activation_revision="rev-1",
+                        revision="rev-1",
                         task_name="Morning briefing",
                     ),
                     None,
                 ),
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "unify.conversation_manager.domains.task_execution._start_live_task_due_execution",
                 new=AsyncMock(side_effect=RuntimeError("delegate mismatch")),
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.publish_system_error",
+                "unify.conversation_manager.domains.task_execution.publish_system_error",
             ) as mock_publish_system_error,
         ):
             should_request_llm = await _handle_task_due_event(event, mock_cm)
@@ -2871,7 +2866,7 @@ class TestTaskDueEventHandlers:
         event = TaskDue(
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
             task_label="Morning briefing",
             task_summary="Prepare the morning update before the user checks in.",
@@ -2885,20 +2880,20 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
+                "unify.conversation_manager.domains.task_execution.validate_task_due_execution",
                 return_value=(
-                    TaskActivationSnapshot(
+                    TaskExecutionSnapshot(
                         assistant_id="42",
-                        activation_key="42:101",
+                        run_key="42:101",
                         task_id=101,
-                        activation_revision="rev-1",
+                        revision="rev-1",
                         task_name="Morning briefing",
                     ),
                     None,
                 ),
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "unify.conversation_manager.domains.task_execution._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ),
         ):
@@ -2922,13 +2917,13 @@ class TestTaskDueEventHandlers:
         event = TaskDue(
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
+            revision="rev-1",
             scheduled_for="2026-04-10T09:00:00+00:00",
         )
 
         with patch(
-            "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
-            return_value=(None, "activation_revision_mismatch"),
+            "unify.conversation_manager.domains.task_execution.validate_task_due_execution",
+            return_value=(None, "revision_mismatch"),
         ):
             await EventHandler.handle_event(event, mock_cm)
 
@@ -2948,7 +2943,7 @@ class TestTaskDueEventHandlers:
                 "type": "task_due",
                 "task_id": 101,
                 "source_task_log_id": 555,
-                "activation_revision": "rev-1",
+                "revision": "rev-1",
                 "scheduled_for": "2026-04-10T09:00:00+00:00",
                 "task_label": "Morning briefing",
                 "task_summary": "Prepare the morning update before the user checks in.",
@@ -2959,11 +2954,11 @@ class TestTaskDueEventHandlers:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.validate_task_due_activation",
-                return_value=(MagicMock(activation_revision="rev-1"), None),
+                "unify.conversation_manager.domains.task_execution.validate_task_due_execution",
+                return_value=(MagicMock(revision="rev-1"), None),
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._start_live_task_due_execution",
+                "unify.conversation_manager.domains.task_execution._start_live_task_due_execution",
                 new=AsyncMock(return_value=7),
             ),
         ):
@@ -3137,24 +3132,24 @@ class TestTriggeredTaskNotifications:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.ManagerRegistry.get_task_scheduler",
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
                 return_value=fake_scheduler,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._register_live_task_handle",
+                "unify.conversation_manager.domains.task_execution._register_live_task_handle",
                 new_callable=AsyncMock,
                 return_value=77,
             ) as register_handle,
             patch(
-                "unify.conversation_manager.domains.task_activation._current_task_assistant_id",
+                "unify.conversation_manager.domains.task_execution._current_task_assistant_id",
                 return_value="42",
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.get_task_activation",
+                "unify.conversation_manager.domains.task_execution.get_open_task_execution",
                 return_value=None,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+                "unify.conversation_manager.domains.task_execution.remember_live_task_run_provenance",
             ) as remember_provenance,
         ):
             await EventHandler.handle_event(event, mock_cm)
@@ -3168,7 +3163,7 @@ class TestTriggeredTaskNotifications:
         provenance = remember_provenance.call_args.args[0]
         assert provenance.assistant_id == "42"
         assert provenance.task_id == 301
-        assert provenance.source_type == "explicit"
+        assert provenance.wake.value == "explicit"
         assert provenance.source_task_log_id == 9001
         assert provenance.source_ref == "req-abc"
         mock_cm.request_llm_run.assert_not_called()
@@ -3182,31 +3177,31 @@ class TestTriggeredTaskNotifications:
             content="Can you review the invoice?",
         )
         candidates = [
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:301",
+                run_key="42:301",
                 task_id=301,
-                activation_kind="triggered",
-                execution_mode="live",
+                wake="triggered",
+                delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Invoice follow-up",
                 task_description="Help handle invoice-related requests from Alice.",
             ),
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:302",
+                run_key="42:302",
                 task_id=302,
-                activation_kind="triggered",
-                execution_mode="offline",
+                wake="triggered",
+                delivery="offline",
                 trigger_from_contact_ids=[2],
                 task_name="Hidden offline task",
             ),
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:303",
+                run_key="42:303",
                 task_id=303,
-                activation_kind="triggered",
-                execution_mode="live",
+                wake="triggered",
+                delivery="live",
                 trigger_omit_contact_ids=[2],
                 task_name="Wrong sender task",
             ),
@@ -3214,14 +3209,14 @@ class TestTriggeredTaskNotifications:
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.list_trigger_activations",
+                "unify.conversation_manager.domains.task_execution.list_trigger_executions",
                 return_value=candidates,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation.remember_live_task_run_provenance",
+                "unify.conversation_manager.domains.task_execution.remember_live_task_run_provenance",
             ) as mock_remember_provenance,
             patch(
-                "unify.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
+                "unify.conversation_manager.domains.task_execution._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
             patch(
@@ -3244,7 +3239,7 @@ class TestTriggeredTaskNotifications:
         assert "Wrong sender task" not in trigger_notification
         remembered = mock_remember_provenance.call_args.args[0]
         assert remembered.task_id == 301
-        assert remembered.source_type == "triggered"
+        assert remembered.wake.value == "triggered"
         assert remembered.source_medium == "sms_message"
         assert remembered.attempt_token
         mock_offline_dispatch.assert_called_once()
@@ -3270,23 +3265,23 @@ class TestTriggeredTaskNotifications:
             conference_name="conf-123",
         )
         candidates = [
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:402",
+                run_key="42:402",
                 task_id=402,
-                activation_kind="triggered",
-                execution_mode="offline",
+                wake="triggered",
+                delivery="offline",
                 trigger_from_contact_ids=[2],
             ),
         ]
 
         with (
             patch(
-                "unify.conversation_manager.domains.task_activation.list_trigger_activations",
+                "unify.conversation_manager.domains.task_execution.list_trigger_executions",
                 return_value=candidates,
             ),
             patch(
-                "unify.conversation_manager.domains.task_activation._dispatch_offline_trigger_candidate",
+                "unify.conversation_manager.domains.task_execution._dispatch_offline_trigger_candidate",
                 return_value={"status": "launched"},
             ) as mock_offline_dispatch,
             patch(
@@ -3319,12 +3314,12 @@ class TestTriggeredTaskNotifications:
             conference_name="conf-123",
         )
         candidates = [
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:401",
+                run_key="42:401",
                 task_id=401,
-                activation_kind="triggered",
-                execution_mode="live",
+                wake="triggered",
+                delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
                 task_description="Prioritize urgent inbound calls from Alice.",
@@ -3332,7 +3327,7 @@ class TestTriggeredTaskNotifications:
         ]
 
         with patch(
-            "unify.conversation_manager.domains.task_activation.list_trigger_activations",
+            "unify.conversation_manager.domains.task_execution.list_trigger_executions",
             return_value=candidates,
         ):
             await EventHandler.handle_event(event, mock_cm)
@@ -3370,12 +3365,12 @@ class TestTriggeredTaskNotifications:
         mock_socket.queue_for_clients = AsyncMock()
         mock_cm.call_manager._socket_server = mock_socket
         candidates = [
-            TaskActivationSnapshot(
+            TaskExecutionSnapshot(
                 assistant_id="42",
-                activation_key="42:401",
+                run_key="42:401",
                 task_id=401,
-                activation_kind="triggered",
-                execution_mode="live",
+                wake="triggered",
+                delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
                 task_description="Prioritize urgent inbound calls from Alice.",
@@ -3383,7 +3378,7 @@ class TestTriggeredTaskNotifications:
         ]
 
         with patch(
-            "unify.conversation_manager.domains.task_activation.list_trigger_activations",
+            "unify.conversation_manager.domains.task_execution.list_trigger_executions",
             return_value=candidates,
         ):
             await EventHandler.handle_event(event, mock_cm)

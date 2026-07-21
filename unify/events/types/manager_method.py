@@ -95,5 +95,5 @@ class ManagerMethodPayload(BaseModel):
     )
     run_key: Optional[str] = Field(
         default=None,
-        description="Owning Tasks/Runs run_key when known",
+        description="Owning Tasks/Executions run_key when known",
     )

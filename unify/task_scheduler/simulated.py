@@ -433,6 +433,51 @@ class SimulatedTaskScheduler(BaseTaskScheduler):
             return {g: _scalar(keys) for g in groups}
         return {g: {k: _scalar(k) for k in key_list} for g in groups}
 
+    @functools.wraps(BaseTaskScheduler.get_run_event_children, updated=())
+    def get_run_event_children(
+        self,
+        *,
+        run_key: str,
+        parent: str | None = None,
+        limit: int = 50,
+        events_base_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Simulated: empty children (no Orchestra EventBus)."""
+
+        key = str(run_key or "").strip()
+        if not key:
+            raise ValueError("run_key must be a non-empty string")
+        return {
+            "run_key": key,
+            "parent": str(parent).strip() if parent else None,
+            "events_base_context": events_base_context or "Events",
+            "children": [],
+        }
+
+    @functools.wraps(BaseTaskScheduler.get_run_event, updated=())
+    def get_run_event(
+        self,
+        *,
+        run_key: str,
+        node_id: str,
+        event_id: str | None = None,
+        events_base_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Simulated: no events (no Orchestra EventBus)."""
+
+        key = str(run_key or "").strip()
+        if not key:
+            raise ValueError("run_key must be a non-empty string")
+        nid = str(node_id or "").strip()
+        if not nid:
+            raise ValueError("node_id must be a non-empty hierarchy prefix")
+        return {
+            "run_key": key,
+            "node_id": nid,
+            "events_base_context": events_base_context or "Events",
+            "events": [],
+        }
+
     @functools.wraps(BaseTaskScheduler.clear, updated=())
     def clear(self) -> None:
         sched = maybe_tool_log_scheduled(

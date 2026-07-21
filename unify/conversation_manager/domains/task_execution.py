@@ -1,4 +1,4 @@
-"""Task-activation wake-reason helpers for conversation-manager handlers."""
+"""Task-execution wake-reason helpers for conversation-manager handlers."""
 
 import asyncio
 import hashlib
@@ -25,14 +25,14 @@ from unify.logger import LOGGER
 from unify.manager_registry import ManagerRegistry
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.types.activated_by import ActivatedBy
-from unify.task_scheduler.types.run_source import RunSource
+from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.machine_state import (
-    TaskActivationSnapshot,
+    TaskExecutionSnapshot,
     TaskRunProvenance,
-    get_task_activation,
-    list_trigger_activations,
+    get_open_task_execution,
+    list_trigger_executions,
     remember_live_task_run_provenance,
-    validate_task_due_activation,
+    validate_task_due_execution,
 )
 
 if TYPE_CHECKING:
@@ -141,7 +141,7 @@ async def _register_live_task_handle(
 async def _start_live_task_due_execution(
     event: TaskDue,
     cm: "ConversationManager",
-    activation: TaskActivationSnapshot,
+    activation: TaskExecutionSnapshot,
 ) -> int:
     """Start a validated live due task through the scheduler execution path."""
 
@@ -274,7 +274,7 @@ def _sender_display_name(sender_name: str, *, contact_id: int | None) -> str | N
 
 def _task_due_label(
     event: TaskDue,
-    activation: TaskActivationSnapshot | None,
+    activation: TaskExecutionSnapshot | None,
 ) -> str:
     """Return the human-facing label for one due-task wake."""
 
@@ -287,7 +287,7 @@ def _task_due_label(
 
 def _task_due_summary(
     event: TaskDue,
-    activation: TaskActivationSnapshot | None,
+    activation: TaskExecutionSnapshot | None,
 ) -> str:
     """Return one compact summary for one due-task wake."""
 
@@ -305,7 +305,7 @@ def _task_due_summary(
 
 def _task_due_recurrence_hint(
     event: TaskDue,
-    activation: TaskActivationSnapshot | None,
+    activation: TaskExecutionSnapshot | None,
 ) -> str:
     """Return whether the due task should be treated as recurring or one-off."""
 
@@ -316,7 +316,7 @@ def _task_due_recurrence_hint(
 
 def _task_due_notification_text(
     event: TaskDue,
-    activation: TaskActivationSnapshot | None,
+    activation: TaskExecutionSnapshot | None,
 ) -> str:
     """Return the slow-brain instruction for a validated due task."""
 
@@ -375,7 +375,7 @@ def _task_trigger_fast_brain_context(event: TaskTriggerRequested) -> str:
 
 def _task_due_fast_brain_context(
     event: TaskDue,
-    activation: TaskActivationSnapshot | None,
+    activation: TaskExecutionSnapshot | None,
 ) -> str:
     """Return the silent fast-brain context for one validated due task."""
 
@@ -392,20 +392,20 @@ def _task_due_fast_brain_context(
     return " ".join(parts)
 
 
-def _activation_label(candidate: TaskActivationSnapshot) -> str:
+def _activation_label(candidate: TaskExecutionSnapshot) -> str:
     """Return one human-facing label for a trigger candidate."""
 
     return candidate.task_name or f"task {candidate.task_id}"
 
 
-def _activation_summary(candidate: TaskActivationSnapshot) -> str:
+def _activation_summary(candidate: TaskExecutionSnapshot) -> str:
     """Return one compact summary for a trigger candidate."""
 
     label = _activation_label(candidate)
     return _compact_task_text(candidate.task_description, fallback=label)
 
 
-def _describe_trigger_candidate(candidate: TaskActivationSnapshot) -> str:
+def _describe_trigger_candidate(candidate: TaskExecutionSnapshot) -> str:
     """Render one live trigger candidate for slow-brain review."""
 
     label = _activation_label(candidate)
@@ -419,7 +419,7 @@ def _trigger_candidate_fast_brain_context(
     *,
     medium: Medium,
     sender_name: str,
-    candidates: list[TaskActivationSnapshot],
+    candidates: list[TaskExecutionSnapshot],
 ) -> str:
     """Return silent fast-brain context for live trigger candidates."""
 
@@ -539,10 +539,10 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
     """
 
     assistant_id = _current_task_assistant_id()
-    activation, stale_reason = validate_task_due_activation(
+    activation, stale_reason = validate_task_due_execution(
         assistant_id=assistant_id,
         task_id=event.task_id,
-        activation_revision=event.activation_revision,
+        revision=event.revision,
         source_task_log_id=event.source_task_log_id,
         scheduled_for=event.scheduled_for,
         destination=event.destination,
@@ -563,10 +563,10 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
             TaskRunProvenance(
                 assistant_id=assistant_id_for_run,
                 task_id=event.task_id,
-                source_type="scheduled",
-                execution_mode="live",
+                wake=Wake.scheduled,
+                delivery=Delivery.live,
                 source_task_log_id=event.source_task_log_id,
-                activation_revision=event.activation_revision,
+                revision=event.revision,
                 destination=event.destination,
                 scheduled_for=event.scheduled_for,
                 task_name=(activation.task_name if activation is not None else None),
@@ -614,7 +614,7 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
         "task_due",
         (
             f"Accepted due task {event.task_id} "
-            f"(activation_revision={activation.activation_revision or '-'}, "
+            f"(revision={activation.revision or '-'}, "
             f"handle_id={handle_id})"
         ),
     )
@@ -639,12 +639,12 @@ async def _handle_task_trigger_requested_event(
     assistant_id = _current_task_assistant_id()
     activation = None
     if assistant_id:
-        activation = get_task_activation(
+        activation = get_open_task_execution(
             assistant_id=assistant_id,
             task_id=event.task_id,
             destination=event.destination,
         )
-    if activation is not None and activation.execution_mode == "offline":
+    if activation is not None and activation.delivery == "offline":
         return await _handle_offline_rest_task_trigger(
             event,
             cm,
@@ -656,8 +656,8 @@ async def _handle_task_trigger_requested_event(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=event.task_id,
-                source_type=RunSource.explicit,
-                execution_mode="live",
+                wake=Wake.explicit,
+                delivery=Delivery.live,
                 source_task_log_id=event.source_task_log_id,
                 destination=event.destination,
                 source_ref=event.source_ref,
@@ -707,7 +707,7 @@ async def _handle_provider_event_dispatch_requested_event(
     event: ProviderEventDispatchRequested,
     cm: "ConversationManager",
 ) -> bool:
-    """Adopt one live provider-event dispatch and start a captured-revision instance."""
+    """Adopt one live provider-event dispatch and start execution."""
 
     from datetime import datetime
 
@@ -732,9 +732,9 @@ async def _handle_provider_event_dispatch_requested_event(
             task_id=event.task_id,
             binding_id=event.binding_id,
             receipt_id=event.receipt_id,
-            accepted_activation_revision=event.accepted_activation_revision,
-            source_type=event.source_type,  # type: ignore[arg-type]
-            dispatch_mode=event.dispatch_mode,  # type: ignore[arg-type]
+            accepted_revision=event.accepted_revision,
+            wake=event.wake,  # type: ignore[arg-type]
+            delivery=event.delivery,  # type: ignore[arg-type]
             event_context_ref=event.event_context_ref,
             issued_at=issued_at,
             audience=event.audience,
@@ -801,7 +801,7 @@ async def _handle_offline_rest_task_trigger(
     event: TaskTriggerRequested,
     cm: "ConversationManager",
     *,
-    activation: TaskActivationSnapshot,
+    activation: TaskExecutionSnapshot,
 ) -> bool:
     """Dispatch one REST-triggered offline task without requiring a live actor."""
 
@@ -855,7 +855,7 @@ async def _handle_offline_rest_task_trigger(
 
 def _dispatch_offline_explicit_candidate(
     *,
-    candidate: TaskActivationSnapshot,
+    candidate: TaskExecutionSnapshot,
     source_ref: str,
 ) -> dict[str, Any]:
     """Ask Communication to execute one REST-triggered offline task headlessly."""
@@ -874,9 +874,9 @@ def _dispatch_offline_explicit_candidate(
         "assistant_id": assistant_id,
         "task_id": candidate.task_id,
         "source_task_log_id": candidate.source_task_log_id,
-        "activation_revision": candidate.activation_revision,
-        "execution_mode": "offline",
-        "source_type": RunSource.explicit,
+        "revision": candidate.revision,
+        "delivery": "offline",
+        "wake": Wake.explicit.value,
         "source_ref": source_ref,
         "source_medium": "api",
         "task_name": candidate.task_name or None,
@@ -889,7 +889,7 @@ def _dispatch_offline_explicit_candidate(
     payload["requires_filesystem"] = bool(candidate.requires_filesystem)
     payload["requires_computer"] = bool(candidate.requires_computer)
     response = requests.post(
-        f"{comms_url}/infra/task-activation/offline-dispatch",
+        f"{comms_url}/infra/task-execution/offline-dispatch",
         json=payload,
         headers={"Authorization": f"Bearer {unify_key}"},
         timeout=15,
@@ -901,7 +901,7 @@ def _dispatch_offline_explicit_candidate(
 async def _dispatch_offline_explicit_candidate_local(
     *,
     cm: "ConversationManager",
-    candidate: TaskActivationSnapshot,
+    candidate: TaskExecutionSnapshot,
     source_ref: str,
 ) -> dict[str, Any]:
     """Execute one REST-triggered offline task via the local subprocess lane."""
@@ -922,7 +922,7 @@ async def _dispatch_offline_explicit_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type=RunSource.explicit,
+        wake=Wake.explicit,
         source_ref=source_ref,
         source_medium="api",
     )
@@ -937,15 +937,15 @@ async def _dispatch_offline_explicit_candidate_local(
         stderr=_asyncio.subprocess.PIPE,
     )
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, RunSource.explicit),
+        dispatcher._watch(process, candidate, Wake.explicit.value),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
     return {
         "success": True,
         "status": "spawned_local",
-        "execution_mode": "offline",
-        "source_type": RunSource.explicit,
+        "delivery": "offline",
+        "wake": Wake.explicit.value,
     }
 
 
@@ -993,15 +993,15 @@ def _filter_trigger_candidates(
     *,
     medium: Medium,
     contact_id: int | None,
-) -> tuple[list[TaskActivationSnapshot], list[TaskActivationSnapshot]]:
+) -> tuple[list[TaskExecutionSnapshot], list[TaskExecutionSnapshot]]:
     """Return mechanically matching live and offline trigger activations."""
 
     assistant_id = _current_task_assistant_id()
-    candidates = list_trigger_activations(
+    candidates = list_trigger_executions(
         assistant_id=assistant_id,
         medium=medium.value,
     )
-    matching: list[TaskActivationSnapshot] = []
+    matching: list[TaskExecutionSnapshot] = []
     for candidate in candidates:
         if contact_id is not None and contact_id in candidate.trigger_omit_contact_ids:
             continue
@@ -1011,10 +1011,10 @@ def _filter_trigger_candidates(
             continue
         matching.append(candidate)
     live_candidates = [
-        candidate for candidate in matching if candidate.execution_mode == "live"
+        candidate for candidate in matching if candidate.delivery == "live"
     ]
     offline_candidates = [
-        candidate for candidate in matching if candidate.execution_mode == "offline"
+        candidate for candidate in matching if candidate.delivery == "offline"
     ]
     return live_candidates, offline_candidates
 
@@ -1023,7 +1023,7 @@ def _trigger_candidate_notification_text(
     *,
     medium: Medium,
     sender_name: str,
-    candidates: list[tuple[TaskActivationSnapshot, str]],
+    candidates: list[tuple[TaskExecutionSnapshot, str]],
 ) -> str:
     """Return the slow-brain instruction for mechanically matched trigger tasks."""
 
@@ -1085,7 +1085,7 @@ def _build_trigger_source_ref(
 
 def _dispatch_offline_trigger_candidate(
     *,
-    candidate: TaskActivationSnapshot,
+    candidate: TaskExecutionSnapshot,
     event: Any,
     medium: Medium,
     contact_id: int | None,
@@ -1106,14 +1106,14 @@ def _dispatch_offline_trigger_candidate(
         raise RuntimeError("UNIFY_KEY is not configured")
     assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")
     response = requests.post(
-        f"{comms_url}/infra/task-activation/offline-dispatch",
+        f"{comms_url}/infra/task-execution/offline-dispatch",
         json={
             "assistant_id": assistant_id,
             "task_id": candidate.task_id,
             "source_task_log_id": candidate.source_task_log_id,
-            "activation_revision": candidate.activation_revision,
-            "execution_mode": "offline",
-            "source_type": RunSource.triggered,
+            "revision": candidate.revision,
+            "delivery": "offline",
+            "wake": Wake.triggered.value,
             "source_ref": _build_trigger_source_ref(
                 event=event,
                 medium=medium,
@@ -1138,7 +1138,7 @@ def _dispatch_offline_trigger_candidate(
 async def _dispatch_offline_trigger_candidate_local(
     *,
     cm: "ConversationManager",
-    candidate: TaskActivationSnapshot,
+    candidate: TaskExecutionSnapshot,
     event: Any,
     medium: Medium,
     contact_id: int | None,
@@ -1179,7 +1179,7 @@ async def _dispatch_offline_trigger_candidate_local(
 
     env = _build_local_offline_runner_env(
         candidate,
-        source_type=RunSource.triggered,
+        wake=Wake.triggered,
         source_ref=source_ref,
         source_medium=medium.value,
         source_contact_id=contact_id,
@@ -1201,15 +1201,15 @@ async def _dispatch_offline_trigger_candidate_local(
     # Adopt the watcher onto the dispatcher's set so cleanup on CM stop
     # cancels it together with other in-flight scheduler watchers.
     watcher = _asyncio.create_task(
-        dispatcher._watch(process, candidate, RunSource.triggered),
+        dispatcher._watch(process, candidate, Wake.triggered.value),
     )
     dispatcher._inflight.add(watcher)
     watcher.add_done_callback(dispatcher._inflight.discard)
     return {
         "success": True,
         "status": "spawned_local",
-        "execution_mode": "offline",
-        "source_type": RunSource.triggered,
+        "delivery": "offline",
+        "wake": Wake.triggered.value,
     }
 
 
@@ -1232,7 +1232,7 @@ async def _surface_trigger_task_candidates(
     )
     log_startup_timing(
         LOGGER,
-        "⏱️ [StartupTiming] task_activation.filter_trigger_candidates duration=%.2fs medium=%s contact_id=%s live=%d offline=%d",
+        "⏱️ [StartupTiming] task_execution.filter_trigger_candidates duration=%.2fs medium=%s contact_id=%s live=%d offline=%d",
         perf_counter() - _filter_t0,
         medium.value,
         contact_id,
@@ -1287,14 +1287,14 @@ async def _surface_trigger_task_candidates(
             )
         log_startup_timing(
             LOGGER,
-            "⏱️ [StartupTiming] task_activation.dispatch_offline_candidates duration=%.2fs count=%d",
+            "⏱️ [StartupTiming] task_execution.dispatch_offline_candidates duration=%.2fs count=%d",
             perf_counter() - _offline_t0,
             len(offline_candidates),
         )
     if not live_candidates:
         log_startup_timing(
             LOGGER,
-            "⏱️ [StartupTiming] task_activation.surface_trigger_candidates total=%.2fs result=no_live_candidates",
+            "⏱️ [StartupTiming] task_execution.surface_trigger_candidates total=%.2fs result=no_live_candidates",
             perf_counter() - _total_t0,
         )
         return False
@@ -1303,7 +1303,7 @@ async def _surface_trigger_task_candidates(
         medium=medium,
         contact_id=contact_id,
     )
-    live_candidates_with_tokens: list[tuple[TaskActivationSnapshot, str]] = []
+    live_candidates_with_tokens: list[tuple[TaskExecutionSnapshot, str]] = []
     for candidate in live_candidates:
         assistant_id = candidate.assistant_id or (_current_task_assistant_id() or "")
         if not assistant_id:
@@ -1313,10 +1313,10 @@ async def _surface_trigger_task_candidates(
             TaskRunProvenance(
                 assistant_id=assistant_id,
                 task_id=candidate.task_id,
-                source_type=RunSource.triggered,
-                execution_mode="live",
+                wake=Wake.triggered,
+                delivery=Delivery.live,
                 source_task_log_id=candidate.source_task_log_id,
-                activation_revision=candidate.activation_revision,
+                revision=candidate.revision,
                 destination=candidate.destination,
                 source_medium=medium.value,
                 source_ref=source_ref,
@@ -1334,7 +1334,7 @@ async def _surface_trigger_task_candidates(
     if not live_candidates_with_tokens:
         log_startup_timing(
             LOGGER,
-            "⏱️ [StartupTiming] task_activation.surface_trigger_candidates total=%.2fs result=no_tokenized_candidates",
+            "⏱️ [StartupTiming] task_execution.surface_trigger_candidates total=%.2fs result=no_tokenized_candidates",
             perf_counter() - _total_t0,
         )
         return False
@@ -1372,13 +1372,13 @@ async def _surface_trigger_task_candidates(
     )
     log_startup_timing(
         LOGGER,
-        "⏱️ [StartupTiming] task_activation.queue_fast_brain_context duration=%.2fs candidates=%d",
+        "⏱️ [StartupTiming] task_execution.queue_fast_brain_context duration=%.2fs candidates=%d",
         perf_counter() - _queue_t0,
         len(live_candidates_with_tokens),
     )
     log_startup_timing(
         LOGGER,
-        "⏱️ [StartupTiming] task_activation.surface_trigger_candidates total=%.2fs result=matched",
+        "⏱️ [StartupTiming] task_execution.surface_trigger_candidates total=%.2fs result=matched",
         perf_counter() - _total_t0,
     )
     return True

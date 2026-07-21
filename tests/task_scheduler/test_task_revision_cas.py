@@ -13,7 +13,10 @@ from unisdk import BASE_URL
 from unisdk.utils import http
 from unisdk.utils.http import RequestError
 
-from tests.provider_trigger_delivery import create_github_composio_connection
+from tests.provider_trigger_delivery import (
+    create_github_composio_connection,
+    ensure_provider_trigger_test_prerequisites,
+)
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.trigger import ProviderEventTrigger, parse_task_trigger
 from unify.task_scheduler.types.priority import Priority
@@ -82,6 +85,11 @@ def test_split_provider_event_task_update_keeps_runtime_statuses_on_log_path() -
         authored, runtime = split_provider_event_task_update({"status": status.value})
         assert authored == {}
         assert runtime == {"status": status.value}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _provider_trigger_catalog() -> None:
+    ensure_provider_trigger_test_prerequisites()
 
 
 @pytest.mark.requires_orchestra

@@ -707,14 +707,28 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "input/output contract and validation; if it required agentic "
     "exploration, preserve that substep or leave the task "
     "description-driven.\n\n"
-    "Executor candidates may simplify incidental logging, formatting, dead "
-    "exploratory branches, or duplicated setup, but they must not hardcode "
-    "observations from live tool results, remove validation gates, reorder "
-    "dependent side effects, discard recovery branches, replace managed "
-    "tools with weaker ad hoc mechanisms, or replace semantic LLM work "
-    "with brittle symbolic approximations. Store non-executor helpers and "
-    "guidance freely; offline executor promotion requires separate "
-    "certification.\n\n"
+    "Executor candidates must not hardcode observations from live tool "
+    "results, remove validation gates, reorder dependent side effects, "
+    "discard recovery branches, replace managed tools with weaker ad hoc "
+    "mechanisms, or replace semantic LLM work with brittle symbolic "
+    "approximations.\n\n"
+    "### Expressive logging in stored functions\n\n"
+    "Soft failures (empty results, skipped branches, degraded fallbacks, "
+    "status dicts that report problems without raising) are the common "
+    "bug shape. Stored functions must leave a reconstructable trail with "
+    "the stdlib `logging` module — not via user-facing `notify()`. Use "
+    "markers `PHASE`, `SKIP`, and `SOFT_FAIL` in the message text so "
+    "Job/EventBus captures stay greppable, e.g. "
+    "`logging.getLogger(__name__).info('PHASE load_rows count=%s', n)` "
+    "or `.warning('SKIP empty_result')` / `.error('SOFT_FAIL partial …')`. "
+    "Log every meaningful stage boundary, every intentional skip, and "
+    "every soft failure. Do **not** strip PHASE/SKIP/SOFT_FAIL trails when "
+    "distilling a live trajectory into a stored function. You may remove "
+    "dead exploratory `print`s, duplicated setup, or formatting noise, "
+    "but never remove validation gates, recovery branches, or diagnostic "
+    "logging that explains why a path returned early or returned empty. "
+    "Store non-executor helpers and guidance freely; offline executor "
+    "promotion requires separate certification.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -3704,6 +3718,9 @@ class CodeActActor(BaseCodeActActor):
 
                 _ef_t0 = _ef_time.perf_counter()
                 _ef_log = _ef_logging.getLogger("unify")
+                _ef_fn_log = _ef_logging.getLogger(
+                    f"unify.execute_function.{function_name}",
+                )
 
                 def _ef_ms():
                     return f"{(_ef_time.perf_counter() - _ef_t0) * 1000:.0f}ms"
@@ -3711,6 +3728,20 @@ class CodeActActor(BaseCodeActActor):
                 _ef_log.debug(
                     f"⏱️ [execute_function +{_ef_ms()}] entered: {function_name}",
                 )
+                _ef_fn_log.info(
+                    "START execute_function.%s params=%s",
+                    function_name,
+                    {
+                        k: (
+                            v
+                            if isinstance(v, (int, float, bool, type(None)))
+                            else repr(v)[:80]
+                        )
+                        for k, v in (call_kwargs or {}).items()
+                        if not str(k).startswith("_")
+                    },
+                )
+                _ef_fn_t0 = _ef_time.monotonic()
 
                 # ── Synthesize the code string ────────────────────────────
                 code: str | None = None
@@ -3983,15 +4014,56 @@ class CodeActActor(BaseCodeActActor):
                     ):
                         out = ExecutionResult(**out)
 
-                    # When the execution produced a bare SteerableToolHandle
-                    # with no meaningful side output, return the handle directly
-                    # so the core loop adopts it via the bare-handle path
-                    # (no intermediate LLM turn required).
-                    _ef_result_val = (
+                    _ef_result_for_log = (
                         out.get("result")
                         if isinstance(out, dict)
                         else getattr(out, "result", None)
                     )
+                    _ef_error_for_log = (
+                        out.get("error")
+                        if isinstance(out, dict)
+                        else getattr(out, "error", None)
+                    )
+                    if _ef_error_for_log:
+                        _ef_fn_log.error(
+                            "FAIL execute_function.%s after %.1fs error=%s",
+                            function_name,
+                            _ef_time.monotonic() - _ef_fn_t0,
+                            _ef_error_for_log,
+                        )
+                    else:
+                        _ef_result_repr = repr(_ef_result_for_log)
+                        if len(_ef_result_repr) > 240:
+                            _ef_result_repr = _ef_result_repr[:237] + "..."
+                        _ef_fn_log.info(
+                            "END execute_function.%s after %.1fs result=%s",
+                            function_name,
+                            _ef_time.monotonic() - _ef_fn_t0,
+                            _ef_result_repr,
+                        )
+                        if isinstance(_ef_result_for_log, dict):
+                            _ef_status = str(
+                                _ef_result_for_log.get("status") or "",
+                            ).lower()
+                            if (
+                                "fail" in _ef_status
+                                or _ef_result_for_log.get("error")
+                                or _ef_result_for_log.get("partial_error")
+                            ):
+                                _ef_fn_log.error(
+                                    "SOFT_FAIL execute_function.%s status=%r "
+                                    "error=%r partial_error=%r",
+                                    function_name,
+                                    _ef_result_for_log.get("status"),
+                                    _ef_result_for_log.get("error"),
+                                    _ef_result_for_log.get("partial_error"),
+                                )
+
+                    # When the execution produced a bare SteerableToolHandle
+                    # with no meaningful side output, return the handle directly
+                    # so the core loop adopts it via the bare-handle path
+                    # (no intermediate LLM turn required).
+                    _ef_result_val = _ef_result_for_log
                     if isinstance(_ef_result_val, SteerableToolHandle):
                         _ef_stdout = (
                             out.get("stdout")

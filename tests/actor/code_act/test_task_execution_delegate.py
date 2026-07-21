@@ -18,7 +18,7 @@ from unify.actor.code_act_actor import (
 )
 from unify.actor.simulated import SimulatedActor
 from unify.common.task_execution_context import current_task_execution_delegate
-from unify.conversation_manager.domains.task_activation import (
+from unify.conversation_manager.domains.task_execution import (
     _ConversationTaskExecutionDelegate,
 )
 from unify.function_manager.function_manager import FunctionManager

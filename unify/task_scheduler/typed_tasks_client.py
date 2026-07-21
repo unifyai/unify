@@ -294,17 +294,10 @@ def delete_event_context(*, task_id: int, run_id: int) -> None:
     )
 
 
-def trigger_task(*, task_id: int, instance_id: int | None = None) -> dict[str, Any]:
-    """Request one manual task execution through the compatibility route.
-
-    When ``instance_id`` is omitted, Orchestra forks a new Tasks instance
-    decoupled from recurrence and dispatches that fork. Pass ``instance_id`` to
-    start an existing scheduled/triggerable instance early.
-    """
+def trigger_task(*, task_id: int) -> dict[str, Any]:
+    """Request one manual task execution through the compatibility route."""
 
     payload: dict[str, Any] = {"assistant_id": _assistant_id()}
-    if instance_id is not None:
-        payload["instance_id"] = int(instance_id)
     response = _request(
         "post",
         f"/tasks/{task_id}/trigger",

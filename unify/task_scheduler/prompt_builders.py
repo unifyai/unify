@@ -29,7 +29,6 @@ def build_task_execution_request(task: Task) -> str:
         "Execute this TaskScheduler task as a contained task run.",
         "",
         f"Task id: {task.task_id}",
-        f"Instance id: {task.instance_id}",
         f"Task name: {task.name}",
         "",
         "Task description:",
@@ -78,11 +77,15 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "explicitly asks you to create or modify tasks. If this task has no "
         "stored entrypoint, interpret the natural-language description "
         "directly using the available primitives and functions. Offline "
-        "delivery does not change that execution style. Keep any "
-        "progress notifications focused on this task run.\n\n"
+        "delivery does not change that execution style. Prefer calling "
+        "stored functions that already emit expressive `logging` trails "
+        "(PHASE/SKIP/SOFT_FAIL markers); for any direct soft outcomes "
+        "(empty results, intentional skips, degraded fallbacks), log "
+        "briefly via stdlib `logging` rather than silent returns. Keep "
+        "progress notifications user-facing — diagnostics belong in "
+        "logging, not `notify()`.\n\n"
         f"Activation reason: {reason.value}\n"
-        f"Task id: {task.task_id}\n"
-        f"Instance id: {task.instance_id}"
+        f"Task id: {task.task_id}"
     )
 
 

@@ -11,7 +11,11 @@ import pytest
 import unisdk
 
 from tests.helpers import _handle_project
-from tests.provider_trigger_delivery import create_github_composio_connection
+from tests.provider_trigger_delivery import (
+    create_github_composio_connection,
+    ensure_provider_trigger_test_prerequisites,
+    run_orchestra_trigger_worker_cycle,
+)
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler import typed_tasks_client
 from unify.task_scheduler.provider_trigger_actor import (
@@ -55,6 +59,7 @@ def _provider_event_trigger(*, connection_id: str) -> dict[str, Any]:
 def orchestra_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch):
     """Create one assistant, pin session agent_id, and return a TaskScheduler."""
 
+    ensure_provider_trigger_test_prerequisites()
     suffix = uuid.uuid4().hex[:8]
     assistant = unisdk.create_assistant(
         first_name=f"ProviderTrigger{suffix}",
@@ -152,6 +157,9 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     assert int(seeded.task_revision) == 1
     assert seeded.status == Status.triggerable
     assert seeded.provider_event_binding_id
+
+    scheduler._retry_provider_trigger(task_id=task_id)
+    run_orchestra_trigger_worker_cycle()
 
     scheduler._update_task(
         task_id=task_id,

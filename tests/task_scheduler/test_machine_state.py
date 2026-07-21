@@ -3,168 +3,136 @@ import hashlib
 from unify.task_scheduler import machine_state
 from unify.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
-    TaskActivationSnapshot,
+    TaskExecutionSnapshot,
     TaskOutboundOperationProvenance,
     TaskRunProvenance,
-    build_activation_key,
-    build_task_activation_context_name,
+    build_task_executions_context_name,
     build_task_outbound_operation_key,
     build_task_run_key,
     create_or_adopt_task_outbound_operation,
     create_or_adopt_live_task_run,
     consume_live_task_run_provenance,
-    get_task_activation,
+    get_open_task_execution,
     remember_live_task_run_provenance,
-    validate_task_due_activation,
+    validate_task_due_execution,
 )
-from unify.task_scheduler.types.run_source import RunSource
+from unify.task_scheduler.types.execution import Delivery, Wake
 
 
-def test_validate_task_due_activation_accepts_current_activation(monkeypatch):
-    activation = TaskActivationSnapshot(
+def _scheduled_execution(**overrides) -> TaskExecutionSnapshot:
+    base = dict(
+        run_key="live:scheduled:42:101:rev-digest:once",
         assistant_id="42",
-        activation_key="42:101",
         task_id=101,
         source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="live",
-        next_due_at="2026-04-10T10:00:00+01:00",
-        activation_revision="rev-1",
+        wake=Wake.scheduled.value,
+        delivery=Delivery.live.value,
+        scheduled_for="2026-04-10T09:00:00+00:00",
+        revision="rev-1",
+    )
+    base.update(overrides)
+    return TaskExecutionSnapshot(**base)
+
+
+def test_validate_task_due_execution_accepts_current_execution(monkeypatch):
+    execution = _scheduled_execution(
+        scheduled_for="2026-04-10T10:00:00+01:00",
     )
     monkeypatch.setattr(
         machine_state,
-        "get_task_activation",
-        lambda **_: activation,
+        "get_open_task_execution",
+        lambda **_: execution,
     )
 
-    current_activation, stale_reason = validate_task_due_activation(
+    current_execution, stale_reason = validate_task_due_execution(
         assistant_id="42",
         task_id=101,
-        activation_revision="rev-1",
+        revision="rev-1",
         source_task_log_id=555,
         scheduled_for="2026-04-10T09:00:00+00:00",
     )
 
-    assert current_activation == activation
+    assert current_execution == execution
     assert stale_reason is None
 
 
-def test_validate_task_due_activation_rejects_revision_mismatch(monkeypatch):
-    activation = TaskActivationSnapshot(
-        assistant_id="42",
-        activation_key="42:101",
-        task_id=101,
-        source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="live",
-        next_due_at="2026-04-10T09:00:00+00:00",
-        activation_revision="rev-current",
-    )
+def test_validate_task_due_execution_rejects_revision_mismatch(monkeypatch):
+    execution = _scheduled_execution()
     monkeypatch.setattr(
         machine_state,
-        "get_task_activation",
-        lambda **_: activation,
+        "get_open_task_execution",
+        lambda **_: execution,
     )
 
-    current_activation, stale_reason = validate_task_due_activation(
+    current_execution, stale_reason = validate_task_due_execution(
         assistant_id="42",
         task_id=101,
-        activation_revision="rev-stale",
+        revision="rev-stale",
         source_task_log_id=555,
         scheduled_for="2026-04-10T09:00:00+00:00",
     )
 
-    assert current_activation is None
-    assert stale_reason == "activation_revision_mismatch"
+    assert current_execution is None
+    assert stale_reason == "revision_mismatch"
 
 
-def test_validate_task_due_activation_rejects_invalid_destination():
-    current_activation, stale_reason = validate_task_due_activation(
+def test_validate_task_due_execution_rejects_invalid_destination():
+    current_execution, stale_reason = validate_task_due_execution(
         assistant_id="42",
         task_id=101,
-        activation_revision="rev-1",
+        revision="rev-1",
         source_task_log_id=555,
         scheduled_for="2026-04-10T09:00:00+00:00",
         destination="org_default",
     )
 
-    assert current_activation is None
+    assert current_execution is None
     assert stale_reason == "invalid_destination"
 
 
-def test_validate_task_due_activation_rejects_offline_activation(monkeypatch):
-    activation = TaskActivationSnapshot(
-        assistant_id="42",
-        activation_key="42:101",
-        task_id=101,
-        source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="offline",
-        next_due_at="2026-04-10T09:00:00+00:00",
-        activation_revision="rev-1",
-    )
+def test_validate_task_due_execution_rejects_offline_execution(monkeypatch):
+    execution = _scheduled_execution(delivery=Delivery.offline.value)
     monkeypatch.setattr(
         machine_state,
-        "get_task_activation",
-        lambda **_: activation,
+        "get_open_task_execution",
+        lambda **_: execution,
     )
 
-    current_activation, stale_reason = validate_task_due_activation(
+    current_execution, stale_reason = validate_task_due_execution(
         assistant_id="42",
         task_id=101,
-        activation_revision="rev-1",
+        revision="rev-1",
         source_task_log_id=555,
         scheduled_for="2026-04-10T09:00:00+00:00",
     )
 
-    assert current_activation is None
-    assert stale_reason == "execution_mode_changed"
+    assert current_execution is None
+    assert stale_reason == "delivery_changed"
 
 
-def test_build_activation_key_ignores_invalid_destination_labels():
-    assert (
-        build_activation_key(
-            assistant_id="42",
-            task_id=101,
-            destination="org_default",
-        )
-        == "42:101"
-    )
-
-
-def test_validate_task_due_activation_rejects_departed_space(monkeypatch):
-    activation = TaskActivationSnapshot(
-        assistant_id="42",
-        activation_key="42:101",
-        task_id=101,
-        destination="team:7",
-        source_task_log_id=555,
-        activation_kind="scheduled",
-        execution_mode="live",
-        next_due_at="2026-04-10T09:00:00+00:00",
-        activation_revision="rev-1",
-    )
+def test_validate_task_due_execution_rejects_departed_space(monkeypatch):
+    execution = _scheduled_execution(destination="team:7")
     monkeypatch.setattr(
         machine_state,
-        "get_task_activation",
-        lambda **_: activation,
+        "get_open_task_execution",
+        lambda **_: execution,
     )
     monkeypatch.setattr(machine_state.SESSION_DETAILS, "team_ids", [8])
 
-    current_activation, stale_reason = validate_task_due_activation(
+    current_execution, stale_reason = validate_task_due_execution(
         assistant_id="42",
         task_id=101,
-        activation_revision="rev-1",
+        revision="rev-1",
         source_task_log_id=555,
         scheduled_for="2026-04-10T09:00:00+00:00",
         destination="team:7",
     )
 
-    assert current_activation is None
+    assert current_execution is None
     assert stale_reason == "destination_membership_revoked"
 
 
-def test_get_task_activation_queries_for_null_personal_destination(monkeypatch):
+def test_get_open_task_execution_queries_open_scheduled_row(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_get_logs(**kwargs):
@@ -175,43 +143,46 @@ def test_get_task_activation_queries_for_null_personal_destination(monkeypatch):
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 2069)
 
-    activation = get_task_activation(
+    execution = get_open_task_execution(
         assistant_id="2069",
         task_id=0,
         destination=None,
+        wake=Wake.scheduled,
     )
 
-    assert activation is None
-    assert captured["filter"] == "activation_key == '2069:0'"
+    assert execution is None
+    assert "task_id == 0" in str(captured["filter"])
+    assert "wake == 'scheduled'" in str(captured["filter"])
     assert captured["project"] == TASK_MACHINE_STATE_PROJECT
-    assert captured["context"] == build_task_activation_context_name(
+    assert captured["context"] == build_task_executions_context_name(
         user_context="user-1",
         assistant_context="2069",
     )
 
 
-def test_get_task_activation_skips_query_for_invalid_destination():
-    activation = get_task_activation(
+def test_get_open_task_execution_skips_query_for_invalid_destination():
+    execution = get_open_task_execution(
         assistant_id="2069",
         task_id=0,
         destination="org_default",
     )
 
-    assert activation is None
+    assert execution is None
 
 
-def test_get_task_activation_queries_assistants_machine_state_project(monkeypatch):
+def test_get_open_task_execution_queries_assistants_machine_state_project(monkeypatch):
     captured: dict[str, object] = {}
 
     class _FakeRow:
         entries = {
             "assistant_id": "42",
-            "activation_key": "42:team:7:101",
+            "run_key": "live:scheduled:42:team-7:101:rev:once",
             "task_id": 101,
             "destination": "team:7",
-            "activation_kind": "scheduled",
-            "execution_mode": "live",
-            "activation_revision": "rev-1",
+            "wake": "scheduled",
+            "delivery": "live",
+            "revision": "rev-1",
+            "state": "scheduled",
         }
 
     def _fake_get_logs(**kwargs):
@@ -222,17 +193,18 @@ def test_get_task_activation_queries_assistants_machine_state_project(monkeypatc
     monkeypatch.setattr(machine_state.SESSION_DETAILS.user, "id", "user-1")
     monkeypatch.setattr(machine_state.SESSION_DETAILS.assistant, "agent_id", 42)
 
-    activation = get_task_activation(
+    execution = get_open_task_execution(
         assistant_id="42",
         task_id=101,
         destination="team:7",
+        wake=Wake.scheduled,
     )
 
-    assert activation is not None
-    assert activation.task_id == 101
-    assert captured["filter"] == "activation_key == '42:team:7:101'"
+    assert execution is not None
+    assert execution.task_id == 101
+    assert "destination == 'team:7'" in str(captured["filter"])
     assert captured["project"] == TASK_MACHINE_STATE_PROJECT
-    assert captured["context"] == build_task_activation_context_name(
+    assert captured["context"] == build_task_executions_context_name(
         user_context="user-1",
         assistant_context="42",
     )
@@ -242,27 +214,27 @@ def test_trigger_provenance_keeps_attempts_separate(monkeypatch):
     monkeypatch.setattr(machine_state, "_PENDING_LIVE_TASK_RUNS", {})
     monkeypatch.setattr(machine_state, "_PENDING_TRIGGER_LIVE_TASK_RUNS", {})
 
-    activation = TaskActivationSnapshot(
+    execution = TaskExecutionSnapshot(
+        run_key="live:triggered:42:301:rev:once",
         assistant_id="42",
-        activation_key="42:301",
         task_id=301,
         source_task_log_id=555,
-        activation_kind="triggered",
-        execution_mode="live",
+        wake=Wake.triggered.value,
+        delivery=Delivery.live.value,
         trigger_medium="sms_message",
-        activation_revision="rev-1",
+        revision="rev-1",
     )
     monkeypatch.setattr(
         machine_state,
-        "get_task_activation",
-        lambda **_: activation,
+        "get_open_task_execution",
+        lambda **_: execution,
     )
 
     remember_live_task_run_provenance(
         TaskRunProvenance(
             assistant_id="42",
             task_id=301,
-            source_type=RunSource.triggered,
+            wake=Wake.triggered,
             source_medium="sms_message",
             source_ref="message-1",
             source_contact_id="2",
@@ -273,7 +245,7 @@ def test_trigger_provenance_keeps_attempts_separate(monkeypatch):
         TaskRunProvenance(
             assistant_id="42",
             task_id=301,
-            source_type=RunSource.triggered,
+            wake=Wake.triggered,
             source_medium="sms_message",
             source_ref="message-2",
             source_contact_id="2",
@@ -284,19 +256,19 @@ def test_trigger_provenance_keeps_attempts_separate(monkeypatch):
     first = consume_live_task_run_provenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
+        wake=Wake.triggered,
         trigger_attempt_token="attempt-a",
     )
     second = consume_live_task_run_provenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
+        wake=Wake.triggered,
         trigger_attempt_token="attempt-b",
     )
     fallback = consume_live_task_run_provenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
+        wake=Wake.triggered,
     )
 
     assert first is not None
@@ -315,9 +287,9 @@ def test_build_task_run_key_ignores_trigger_attempt_token():
     with_attempt = TaskRunProvenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
-        execution_mode="live",
-        activation_revision="rev-1",
+        wake=Wake.triggered,
+        delivery=Delivery.live,
+        revision="rev-1",
         source_medium="sms_message",
         source_ref="message-1",
         source_contact_id="2",
@@ -326,9 +298,9 @@ def test_build_task_run_key_ignores_trigger_attempt_token():
     without_attempt = TaskRunProvenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
-        execution_mode="live",
-        activation_revision="rev-1",
+        wake=Wake.triggered,
+        delivery=Delivery.live,
+        revision="rev-1",
         source_medium="sms_message",
         source_ref="message-1",
         source_contact_id="2",
@@ -345,9 +317,9 @@ def test_build_task_run_key_ignores_trigger_attempt_token():
     with_attempt = TaskRunProvenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
-        execution_mode="live",
-        activation_revision="rev-1",
+        wake=Wake.triggered,
+        delivery=Delivery.live,
+        revision="rev-1",
         destination="team:7",
         source_medium="sms_message",
         source_ref="message-1",
@@ -366,9 +338,9 @@ def test_create_or_adopt_live_task_run_persists_display_fields(monkeypatch):
     provenance = TaskRunProvenance(
         assistant_id="42",
         task_id=301,
-        source_type=RunSource.triggered,
-        execution_mode="live",
-        activation_revision="rev-1",
+        wake=Wake.triggered,
+        delivery=Delivery.live,
+        revision="rev-1",
         source_medium="sms_message",
         source_ref="message-1",
         source_contact_id="2",
@@ -396,6 +368,9 @@ def test_create_or_adopt_live_task_run_persists_display_fields(monkeypatch):
     assert payload["task_name"] == "Follow up on invoice"
     assert payload["task_description"] == "Ask Alice for the missing invoice details."
     assert payload["started_at"] == "2026-04-16T10:15:00+00:00"
+    assert payload["wake"] == "triggered"
+    assert payload["delivery"] == "live"
+    assert payload["revision"] == "rev-1"
 
 
 def test_build_task_outbound_operation_key_is_stable_for_same_target():
@@ -515,14 +490,12 @@ def test_task_machine_contexts_route_to_owner_team_for_team_owned():
     original_owner = SESSION_DETAILS.owner_team_id
     SESSION_DETAILS.owner_team_id = 5
     try:
-        assert build_task_activation_context_name() == "Teams/5/Tasks/Activations"
+        assert build_task_executions_context_name() == "Teams/5/Tasks/Executions"
     finally:
         SESSION_DETAILS.owner_team_id = original_owner
 
-    # Explicit user/assistant contexts still take precedence (cross-assistant
-    # admin paths address a specific personal tree).
-    explicit = build_task_activation_context_name(
+    explicit = build_task_executions_context_name(
         user_context="user123",
         assistant_context="42",
     )
-    assert explicit == "user123/42/Tasks/Activations"
+    assert explicit == "user123/42/Tasks/Executions"
