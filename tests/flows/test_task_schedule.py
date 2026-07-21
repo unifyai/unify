@@ -78,7 +78,7 @@ class _RecordingOfflineDispatcher:
     def __init__(self) -> None:
         self.dispatched: list[Any] = []
 
-    async def dispatch(self, snap: Any, *, source_type: str) -> None:
+    async def dispatch(self, snap: Any, *, wake: str) -> None:
         self.dispatched.append(snap)
 
     async def stop(self) -> None:
