@@ -1,11 +1,10 @@
 """Task-run lineage for EventBus hierarchy and payload fields.
 
 When a ``TaskScheduler`` / ``ActiveTask`` run is in flight, push a
-``Task.run(task_id=…,instance_id=…[,run_key=…])`` segment onto
-``TOOL_LOOP_LINEAGE`` so nested ``execute_code`` / ``execute_function``
+``Task.run(task_id=…,run_key=…)`` segment onto ``TOOL_LOOP_LINEAGE`` so nested
 events inherit a deterministic parent. Structured ids are also held in a
-ContextVar so Orchestra payloads can carry ``task_id`` / ``instance_id`` /
-``run_key`` without parsing hierarchy strings.
+ContextVar so Orchestra payloads carry ``task_id`` / ``run_key`` without
+parsing hierarchy strings.
 """
 
 from __future__ import annotations
@@ -30,10 +29,11 @@ __all__ = [
     "enrich_payload_with_task_run_lineage",
 ]
 
+# Prefer task_id + run_key; accept legacy instance_id segments for read-back only.
 TASK_RUN_LINEAGE_SEGMENT_RE = re.compile(
     r"^Task\.run\("
-    r"task_id=(?P<task_id>\d+),"
-    r"instance_id=(?P<instance_id>\d+)"
+    r"task_id=(?P<task_id>\d+)"
+    r"(?:,instance_id=(?P<instance_id>\d+))?"
     r"(?:,run_key=(?P<run_key>[^)]+))?"
     r"\)$",
 )
@@ -41,16 +41,14 @@ TASK_RUN_LINEAGE_SEGMENT_RE = re.compile(
 
 @dataclass(frozen=True)
 class TaskRunLineage:
-    """Structured ids for the currently executing durable task instance."""
+    """Structured ids for the currently executing durable task Execution."""
 
     task_id: int
-    instance_id: int
     run_key: str | None = None
 
     def as_payload_fields(self) -> dict[str, Any]:
         fields: dict[str, Any] = {
             "task_id": int(self.task_id),
-            "instance_id": int(self.instance_id),
         }
         if self.run_key:
             fields["run_key"] = str(self.run_key)
@@ -66,12 +64,11 @@ CURRENT_TASK_RUN_LINEAGE: ContextVar[TaskRunLineage | None] = ContextVar(
 def format_task_run_lineage_segment(
     *,
     task_id: int,
-    instance_id: int,
     run_key: str | None = None,
 ) -> str:
-    """Return the canonical hierarchy segment for one task run."""
+    """Return the canonical hierarchy segment for one task execution."""
 
-    base = f"Task.run(task_id={int(task_id)},instance_id={int(instance_id)}"
+    base = f"Task.run(task_id={int(task_id)}"
     if run_key:
         return f"{base},run_key={run_key})"
     return f"{base})"
@@ -85,7 +82,6 @@ def parse_task_run_lineage_segment(segment: str) -> TaskRunLineage | None:
         return None
     return TaskRunLineage(
         task_id=int(match.group("task_id")),
-        instance_id=int(match.group("instance_id")),
         run_key=match.group("run_key"),
     )
 
@@ -99,19 +95,16 @@ class _TaskRunLineageTokens:
 def push_task_run_lineage(
     *,
     task_id: int,
-    instance_id: int,
     run_key: str | None = None,
 ) -> _TaskRunLineageTokens:
     """Push task-run context onto lineage ContextVars; return reset tokens."""
 
     lineage = TaskRunLineage(
         task_id=int(task_id),
-        instance_id=int(instance_id),
         run_key=str(run_key) if run_key else None,
     )
     segment = format_task_run_lineage_segment(
         task_id=lineage.task_id,
-        instance_id=lineage.instance_id,
         run_key=lineage.run_key,
     )
     parent = list(TOOL_LOOP_LINEAGE.get([]) or [])
@@ -136,14 +129,12 @@ def reset_task_run_lineage(tokens: _TaskRunLineageTokens | None) -> None:
 def task_run_lineage_scope(
     *,
     task_id: int,
-    instance_id: int,
     run_key: str | None = None,
 ) -> Generator[_TaskRunLineageTokens, None, None]:
     """Context manager that pushes then resets task-run lineage."""
 
     tokens = push_task_run_lineage(
         task_id=task_id,
-        instance_id=instance_id,
         run_key=run_key,
     )
     try:
@@ -171,7 +162,6 @@ def enrich_payload_with_task_run_lineage(
     if isinstance(hierarchy, list):
         segment = format_task_run_lineage_segment(
             task_id=lineage.task_id,
-            instance_id=lineage.instance_id,
             run_key=lineage.run_key,
         )
         if not any(

@@ -5,7 +5,7 @@ Orchestra persistence (``Events/*``) can be narrowed independently of Pub/Sub
 Live Actions via ``EVENTBUS_ORCHESTRA_PERSIST_MODE`` /
 ``EVENTBUS_ORCHESTRA_PERSIST_TOOLS`` (see ``persist_filters``). In allowlist
 mode, ManagerMethod/ToolLoop rows under an ActiveTask (task-run lineage on the
-payload) are still persisted in full for ``Tasks/Runs`` join via ``run_key``.
+payload) are still persisted in full for ``Tasks/Executions`` join via ``run_key``.
 Stream noise rules in ``stream_filters`` affect Pub/Sub only.
 """
 

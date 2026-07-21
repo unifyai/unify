@@ -15,7 +15,8 @@ from tests.helpers import _handle_project
 from tests.provider_trigger_delivery import (
     create_github_pipedream_connection,
     deliver_signed_pipedream_webhook,
-    ensure_pipedream_integration_backend_enabled,
+    ensure_pipedream_provider_trigger_catalog_seeded,
+    ensure_provider_trigger_test_prerequisites,
     fetch_active_generation_signing_secret,
     fetch_latest_receipt_run_key,
     load_pipedream_github_issue_fixture,
@@ -90,7 +91,8 @@ def orchestra_pipedream_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("PIPEDREAM_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("PIPEDREAM_PROJECT_ID", raising=False)
 
-    ensure_pipedream_integration_backend_enabled()
+    ensure_provider_trigger_test_prerequisites()
+    ensure_pipedream_provider_trigger_catalog_seeded()
 
     import unisdk
 
@@ -216,4 +218,7 @@ def test_actor_enable_and_pipedream_stub_delivery_create_one_provider_run(
     run_response.raise_for_status()
     run = run_response.json().get("run")
     assert run is not None
-    assert run["source_type"] == "provider_event"
+    assert (
+        run.get("wake") == "provider_event"
+        or run.get("source_type") == "provider_event"
+    )

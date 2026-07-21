@@ -136,7 +136,7 @@ class ProductionSettings(BaseSettings):
     # - ``allowlist``: write ManagerMethod/ToolLoop events whose method or
     #   tool name is listed in EVENTBUS_ORCHESTRA_PERSIST_TOOLS, **plus** the
     #   full ManagerMethod + ToolLoop tree when the payload carries task-run
-    #   lineage (``run_key`` / ``task_id``+``instance_id`` under an ActiveTask)
+    #   lineage (``run_key`` or ``task_id``+``run_key`` under an ActiveTask)
     # Pub/Sub Live Actions streaming is independent (see EVENTBUS_PUBSUB_STREAMING).
     EVENTBUS_ORCHESTRA_PERSIST_MODE: Literal["all", "allowlist"] = "all"
 

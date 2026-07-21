@@ -57,7 +57,7 @@ class TaskSettings(BaseSettings):
         SIM_ACTOR_DURATION: Duration for simulated actor in seconds.
         LOCAL_SCHEDULER_ENABLED: When True, an in-process
             ``LocalActivationScheduler`` watches the Orchestra-projected
-            ``Tasks/Activations`` rows and fires due tasks directly on the
+            ``Tasks/Executions`` rows and fires due tasks directly on the
             event broker (live mode) or via subprocess invocation of
             ``unify.task_scheduler.offline_runner`` (offline mode). When
             False, scheduled activations are materialised by Communication's
@@ -67,7 +67,7 @@ class TaskSettings(BaseSettings):
             gets ``False``. Override explicitly with
             ``UNITY_LOCAL_SCHEDULER=true|false``.
         LOCAL_SCHEDULER_POLL_INTERVAL_SECONDS: How often the in-process
-            scheduler re-reads ``Tasks/Activations`` to pick up rows added
+            scheduler re-reads ``Tasks/Executions`` to pick up rows added
             after boot (e.g. immediately after the user asks the agent to
             schedule something). Ignored when LOCAL_SCHEDULER_ENABLED is
             False. Default 60 seconds.

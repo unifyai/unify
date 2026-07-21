@@ -40,4 +40,4 @@ def test_provider_event_dispatch_request_matches_shared_fixture_fields() -> None
     request = ProviderEventDispatchRequest.model_validate(payload)
     assert request.operation_id == payload["operation_id"]
     assert request.binding_id == payload["binding_id"]
-    assert request.source_type == "provider_event"
+    assert request.wake == "provider_event"

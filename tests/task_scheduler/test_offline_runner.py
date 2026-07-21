@@ -3,15 +3,15 @@
 import pytest
 
 
-def _seed_env(monkeypatch, *, source_type="dashboard_action"):
+def _seed_env(monkeypatch, *, wake="dashboard_action"):
     monkeypatch.setenv("ASSISTANT_ID", "42")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_RUN_KEY", "offline:scheduled:42:101:rev")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "Send the daily summary email.")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TYPE", source_type)
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_WAKE", wake)
     monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "555")
-    monkeypatch.setenv("UNITY_OFFLINE_TASK_ACTIVATION_REVISION", "rev-123")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "rev-123")
     monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
     monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin-key")
 
@@ -29,8 +29,8 @@ def _stub_runtime_initialization(monkeypatch, offline_runner):
     )
 
 
-def test_offline_runner_normalizes_unknown_source_type_to_explicit(monkeypatch):
-    """Unknown source types normalize to explicit and enter the scheduler lane."""
+def test_offline_runner_normalizes_unknown_wake_to_explicit(monkeypatch):
+    """Unknown wake values normalize to explicit and enter the scheduler lane."""
 
     from unify.task_scheduler import offline_runner
 
@@ -51,7 +51,7 @@ def test_offline_runner_normalizes_unknown_source_type_to_explicit(monkeypatch):
     )
 
     config = offline_runner._load_config_from_env()
-    assert config.source_type == offline_runner.RunSource.explicit
+    assert config.wake == offline_runner.Wake.explicit
 
     exit_code = offline_runner.main()
 
@@ -66,7 +66,7 @@ def test_offline_runner_initializes_before_scheduler_delegate_execution(monkeypa
     from unify.common.task_execution_context import current_task_execution_delegate
     from unify.task_scheduler import offline_runner
 
-    _seed_env(monkeypatch, source_type="scheduled")
+    _seed_env(monkeypatch, wake="scheduled")
     events = []
     updates = []
 
@@ -137,7 +137,7 @@ def test_offline_runner_explicit_uses_activated_by_explicit(monkeypatch):
     from unify.task_scheduler import offline_runner
     from unify.task_scheduler.types.activated_by import ActivatedBy
 
-    _seed_env(monkeypatch, source_type="explicit")
+    _seed_env(monkeypatch, wake="explicit")
     monkeypatch.setenv(
         "UNITY_OFFLINE_TASK_RUN_KEY",
         "offline:explicit:42:101:rev:abc123",
@@ -180,7 +180,7 @@ def test_offline_runner_explicit_uses_activated_by_explicit(monkeypatch):
     provenance = offline_runner._build_offline_provenance(
         offline_runner._load_config_from_env(),
     )
-    assert provenance.source_type == "explicit"
+    assert provenance.wake == offline_runner.Wake.explicit
     assert provenance.attempt_token is None
     assert provenance.source_ref == "req-rest-1"
 
@@ -216,9 +216,9 @@ def test_offline_delegate_runs_agentic_task_through_actor(monkeypatch):
         task_id=101,
         function_id=None,
         request="Send the agentic offline summary.",
-        source_type="scheduled",
+        wake="scheduled",
         source_task_log_id=555,
-        activation_revision="rev-123",
+        revision="rev-123",
         scheduled_for="2026-04-10T09:00:00+00:00",
     )
 
@@ -262,7 +262,7 @@ def test_load_config_from_env_reads_resource_flags(monkeypatch):
 
     from unify.task_scheduler import offline_runner
 
-    _seed_env(monkeypatch, source_type="scheduled")
+    _seed_env(monkeypatch, wake="scheduled")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM", "1")
     monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER", "true")
 
@@ -284,9 +284,9 @@ def test_execute_offline_task_requires_desktop_env_when_resources_needed(monkeyp
         task_id=101,
         function_id=None,
         request="Touch Local files.",
-        source_type="scheduled",
+        wake="scheduled",
         source_task_log_id=555,
-        activation_revision="rev-123",
+        revision="rev-123",
         requires_filesystem=True,
     )
 
@@ -320,9 +320,9 @@ def test_build_offline_actor_omits_computer_unless_required(monkeypatch):
             task_id=101,
             function_id=None,
             request="No computer.",
-            source_type="scheduled",
+            wake="scheduled",
             source_task_log_id=555,
-            activation_revision="rev-123",
+            revision="rev-123",
             requires_computer=False,
         ),
     )
@@ -333,9 +333,9 @@ def test_build_offline_actor_omits_computer_unless_required(monkeypatch):
             task_id=101,
             function_id=None,
             request="Use the desktop.",
-            source_type="scheduled",
+            wake="scheduled",
             source_task_log_id=555,
-            activation_revision="rev-123",
+            revision="rev-123",
             requires_computer=True,
         ),
     )

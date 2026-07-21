@@ -218,9 +218,10 @@ class TaskBase(AuthoredRow):
 class Task(TaskBase):
     task_id: int = Field(description="Unique identifier for the task")
     instance_id: int = Field(
+        default=0,
         description=(
-            "Auto-incrementing counter that distinguishes multiple *instances* "
-            "of the same logical task.  The very first row receives `0`; "
-            "each subsequent clone is incremented by the backend."
+            "Legacy occurrence counter retained for migration reads. "
+            "Task identity is ``task_id`` only; executions live in "
+            "``Tasks/Executions``."
         ),
     )

@@ -103,24 +103,23 @@ In ``allowlist`` mode:
   ``execute_function``) are written to ``Events/*``.
 - **Inside** an ``ActiveTask`` (``CURRENT_TASK_RUN_LINEAGE`` / payload
   ``run_key`` + ``task_id``/``instance_id``): the full ManagerMethod + ToolLoop
-  tree is persisted and stamped for join from ``Tasks/Runs``.
+  tree is persisted and stamped for join from ``Tasks/Executions``.
 
 `EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every
 event to `Events/*`” behavior when publishing is enabled.
 
-Load a run’s tree later via ``run_key`` (no content duplication on the Run row):
+Load a run’s tree later via ``run_key`` (no content duplication on the Execution row):
 
 ```python
 from unify.task_scheduler.task_run_events import fetch_task_run_events
+# or: await primitives.tasks.get_execution_events(run_key=...)
 
 tree = fetch_task_run_events(
-    run_key,  # Tasks/Runs.run_key
+    run_key,  # Tasks/Executions.run_key
     events_base_context="{user}/{assistant}/Events",
 )
 # tree.manager_methods / tree.tool_loops — nest via hierarchy / hierarchy_label
 ```
-
-This helper is not yet on ``primitives.tasks.*``.
 
 ## Troubleshooting
 

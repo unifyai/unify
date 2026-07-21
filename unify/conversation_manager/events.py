@@ -1752,10 +1752,10 @@ class TaskDue(Event):
 
     task_id: int
     source_task_log_id: int
-    activation_revision: str
+    revision: str
     scheduled_for: str
     destination: str | None = None
-    source_type: RunSource = RunSource.scheduled
+    wake: str = RunSource.scheduled.value
     task_label: str = ""
     task_summary: str = ""
     visibility_policy: str = "silent_by_default"
@@ -1782,11 +1782,11 @@ class TaskDue(Event):
           fields plus a leading ``type`` discriminator the caller is
           responsible for checking).
         - The local in-process `LocalActivationScheduler`, which converts
-          a projected `TaskActivationSnapshot` into the same dict shape
+          a projected `TaskExecutionSnapshot` into the same dict shape
           before calling this method.
 
         Returns ``None`` when any required identity field
-        (``task_id``, ``source_task_log_id``, ``activation_revision``,
+        (``task_id``, ``source_task_log_id``, ``revision``,
         ``scheduled_for``) is missing or malformed; the caller decides
         how to log / drop the event. Callers that dispatch from a
         heterogeneous wake-reason stream must still type-check the
@@ -1798,20 +1798,14 @@ class TaskDue(Event):
             return None
         task_id = _coerce_int(payload.get("task_id"))
         source_task_log_id = _coerce_int(payload.get("source_task_log_id"))
-        activation_revision = str(payload.get("activation_revision") or "")
+        revision = str(payload.get("revision") or "")
         scheduled_for = str(payload.get("scheduled_for") or "")
-        source_type = RunSource.normalize(
-            str(payload.get("source_type") or RunSource.scheduled),
-        )
+        wake = str(payload.get("wake") or RunSource.scheduled.value)
         if task_id is None or source_task_log_id is None:
             return None
-        if not activation_revision:
+        if not revision:
             return None
-        # ``scheduled_for`` is part of the dedupe identity for clock-fired
-        # deliveries only. Explicit (REST-fired) deliveries of a scheduled
-        # task legitimately fire ahead of the projected occurrence and carry
-        # an empty scheduled_for.
-        if source_type is RunSource.scheduled and not scheduled_for:
+        if wake == RunSource.scheduled.value and not scheduled_for:
             return None
         try:
             destination = ContextRegistry.canonical_destination(
@@ -1833,10 +1827,10 @@ class TaskDue(Event):
         return cls(
             task_id=task_id,
             source_task_log_id=source_task_log_id,
-            activation_revision=activation_revision,
+            revision=revision,
             scheduled_for=scheduled_for,
             destination=destination,
-            source_type=source_type,
+            wake=wake,
             task_label=task_label,
             task_summary=str(payload.get("task_summary") or ""),
             visibility_policy=str(
@@ -1906,9 +1900,9 @@ class ProviderEventDispatchRequested(Event):
 
     Communication publishes this as a ``unity_system_event``. Unity validates
     the immutable accepted receipt authorization, adopts its local dispatch
-    inbox, creates one captured-revision task instance, and returns
-    adopted/started/terminal status by operation id without consuming or
-    re-arming the authored task definition.
+    inbox, executes against the authored definition via ``Tasks/Executions``,
+    and returns adopted/started/terminal status by operation id without
+    consuming or re-arming the authored task definition.
     """
 
     topic: ClassVar[str | None] = "app:comms:provider_event_dispatch"
@@ -1920,12 +1914,12 @@ class ProviderEventDispatchRequested(Event):
     task_id: int
     binding_id: str
     receipt_id: str
-    accepted_activation_revision: str
+    accepted_revision: str
     event_context_ref: str
     issued_at: str
     contract_version: str = "1"
-    source_type: str = "provider_event"
-    dispatch_mode: str = "live"
+    wake: str = "provider_event"
+    delivery: str = "live"
     audience: str = "unity:provider-event-dispatch"
     reason: str = ""
 
@@ -1947,8 +1941,8 @@ class ProviderEventDispatchRequested(Event):
         assistant_id = str(fields.get("assistant_id") or "")
         binding_id = str(fields.get("binding_id") or "")
         receipt_id = str(fields.get("receipt_id") or "")
-        accepted_activation_revision = str(
-            fields.get("accepted_activation_revision") or "",
+        accepted_revision = str(
+            fields.get("accepted_revision") or "",
         )
         event_context_ref = str(fields.get("event_context_ref") or "")
         issued_at = str(fields.get("issued_at") or "")
@@ -1962,7 +1956,7 @@ class ProviderEventDispatchRequested(Event):
             or task_id is None
             or not binding_id
             or not receipt_id
-            or not accepted_activation_revision
+            or not accepted_revision
             or not event_context_ref
             or not issued_at
         ):
@@ -1975,12 +1969,16 @@ class ProviderEventDispatchRequested(Event):
             task_id=task_id,
             binding_id=binding_id,
             receipt_id=receipt_id,
-            accepted_activation_revision=accepted_activation_revision,
+            accepted_revision=accepted_revision,
             event_context_ref=event_context_ref,
             issued_at=issued_at,
             contract_version=str(fields.get("contract_version") or "1"),
-            source_type=str(fields.get("source_type") or "provider_event"),
-            dispatch_mode=str(fields.get("dispatch_mode") or "live"),
+            wake=str(
+                fields.get("wake") or fields.get("source_type") or "provider_event",
+            ),
+            delivery=str(
+                fields.get("delivery") or fields.get("dispatch_mode") or "live",
+            ),
             audience=str(
                 fields.get("audience") or "unity:provider-event-dispatch",
             ),

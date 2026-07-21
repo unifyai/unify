@@ -68,7 +68,7 @@ def test_build_task_execution_request_includes_run_metadata():
 
     assert "Execute this TaskScheduler task as a contained task run." in request
     assert "Task id: 7" in request
-    assert "Instance id: 2" in request
+    assert "Instance id:" not in request
     assert "Weekly AI report" in request
     assert "Summarize the previous week's AI research." in request
     assert "Task response policy:" in request
@@ -113,7 +113,7 @@ def test_build_task_run_guidelines_keep_child_actor_focused_on_one_task():
     assert "interpret the natural-language description" in guidelines
     assert "Activation reason: trigger" in guidelines
     assert "Task id: 3" in guidelines
-    assert "Instance id: 1" in guidelines
+    assert "Instance id:" not in guidelines
 
 
 def test_build_update_prompt_includes_provider_event_guidance() -> None:

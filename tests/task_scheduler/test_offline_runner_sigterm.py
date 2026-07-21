@@ -1,4 +1,4 @@
-"""SIGTERM writeback for offline_runner Tasks/Runs terminalization."""
+"""SIGTERM writeback for offline_runner Tasks/Executions terminalization."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ def _config() -> OfflineTaskConfig:
         task_id=9,
         function_id=1,
         request="run poll",
-        source_type="explicit",
+        wake="explicit",
         source_task_log_id=555,
-        activation_revision="rev",
+        revision="rev",
     )
 
 

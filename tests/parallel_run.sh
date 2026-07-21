@@ -397,6 +397,13 @@ if _is_local_url "${ORCHESTRA_URL:-}"; then
     # and add ~370MB to CI artifacts. Orchestra's own CI still uses it.
     export ORCHESTRA_OTEL_LOG_DIR="$REPO_ROOT/logs/all"
     export ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS="${ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS:-86400}"
+    export SELF_HOST=1
+    export ORCHESTRA_TRIGGER_CALLBACK_BASE_URL="${ORCHESTRA_TRIGGER_CALLBACK_BASE_URL:-https://orchestra.example}"
+    export COMPOSIO_WEBHOOK_SECRET="${COMPOSIO_WEBHOOK_SECRET:-test-composio-webhook-secret}"
+    export PROVIDER_TRIGGER_CATALOG_ENVIRONMENT="${PROVIDER_TRIGGER_CATALOG_ENVIRONMENT:-selfhost}"
+    export TRIGGER_EVENT_WRAPPING_MASTER_KEY="${TRIGGER_EVENT_WRAPPING_MASTER_KEY:-test-master-key-material}"
+    export TRIGGER_EVENT_PRIVATE_ROOT="${TRIGGER_EVENT_PRIVATE_ROOT:-${UNITY_HOME:-$HOME/.unity}/provider-event-blobs}"
+    mkdir -p "$TRIGGER_EVENT_PRIVATE_ROOT"
 
     # Check if local orchestra is already running
     if _local_url=$("$_local_orchestra_script" check 2>/dev/null); then

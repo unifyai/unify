@@ -37,7 +37,7 @@ from unify.conversation_manager.domains.self_host_desktop import (
     bootstrap_managed_desktop_on_startup,
     resolve_desktop_urls,
 )
-from unify.conversation_manager.domains.task_activation import (
+from unify.conversation_manager.domains.task_execution import (
     _consume_startup_wake_reasons,
     _handle_provider_event_dispatch_requested_event,
     _handle_task_due_event,

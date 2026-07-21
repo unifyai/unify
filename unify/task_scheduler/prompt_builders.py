@@ -29,7 +29,6 @@ def build_task_execution_request(task: Task) -> str:
         "Execute this TaskScheduler task as a contained task run.",
         "",
         f"Task id: {task.task_id}",
-        f"Instance id: {task.instance_id}",
         f"Task name: {task.name}",
         "",
         "Task description:",
@@ -81,8 +80,7 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
         "delivery does not change that execution style. Keep any "
         "progress notifications focused on this task run.\n\n"
         f"Activation reason: {reason.value}\n"
-        f"Task id: {task.task_id}\n"
-        f"Instance id: {task.instance_id}"
+        f"Task id: {task.task_id}"
     )
 
 

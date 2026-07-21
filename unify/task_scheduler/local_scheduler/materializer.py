@@ -1,7 +1,7 @@
 """Selection seam for the scheduled-activation materialiser.
 
 The hosted Unity stack relies on Communication + Cloud Tasks to materialise
-``Tasks/Activations`` rows into real timers and to deliver the wake event at
+``Tasks/Executions`` rows into real timers and to deliver the wake event at
 fire time. A local install has none of that infrastructure available and
 needs an in-process equivalent.
 

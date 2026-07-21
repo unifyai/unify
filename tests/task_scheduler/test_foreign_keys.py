@@ -214,11 +214,10 @@ def test_entrypoint_clone_after_set_null():
     tasks = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
-        from_fields=["task_id", "entrypoint", "instance_id"],
+        from_fields=["task_id", "entrypoint"],
     )
     assert len(tasks) == 1
     assert tasks[0].entries["entrypoint"] == func_id
-    original_instance_id = tasks[0].entries["instance_id"]
 
     # Delete function (triggers FK SET NULL)
     fm.delete_function(function_id=func_id)
@@ -232,7 +231,7 @@ def test_entrypoint_clone_after_set_null():
     assert len(tasks_after_delete) == 1
     assert tasks_after_delete[0].entries.get("entrypoint") is None
 
-    # Trigger cloning by fetching the task and calling _clone_task_instance
+    # Re-arm the definition after the FK SET NULL and verify entrypoint stays null.
     from unify.task_scheduler.types.task import Task
 
     task_entries = unisdk.get_logs(
@@ -241,25 +240,14 @@ def test_entrypoint_clone_after_set_null():
     )[0].entries
     task_obj = Task(**task_entries)
 
-    # Clone the task
-    ts._clone_task_instance(task_obj)
+    ts._rearm_task_definition(task_obj)
 
-    # Verify clone was created with null entrypoint. Fetch full rows rather than
-    # projecting the nullable FK column — from_fields including null FKs can
-    # under-count instances after SET NULL.
     all_instances = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
     )
-    assert len(all_instances) == 2  # Original + clone
-
-    # Check both instances have null entrypoint
-    for instance in all_instances:
-        assert instance.entries.get("entrypoint") is None
-
-    # Verify we have distinct instance_ids
-    instance_ids = {int(inst.entries["instance_id"]) for inst in all_instances}
-    assert len(instance_ids) == 2
+    assert len(all_instances) == 1
+    assert all_instances[0].entries.get("entrypoint") is None
 
 
 @_handle_project
