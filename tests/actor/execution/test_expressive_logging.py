@@ -25,6 +25,26 @@ def test_create_execution_globals_does_not_inject_progress_helpers():
     assert "skip" not in g
     assert "soft_fail" not in g
     assert "get_tick_logger" not in g
+    assert callable(g["run_coro_sync"])
+
+
+def test_storage_prompt_requires_event_loop_safety():
+    prompt = _STORAGE_WHAT_CAN_BE_STORED
+    assert "run_coro_sync" in prompt
+    assert "asyncio.run" in prompt
+    assert "Offline TaskScheduler Jobs already own an event loop" in prompt
+
+
+def test_add_functions_doc_has_asyncio_antipattern():
+    doc = BaseFunctionManager.add_functions.__doc__ or ""
+    assert "asyncio.run" in doc
+    assert "run_coro_sync" in doc
+
+
+def test_task_execute_doc_has_asyncio_antipattern():
+    doc = BaseTaskScheduler.execute.__doc__ or ""
+    assert "asyncio.run" in doc
+    assert "run_coro_sync" in doc
 
 
 def test_compact_diagnostic_text_summarizes_dense_trails():
