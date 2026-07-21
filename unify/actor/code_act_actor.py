@@ -729,6 +729,15 @@ _STORAGE_WHAT_CAN_BE_STORED = (
     "logging that explains why a path returned early or returned empty. "
     "Store non-executor helpers and guidance freely; offline executor "
     "promotion requires separate certification.\n\n"
+    "### Async / event-loop safety in stored functions\n\n"
+    "Offline TaskScheduler Jobs already own an event loop via "
+    "`asyncio.run`. Nested `asyncio.run(...)` inside a sync helper then "
+    "raises `RuntimeError: asyncio.run() cannot be called from a running "
+    "event loop`. Prefer `async def` entrypoints / helpers and `await` "
+    "end-to-end (including `await query_llm(...)`). When a sync façade is "
+    "required, call the injected `run_coro_sync(factory)` helper (also "
+    "`from unify.common.asyncio_compat import run_coro_sync`) instead of "
+    "nesting `asyncio.run`.\n\n"
     "### Third-party package dependencies\n\n"
     "If the trajectory used `install_python_packages` and the function "
     "you want to store imports any of those packages (anything beyond "
@@ -5093,9 +5102,16 @@ class CodeActActor(BaseCodeActActor):
                     fn,
                     kwargs_for_entrypoint,
                 )
-                res = fn(*args, **compatible_kwargs)
-                if inspect.isawaitable(res):
-                    res = await res
+                # Async entrypoints stay on this loop. Sync entrypoints run
+                # on a worker thread so nested asyncio.run inside helpers is
+                # safe (offline Jobs already own a loop via asyncio.run) and
+                # long sync work does not starve the runner loop.
+                if inspect.iscoroutinefunction(fn):
+                    res = await fn(*args, **compatible_kwargs)
+                else:
+                    res = await asyncio.to_thread(fn, *args, **compatible_kwargs)
+                    if inspect.isawaitable(res):
+                        res = await res
                 return res
 
             async def _run_entrypoint() -> Any:

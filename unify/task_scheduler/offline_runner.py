@@ -24,6 +24,12 @@ The runner is intentionally small and procedural:
 There is no ConversationManager and no CM↔offline steering path if a live
 session later wakes. Communication owns orchestration and job creation. The
 task row owns whether execution is agentic or symbolic.
+
+Event-loop note: ``main()`` drives the whole run with ``asyncio.run``. Sync
+symbolic entrypoints therefore execute under an already-running loop (Unify
+runs them on a worker thread so nested ``asyncio.run`` in helpers is safe, but
+stored code should still prefer ``async def`` + ``await`` or
+``run_coro_sync`` rather than nesting ``asyncio.run`` itself).
 """
 
 from __future__ import annotations
