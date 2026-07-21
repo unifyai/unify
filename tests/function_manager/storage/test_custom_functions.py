@@ -11,6 +11,7 @@ from pathlib import Path
 from unify.function_manager.function_manager import FunctionManager
 from unify.function_manager.custom_functions import (
     CustomFunctionCollectError,
+    CustomFunctionSyncPartialFailure,
     collect_custom_functions,
     compute_custom_functions_hash,
     collect_custom_venvs,
@@ -280,6 +281,44 @@ async def test_sync_custom_functions_inserts_new_functions(
     assert "example_add" in functions
     assert "example_uppercase" in functions
     assert "draft_function_not_synced" not in functions
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_sync_custom_functions_continues_after_one_failure(
+    function_manager_factory,
+    custom_functions_dir,
+):
+    """One broken function must not abort sync of the rest of the catalog."""
+
+    fm = function_manager_factory()
+    source_fns = collect_custom_functions(directory=custom_functions_dir)
+    assert "example_add" in source_fns
+    assert "example_uppercase" in source_fns
+
+    real_insert = fm._insert_custom_function
+
+    def insert_with_failure(data):
+        if data.get("name") == "example_uppercase":
+            raise RuntimeError("simulated sync failure")
+        return real_insert(data)
+
+    fm._insert_custom_function = insert_with_failure
+
+    with pytest.raises(CustomFunctionSyncPartialFailure) as exc_info:
+        fm.sync_custom_functions(source_functions=source_fns)
+
+    assert "example_uppercase" in exc_info.value.failures
+    functions = fm.list_functions()
+    assert "example_add" in functions
+    assert "example_uppercase" not in functions
+
+    # Aggregate hash is not stored on partial failure, so a retry re-attempts
+    # the failed name once the underlying error is gone.
+    fm._custom_functions_synced = False
+    fm._insert_custom_function = real_insert
+    assert fm.sync_custom_functions(source_functions=source_fns) is True
+    assert "example_uppercase" in fm.list_functions()
 
 
 @_handle_project
