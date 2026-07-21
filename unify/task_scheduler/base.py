@@ -315,6 +315,14 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         ValueError
             When ``task_id`` cannot be found, is not runnable, or is disabled
             (``enabled=False``). Disabled tasks must be re-enabled before execute.
+
+        Anti-patterns
+        -------------
+        - Treating only raised exceptions as failures — soft outcomes (empty
+          results, intentional skips, degraded fallbacks) need stdlib
+          ``logging`` PHASE/SKIP/SOFT_FAIL trails in stored entrypoints /
+          helpers called via ``execute_function``.
+        - Putting diagnostic detail in user-facing ``notify()`` instead of logs.
         """
 
     @abstractmethod

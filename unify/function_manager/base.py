@@ -129,6 +129,17 @@ class BaseFunctionManager(BaseStateManager):
         - Implementations should persist records that conform to the
           ``Function`` model and ensure that failures for one function do not
           prevent other valid functions in the same batch from being added.
+
+        Anti-patterns
+        -------------
+        - Silent early returns or empty/"ok" results with no ``PHASE`` /
+          ``SKIP`` / ``SOFT_FAIL`` trail — soft failures need logs, not just
+          stack traces.
+        - Putting diagnostic detail in user-facing ``notify()`` — use the
+          stdlib ``logging`` module with those markers for retrospective
+          forensics.
+        - Stripping PHASE/SKIP/SOFT_FAIL logging when distilling a live
+          trajectory into a stored function.
         """
 
     @abstractmethod
