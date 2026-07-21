@@ -140,6 +140,9 @@ class BaseFunctionManager(BaseStateManager):
           forensics.
         - Stripping PHASE/SKIP/SOFT_FAIL logging when distilling a live
           trajectory into a stored function.
+        - Nesting ``asyncio.run(...)`` inside sync helpers / entrypoints —
+          offline Jobs and actor sandboxes already own a loop. Prefer
+          ``async def`` + ``await``, or the injected ``run_coro_sync`` helper.
         """
 
     @abstractmethod
