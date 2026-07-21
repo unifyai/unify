@@ -430,6 +430,61 @@ class SimulatedDataManager(BaseDataManager):
         )
         return {"status": "created", "column": column_name, "equation": equation}
 
+    @functools.wraps(BaseDataManager.create_external_column, updated=())
+    def create_external_column(
+        self,
+        context: str,
+        *,
+        column_name: str,
+        connector_id: str,
+        binding: Dict[str, Any],
+        column_type: str = "Any",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        resolved = self._resolve_context(context)
+        if resolved not in self._schemas:
+            self._schemas[resolved] = {}
+        self._schemas[resolved][column_name] = f"external:{connector_id}"
+        for row in self._tables.get(resolved, []):
+            row.setdefault(column_name, None)
+        return {
+            "status": "created",
+            "column": column_name,
+            "connector_id": connector_id,
+            "binding": binding,
+            "column_type": column_type,
+        }
+
+    @functools.wraps(BaseDataManager.request_external_write, updated=())
+    def request_external_write(
+        self,
+        context: str,
+        *,
+        payload: Dict[str, Any],
+        idempotency_key: str,
+        field_name: Optional[str] = None,
+        connector_id: Optional[str] = None,
+        binding: Optional[Dict[str, Any]] = None,
+        log_event_ids: Optional[List[int]] = None,
+        deliver: str = "async",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        return {
+            "id": None,
+            "status": "confirmed" if deliver == "sync" else "pending",
+            "connector_id": connector_id,
+            "field_name": field_name,
+            "idempotency_key": idempotency_key,
+            "attempts": 1 if deliver == "sync" else 0,
+            "last_error": None,
+            "result": {"simulated": True, "payload": payload},
+            "log_event_ids": list(log_event_ids or []),
+            "created_at": None,
+            "confirmed_at": None,
+            "binding": binding,
+            "context": self._resolve_context(context),
+        }
+
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────
@@ -448,6 +503,9 @@ class SimulatedDataManager(BaseDataManager):
         descending: bool = False,
         return_ids_only: bool = False,
         include_ids: bool = False,
+        hydrate: Optional[str] = None,
+        hydrate_fields: Optional[List[str]] = None,
+        materialize: Optional[bool] = None,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         if return_ids_only and include_ids:
             raise ValueError("return_ids_only and include_ids are mutually exclusive")

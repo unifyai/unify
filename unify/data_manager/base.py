@@ -939,6 +939,63 @@ class BaseDataManager(BaseStateManager):
         - For dynamic values, use ``update_rows`` instead.
         """
 
+    @abstractmethod
+    def create_external_column(
+        self,
+        context: str,
+        *,
+        column_name: str,
+        connector_id: str,
+        binding: Dict[str, Any],
+        column_type: str = "Any",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a REST-bound external column (Orchestra ``external_entry``).
+
+        Values are hydrated lazily on read via ``filter(..., hydrate=...)``.
+        See Orchestra ``docs/external-field-bindings.md``.
+
+        Parameters
+        ----------
+        context : str
+            Full context path of the table.
+        column_name : str
+            Name for the new external column.
+        connector_id : str
+            Registered connector id (e.g. ``http.generic``).
+        binding : dict
+            Binding config (inputs, cache, http, on_error, …). ``connector_id``
+            is also accepted inside ``binding``; the explicit argument wins.
+        column_type : str, default ``Any``
+            Declared Orchestra field type for the hydrated value.
+        destination : str | None
+            Write destination (same semantics as ``create_derived_column``).
+        """
+
+    @abstractmethod
+    def request_external_write(
+        self,
+        context: str,
+        *,
+        payload: Dict[str, Any],
+        idempotency_key: str,
+        field_name: Optional[str] = None,
+        connector_id: Optional[str] = None,
+        binding: Optional[Dict[str, Any]] = None,
+        log_event_ids: Optional[List[int]] = None,
+        deliver: str = "async",
+        destination: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Enqueue an external through-write intent (Orchestra outbox).
+
+        Prefer ``field_name`` of an ``external_entry`` column so the write
+        binding is loaded server-side. Use ``deliver="sync"`` only for
+        short-path tests; production should enqueue async and drain via
+        ``POST /admin/external_writes/drain``.
+        """
+
     # ──────────────────────────────────────────────────────────────────────────
     # Query Operations
     # ──────────────────────────────────────────────────────────────────────────
@@ -957,6 +1014,9 @@ class BaseDataManager(BaseStateManager):
         descending: bool = False,
         return_ids_only: bool = False,
         include_ids: bool = False,
+        hydrate: Optional[str] = None,
+        hydrate_fields: Optional[List[str]] = None,
+        materialize: Optional[bool] = None,
     ) -> Union[List[Dict[str, Any]], List[int]]:
         """
         Filter rows from a table by expression (Orchestra evaluates

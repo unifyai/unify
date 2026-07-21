@@ -547,3 +547,57 @@ def create_derived_column_impl(
         equation=transformed_equation,
         referenced_logs={"lg": {"context": context}},
     )
+
+
+def create_external_column_impl(
+    context: str,
+    *,
+    column_name: str,
+    connector_id: str,
+    binding: Dict[str, Any],
+    column_type: str = "Any",
+) -> Dict[str, Any]:
+    """Create an ``external_entry`` column bound to a REST connector."""
+    body = dict(binding or {})
+    body["connector_id"] = connector_id
+    logger.debug(
+        "Creating external column %s in %s via connector %s",
+        column_name,
+        context,
+        connector_id,
+    )
+    return unisdk.create_fields(
+        {
+            column_name: {
+                "type": column_type,
+                "category": "external_entry",
+                "binding": body,
+            },
+        },
+        context=context,
+        backfill_logs=True,
+    )
+
+
+def request_external_write_impl(
+    context: str,
+    *,
+    payload: Dict[str, Any],
+    idempotency_key: str,
+    field_name: Optional[str] = None,
+    connector_id: Optional[str] = None,
+    binding: Optional[Dict[str, Any]] = None,
+    log_event_ids: Optional[List[int]] = None,
+    deliver: str = "async",
+) -> Dict[str, Any]:
+    """Enqueue an external through-write intent via UniSDK."""
+    return unisdk.request_external_write(
+        payload=payload,
+        idempotency_key=idempotency_key,
+        field_name=field_name,
+        connector_id=connector_id,
+        binding=binding,
+        log_event_ids=log_event_ids,
+        deliver=deliver,
+        context=context,
+    )
