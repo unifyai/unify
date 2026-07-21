@@ -192,7 +192,12 @@ def update_rows_impl(
             existing = dict(log)
         else:
             continue
-        new_entries = {**existing, **cleaned_updates}
+        # Merge then strip authorship: existing rows carry immutable
+        # authoring_assistant_id, and Orchestra rejects overwrite payloads that
+        # include immutable fields even when the value is unchanged.
+        new_entries = strip_authoring_assistant_id(
+            {**existing, **cleaned_updates},
+        )
         unisdk.update_logs(
             logs=[log_id],
             context=context,
