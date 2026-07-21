@@ -41,6 +41,7 @@ from unify.task_scheduler.machine_state import (
     list_scheduled_executions,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.execution import Wake
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.status import Status
 
@@ -262,7 +263,7 @@ async def test_scheduled_task_projects_and_fires(
         "Orchestra did not project a scheduled activation for the task under the "
         "Assistants project"
     )
-    assert snap.activation_kind == "scheduled"
+    assert snap.wake == Wake.scheduled.value
     assert snap.delivery == "live"
     assert snap.scheduled_for is not None
     assert snap.revision
@@ -319,7 +320,7 @@ async def test_offline_task_projects_and_routes_to_offline_dispatcher(
     assert (
         snap is not None
     ), "Orchestra did not project an activation for the offline task"
-    assert snap.activation_kind == "scheduled"
+    assert snap.wake == Wake.scheduled.value
     assert snap.delivery == "offline"
     assert snap.scheduled_for is not None
     assert snap.revision
