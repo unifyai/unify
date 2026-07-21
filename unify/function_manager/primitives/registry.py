@@ -537,6 +537,7 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_data_filter_example",
         "get_primitives_data_reduce_example",
         "get_primitives_data_ingest_example",
+        "get_primitives_data_external_sync_example",
     ],
     "dashboards": [
         "get_primitives_dashboards_baked_in_example",
@@ -1154,6 +1155,15 @@ class ToolSurfaceRegistry:
                     "download-then-per-row updates. Shared team Data is "
                     "already reachable via `primitives.data` — do not read "
                     "another assistant's private contexts.",
+                )
+                lines.append(
+                    "- **External REST sync:** use "
+                    "`create_external_column` + `filter(..., hydrate=...)` for "
+                    "remote facts and `request_external_write` for mutations. "
+                    "Keep workflow/queue state as ordinary local columns. "
+                    "`auth_secret_ref` must exist in the owning `Secrets` "
+                    "vault — never inline API keys in bindings. Do not "
+                    "full-mirror a remote REST DB into Orchestra.",
                 )
 
         # ── Section 5: Detailed method documentation ──
