@@ -547,3 +547,33 @@ def create_derived_column_impl(
         equation=transformed_equation,
         referenced_logs={"lg": {"context": context}},
     )
+
+
+def create_external_column_impl(
+    context: str,
+    *,
+    column_name: str,
+    connector_id: str,
+    binding: Dict[str, Any],
+    column_type: str = "Any",
+) -> Dict[str, Any]:
+    """Create an ``external_entry`` column bound to a REST connector."""
+    body = dict(binding or {})
+    body["connector_id"] = connector_id
+    logger.debug(
+        "Creating external column %s in %s via connector %s",
+        column_name,
+        context,
+        connector_id,
+    )
+    return unisdk.create_fields(
+        {
+            column_name: {
+                "type": column_type,
+                "category": "external_entry",
+                "binding": body,
+            },
+        },
+        context=context,
+        backfill_logs=True,
+    )
