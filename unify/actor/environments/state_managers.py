@@ -197,7 +197,11 @@ and only await when same-block composition truly requires it.
 `notify({...})` describing what comes next.
   - If you return a handle directly, send one kickoff notification before returning \
 the handle.
-  - Keep notifications user-facing and high-level; avoid internal diagnostics.
+  - Keep notifications user-facing and high-level; avoid internal diagnostics
+    in `notify()` (stack traces, schema dumps, call IDs). Soft-failure and
+    stage diagnostics belong in stdlib `logging` with `PHASE` / `SKIP` /
+    `SOFT_FAIL` markers so Job/EventBus trails stay reconstructable without
+    bloating user-facing progress.
   - Do not use `notify()` to announce the final result — your response text handles that.
 
   **SteerableToolHandle API:**
