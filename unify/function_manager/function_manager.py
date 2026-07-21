@@ -92,6 +92,7 @@ from unify.integrations.function_metadata import (
 from unify.integrations.builtins_catalog import list_catalog_tools
 from unify.integrations.embedding_text import normalize_embedding_text
 from .custom_functions import (
+    CustomFunctionSyncPartialFailure,
     compute_custom_functions_hash,
     compute_custom_venvs_hash,
 )
@@ -3841,60 +3842,84 @@ class FunctionManager(BaseFunctionManager):
 
             # Track what we've processed
             processed_names: Set[str] = set()
+            sync_failures: Dict[str, BaseException] = {}
 
-            # Sync each source function
+            # Sync each source function. Isolate per-name failures so one
+            # broken deployment function cannot abort the rest of the catalog
+            # (e.g. campaign runtime must still land if storyboards fails).
             for name, source_data in source_functions.items():
                 processed_names.add(name)
-                function_data = dict(source_data)
+                try:
+                    function_data = dict(source_data)
 
-                # Resolve venv_name to venv_id
-                venv_name = function_data.get("venv_name")
-                if venv_name and venv_name in venv_name_to_id:
-                    function_data["venv_id"] = venv_name_to_id[venv_name]
-                    logger.debug(
-                        f"Resolved venv_name={venv_name} to "
-                        f"venv_id={function_data['venv_id']} for {name}",
-                    )
-                # Remove venv_name from persisted data.
-                function_data.pop("venv_name", None)
-
-                if name in db_functions:
-                    db_entry = db_functions[name]
-                    # Check if hash changed
-                    if db_entry.get("custom_hash") != function_data["custom_hash"]:
-                        logger.info(f"Updating custom function: {name}")
-                        self._update_custom_function(
-                            function_id=db_entry["function_id"],
-                            data=function_data,
+                    # Resolve venv_name to venv_id
+                    venv_name = function_data.get("venv_name")
+                    if venv_name and venv_name in venv_name_to_id:
+                        function_data["venv_id"] = venv_name_to_id[venv_name]
+                        logger.debug(
+                            f"Resolved venv_name={venv_name} to "
+                            f"venv_id={function_data['venv_id']} for {name}",
                         )
+                    # Remove venv_name from persisted data.
+                    function_data.pop("venv_name", None)
+
+                    if name in db_functions:
+                        db_entry = db_functions[name]
+                        # Check if hash changed
+                        if db_entry.get("custom_hash") != function_data["custom_hash"]:
+                            logger.info(f"Updating custom function: {name}")
+                            self._update_custom_function(
+                                function_id=db_entry["function_id"],
+                                data=function_data,
+                            )
+                        else:
+                            logger.debug(f"Custom function unchanged: {name}")
                     else:
-                        logger.debug(f"Custom function unchanged: {name}")
-                else:
-                    # Check if there's a user-added function with same name
-                    # (no custom_hash) - if so, we need to delete it first
-                    existing = unisdk.get_logs(
-                        context=self._compositional_ctx,
-                        filter=f"name == '{name}'",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(
-                            f"Overwriting user-added function with custom: {name}",
-                        )
-                        unisdk.delete_logs(
+                        # Check if there's a user-added function with same name
+                        # (no custom_hash) - if so, we need to delete it first
+                        existing = unisdk.get_logs(
                             context=self._compositional_ctx,
-                            logs=[existing[0].id],
+                            filter=f"name == '{name}'",
+                            limit=1,
                         )
+                        if existing:
+                            logger.info(
+                                f"Overwriting user-added function with custom: {name}",
+                            )
+                            unisdk.delete_logs(
+                                context=self._compositional_ctx,
+                                logs=[existing[0].id],
+                            )
 
-                    # Insert new custom function
-                    logger.info(f"Inserting custom function: {name}")
-                    self._insert_custom_function(function_data)
+                        # Insert new custom function
+                        logger.info(f"Inserting custom function: {name}")
+                        self._insert_custom_function(function_data)
+                except Exception as exc:
+                    sync_failures[name] = exc
+                    logger.exception(
+                        "Failed to sync custom function %r; continuing with "
+                        "remaining functions",
+                        name,
+                    )
 
             # Delete functions that are in DB but not in source
             for name in db_functions:
                 if name not in processed_names:
-                    logger.info(f"Deleting removed custom function: {name}")
-                    self._delete_custom_function_by_name(name)
+                    try:
+                        logger.info(f"Deleting removed custom function: {name}")
+                        self._delete_custom_function_by_name(name)
+                    except Exception as exc:
+                        sync_failures[name] = exc
+                        logger.exception(
+                            "Failed to delete removed custom function %r; "
+                            "continuing with remaining functions",
+                            name,
+                        )
+
+            if sync_failures:
+                # Do not store the aggregate hash or mark this context synced —
+                # the next reconcile must retry the failed names.
+                raise CustomFunctionSyncPartialFailure(sync_failures)
 
             # Store the new hash
             self._store_custom_functions_hash(expected_hash)
