@@ -8,7 +8,7 @@ from unify.task_scheduler.machine_state import (
     TaskRunReference,
     build_task_run_key,
 )
-from unify.task_scheduler.types.run_source import RunSource
+from unify.task_scheduler.types.execution import Delivery, Wake
 
 
 def test_resolve_run_key_prefers_reference():
@@ -19,9 +19,9 @@ def test_resolve_run_key_prefers_reference():
     prov = TaskRunProvenance(
         assistant_id="1",
         task_id=2,
-        source_type=RunSource.scheduled,
-        execution_mode="live",
-        activation_revision="rev",
+        wake=Wake.scheduled,
+        delivery=Delivery.live,
+        revision="rev",
     )
     assert (
         _resolve_active_task_run_key(
@@ -36,9 +36,9 @@ def test_resolve_run_key_from_provenance():
     prov = TaskRunProvenance(
         assistant_id="1",
         task_id=42,
-        source_type=RunSource.scheduled,
-        execution_mode="live",
-        activation_revision="rev-1",
+        wake=Wake.scheduled,
+        delivery=Delivery.live,
+        revision="rev-1",
     )
     expected = build_task_run_key(prov)
     assert (
@@ -48,7 +48,7 @@ def test_resolve_run_key_from_provenance():
         )
         == expected
     )
-    assert expected  # non-empty join key
+    assert expected
 
 
 def test_resolve_run_key_none_without_inputs():

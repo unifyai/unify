@@ -2,7 +2,7 @@
 
 Replaces Communication's Cloud Tasks + Kubernetes path when the user runs
 Unity locally (bundled Orchestra in Docker, no Communication gateway). The
-in-process scheduler watches the same Orchestra-projected ``Tasks/Activations``
+in-process scheduler watches the same Orchestra-projected ``Tasks/Executions``
 rows the hosted path watches, but fires due tasks directly on the event
 broker instead of via a chain of HTTP hops.
 

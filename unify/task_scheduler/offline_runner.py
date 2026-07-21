@@ -64,12 +64,13 @@ from unify.task_scheduler.provider_event_context import (
 )
 from unify.task_scheduler.provider_event_dispatch import ProviderEventDispatchRequest
 from unify.task_scheduler.provider_event_execution import resolve_captured_task_revision
+from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.types.run_source import RunSource
 
 TASK_RUN_UPDATE_PATH = "/task-run/update"
 HTTP_TIMEOUT_SECONDS = 30
 SUMMARY_LIMIT = 4000
-SCHEDULER_MANAGED_SOURCE_TYPES = frozenset(RunSource)
+SCHEDULER_MANAGED_WAKES = frozenset(Wake)
 _SIGTERM_EXIT_CODE = 143
 
 
@@ -79,7 +80,7 @@ class OfflineTaskConfig:
 
     Communication injects these values when it creates the short-lived Unity
     job. Together they identify which assistant is acting, which stored
-    function should run, why it was activated, and which durable `Tasks/Runs`
+    function should run, why it was activated, and which durable `Tasks/Executions`
     row should be updated as execution progresses.
     """
 
@@ -88,9 +89,9 @@ class OfflineTaskConfig:
     task_id: int
     function_id: int | None
     request: str
-    source_type: RunSource
+    wake: Wake
     source_task_log_id: int
-    activation_revision: str
+    revision: str
     destination: str | None = None
     task_name: str = ""
     task_description: str = ""
@@ -104,8 +105,8 @@ class OfflineTaskConfig:
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
-            "source_type",
-            RunSource.normalize(self.source_type),
+            "wake",
+            Wake.normalize(self.wake),
         )
 
 
@@ -178,11 +179,9 @@ def _load_provider_event_dispatch_from_env() -> ProviderEventDispatchRequest:
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         binding_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_BINDING_ID"),
         receipt_id=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_RECEIPT_ID"),
-        accepted_activation_revision=_require_env(
-            "UNITY_OFFLINE_TASK_ACTIVATION_REVISION",
-        ),
-        source_type="provider_event",
-        dispatch_mode="offline",
+        accepted_revision=_require_env("UNITY_OFFLINE_TASK_REVISION"),
+        wake="provider_event",
+        delivery="offline",
         event_context_ref=_require_env("UNITY_OFFLINE_PROVIDER_EVENT_CONTEXT_REF"),
         issued_at=issued_at,
     )
@@ -202,11 +201,11 @@ def _load_config_from_env() -> OfflineTaskConfig:
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
         request=_require_env("UNITY_OFFLINE_TASK_REQUEST"),
-        source_type=RunSource.normalize(
-            os.environ.get("UNITY_OFFLINE_TASK_SOURCE_TYPE", RunSource.scheduled),
+        wake=Wake.normalize(
+            os.environ.get("UNITY_OFFLINE_TASK_WAKE", Wake.scheduled),
         ),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
-        activation_revision=_require_env("UNITY_OFFLINE_TASK_ACTIVATION_REVISION"),
+        revision=_require_env("UNITY_OFFLINE_TASK_REVISION"),
         destination=destination,
         task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
         task_description=os.environ.get("UNITY_OFFLINE_TASK_DESCRIPTION", ""),
@@ -239,7 +238,7 @@ def _task_run_update_payload(
     """Return the admin payload for one partial run update.
 
     ``source_task_log_id`` pins the task's own surface so team-task runs
-    (living under ``Teams/{id}/Tasks/Runs``) resolve on update exactly as
+    (living under ``Teams/{id}/Tasks/Executions``) resolve on update exactly as
     they did on creation.
     """
 
@@ -341,7 +340,7 @@ def _install_sigterm_handler(config: OfflineTaskConfig) -> None:
             )
         except Exception:
             LOGGER.exception(
-                "Failed to terminalize Tasks/Runs row on SIGTERM "
+                "Failed to terminalize Tasks/Executions row on SIGTERM "
                 "(task_id=%s, run_key=%s)",
                 config.task_id,
                 config.run_key,
@@ -392,7 +391,7 @@ def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> s
         "task_id": config.task_id,
         "function_id": config.function_id,
         "task_name": config.task_name,
-        "source_type": config.source_type,
+        "wake": config.wake.value,
         "destination": config.destination or None,
         "scheduled_for": config.scheduled_for or None,
         "source_medium": config.source_medium or None,
@@ -407,7 +406,7 @@ def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> s
 def _is_scheduler_managed(config: OfflineTaskConfig) -> bool:
     """Return whether this request represents a durable assistant task run."""
 
-    return config.source_type in SCHEDULER_MANAGED_SOURCE_TYPES
+    return config.wake in SCHEDULER_MANAGED_WAKES
 
 
 def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
@@ -418,7 +417,7 @@ def _trigger_attempt_token(config: OfflineTaskConfig) -> str | None:
     communication-trigger source type.
     """
 
-    if config.source_type.is_triggered:
+    if config.wake is Wake.triggered:
         return config.run_key
     return None
 
@@ -444,10 +443,10 @@ def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
     return TaskRunProvenance(
         assistant_id=config.assistant_id,
         task_id=config.task_id,
-        source_type=config.source_type,
-        execution_mode="offline",
+        wake=config.wake,
+        delivery=Delivery.offline,
         source_task_log_id=config.source_task_log_id,
-        activation_revision=config.activation_revision,
+        revision=config.revision,
         scheduled_for=config.scheduled_for or None,
         source_medium=config.source_medium or None,
         source_ref=config.source_ref or None,
@@ -541,22 +540,20 @@ class _OfflineTaskExecutionDelegate:
             entrypoint_kwargs.setdefault("scheduled_for", self._config.scheduled_for)
         entrypoint_kwargs.setdefault("task_id", self._config.task_id)
         entrypoint_kwargs.setdefault("run_key", self._config.run_key)
-        entrypoint_kwargs.setdefault("source_type", self._config.source_type)
+        entrypoint_kwargs.setdefault("wake", self._config.wake.value)
         entrypoint_kwargs.setdefault(
-            "activation_revision",
-            self._config.activation_revision,
+            "revision",
+            self._config.revision,
         )
         entrypoint_kwargs.setdefault(
             "task_execution_context",
             {
-                "task_id": self._config.task_id,
-                "run_key": self._config.run_key,
-                "source_type": self._config.source_type,
+                "wake": self._config.wake.value,
+                "delivery": Delivery.offline.value,
+                "revision": self._config.revision,
                 "scheduled_for": self._config.scheduled_for or None,
-                "activation_revision": self._config.activation_revision,
-                "execution_style": execution_style,
-                "delivery_mode": "offline",
-                "destination": destination,
+                "state": "running",
+                "run_key": self._config.run_key,
             },
         )
 
@@ -598,7 +595,7 @@ async def _execute_provider_event_offline_task(
     config: OfflineTaskConfig,
     dispatch: ProviderEventDispatchRequest,
 ) -> Any:
-    """Execute one offline provider-event run via captured-revision instance."""
+    """Execute one offline provider-event run against the authored definition."""
 
     event_context = fetch_provider_event_context(dispatch)
     verify_precreated_provider_event_run(dispatch)
@@ -631,7 +628,7 @@ async def _execute_scheduler_managed_task(config: OfflineTaskConfig) -> Any:
         handle = await scheduler.execute(
             task_id=config.task_id,
             trigger_attempt_token=_trigger_attempt_token(config),
-            _activated_by=config.source_type.to_activated_by(),
+            _activated_by=RunSource.normalize(config.wake.value).to_activated_by(),
         )
         return await handle.result()
     finally:
@@ -656,7 +653,7 @@ async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     _ensure_desktop_env_for_resources(config)
     SESSION_DETAILS.populate_from_env()
     _bootstrap_offline_runtime()
-    if config.source_type is RunSource.provider_event:
+    if config.wake is Wake.provider_event:
         dispatch = _load_provider_event_dispatch_from_env()
         return await _execute_provider_event_offline_task(config, dispatch)
     if not _is_scheduler_managed(config):

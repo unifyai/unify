@@ -1,8 +1,8 @@
-"""Orchestrate live provider-event dispatch into a captured-revision instance.
+"""Orchestrate live provider-event dispatch against the authored definition.
 
 Bypasses ``TaskScheduler.execute`` consume/clone, communication-trigger
 qualification, and authored-definition mutation. Launch ownership is claimed
-through Orchestra before instance start I/O.
+through Orchestra before execution I/O.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def resolve_captured_task_revision(*, task_id: int) -> int:
 async def handle_provider_event_live_dispatch(
     request: ProviderEventDispatchRequest,
 ) -> tuple[LiveProviderEventDispatchOutcome, SteerableToolHandle | None]:
-    """Validate, claim through Orchestra, and start at most one live instance.
+    """Validate, claim through Orchestra, and start at most one live execution.
 
     On a successful start, return the live ``ActiveTask`` handle so the caller
     can await completion (task status + run terminal state). Adopt-only and

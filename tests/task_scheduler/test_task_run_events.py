@@ -1,4 +1,4 @@
-"""Tests for Tasks/Runs → Events join helpers."""
+"""Tests for Tasks/Executions → Events join helpers."""
 
 from __future__ import annotations
 

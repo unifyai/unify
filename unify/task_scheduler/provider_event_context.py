@@ -123,12 +123,12 @@ def verify_precreated_provider_event_run(
     run_task_id = run.get("task_id")
     if run_task_id is not None and int(run_task_id) != request.task_id:
         raise ProviderEventDispatchValidationError("run_task_id_mismatch")
-    source_type = run.get("source_type")
-    if source_type is not None and str(source_type) != request.source_type:
-        raise ProviderEventDispatchValidationError("run_source_type_mismatch")
-    execution_mode = run.get("execution_mode")
-    if execution_mode is not None and str(execution_mode) != request.dispatch_mode:
-        raise ProviderEventDispatchValidationError("run_execution_mode_mismatch")
+    run_wake = run.get("wake", run.get("source_type"))
+    if run_wake is not None and str(run_wake) != request.wake:
+        raise ProviderEventDispatchValidationError("run_wake_mismatch")
+    run_delivery = run.get("delivery", run.get("execution_mode"))
+    if run_delivery is not None and str(run_delivery) != request.delivery:
+        raise ProviderEventDispatchValidationError("run_delivery_mismatch")
 
 
 def fetch_provider_event_context(

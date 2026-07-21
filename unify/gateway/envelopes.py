@@ -217,10 +217,10 @@ class UnitySystemEvent(BaseInboundEvent):
     message: str = ""
     task_id: int | None = None
     source_task_log_id: int | None = None
-    activation_revision: str = ""
+    revision: str = ""
     scheduled_for: str = ""
-    execution_mode: str = ""
-    source_type: str = ""
+    delivery: str = ""
+    wake: str = ""
     source_ref: str = ""
     task_label: str = ""
     task_summary: str = ""

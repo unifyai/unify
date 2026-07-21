@@ -14,12 +14,12 @@ def test_tasks_store_get_rows_passes_explicit_project_override(monkeypatch):
 
     monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
 
-    store = TasksStore("Tasks/Activations", project=TASK_MACHINE_STATE_PROJECT)
+    store = TasksStore("Tasks/Executions", project=TASK_MACHINE_STATE_PROJECT)
     rows = store.get_rows(limit=5)
 
     assert rows == []
     assert captured["project"] == TASK_MACHINE_STATE_PROJECT
-    assert captured["context"] == "Tasks/Activations"
+    assert captured["context"] == "Tasks/Executions"
 
 
 def test_tasks_store_defaults_to_active_project(monkeypatch):

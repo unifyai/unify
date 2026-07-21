@@ -5,8 +5,8 @@ which events are written to Unify ``Events/*`` contexts. In-memory deques,
 subscriptions, and Pub/Sub streaming are unaffected.
 
 In ``allowlist`` mode, ManagerMethod/ToolLoop events that carry task-run
-lineage fields (``run_key``, or ``task_id`` + ``instance_id``) are persisted
-in full so ``Tasks/Runs`` can join a dense execution tree via ``run_key``.
+lineage fields (``run_key``, or ``task_id`` + ``run_key``) are persisted
+in full so ``Tasks/Executions`` can join a dense execution tree via ``run_key``.
 Non-task traffic stays on the tool allowlist.
 """
 
@@ -47,11 +47,10 @@ def payload_has_task_run_lineage(payload_dict: Mapping[str, Any]) -> bool:
     """
 
     run_key = payload_dict.get("run_key")
-    if isinstance(run_key, str) and run_key.strip():
-        return True
+    if not isinstance(run_key, str) or not run_key.strip():
+        return False
     task_id = payload_dict.get("task_id")
-    instance_id = payload_dict.get("instance_id")
-    return task_id is not None and instance_id is not None
+    return task_id is not None
 
 
 def _tool_names_from_tool_loop_message(message: Any) -> set[str]:

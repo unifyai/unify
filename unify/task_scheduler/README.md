@@ -54,15 +54,15 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
    - Validates the task is runnable, records activation provenance, and delegates execution to the actor substrate. Returns a `SteerableToolHandle` for the caller to await or interject.
 
 4) Scheduled activation
-   - User-authored scheduled task rows are projected by Orchestra into machine-facing activation rows.
-   - Communication materializes scheduled live activations as Cloud Tasks targeting the adapters `/scheduled/tasks/due` endpoint.
+   - User-authored scheduled task rows are projected by Orchestra into machine-facing execution rows.
+   - Communication materializes scheduled live executions as Cloud Tasks targeting the adapters `/scheduled/tasks/due` endpoint.
    - The live wake reason is delivered to ConversationManager, which asks the slow brain to start with `primitives.tasks.execute(task_id=...)`.
    - Cloud Scheduler is used for platform maintenance jobs; per-task cadence is delivered by dynamic Cloud Tasks.
 
 5) Trigger activation
-   - Trigger definitions are projected into activation rows and mechanically matched by medium/contact filters when inbound communication events arrive.
+   - Trigger definitions are projected into execution rows and mechanically matched by medium/contact filters when inbound communication events arrive.
    - Live trigger candidates are surfaced to the slow brain, which performs semantic acceptance and calls `primitives.tasks.execute(task_id=..., trigger_attempt_token=...)` so the run adopts the exact inbound provenance.
-   - Recurring triggerable tasks clone a future triggerable instance before the current instance is marked active.
+   - Recurring triggerable tasks re-arm the definition back to `triggerable` before the current run is marked `active`.
 
 6) Offline activation
    - Offline means the hidden headless lane: the live ConversationManager and main actor are not woken.
@@ -75,9 +75,9 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
    - When either is true, dispatch waits for a ready assistant desktop (Local sync and/or computer-use) before the run starts.
 
 8) Concurrency
-   - Multiple instances of the same `task_id` may be `active` at once (for example a 90-minute job on a 60-minute schedule).
-   - `execute` only refuses to start when activation provenance targets the exact instance that is already `active`.
-   - Symbolic entrypoints receive opt-in kwargs (`task_id`, `instance_id`, `task_execution_context`) so they can gate or skip themselves when desired.
+   - Multiple executions of the same `task_id` may be `active` at once (for example a 90-minute job on a 60-minute schedule).
+   - `execute` only refuses to start when activation provenance targets the exact `source_task_log_id` that is already `active`.
+   - Symbolic entrypoints receive opt-in kwargs (`task_id`, `run_key`, `task_execution_context`) so they can gate or skip themselves when desired.
 
 
 ### Schedule invariants (enforced centrally)
@@ -95,17 +95,26 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 
 ### Execution handle
 
-- `ActiveTask`: the `SteerableToolHandle` returned by `execute`. Mirrors task status to the Tasks row as execution proceeds and handles cancellation interjections.
-- Durable executions materialize a `Tasks/Runs` row (unique `run_key`) and stamp EventBus payloads with `task_id` / `instance_id` / `run_key` plus a `Task.run(...)` hierarchy segment.
-- In `EVENTBUS_ORCHESTRA_PERSIST_MODE=allowlist`, Orchestra keeps a **dense** `Events/ManagerMethod` + `Events/ToolLoop` tree only while that lineage is set; interactive traffic stays on the tool allowlist. Join without duplicating payloads:
+- Durable work uses **two** Orchestra surfaces only:
+  - `Tasks` — definition (series), keyed by `task_id`
+  - `Tasks/Executions` — one wake/attempt, unique `run_key` (idempotency key)
+- There is **no** `Tasks/Activations` and no separate Runs ledger. Occurrence and
+  attempt are the same Execution row (`state`: scheduled → triggerable →
+  running → completed/failed/cancelled).
+- Vocabulary: `wake` ∈ {scheduled, triggered, explicit, provider_event};
+  `delivery` ∈ {live, offline}. Recurrence creates the *next* Execution when
+  the current one **starts**.
+- EventBus stamps `task_id` + `run_key` (no `instance_id`). Load the tree with:
 
 ```python
 from unify.task_scheduler.task_run_events import fetch_task_run_events
+# or: await primitives.tasks.get_execution_events(run_key=...)
 
 tree = fetch_task_run_events(run_key, events_base_context="{user}/{assistant}/Events")
 ```
 
-  Runs may live under `Teams/{id}/Tasks/Runs` while Events stay under the executing assistant’s `…/Events/*` — join is by `run_key` value. Not yet exposed on `primitives.tasks.*`.
+  Runs may live under `Teams/{id}/Tasks/Executions` while Events stay under the
+  executing assistant’s `…/Events/*` — join is by `run_key` value.
 
 
 ### Entrypoints and description-driven execution
@@ -137,4 +146,4 @@ tree = fetch_task_run_events(run_key, events_base_context="{user}/{assistant}/Ev
 - Start in `task_scheduler.py` to see public surface and tool wiring.
 - Read `storage.py` to understand I/O behaviors.
 - `active_task.py` defines the live execution handle returned by `execute`.
-- `machine_state.py` handles activation validation and stale delivery rejection.
+- `machine_state.py` handles execution validation and stale delivery rejection.

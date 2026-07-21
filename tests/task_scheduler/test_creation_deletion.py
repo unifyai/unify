@@ -148,12 +148,12 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         current = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
         assert current.destination == f"team:{team_id}"
 
-        ts._clone_task_instance(current)
+        ts._rearm_task_definition(current)
 
         rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-        assert len(rows) == 2
-        assert {row.instance_id for row in rows} == {0, 1}
-        assert all(row.destination == f"team:{team_id}" for row in rows)
+        assert len(rows) == 1
+        assert rows[0].destination == f"team:{team_id}"
+        assert rows[0].schedule_start_at == initial_start + timedelta(days=1)
     finally:
         try:
             unisdk.delete_context(f"Teams/{team_id}/Tasks")

@@ -2643,7 +2643,7 @@ async def init_conv_manager(
             # no-op; in local mode it starts the asyncio supervisor that
             # fires scheduled tasks without going through Communication +
             # Cloud Tasks. Must run after managers are initialised because
-            # the scheduler reads ``Tasks/Activations`` through the same
+            # the scheduler reads ``Tasks/Executions`` through the same
             # storage layer the managers configure.
             try:
                 from unify.task_scheduler.local_scheduler import build_materializer

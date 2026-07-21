@@ -1,15 +1,16 @@
-"""Load EventBus trees for a durable ``Tasks/Runs`` row.
+"""Load EventBus trees for a durable ``Tasks/Executions`` row.
 
-``Tasks/Runs`` does not embed event payloads. Join is by ``run_key`` value:
+``Tasks/Executions`` does not embed event payloads. Join is by ``run_key`` value:
 
-- Runs may live at ``Teams/{id}/Tasks/Runs`` (or ``{user}/{assistant}/Tasks/Runs``)
+- Executions may live at ``Teams/{id}/Tasks/Executions`` (or ``{user}/{assistant}/Tasks/Executions``)
 - Events live under the **executing assistant's** ``{…}/Events/{Type}`` contexts
 
 Filter ``Events/ManagerMethod`` and ``Events/ToolLoop`` with
 ``run_key == "<key>"`` (server-side via DataManager). Reconstruct nesting from
 ``hierarchy`` / ``hierarchy_label`` — there is no ``parent_event_id``.
 
-Not yet exposed on ``primitives.tasks.*``.
+Not yet exposed on ``primitives.tasks.*`` — use
+``TaskScheduler.get_execution_events`` / ``primitives.tasks.get_execution_events``.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def build_run_key_filter(run_key: str) -> str:
 
 @dataclass(frozen=True)
 class TaskRunEventTree:
-    """ManagerMethod + ToolLoop rows attributed to one ``Tasks/Runs.run_key``."""
+    """ManagerMethod + ToolLoop rows attributed to one ``Tasks/Executions.run_key``."""
 
     run_key: str
     events_base_context: str
@@ -130,15 +131,15 @@ def fetch_task_run_events(
     descending: bool = False,
     event_types: Iterable[str] | None = None,
 ) -> TaskRunEventTree:
-    """Fetch the ManagerMethod + ToolLoop tree for one ``Tasks/Runs.run_key``.
+    """Fetch the ManagerMethod + ToolLoop tree for one ``Tasks/Executions.run_key``.
 
     Parameters
     ----------
     run_key:
-        Unique key on the ``Tasks/Runs`` row (and stamped on Event payloads).
+        Unique key on the ``Tasks/Executions`` row (and stamped on Event payloads).
     events_base_context:
         Assistant Events root (``{user}/{assistant}/Events``) or write-context
-        parent that owns ``Events``. Cross-context vs ``Teams/…/Tasks/Runs`` is
+        parent that owns ``Events``. Cross-context vs ``Teams/…/Tasks/Executions`` is
         expected; join is by ``run_key`` value only.
     """
 
