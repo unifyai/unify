@@ -27,7 +27,7 @@ def _expected_first_sms_body(content: str) -> str:
 
 def _seed_offline_env(monkeypatch):
     monkeypatch.setenv(
-        "UNITY_OFFLINE_TASK_RUN_KEY",
+        "UNITY_OFFLINE_RUN_KEY",
         "offline:scheduled:42:101:rev:once",
     )
     monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "101")

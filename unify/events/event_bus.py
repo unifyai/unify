@@ -4,7 +4,7 @@ restricted to Pydantic payload types declared in *events/types/*.
 Orchestra persistence (``Events/*``) can be narrowed independently of Pub/Sub
 Live Actions via ``EVENTBUS_ORCHESTRA_PERSIST_MODE`` /
 ``EVENTBUS_ORCHESTRA_PERSIST_TOOLS`` (see ``persist_filters``). In allowlist
-mode, ManagerMethod/ToolLoop rows under an ActiveTask (task-run lineage on the
+mode, ManagerMethod/ToolLoop rows under an ActiveTask (execution lineage on the
 payload) are still persisted in full for ``Tasks/Executions`` join via ``run_key``.
 Stream noise rules in ``stream_filters`` affect Pub/Sub only.
 """
@@ -964,7 +964,7 @@ class EventBus:
         #
         # Orchestra ``Events/*`` persistence can be narrowed via
         # EVENTBUS_ORCHESTRA_PERSIST_MODE / EVENTBUS_ORCHESTRA_PERSIST_TOOLS.
-        # Under allowlist, payloads already stamped with task-run lineage
+        # Under allowlist, payloads already stamped with execution lineage
         # (ActiveTask) persist the full ManagerMethod + ToolLoop tree; other
         # traffic stays on the tool allowlist. Pub/Sub is unaffected.
         if should_persist_to_orchestra(event.type, payload_dict):

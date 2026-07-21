@@ -76,7 +76,7 @@ def build_offline_runner_env(
 
     env: dict[str, str] = {
         "UNITY_OFFLINE_TASK_MODE": "actor",
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_ID": str(task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(source_task_log_id),
         "UNITY_OFFLINE_TASK_REVISION": str(revision or ""),

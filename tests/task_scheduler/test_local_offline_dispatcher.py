@@ -80,7 +80,7 @@ class TestBuildLocalOfflineRunnerEnv:
 
         required = {
             "UNITY_OFFLINE_TASK_MODE",
-            "UNITY_OFFLINE_TASK_RUN_KEY",
+            "UNITY_OFFLINE_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
             "UNITY_OFFLINE_TASK_REVISION",

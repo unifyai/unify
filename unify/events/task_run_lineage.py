@@ -131,7 +131,7 @@ def task_run_lineage_scope(
     task_id: int,
     run_key: str | None = None,
 ) -> Generator[_TaskRunLineageTokens, None, None]:
-    """Context manager that pushes then resets task-run lineage."""
+    """Context manager that pushes then resets execution lineage."""
 
     tokens = push_task_run_lineage(
         task_id=task_id,
