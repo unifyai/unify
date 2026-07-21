@@ -688,7 +688,9 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     `primitives.tasks.execute(task_id=...)`; execution then runs a contained
     child actor dedicated to that task. Do not write and attach an untested
     entrypoint function at task creation unless the user explicitly requested a
-    stored function-backed workflow.
+    stored function-backed workflow. When you do store an entrypoint or helper,
+    keep expressive stdlib `logging` (PHASE/SKIP/SOFT_FAIL markers) in the body —
+    soft failures need logs, not only exceptions.
 
     If a workflow has just been completed interactively and the user wants it
     repeated, include the relevant context in the task description. Use

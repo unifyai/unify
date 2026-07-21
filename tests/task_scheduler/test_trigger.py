@@ -141,13 +141,12 @@ def test_start_at_on_trigger_task_raises():
 @_handle_project
 @pytest.mark.asyncio
 @pytest.mark.llm_call
-async def test_triggerable_start_clones_instance():
+async def test_triggerable_start_rearms_definition():
     """
     Starting a **triggerable** task should:
 
-    • promote the *oldest* instance (`instance_id` 0) to **active**
-    • create a **new** row with the same `task_id` but `instance_id` 1
-      that remains in the *triggerable* state
+    • promote the definition row to **active**
+    • re-arm the definition back to **triggerable** for the next wake
     """
     ts = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
 
@@ -158,36 +157,22 @@ async def test_triggerable_start_clones_instance():
         trigger=trig,
     )["details"]["task_id"]
 
-    # One physical row before activation
     rows_before = ts._filter_tasks(filter=f"task_id == {tid}")
-    assert len(rows_before) == 1 and rows_before[0].instance_id == 0
+    assert len(rows_before) == 1
 
-    # Activate
     handle = await ts.execute(task_id=tid)
 
-    # Two rows should now exist: 0 (active) and 1 (still triggerable)
-    rows_after = ts._filter_tasks(filter=f"task_id == {tid}")
-    assert len(rows_after) == 2
+    row_after = ts._get_task_or_raise(tid)
+    assert row_after.status == Status.active
 
-    status_by_inst = {r.instance_id: r.status for r in rows_after}
-    assert status_by_inst[0] == Status.active
-    assert status_by_inst[1] == Status.triggerable
-
-    result = ts._attach_entrypoint_to_future_instances(
+    result = ts._attach_entrypoint_to_definition(
         task_id=tid,
-        completed_instance_id=0,
         function_id=654,
         rationale="The triggered run revealed a stable reusable workflow.",
     )
     assert result["outcome"] == "candidate_recorded"
-    future_row = [
-        row
-        for row in ts._filter_tasks(filter=f"task_id == {tid}")
-        if row.instance_id == 1
-    ][0]
-    assert future_row.entrypoint == 654
-    assert future_row.offline is False
+    assert ts._get_task_or_raise(tid).entrypoint == 654
+    assert ts._get_task_or_raise(tid).offline is False
 
-    # Clean-up (avoid background thread leaks)
     await handle.stop(cancel=True)
     await handle.result()

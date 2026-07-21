@@ -102,6 +102,75 @@ async def test_allowlist_mode_only_buffers_matching_orchestra_writes(monkeypatch
 
 @pytest.mark.asyncio
 @_handle_project
+async def test_allowlist_buffers_full_tree_under_task_run_lineage(monkeypatch):
+    """Under ActiveTask lineage, allowlist still buffers non-execute ManagerMethod/ToolLoop."""
+
+    monkeypatch.setattr(
+        "unify.events.event_bus.EventBus._publishing_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unify.settings.SETTINGS.EVENTBUS_ORCHESTRA_PERSIST_MODE",
+        "allowlist",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unify.settings.SETTINGS.EVENTBUS_ORCHESTRA_PERSIST_TOOLS",
+        "execute_code,execute_function",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "unify.events.event_bus.EventBus._pubsub_streaming_enabled",
+        False,
+        raising=False,
+    )
+
+    from unify.events.task_run_lineage import task_run_lineage_scope
+
+    bus = EventBus()
+    bus._pending_writes.clear()
+
+    with task_run_lineage_scope(
+        task_id=42,
+        instance_id=7,
+        run_key="live:scheduled:1:42:deadbeef:once",
+    ):
+        await bus.publish(
+            Event(
+                type="ManagerMethod",
+                payload=ManagerMethodPayload(
+                    manager="CodeActActor",
+                    method="act",
+                    phase="incoming",
+                ),
+            ),
+        )
+        await bus.publish(
+            Event(
+                type="ToolLoop",
+                payload=ToolLoopPayload(
+                    kind=ToolLoopKind.THOUGHT.value,
+                    message={"role": "assistant", "content": "plan"},
+                    method="CodeActActor.act",
+                ),
+            ),
+        )
+
+    buffered = list(bus._pending_writes)
+    assert len(buffered) == 2
+    methods = [e.get("method") for e, _ in buffered if e.get("type") == "ManagerMethod"]
+    kinds = [e.get("kind") for e, _ in buffered if e.get("type") == "ToolLoop"]
+    assert methods == ["act"]
+    assert kinds == [ToolLoopKind.THOUGHT.value]
+    for entries, _ctx in buffered:
+        assert entries.get("run_key") == "live:scheduled:1:42:deadbeef:once"
+        assert entries.get("task_id") == 42
+        assert entries.get("instance_id") == 7
+
+
+@pytest.mark.asyncio
+@_handle_project
 async def test_allowlist_does_not_block_pubsub_for_non_matching(monkeypatch):
     """Pub/Sub still streams non-allowlisted ManagerMethod when streaming is on."""
 

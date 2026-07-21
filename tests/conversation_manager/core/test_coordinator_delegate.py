@@ -14,7 +14,7 @@ from unify.conversation_manager.domains.coordinator_delegate import (
 )
 from unify.conversation_manager.domains.event_handlers import EventHandler
 from unify.conversation_manager.domains.notifications import NotificationBar
-from unify.conversation_manager.domains.task_activation import (
+from unify.conversation_manager.domains.task_execution import (
     _consume_startup_wake_reasons,
 )
 from unify.conversation_manager.events import CoordinatorDelegate

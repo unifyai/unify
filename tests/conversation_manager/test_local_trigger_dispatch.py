@@ -14,12 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from unify.conversation_manager.cm_types import Medium
-from unify.conversation_manager.domains import task_activation
-from unify.task_scheduler.machine_state import TaskActivationSnapshot
-
-# --------------------------------------------------------------------------- #
-# Fixtures                                                                    #
-# --------------------------------------------------------------------------- #
+from unify.conversation_manager.domains import task_execution
+from unify.task_scheduler.machine_state import TaskExecutionSnapshot
 
 
 def _make_offline_trigger_snapshot(
@@ -27,19 +23,18 @@ def _make_offline_trigger_snapshot(
     task_id: int = 17,
     assistant_id: str = "42",
     trigger_medium: str = "sms",
-) -> TaskActivationSnapshot:
-    return TaskActivationSnapshot(
+) -> TaskExecutionSnapshot:
+    return TaskExecutionSnapshot(
+        run_key=f"{assistant_id}:{task_id}",
         assistant_id=assistant_id,
-        activation_key=f"{assistant_id}:{task_id}",
         task_id=task_id,
         source_task_log_id=2000 + task_id,
-        activation_kind="triggered",
-        execution_mode="offline",
-        status="triggerable",
+        wake="triggered",
+        delivery="offline",
         task_name="Reply to Alice",
         task_description="Send a templated reply to Alice when she emails.",
         trigger_medium=trigger_medium,
-        activation_revision="rev-xyz",
+        revision="rev-xyz",
     )
 
 
@@ -58,8 +53,8 @@ class _CapturingDispatcher:
         self._inflight: set[asyncio.Task] = set()
         self.watch_calls: list[tuple] = []
 
-    async def _watch(self, process, snap, source_type):
-        self.watch_calls.append((snap.activation_key, source_type))
+    async def _watch(self, process, snap, wake):
+        self.watch_calls.append((snap.run_key, wake))
         await process.communicate()
 
 
@@ -68,11 +63,6 @@ def _make_fake_cm(dispatcher) -> SimpleNamespace:
 
     materializer = SimpleNamespace(_offline=dispatcher)
     return SimpleNamespace(_activation_materializer=materializer)
-
-
-# --------------------------------------------------------------------------- #
-# Local branch                                                                #
-# --------------------------------------------------------------------------- #
 
 
 class TestLocalOfflineTriggerDispatch:
@@ -91,7 +81,7 @@ class TestLocalOfflineTriggerDispatch:
         cm = _make_fake_cm(dispatcher)
         event = SimpleNamespace(content="Hi from Alice", timestamp=None)
 
-        result = await task_activation._dispatch_offline_trigger_candidate_local(
+        result = await task_execution._dispatch_offline_trigger_candidate_local(
             cm=cm,
             candidate=_make_offline_trigger_snapshot(),
             event=event,
@@ -100,19 +90,15 @@ class TestLocalOfflineTriggerDispatch:
             sender_name="Alice",
         )
 
-        # Subprocess invoked with the offline runner module.
         assert captured["args"][-2:] == ("-m", "unify.task_scheduler.offline_runner")
         env = captured["env"]
-        # Triggered source semantics propagate.
-        assert env["UNITY_OFFLINE_TASK_SOURCE_TYPE"] == "triggered"
+        assert env["UNITY_OFFLINE_TASK_WAKE"] == "triggered"
         assert env["UNITY_OFFLINE_TASK_SOURCE_MEDIUM"] == "sms_message"
         assert env["UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID"] == "123"
-        # Source ref is built per inbound and is non-empty.
         assert env["UNITY_OFFLINE_TASK_SOURCE_REF"]
-        # Result shape used by the caller's logging.
         assert result["success"] is True
         assert result["status"] == "spawned_local"
-        assert result["source_type"] == "triggered"
+        assert result["wake"] == "triggered"
 
     @pytest.mark.asyncio
     async def test_adopts_watcher_onto_dispatcher_inflight(self, monkeypatch):
@@ -125,7 +111,7 @@ class TestLocalOfflineTriggerDispatch:
         cm = _make_fake_cm(dispatcher)
         event = SimpleNamespace(content="msg", timestamp=None)
 
-        await task_activation._dispatch_offline_trigger_candidate_local(
+        await task_execution._dispatch_offline_trigger_candidate_local(
             cm=cm,
             candidate=_make_offline_trigger_snapshot(),
             event=event,
@@ -134,15 +120,11 @@ class TestLocalOfflineTriggerDispatch:
             sender_name="Bob",
         )
 
-        # One watcher task should be registered (until it completes naturally).
-        # Drain by letting the loop run a turn so the FakeProcess.communicate
-        # completes and the watcher exits.
         for _ in range(5):
             if not dispatcher._inflight:
                 break
             await asyncio.sleep(0.01)
 
-        # The watcher recorded the dispatch with the correct source_type.
         assert dispatcher.watch_calls == [("42:17", "triggered")]
 
     @pytest.mark.asyncio
@@ -151,7 +133,7 @@ class TestLocalOfflineTriggerDispatch:
         event = SimpleNamespace(content="msg", timestamp=None)
 
         with pytest.raises(RuntimeError, match="Local activation scheduler"):
-            await task_activation._dispatch_offline_trigger_candidate_local(
+            await task_execution._dispatch_offline_trigger_candidate_local(
                 cm=cm,
                 candidate=_make_offline_trigger_snapshot(),
                 event=event,
@@ -162,12 +144,12 @@ class TestLocalOfflineTriggerDispatch:
 
     @pytest.mark.asyncio
     async def test_raises_when_no_offline_dispatcher_on_materializer(self):
-        materializer = SimpleNamespace()  # no _offline attribute
+        materializer = SimpleNamespace()
         cm = SimpleNamespace(_activation_materializer=materializer)
         event = SimpleNamespace(content="msg", timestamp=None)
 
         with pytest.raises(RuntimeError, match="Local activation scheduler"):
-            await task_activation._dispatch_offline_trigger_candidate_local(
+            await task_execution._dispatch_offline_trigger_candidate_local(
                 cm=cm,
                 candidate=_make_offline_trigger_snapshot(),
                 event=event,

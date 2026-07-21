@@ -66,7 +66,6 @@ async def test_summary_on_natural_completion(monkeypatch):
         description="Natural completion test",
     )
     task_id = task_info["details"]["task_id"]
-    instance_id = task_info["details"].get("instance_id", 0)
 
     handle = await ts.execute(task_id=task_id)
     result_text = await handle.result()
@@ -101,13 +100,9 @@ async def test_summary_on_natural_completion(monkeypatch):
         f"Calls: {write_entries_spy.call_args_list}"
     )
 
-    # Verify the data in the store (this should now pass as the write was allowed)
-    final_rows = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id}",
-    )
-    assert (
-        final_rows
-    ), f"Could not find final row for task_id {task_id}, instance_id {instance_id}"
+    # Verify the data in the store (definition row only; executions live separately)
+    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
+    assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
     assert final_row.status == Status.completed.value
     assert final_row.info == MOCK_SUMMARY
@@ -155,7 +150,6 @@ async def test_summary_on_stop_cancel(monkeypatch):
 
     task_info = ts._create_task(name="Test Stop Cancel", description="Stop cancel test")
     task_id = task_info["details"]["task_id"]
-    instance_id = task_info["details"].get("instance_id", 0)  # Fetch instance_id
 
     handle = await ts.execute(task_id=task_id)
     await asyncio.sleep(0.1)
@@ -201,12 +195,8 @@ async def test_summary_on_stop_cancel(monkeypatch):
     )
 
     # Verify the data in the store
-    final_rows = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id}",
-    )
-    assert (
-        final_rows
-    ), f"Could not find final row for task_id {task_id}, instance_id {instance_id}"
+    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
+    assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
     # In the cancel=True case, the final status *should* be 'cancelled'
     assert final_row.status == Status.cancelled.value
@@ -265,7 +255,6 @@ async def test_summary_on_execution_error(monkeypatch):
 
     task_info = ts._create_task(name="Test Error", description="Execution error test")
     task_id = task_info["details"]["task_id"]
-    instance_id = task_info["details"].get("instance_id", 0)
 
     # Patch ActiveTask.result to return an error string but keep original scheduling of summary
     original_result = ActiveTask.result
@@ -315,12 +304,8 @@ async def test_summary_on_execution_error(monkeypatch):
     )
 
     # Verify the data in the store
-    final_rows = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id}",
-    )
-    assert (
-        final_rows
-    ), f"Could not find final row for task_id {task_id}, instance_id {instance_id}"
+    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
+    assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
     # The final status should be 'failed'
     assert final_row.status == Status.failed.value
@@ -329,13 +314,10 @@ async def test_summary_on_execution_error(monkeypatch):
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
+async def test_summary_targets_definition_row_for_recurring(monkeypatch):
     """
-    Verify info is populated for the CORRECT instance_id when a
-    recurring task completes multiple times.
+    Verify recurring runs update the same task definition row's info field.
     """
-    # steps=0 completes immediately; steps>=1 waits for tool calls that never
-    # happen in this mocked path and would hang await handle.result() forever.
     actor = SimulatedActor(steps=0)
     ts = create_test_scheduler(actor)
 
@@ -348,47 +330,25 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
     mock_generate_summary = AsyncMock(return_value=MOCK_SUMMARY)
     monkeypatch.setattr(ActiveTask, "_generate_summary_from_log", mock_generate_summary)
 
-    # Spy on _update_task_instance
     summary_saved_event_0 = asyncio.Event()
     summary_saved_event_1 = asyncio.Event()
-    update_instance_calls = []
-    original_update_instance = TaskScheduler._update_task_instance
+    definition_info_calls = []
+    original_update_definition_info = TaskScheduler._update_task_definition_info
 
-    def check_summary_write(*args, **kwargs):
-        call_kwargs = kwargs
-        call_record = dict(call_kwargs)
-        try:
-            status_val = call_record.get("status")
-            if not isinstance(status_val, Status):
-                call_record["status"] = Status(status_val)
-        except Exception:
-            pass
-        update_instance_calls.append(call_record)
-
-        task_id_called = call_record.get("task_id")
-        instance_id_called = call_record.get("instance_id")
-        status_called = call_record.get("status")
-        info_called = call_record.get("info")
-
-        # New behavior: summary is written independently of status
-        if instance_id_called == 0 and info_called == MOCK_SUMMARY:
+    def check_definition_info_write(self, *, task_id: int, info: str):
+        definition_info_calls.append({"task_id": task_id, "info": info})
+        if info == MOCK_SUMMARY:
             summary_saved_event_0.set()
-
-        elif instance_id_called == 1 and info_called == "Mock summary for run 1":
+        elif info == "Mock summary for run 1":
             summary_saved_event_1.set()
+        return original_update_definition_info(self, task_id=task_id, info=info)
 
-        # Return a dummy sync result to mimic scheduler write
-        return {"detail": "Update recorded by spy"}
-
-    update_instance_spy = MagicMock(side_effect=check_summary_write)
     monkeypatch.setattr(
         TaskScheduler,
-        "_update_task_instance",
-        update_instance_spy,
+        "_update_task_definition_info",
+        check_definition_info_write,
     )
 
-    # Clone-on-execute requires repeat *and* schedule_start_at (same as
-    # test_repetition clone/rearm coverage).
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
     )
@@ -401,128 +361,28 @@ async def test_summary_targets_correct_instance_for_recurring(monkeypatch):
     )
     task_id = task_create_outcome["details"]["task_id"]
 
-    # Run instance 0
     handle_0 = await ts.execute(task_id=task_id)
-    instance_id_0 = getattr(
-        handle_0,
-        "_instance_id",
-        getattr(getattr(handle_0, "_current_handle", object()), "_instance_id", None),
-    )
-    assert instance_id_0 == 0, f"Expected instance_id 0, got {instance_id_0}"
-    result_0 = await handle_0.result()  # Triggers background _save_final_summary -> spy
-    try:
-        # Wait for the spy to detect the call initiated by _save_final_summary
-        await asyncio.wait_for(summary_saved_event_0.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-        pytest.fail(
-            "Timeout waiting for summary save event 0. Spy calls: {}".format(
-                update_instance_calls,
-            ),
-        )
+    await handle_0.result()
+    await asyncio.wait_for(summary_saved_event_0.wait(), timeout=5.0)
 
-    # Persist DB updates using the original method for final assertions
-    original_update_instance(
-        ts,
-        task_id=task_id,
-        instance_id=0,
-        status=Status.completed,
-        info=MOCK_SUMMARY,
-    )
+    definition_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
+    assert len(definition_rows) == 1
+    assert definition_rows[0].info == MOCK_SUMMARY
 
-    # Verify spy recorded the call correctly for instance 0
-    call_0_found = any(
-        call.get("task_id") == task_id
-        and call.get("instance_id") == 0
-        and call.get("info") == MOCK_SUMMARY
-        for call in update_instance_calls
-    )
-    assert call_0_found, (
-        "Summary write call for instance 0 not found or incorrect. "
-        f"Calls: {update_instance_calls}"
-    )
-    call_index_0 = next(
-        (
-            i
-            for i, call in enumerate(update_instance_calls)
-            if call.get("instance_id") == 0
-        ),
-        -1,
-    )
-
-    # Check for cloned task (instance 1)
-    await asyncio.sleep(0.1)
-    cloned_tasks = ts._filter_tasks(filter=f"task_id == {task_id} and instance_id == 1")
-    assert cloned_tasks, f"Did not find cloned task instance 1 for task_id {task_id}"
-    instance_id_1 = cloned_tasks[0].instance_id
-    assert instance_id_1 == 1
-
-    # Set up action log / summary mock for run 1
     monkeypatch.setattr(
         SimulatedActorHandle,
         "action_log",
         ["Log for run 1"],
         raising=False,
     )
-    mock_generate_summary.reset_mock(return_value=True, side_effect=False)
     mock_generate_summary.return_value = "Mock summary for run 1"
     EXPECTED_SUMMARY_1 = "Mock summary for run 1"
 
-    # Run instance 1
-    handle_1 = await ts.execute(task_id=task_id)  # Should pick up instance 1 now
-    instance_id_1_run = getattr(
-        handle_1,
-        "_instance_id",
-        getattr(getattr(handle_1, "_current_handle", object()), "_instance_id", None),
-    )
-    assert instance_id_1_run == 1, (
-        f"Expected execute to run instance_id 1, got {instance_id_1_run}. "
-        f"Cloned task status before execute: {cloned_tasks[0].status}."
-    )
+    handle_1 = await ts.execute(task_id=task_id)
+    await handle_1.result()
+    await asyncio.wait_for(summary_saved_event_1.wait(), timeout=5.0)
 
-    result_1 = (
-        await handle_1.result()
-    )  # Triggers background _save_final_summary -> spy for instance 1
-    await asyncio.sleep(0)  # Yield control briefly
-    try:
-        # Wait for the spy to detect the call for instance 1
-        await asyncio.wait_for(summary_saved_event_1.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-        pytest.fail(
-            "Timeout waiting for summary save event 1. Spy calls: {}".format(
-                update_instance_calls,
-            ),
-        )
-
-    # Persist DB updates using the original method for final assertions
-    original_update_instance(
-        ts,
-        task_id=task_id,
-        instance_id=1,
-        status=Status.completed,
-        info=EXPECTED_SUMMARY_1,
-    )
-
-    # Check that the spy *recorded* the call for instance 1 correctly
-    found_call_1 = any(
-        call.get("task_id") == task_id
-        and call.get("instance_id") == 1
-        and call.get("info") == EXPECTED_SUMMARY_1
-        for i, call in enumerate(update_instance_calls)
-        if i > call_index_0
-    )
-    assert (
-        found_call_1
-    ), f"Did not find summary write call for instance 1 after index {call_index_0}. Calls: {update_instance_calls}"
-
-    # Verify data in store for both instances (should now be correct due to manual updates)
-    final_rows_0 = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id_0}",
-    )
-    final_rows_1 = ts._filter_tasks(
-        filter=f"task_id == {task_id} and instance_id == {instance_id_1}",
-    )
-    # Asserts remain the same
-    assert final_rows_0 and final_rows_0[0].status == Status.completed
-    assert final_rows_0 and final_rows_0[0].info == MOCK_SUMMARY
-    assert final_rows_1 and final_rows_1[0].status == Status.completed
-    assert final_rows_1 and final_rows_1[0].info == EXPECTED_SUMMARY_1
+    definition_rows_after_second = ts._filter_tasks(filter=f"task_id == {task_id}")
+    assert len(definition_rows_after_second) == 1
+    assert definition_rows_after_second[0].info == EXPECTED_SUMMARY_1
+    assert all(call["task_id"] == task_id for call in definition_info_calls)

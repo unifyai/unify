@@ -15,6 +15,7 @@ from tests.helpers import _handle_project
 from tests.provider_trigger_delivery import (
     create_github_composio_connection,
     deliver_signed_composio_webhook,
+    ensure_provider_trigger_test_prerequisites,
     fetch_active_generation_for_binding,
     fetch_latest_receipt_run_key,
     load_composio_github_issue_fixture,
@@ -87,6 +88,7 @@ def orchestra_assistant_and_scheduler(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
     monkeypatch.setenv("COMPOSIO_WEBHOOK_SECRET", _WEBHOOK_SECRET)
+    ensure_provider_trigger_test_prerequisites()
 
     import unisdk
 
@@ -195,7 +197,7 @@ def test_actor_enable_and_stub_delivery_create_one_provider_run(
 
     run_key = fetch_latest_receipt_run_key(binding_id=binding_id)
     run_response = requests.post(
-        f"{orchestra_api_base()}/v0/task-run/get",
+        f"{orchestra_api_base()}/v0/task-execution/get",
         headers={"Authorization": f"Bearer {orchestra_api_key()}"},
         json={
             "project_name": "Assistants",
@@ -208,7 +210,10 @@ def test_actor_enable_and_stub_delivery_create_one_provider_run(
     run_response.raise_for_status()
     run = run_response.json().get("run")
     assert run is not None
-    assert run["source_type"] == "provider_event"
+    assert (
+        run.get("wake") == "provider_event"
+        or run.get("source_type") == "provider_event"
+    )
 
 
 @pytest.mark.requires_orchestra
@@ -244,12 +249,12 @@ def test_actor_non_matching_stub_delivery_creates_no_run(
 
     payload = load_composio_github_issue_fixture(
         external_trigger_id=generation["external_trigger_id"],
-        connected_account_id=connection.get("provider_connection_id", "ca_local_stub"),
+        connected_account_id="ca_wrong_account",
         provider_user_id=connection.get(
             "provider_user_id",
             "assistant:provider-trigger-probe",
         ),
-        repository="unifyai/demo",
+        repository=probe_github_repository_full_name(),
     )
     response = deliver_signed_composio_webhook(
         ingress_key=generation["ingress_key"],
@@ -259,4 +264,4 @@ def test_actor_non_matching_stub_delivery_creates_no_run(
     )
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "ignored"
-    assert response.json().get("run_key") in {None, ""}
+    assert response.json().get("classification_reason") == "unauthorized"

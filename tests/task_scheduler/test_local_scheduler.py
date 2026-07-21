@@ -22,29 +22,30 @@ from unify.task_scheduler.local_scheduler import scheduler as scheduler_module
 from unify.task_scheduler.local_scheduler.scheduler import (
     LocalActivationScheduler as _LAS,
 )
-from unify.task_scheduler.machine_state import TaskActivationSnapshot
+from unify.task_scheduler.machine_state import TaskExecutionSnapshot
 
 
 def _make_snapshot(
     *,
     task_id: int,
-    activation_key: str | None = None,
-    next_due_at: str | None = None,
-    activation_revision: str = "rev-1",
-    execution_mode: str = "live",
+    run_key: str | None = None,
+    scheduled_for: str | None = None,
+    revision: str = "rev-1",
+    delivery: str = "live",
+    wake: str = "scheduled",
     assistant_id: str = "42",
-) -> TaskActivationSnapshot:
-    """Construct a scheduled TaskActivationSnapshot with sane defaults."""
+) -> TaskExecutionSnapshot:
+    """Construct a scheduled TaskExecutionSnapshot with sane defaults."""
 
-    return TaskActivationSnapshot(
+    return TaskExecutionSnapshot(
+        run_key=run_key or f"{assistant_id}:{task_id}",
         assistant_id=assistant_id,
-        activation_key=activation_key or f"{assistant_id}:{task_id}",
         task_id=task_id,
         source_task_log_id=1000 + task_id,
-        activation_kind="scheduled",
-        execution_mode=execution_mode,
-        next_due_at=next_due_at or _iso_future(seconds=600),
-        activation_revision=activation_revision,
+        wake=wake,
+        delivery=delivery,
+        scheduled_for=scheduled_for or _iso_future(seconds=600),
+        revision=revision,
     )
 
 
@@ -323,9 +324,9 @@ class TestSecondsUntil:
 
 def _patch_list_scheduled(
     monkeypatch,
-    activations: list[TaskActivationSnapshot],
+    activations: list[TaskExecutionSnapshot],
 ) -> list[str | int | None]:
-    """Patch the module's `list_scheduled_activations` to return a fixed list.
+    """Patch the module's `list_scheduled_executions` to return a fixed list.
 
     Returns a list that records the assistant_id of each call so tests can
     assert how reconciliation was invoked.
@@ -341,7 +342,7 @@ def _patch_list_scheduled(
 
     monkeypatch.setattr(
         machine_state,
-        "list_scheduled_activations",
+        "list_scheduled_executions",
         _fake,
     )
     return calls
@@ -435,7 +436,7 @@ class TestReconcile:
         # Pass 1: snapshot at rev-1.
         _patch_list_scheduled(
             monkeypatch,
-            [_make_snapshot(task_id=7, activation_revision="rev-1")],
+            [_make_snapshot(task_id=7, revision="rev-1")],
         )
         scheduler = LocalActivationScheduler(event_broker=_FakeBroker())
         await scheduler._reconcile()
@@ -445,7 +446,7 @@ class TestReconcile:
         # Pass 2: snapshot at rev-2 (e.g. user edited the schedule).
         _patch_list_scheduled(
             monkeypatch,
-            [_make_snapshot(task_id=7, activation_revision="rev-2")],
+            [_make_snapshot(task_id=7, revision="rev-2")],
         )
         await scheduler._reconcile()
         try:
@@ -465,7 +466,7 @@ class TestReconcile:
         )
         _patch_list_scheduled(
             monkeypatch,
-            [_make_snapshot(task_id=7, activation_revision="rev-1")],
+            [_make_snapshot(task_id=7, revision="rev-1")],
         )
 
         scheduler = LocalActivationScheduler(event_broker=_FakeBroker())
@@ -494,7 +495,7 @@ class TestReconcile:
         def _boom(*, assistant_id):
             raise RuntimeError("simulated Unify outage")
 
-        monkeypatch.setattr(machine_state, "list_scheduled_activations", _boom)
+        monkeypatch.setattr(machine_state, "list_scheduled_executions", _boom)
 
         scheduler = LocalActivationScheduler(event_broker=_FakeBroker())
         # Existing timers should be preserved when the read fails.
@@ -540,15 +541,15 @@ class TestTaskDueFromSnapshot:
         )
 
         # Missing source_task_log_id.
-        bad = TaskActivationSnapshot(
+        bad = TaskExecutionSnapshot(
+            run_key="42:1",
             assistant_id="42",
-            activation_key="42:1",
             task_id=1,
             source_task_log_id=None,
-            activation_kind="scheduled",
-            execution_mode="live",
-            next_due_at="2030-01-01T00:00:00+00:00",
-            activation_revision="rev",
+            wake="scheduled",
+            delivery="live",
+            scheduled_for="2030-01-01T00:00:00+00:00",
+            revision="rev",
         )
         assert _task_due_from_snapshot(bad) is None
 
@@ -557,15 +558,15 @@ class TestTaskDueFromSnapshot:
             _task_due_from_snapshot,
         )
 
-        bad = TaskActivationSnapshot(
+        bad = TaskExecutionSnapshot(
+            run_key="42:1",
             assistant_id="42",
-            activation_key="42:1",
             task_id=1,
             source_task_log_id=99,
-            activation_kind="scheduled",
-            execution_mode="live",
-            next_due_at="2030-01-01T00:00:00+00:00",
-            activation_revision=None,
+            wake="scheduled",
+            delivery="live",
+            scheduled_for="2030-01-01T00:00:00+00:00",
+            revision=None,
         )
         assert _task_due_from_snapshot(bad) is None
 
@@ -574,15 +575,15 @@ class TestTaskDueFromSnapshot:
             _task_due_from_snapshot,
         )
 
-        bad = TaskActivationSnapshot(
+        bad = TaskExecutionSnapshot(
+            run_key="42:1",
             assistant_id="42",
-            activation_key="42:1",
             task_id=1,
             source_task_log_id=99,
-            activation_kind="scheduled",
-            execution_mode="live",
-            next_due_at=None,
-            activation_revision="rev",
+            wake="scheduled",
+            delivery="live",
+            scheduled_for=None,
+            revision="rev",
         )
         assert _task_due_from_snapshot(bad) is None
 
@@ -591,20 +592,20 @@ class TestTaskDueFromSnapshot:
             _task_due_from_snapshot,
         )
 
-        snap = TaskActivationSnapshot(
+        snap = TaskExecutionSnapshot(
+            run_key="42:7",
             assistant_id="42",
-            activation_key="42:7",
             task_id=7,
             source_task_log_id=1007,
-            activation_kind="scheduled",
-            execution_mode="live",
+            wake="scheduled",
+            delivery="live",
             task_name="Weekly Status",
             task_description=(
                 "Send Monday morning status report to the team — "
                 "summarise Friday's progress."
             ),
-            next_due_at="2030-04-10T09:00:00+00:00",
-            activation_revision="rev-abc",
+            scheduled_for="2030-04-10T09:00:00+00:00",
+            revision="rev-abc",
         )
 
         event = _task_due_from_snapshot(snap)
@@ -612,9 +613,9 @@ class TestTaskDueFromSnapshot:
         assert event is not None
         assert event.task_id == 7
         assert event.source_task_log_id == 1007
-        assert event.activation_revision == "rev-abc"
+        assert event.revision == "rev-abc"
         assert event.scheduled_for == "2030-04-10T09:00:00+00:00"
-        assert event.source_type == "scheduled"
+        assert event.wake == "scheduled"
         assert event.task_label == "Weekly Status"
         assert event.task_summary.startswith("Send Monday morning")
         assert len(event.task_summary) <= 220
@@ -628,7 +629,7 @@ class TestTaskDueFromSnapshot:
         )
 
         snap = _make_snapshot(task_id=1)
-        snap = TaskActivationSnapshot(
+        snap = TaskExecutionSnapshot(
             **{
                 **{k: getattr(snap, k) for k in snap.__dataclass_fields__.keys()},
                 "repeat": [{"frequency": "weekly", "interval": 1}],
@@ -695,8 +696,8 @@ class TestFire:
             def __init__(self) -> None:
                 self.calls: list[tuple] = []
 
-            async def dispatch(self, snap, *, source_type):
-                self.calls.append((snap.activation_key, source_type))
+            async def dispatch(self, snap, *, wake):
+                self.calls.append((snap.run_key, wake))
 
             async def stop(self):
                 return None
@@ -708,7 +709,7 @@ class TestFire:
             offline_dispatcher=fake,
         )
         await scheduler._fire(
-            _make_snapshot(task_id=9, execution_mode="offline"),
+            _make_snapshot(task_id=9, delivery="offline"),
         )
         assert broker.published == []
         assert fake.calls == [("42:9", "scheduled")]
@@ -716,7 +717,7 @@ class TestFire:
     @pytest.mark.asyncio
     async def test_fire_offline_swallows_dispatcher_failure(self):
         class _BoomDispatcher:
-            async def dispatch(self, snap, *, source_type):
+            async def dispatch(self, snap, *, wake):
                 raise RuntimeError("subprocess spawn failed")
 
             async def stop(self):
@@ -728,7 +729,7 @@ class TestFire:
         )
         # Must not raise.
         await scheduler._fire(
-            _make_snapshot(task_id=9, execution_mode="offline"),
+            _make_snapshot(task_id=9, delivery="offline"),
         )
 
     @pytest.mark.asyncio
@@ -744,7 +745,7 @@ class TestFire:
         scheduler = LocalActivationScheduler(event_broker=broker)
         snap = _make_snapshot(
             task_id=11,
-            next_due_at=_iso_future(seconds=0.05),
+            scheduled_for=_iso_future(seconds=0.05),
         )
         scheduler._arm(snap)
 
@@ -844,8 +845,8 @@ class TestPollLoop:
             "42",
         )
 
-        # Mutable list the patched list_scheduled_activations reads from.
-        live: list[TaskActivationSnapshot] = []
+        # Mutable list the patched list_scheduled_executions reads from.
+        live: list[TaskExecutionSnapshot] = []
 
         from unify.task_scheduler import machine_state
 
@@ -854,7 +855,7 @@ class TestPollLoop:
 
         monkeypatch.setattr(
             machine_state,
-            "list_scheduled_activations",
+            "list_scheduled_executions",
             _fake,
         )
 

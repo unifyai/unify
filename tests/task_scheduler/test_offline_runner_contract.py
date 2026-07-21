@@ -35,8 +35,8 @@ class TestBuildOfflineRunnerEnv:
             assistant_id="assistant-123",
             task_id=101,
             source_task_log_id=555,
-            activation_revision="rev-1",
-            source_type="scheduled",
+            revision="rev-1",
+            wake="scheduled",
             run_key="offline:scheduled:assistant-123:101:rev-digest:once",
         )
         defaults.update(overrides)
@@ -46,15 +46,15 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env()
         required = {
             "UNITY_OFFLINE_TASK_MODE",
-            "UNITY_OFFLINE_TASK_RUN_KEY",
+            "UNITY_OFFLINE_RUN_KEY",
             "UNITY_OFFLINE_TASK_ID",
             "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID",
-            "UNITY_OFFLINE_TASK_ACTIVATION_REVISION",
+            "UNITY_OFFLINE_TASK_REVISION",
             "UNITY_OFFLINE_TASK_FUNCTION_ID",
             "UNITY_OFFLINE_TASK_REQUEST",
             "UNITY_OFFLINE_TASK_NAME",
             "UNITY_OFFLINE_TASK_DESCRIPTION",
-            "UNITY_OFFLINE_TASK_SOURCE_TYPE",
+            "UNITY_OFFLINE_TASK_WAKE",
             "UNITY_OFFLINE_TASK_SCHEDULED_FOR",
             "UNITY_OFFLINE_TASK_SOURCE_REF",
             "UNITY_OFFLINE_TASK_SOURCE_MEDIUM",
@@ -159,11 +159,11 @@ class TestBuildOfflineRunnerEnv:
 
     def test_provider_event_env_requires_dispatch_fields(self):
         with pytest.raises(ValueError, match="provider_event offline runs require"):
-            self._make_env(source_type="provider_event")
+            self._make_env(wake="provider_event")
 
     def test_provider_event_env_includes_dispatch_identity(self):
         env = self._make_env(
-            source_type="provider_event",
+            wake="provider_event",
             provider_event_operation_id="op-1",
             provider_event_run_id=42,
             provider_event_binding_id="binding-1",
@@ -196,8 +196,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="assistant-123",
             task_id=101,
-            activation_revision="rev-abc",
-            source_type="scheduled",
+            revision="rev-abc",
+            wake="scheduled",
         )
         revision_digest = hashlib.sha256(b"rev-abc").hexdigest()[:12]
         assert key == f"offline:scheduled:assistant-123:101:{revision_digest}:once"
@@ -206,8 +206,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="assistant-123",
             task_id=101,
-            activation_revision="rev-abc",
-            source_type="scheduled",
+            revision="rev-abc",
+            wake="scheduled",
             scheduled_for="2030-04-10T09:00:00+00:00",
         )
         revision_digest = hashlib.sha256(b"rev-abc").hexdigest()[:12]
@@ -222,8 +222,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="assistant-123",
             task_id=101,
-            activation_revision="rev-123",
-            source_type="triggered",
+            revision="rev-123",
+            wake="triggered",
             source_medium="sms_message",
             source_ref="message-123",
             source_contact_id="77",
@@ -239,14 +239,14 @@ class TestBuildOfflineRunKey:
         a = build_offline_run_key(
             assistant_id="x",
             task_id=1,
-            activation_revision="rev-1",
-            source_type="scheduled",
+            revision="rev-1",
+            wake="scheduled",
         )
         b = build_offline_run_key(
             assistant_id="x",
             task_id=1,
-            activation_revision="rev-2",
-            source_type="scheduled",
+            revision="rev-2",
+            wake="scheduled",
         )
         assert a != b
 
@@ -255,8 +255,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="x",
             task_id=1,
-            activation_revision="rev",
-            source_type="scheduled",
+            revision="rev",
+            wake="scheduled",
             scheduled_for=ts,
         )
         assert key.endswith(":20300410T090000Z")
@@ -266,8 +266,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="x",
             task_id=1,
-            activation_revision="rev",
-            source_type="scheduled",
+            revision="rev",
+            wake="scheduled",
             scheduled_for=ts,
         )
         assert key.endswith(":20300410T090000Z")
@@ -276,8 +276,8 @@ class TestBuildOfflineRunKey:
         key = build_offline_run_key(
             assistant_id="x",
             task_id=1,
-            activation_revision="rev",
-            source_type="scheduled",
+            revision="rev",
+            wake="scheduled",
             scheduled_for="not-a-date",
         )
         # Falls through to the default tail.
@@ -289,9 +289,9 @@ class TestBuildOfflineRunKey:
             assistant_id="assistant-1",
             task_id=101,
             binding_id="binding-1",
-            activation_revision="rev-shared",
+            revision="rev-shared",
             event_identity_hmac=identity,
-            execution_mode="live",
+            delivery="live",
         )
         revision_digest = hashlib.sha256(b"rev-shared").hexdigest()[:12]
         assert key == (
@@ -304,14 +304,14 @@ class TestBuildOfflineRunKey:
             assistant_id="assistant-1",
             task_id=101,
             binding_id="binding-1",
-            activation_revision="rev-shared",
+            revision="rev-shared",
             event_identity_hmac="abcdef0123456789aaa111",  # pragma: allowlist secret
         )
         second = build_provider_event_run_key(
             assistant_id="assistant-1",
             task_id=101,
             binding_id="binding-1",
-            activation_revision="rev-shared",
+            revision="rev-shared",
             event_identity_hmac="abcdef0123456789bbb222",  # pragma: allowlist secret
         )
         assert first != second
@@ -370,9 +370,9 @@ class _FakeOfflineRequest:
         self.assistant_id = kwargs.get("assistant_id", "assistant-123")
         self.task_id = kwargs.get("task_id", 101)
         self.source_task_log_id = kwargs.get("source_task_log_id", 555)
-        self.activation_revision = kwargs.get("activation_revision", "rev-1")
-        self.source_type = kwargs.get("source_type", "scheduled")
-        self.execution_mode = kwargs.get("execution_mode", "offline")
+        self.revision = kwargs.get("revision", "rev-1")
+        self.wake = kwargs.get("wake", "scheduled")
+        self.delivery = kwargs.get("delivery", "offline")
         self.entrypoint = kwargs.get("entrypoint")
         self.scheduled_for = kwargs.get("scheduled_for")
         self.source_ref = kwargs.get("source_ref")
@@ -409,16 +409,16 @@ def _original_communication_env_builder(
 
     return {
         "UNITY_OFFLINE_TASK_MODE": "actor",
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
+        "UNITY_OFFLINE_RUN_KEY": run_key,
         "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
-        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
+        "UNITY_OFFLINE_TASK_REVISION": request.revision,
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
         "UNITY_OFFLINE_TASK_REQUEST": task_request,
         "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
         "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
-        "UNITY_OFFLINE_TASK_SOURCE_TYPE": request.source_type,
+        "UNITY_OFFLINE_TASK_WAKE": request.wake,
         "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
         "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
         "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": (
@@ -488,8 +488,8 @@ def _new_communication_env_builder(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
         task_id=request.task_id,
         source_task_log_id=request.source_task_log_id,
-        activation_revision=request.activation_revision,
-        source_type=request.source_type,
+        revision=request.revision,
+        wake=request.wake,
         run_key=run_key,
         task_name=str(activation.get("task_name") or ""),
         task_description=str(activation.get("task_description") or ""),
@@ -567,8 +567,8 @@ class TestCommunicationEnvBuilderEquivalence:
             "assistant_id": "assistant-123",
             "task_id": 101,
             "source_task_log_id": 555,
-            "activation_revision": "rev-1",
-            "source_type": "scheduled",
+            "revision": "rev-1",
+            "wake": "scheduled",
             "scheduled_for": _dt(2026, 4, 10, 9, 0, 0, tzinfo=timezone.utc),
         }
         request_kwargs.update(overrides.get("request", {}))

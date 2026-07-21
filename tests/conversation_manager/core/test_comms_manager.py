@@ -1765,10 +1765,10 @@ class TestSystemEvents:
                     "message": "Scheduled task 'Morning briefing' became due.",
                     "task_id": 101,
                     "source_task_log_id": 555,
-                    "activation_revision": "rev-1",
+                    "revision": "rev-1",
                     "scheduled_for": "2026-04-10T09:00:00+00:00",
-                    "execution_mode": "live",
-                    "source_type": "scheduled",
+                    "delivery": "live",
+                    "wake": "scheduled",
                     "task_label": "Morning briefing",
                     "task_summary": "Prepare the morning update before the user checks in.",
                     "visibility_policy": "silent_by_default",
@@ -1786,7 +1786,7 @@ class TestSystemEvents:
             assert isinstance(event, TaskDue)
             assert event.task_id == 101
             assert event.source_task_log_id == 555
-            assert event.activation_revision == "rev-1"
+            assert event.revision == "rev-1"
             assert event.scheduled_for == "2026-04-10T09:00:00+00:00"
             assert event.task_label == "Morning briefing"
             assert (
@@ -1996,7 +1996,7 @@ class TestSystemEvents:
                     "event_type": "task_due",
                     "task_id": 101,
                     "source_task_log_id": 555,
-                    "activation_revision": "rev-1",
+                    "revision": "rev-1",
                     "scheduled_for": "2026-04-10T09:00:00+00:00",
                     "destination": "team:007",
                 },
@@ -2034,7 +2034,7 @@ class TestSystemEvents:
                     "event_type": "task_due",
                     "task_id": 101,
                     "source_task_log_id": 555,
-                    "activation_revision": "rev-1",
+                    "revision": "rev-1",
                     "scheduled_for": "2026-04-10T09:00:00+00:00",
                     "destination": "org_default",
                 },

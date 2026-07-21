@@ -20,6 +20,49 @@ from typing import (
 from pydantic import BaseModel, Field
 
 
+def _is_diagnostic_line(text: str) -> bool:
+    for marker in ("PHASE ", "SKIP ", "SOFT_FAIL ", "START ", "END ", "FAIL "):
+        if marker in text:
+            return True
+    return False
+
+
+def compact_diagnostic_text(
+    text: str,
+    *,
+    max_keep_lines: int = 12,
+) -> str:
+    """Summarize dense PHASE/SKIP/SOFT_FAIL trails for live LLM observations.
+
+    Full text remains on the ExecutionResult / EventBus payload; this only
+    shapes what ``to_llm_content`` shows the live CodeAct loop.
+    """
+
+    if not text or not text.strip():
+        return text
+    lines = text.splitlines()
+    diagnostic = [ln for ln in lines if _is_diagnostic_line(ln)]
+    other = [ln for ln in lines if not _is_diagnostic_line(ln)]
+    if len(diagnostic) < 4:
+        return text
+
+    phase_n = sum(1 for ln in diagnostic if "PHASE " in ln)
+    skip_n = sum(1 for ln in diagnostic if "SKIP " in ln)
+    soft_n = sum(1 for ln in diagnostic if "SOFT_FAIL " in ln)
+    summary = (
+        f"[{len(diagnostic)} diagnostic log lines compacted for live context: "
+        f"PHASE={phase_n} SKIP={skip_n} SOFT_FAIL={soft_n}; "
+        f"full trail retained in EventBus/Job logs]"
+    )
+    keep_tail = diagnostic[-min(3, len(diagnostic)) :]
+    kept_other = other[:max_keep_lines]
+    if len(other) > max_keep_lines:
+        kept_other.append(
+            f"... ({len(other) - max_keep_lines} more non-diagnostic lines)",
+        )
+    return "\n".join([summary, *keep_tail, *kept_other])
+
+
 class TextPart(BaseModel):
     """A text output part from sandbox execution."""
 
@@ -175,15 +218,25 @@ class ExecutionResult(BaseModel):
                     blocks.append({"type": "text", "text": "\n--- stdout ---\n"})
                 blocks.extend(parts_to_llm_content(self.stdout))
 
-        # Add stderr with preserved ordering (if non-empty)
+        # Add stderr with preserved ordering (if non-empty). Compact dense
+        # PHASE/SKIP/SOFT_FAIL trails for the live LLM observation; the raw
+        # ``stderr`` field on this object is unchanged for EventBus/Job capture.
         if self.stderr:
             has_content = any(
                 (isinstance(p, TextPart) and p.text.strip()) or isinstance(p, ImagePart)
                 for p in self.stderr
             )
             if has_content:
+                compacted: List[Union[TextPart, ImagePart]] = []
+                for part in self.stderr:
+                    if isinstance(part, TextPart) and part.text:
+                        compacted.append(
+                            TextPart(text=compact_diagnostic_text(part.text)),
+                        )
+                    else:
+                        compacted.append(part)
                 blocks.append({"type": "text", "text": "\n--- stderr ---\n"})
-                blocks.extend(parts_to_llm_content(self.stderr))
+                blocks.extend(parts_to_llm_content(compacted))
 
         # Ensure we always return at least something
         if not blocks:

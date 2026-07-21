@@ -35,7 +35,7 @@ def _request(**overrides) -> ProviderEventDispatchRequest:
         "task_id": 101,
         "binding_id": "binding-1",
         "receipt_id": "receipt-1",
-        "accepted_activation_revision": "rev-123",
+        "accepted_revision": "rev-123",
         "event_context_ref": "blob://binding-1/receipt-1",
         "issued_at": datetime.now(timezone.utc),
     }
@@ -52,8 +52,8 @@ def test_provider_event_dispatch_requested_from_dict_round_trip() -> None:
     assert event.operation_id == request.operation_id
     assert event.run_id == request.run_id
     assert event.task_id == request.task_id
-    assert event.accepted_activation_revision == request.accepted_activation_revision
-    assert event.dispatch_mode == "live"
+    assert event.accepted_revision == request.accepted_revision
+    assert event.delivery == "live"
     assert event.audience == "unity:provider-event-dispatch"
 
 

@@ -52,7 +52,7 @@ async def update_contacts_and_search():
 |----------|---------|---------|
 | `primitives.contacts` | ContactManager | `ask`, `update` |
 | `primitives.transcripts` | TranscriptManager | `ask` |
-| `primitives.tasks` | TaskScheduler | `ask`, `update`, `execute` |
+| `primitives.tasks` | TaskScheduler | `ask`, `update`, `execute`, `get_run_event_children`, `get_run_event` |
 | `primitives.secrets` | SecretManager | `ask`, `update` |
 | `primitives.web` | WebSearcher | `ask` |
 | `primitives.computer` | ComputerPrimitives | `navigate`, `act`, `observe`, `query`, `reason` |

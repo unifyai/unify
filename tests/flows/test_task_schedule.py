@@ -6,8 +6,8 @@ coordinator identity and the shared ``Assistants`` task-machine project that
 projection requires:
 
     TaskScheduler write (``Assistants/{user}/{agent}/Tasks``)
-      -> Orchestra projects ``Tasks/Activations``
-      -> ``list_scheduled_activations`` read
+      -> Orchestra projects ``Tasks/Executions``
+      -> ``list_scheduled_executions`` read
       -> ``LocalActivationScheduler`` reconcile + timer
       -> fire (``TaskDue`` publish for live, offline dispatch for offline).
 
@@ -38,9 +38,10 @@ from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.local_scheduler import LocalActivationScheduler
 from unify.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
-    list_scheduled_activations,
+    list_scheduled_executions,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.execution import Wake
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.status import Status
 
@@ -77,7 +78,7 @@ class _RecordingOfflineDispatcher:
     def __init__(self) -> None:
         self.dispatched: list[Any] = []
 
-    async def dispatch(self, snap: Any, *, source_type: str) -> None:
+    async def dispatch(self, snap: Any, *, wake: str) -> None:
         self.dispatched.append(snap)
 
     async def stop(self) -> None:
@@ -134,7 +135,7 @@ def coordinator_task_env():
 
     Projection writes the activation to a context derived from the *real*
     assistant's ``user_id``, and the scheduler reads activations from
-    ``{SESSION_DETAILS.user_context}/{assistant_context}/Tasks/Activations`` —
+    ``{SESSION_DETAILS.user_context}/{assistant_context}/Tasks/Executions`` —
     so both halves must use the coordinator's actual ``(user_id, agent_id)``.
     All mutated process globals are restored on teardown and created tasks are
     deleted (the delete re-projects and removes their activation rows).
@@ -217,7 +218,7 @@ async def _wait_for_activation(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        for snap in list_scheduled_activations(assistant_id=assistant_id):
+        for snap in list_scheduled_executions(assistant_id=assistant_id):
             if snap.task_name == task_name:
                 return snap
         await asyncio.sleep(0.25)
@@ -262,10 +263,10 @@ async def test_scheduled_task_projects_and_fires(
         "Orchestra did not project a scheduled activation for the task under the "
         "Assistants project"
     )
-    assert snap.activation_kind == "scheduled"
-    assert snap.execution_mode == "live"
-    assert snap.next_due_at is not None
-    assert snap.activation_revision
+    assert snap.wake == Wake.scheduled.value
+    assert snap.delivery == "live"
+    assert snap.scheduled_for is not None
+    assert snap.revision
 
     broker = _RecordingBroker()
     scheduler = LocalActivationScheduler(
@@ -319,10 +320,10 @@ async def test_offline_task_projects_and_routes_to_offline_dispatcher(
     assert (
         snap is not None
     ), "Orchestra did not project an activation for the offline task"
-    assert snap.activation_kind == "scheduled"
-    assert snap.execution_mode == "offline"
-    assert snap.next_due_at is not None
-    assert snap.activation_revision
+    assert snap.wake == Wake.scheduled.value
+    assert snap.delivery == "offline"
+    assert snap.scheduled_for is not None
+    assert snap.revision
 
     broker = _RecordingBroker()
     dispatcher = _RecordingOfflineDispatcher()
@@ -350,7 +351,7 @@ async def test_offline_task_projects_and_routes_to_offline_dispatcher(
             for s in dispatcher.dispatched
             if getattr(s, "task_name", None) == task_name
         )
-        assert offline_snap.execution_mode == "offline"
+        assert offline_snap.delivery == "offline"
 
         # The offline lane must not also publish a live TaskDue for this task;
         # otherwise an offline task would be executed twice.

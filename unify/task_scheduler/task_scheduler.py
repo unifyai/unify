@@ -112,6 +112,7 @@ from .types.status import Status, to_status
 from .types.task import Task, TaskBase
 from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
+from .types.execution import Delivery, Wake
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
 from .provider_event_dispatch import (
     PROVIDER_EVENT_OPERATION_INFO_PREFIX as _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
@@ -171,14 +172,12 @@ class TaskScheduler(BaseTaskScheduler):
                 name="Tasks",
                 description=(
                     "List of all tasks with their name, description, status, "
-                    "schedule, deadline, repeat pattern, priority and instance_id "
-                    "which tracks multiple executions of the same logical task."
+                    "schedule, deadline, repeat pattern, and priority."
                 ),
                 fields=model_to_fields(Task),
-                unique_keys={"task_id": "int", "instance_id": "int"},
+                unique_keys={"task_id": "int"},
                 auto_counting={
                     "task_id": None,
-                    "instance_id": "task_id",
                 },
                 foreign_keys=[
                     {
@@ -234,6 +233,14 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(
                     fn=self._get_provider_event_context,
                     display_label="Inspecting provider event context",
+                ),
+                ToolSpec(
+                    fn=self.get_run_event_children,
+                    display_label="Listing task-run event children",
+                ),
+                ToolSpec(
+                    fn=self.get_run_event,
+                    display_label="Loading one task-run event node",
                 ),
                 include_class_name=False,
             ),
@@ -330,7 +337,6 @@ class TaskScheduler(BaseTaskScheduler):
 
         metadata: dict[str, Any] = {
             "task_id": task.task_id,
-            "instance_id": task.instance_id,
             "task_name": task.name,
             "task_description": task.description,
             "activation_reason": reason.value,
@@ -358,9 +364,8 @@ class TaskScheduler(BaseTaskScheduler):
             rationale: str,
             certification_metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
-            return self._attach_entrypoint_to_future_instances(
+            return self._attach_entrypoint_to_definition(
                 task_id=task.task_id,
-                completed_instance_id=task.instance_id,
                 function_id=function_id,
                 rationale=rationale,
                 certification_metadata=certification_metadata,
@@ -372,9 +377,8 @@ class TaskScheduler(BaseTaskScheduler):
             certification_metadata: dict[str, Any],
             certification_result: dict[str, Any],
         ) -> dict[str, Any]:
-            return self._promote_symbolic_candidate_to_offline(
+            return self._promote_definition_to_offline(
                 task_id=task.task_id,
-                completed_instance_id=task.instance_id,
                 function_id=function_id,
                 certification_metadata=certification_metadata,
                 certification_result=certification_result,
@@ -390,108 +394,99 @@ class TaskScheduler(BaseTaskScheduler):
         self,
         *,
         task: Task,
-        reason: ActivatedBy,
-        source_type: str,
+        wake: Wake | RunSource | str,
         task_run_provenance: TaskRunProvenance | None,
+        state: str | None = None,
     ) -> dict[str, Any]:
-        """Return deterministic run facts supplied by the scheduler."""
+        """Return deterministic execution facts supplied by the scheduler."""
 
         scheduled_for = None
-        activation_revision = None
-        source_medium = None
-        source_ref = None
-        source_contact_id = None
+        revision = None
         run_key = None
+        delivery = task.delivery_mode.value
         if task_run_provenance is not None:
             scheduled_for = task_run_provenance.scheduled_for
-            activation_revision = task_run_provenance.activation_revision
-            source_medium = task_run_provenance.source_medium
-            source_ref = task_run_provenance.source_ref
-            source_contact_id = task_run_provenance.source_contact_id
+            revision = task_run_provenance.revision
             run_key = build_task_run_key(task_run_provenance)
+            delivery = task_run_provenance.delivery.value
         if scheduled_for is None and task.schedule_start_at is not None:
             scheduled_for = task.schedule_start_at.isoformat()
+        normalized_wake = Wake.normalize(
+            wake.value if isinstance(wake, RunSource) else wake,
+        )
         return {
             "task_id": task.task_id,
-            "instance_id": task.instance_id,
-            "task_name": task.name,
-            "source_type": source_type,
-            "activation_reason": reason.value,
+            "wake": normalized_wake.value,
+            "delivery": delivery,
+            "revision": revision,
             "scheduled_for": scheduled_for,
-            "scheduled_run_timestamp": scheduled_for,
+            "state": state,
             "run_key": run_key,
-            "activation_revision": activation_revision,
-            "source_medium": source_medium,
-            "source_ref": source_ref,
-            "source_contact_id": source_contact_id,
-            "delivery_mode": task.delivery_mode.value,
-            "execution_style": task.execution_style.value,
         }
 
     def _build_entrypoint_kwargs(
         self,
         *,
         task: Task,
-        reason: ActivatedBy,
-        source_type: str,
+        wake: Wake | RunSource | str,
         task_run_provenance: TaskRunProvenance | None,
+        state: str | None = None,
     ) -> dict[str, Any]:
         """Return explicit kwargs available to symbolic task entrypoints."""
 
         context = self._build_task_run_context(
             task=task,
-            reason=reason,
-            source_type=source_type,
+            wake=wake,
             task_run_provenance=task_run_provenance,
+            state=state,
         )
         return {
+            "task_id": task.task_id,
             **context,
             "task_execution_context": context,
         }
 
-    def _attach_entrypoint_to_future_instances(
+    def _attach_entrypoint_to_definition(
         self,
         *,
         task_id: int,
-        completed_instance_id: int,
         function_id: int,
         rationale: str,
         certification_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Record a symbolic executor candidate on future non-terminal instances."""
+        """Record a symbolic executor candidate on the task definition row."""
 
         if function_id < 0:
             raise ValueError("function_id must be a non-negative integer.")
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
-            future_logs = self._store.get_rows(
-                filter=(
-                    f"task_id == {task_id} and instance_id > {completed_instance_id} "
-                    "and entrypoint is None and status not in ('completed','cancelled','failed','active')"
-                ),
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                limit=1,
                 return_ids_only=False,
             )
-            if not future_logs:
+            if not log_objs:
                 return {
-                    "outcome": "no_future_instances",
+                    "outcome": "definition_missing",
                     "task_id": task_id,
-                    "completed_instance_id": completed_instance_id,
                     "function_id": function_id,
                     "rationale": rationale,
                 }
-
-            log_ids = [int(log.id) for log in future_logs]
+            if log_objs[0].entries.get("entrypoint") is not None:
+                return {
+                    "outcome": "already_has_entrypoint",
+                    "task_id": task_id,
+                    "function_id": function_id,
+                    "rationale": rationale,
+                }
             self._write_log_entries(
-                logs=log_ids,
+                logs=log_objs[0].id,
                 entries={"entrypoint": int(function_id)},
             )
             return {
                 "outcome": "candidate_recorded",
                 "task_id": task_id,
-                "patched_instance_ids": [
-                    log.entries.get("instance_id") for log in future_logs
-                ],
                 "function_id": int(function_id),
                 "rationale": rationale,
                 "certification_status": "required_before_offline_promotion",
@@ -564,16 +559,15 @@ class TaskScheduler(BaseTaskScheduler):
             reasons.append("certification_must_not_execute_entrypoint")
         return reasons
 
-    def _promote_symbolic_candidate_to_offline(
+    def _promote_definition_to_offline(
         self,
         *,
         task_id: int,
-        completed_instance_id: int,
         function_id: int,
         certification_metadata: dict[str, Any],
         certification_result: dict[str, Any],
     ) -> dict[str, Any]:
-        """Promote future symbolic candidate instances to offline delivery."""
+        """Promote the task definition to offline delivery after certification."""
 
         if function_id < 0:
             raise ValueError("function_id must be a non-negative integer.")
@@ -586,45 +580,49 @@ class TaskScheduler(BaseTaskScheduler):
             return {
                 "outcome": "certification_rejected",
                 "task_id": task_id,
-                "completed_instance_id": completed_instance_id,
                 "function_id": int(function_id),
                 "rejection_reasons": rejection_reasons,
             }
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
-            future_logs = self._store.get_rows(
-                filter=(
-                    f"task_id == {task_id} and instance_id > {completed_instance_id} "
-                    f"and entrypoint == {int(function_id)} "
-                    "and status not in ('completed','cancelled','failed','active')"
-                ),
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                limit=1,
                 return_ids_only=False,
             )
-            future_logs = [
-                log for log in future_logs if not bool(log.entries.get("offline"))
-            ]
-            if not future_logs:
+            if not log_objs:
                 return {
-                    "outcome": "no_matching_candidate_instances",
+                    "outcome": "definition_missing",
                     "task_id": task_id,
-                    "completed_instance_id": completed_instance_id,
                     "function_id": int(function_id),
                     "certification_status": "passed",
                     "certification_result": certification_result,
                 }
-
-            log_ids = [int(log.id) for log in future_logs]
+            row = log_objs[0]
+            if int(row.entries.get("entrypoint") or -1) != int(function_id):
+                return {
+                    "outcome": "entrypoint_mismatch",
+                    "task_id": task_id,
+                    "function_id": int(function_id),
+                    "certification_status": "passed",
+                    "certification_result": certification_result,
+                }
+            if bool(row.entries.get("offline")):
+                return {
+                    "outcome": "already_offline",
+                    "task_id": task_id,
+                    "function_id": int(function_id),
+                    "certification_status": "passed",
+                    "certification_result": certification_result,
+                }
             self._write_log_entries(
-                logs=log_ids,
+                logs=row.id,
                 entries={"offline": True},
             )
             return {
                 "outcome": "offline_promoted",
                 "task_id": task_id,
-                "patched_instance_ids": [
-                    log.entries.get("instance_id") for log in future_logs
-                ],
                 "function_id": int(function_id),
                 "certification_status": "passed",
                 "certification_metadata": certification_metadata,
@@ -763,8 +761,11 @@ class TaskScheduler(BaseTaskScheduler):
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
+            row_filter = f"task_id == {task_id}"
+            if instance_id != 0:
+                row_filter = f"task_id == {task_id} and instance_id == {instance_id}"
             log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id} and instance_id == {instance_id}",
+                filter=row_filter,
                 limit=2,
                 return_ids_only=False,
             )
@@ -804,9 +805,8 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             instance_id = entries.get("instance_id")
             if instance_id is None:
-                raise ValueError(
-                    f"Activation source task log {source_task_log_id} has no instance_id.",
-                )
+                instance_id = 0
+            entries["instance_id"] = instance_id
             entries.setdefault(
                 "destination",
                 self._destination_from_task_context(context_name),
@@ -837,7 +837,7 @@ class TaskScheduler(BaseTaskScheduler):
     ) -> None:
         """Reject stale scheduled provenance before mutating a task instance."""
 
-        if provenance is None or provenance.source_type != "scheduled":
+        if provenance is None or provenance.wake != Wake.scheduled:
             return
         if provenance.scheduled_for is None:
             return
@@ -859,26 +859,15 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         provenance: TaskRunProvenance | None,
     ) -> bool:
-        """Return True when provenance targets an instance that is already active.
+        """Return whether this Execution attempt is already running.
 
-        Concurrent instances of the same ``task_id`` are allowed. The only
-        blocked case is restarting the exact source instance that is already
-        ``active`` (same ``source_task_log_id``).
+        Definition-only Tasks share one row per ``task_id``, so concurrency is
+        gated by Execution ``run_key`` (via create-or-adopt), not by the
+        definition row's ``active`` status.
         """
 
-        if provenance is None or provenance.source_task_log_id is None:
-            return False
-
-        source_task_log_id = int(provenance.source_task_log_id)
-        for context_name in self._read_task_contexts():
-            store = self._store_for_task_context(context_name)
-            rows = store.get_rows(
-                filter=f"task_id == {task_id} and status == 'active'",
-                return_ids_only=False,
-            )
-            for row in rows:
-                if int(row.id) == source_task_log_id:
-                    return True
+        _ = task_id
+        _ = provenance
         return False
 
     @functools.wraps(BaseTaskScheduler.ask, updated=())
@@ -1052,32 +1041,32 @@ class TaskScheduler(BaseTaskScheduler):
         if not all_task_instances:
             raise ValueError(f"No task found with id={task_id}")
 
-        candidate_tasks = [
-            t
-            for t in all_task_instances
-            if t.status
-            not in (
-                Status.completed,
-                Status.cancelled,
-                Status.failed,
-                Status.active,
+        if len(all_task_instances) != 1:
+            raise ValueError(
+                f"Task definition must be unique for task_id={task_id}; "
+                f"found {len(all_task_instances)} rows.",
             )
-        ]
-        if not candidate_tasks:
+        task = all_task_instances[0]
+        if task.status in (Status.cancelled, Status.failed):
             raise ValueError(f"No runnable task found with id={task_id}")
-        task = sorted(candidate_tasks, key=lambda t: t.instance_id)[0]
+        if task.status == Status.completed and task.repeat is None:
+            raise ValueError(f"No runnable task found with id={task_id}")
 
         # Concurrent instances of the same task_id are allowed. Only block when
-        # activation provenance targets an instance that is already active.
-        source_type = (
-            RunSource.triggered
+        # execution provenance targets a row that is already active.
+        task_run_wake = (
+            Wake.triggered
             if trigger_attempt_token
-            else RunSource.from_activation_reason(_activated_by or ActivatedBy.explicit)
+            else Wake.normalize(
+                RunSource.from_activation_reason(
+                    _activated_by or ActivatedBy.explicit,
+                ).value,
+            )
         )
         pending_provenance = peek_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             task_id=task_id,
-            source_type=source_type,
+            wake=task_run_wake,
             trigger_attempt_token=trigger_attempt_token,
         )
         if self._same_instance_already_active(
@@ -1106,15 +1095,15 @@ class TaskScheduler(BaseTaskScheduler):
                 "Description-driven tasks should be executed from Actor.act via primitives.tasks.execute(...).",
             )
 
-        task_run_source_type = (
-            RunSource.triggered
+        task_run_wake = (
+            Wake.triggered
             if trigger_attempt_token
-            else RunSource.from_activation_reason(reason)
+            else Wake.normalize(RunSource.from_activation_reason(reason).value)
         )
         task_run_provenance = consume_live_task_run_provenance(
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             task_id=task_id,
-            source_type=task_run_source_type,
+            wake=task_run_wake,
             destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
         )
@@ -1123,16 +1112,20 @@ class TaskScheduler(BaseTaskScheduler):
                 source_task_log_id=task_run_provenance.source_task_log_id,
                 expected_task_id=task_id,
             )
+            # Definition-only Tasks: concurrent Executions share one definition
+            # row, so ``active`` is allowed. Terminal rows are not runnable.
             if task.status in (
-                Status.completed,
                 Status.cancelled,
                 Status.failed,
-                Status.active,
             ):
                 raise ValueError(
-                    "Activation source task instance is not runnable: "
-                    f"task_id={task.task_id}, instance_id={task.instance_id}, "
-                    f"status={task.status!r}.",
+                    "Task definition is not runnable: "
+                    f"task_id={task.task_id}, status={task.status!r}.",
+                )
+            if task.status == Status.completed and task.repeat is None:
+                raise ValueError(
+                    "Task definition is not runnable: "
+                    f"task_id={task.task_id}, status={task.status!r}.",
                 )
             if _activated_by is None:
                 if task.trigger is not None:
@@ -1141,10 +1134,12 @@ class TaskScheduler(BaseTaskScheduler):
                     reason = ActivatedBy.schedule
                 else:
                     reason = ActivatedBy.explicit
-                task_run_source_type = (
-                    RunSource.triggered
+                task_run_wake = (
+                    Wake.triggered
                     if trigger_attempt_token
-                    else RunSource.from_activation_reason(reason)
+                    else Wake.normalize(
+                        RunSource.from_activation_reason(reason).value,
+                    )
                 )
         self._validate_task_matches_provenance(
             task=task,
@@ -1160,22 +1155,21 @@ class TaskScheduler(BaseTaskScheduler):
         if task.entrypoint is not None:
             entrypoint_kwargs = self._build_entrypoint_kwargs(
                 task=task,
-                reason=reason,
-                source_type=task_run_source_type,
+                wake=task_run_wake,
                 task_run_provenance=task_run_provenance,
+                state=Status.active.value,
             )
 
+        definition_rearmed = False
         if task.status == Status.triggerable or (
             task.repeat is not None and task.schedule_start_at is not None
         ):
-            self._clone_task_instance(task)
+            definition_rearmed = self._rearm_task_definition(task)
 
         with self._use_task_destination(task.destination):
-            self._update_task_status_instance(
+            self._update_task_definition_status(
                 task_id=task_id,
-                instance_id=task.instance_id,
                 new_status=Status.active,
-                activated_by=reason,
             )
 
         handle = await ActiveTask.create(
@@ -1208,6 +1202,7 @@ class TaskScheduler(BaseTaskScheduler):
                 reason=reason,
             ),
             task_guidelines=build_task_run_guidelines(task, reason),
+            definition_rearmed=definition_rearmed,
         )
 
         return handle
@@ -1219,12 +1214,13 @@ class TaskScheduler(BaseTaskScheduler):
         captured_task_revision: int,
         provider_event_context: dict[str, Any],
     ) -> SteerableToolHandle:
-        """Start one captured-revision instance for a provider-event dispatch.
+        """Start one provider-event execution against the authored definition.
 
-        Creates a separate task instance keyed by the dispatch operation without
-        consuming, re-arming, or mutating the authored definition. Validates the
-        accepted receipt authorization carried on ``request`` rather than current
-        trigger state. Event content must arrive as structured untrusted data.
+        Materializes/adopts the Orchestra-precreated ``Tasks/Executions`` row by
+        ``run_key`` and leaves the definition row untouched (no Task-row clone).
+        Validates the accepted receipt authorization on ``request`` rather than
+        current trigger state. Event content must arrive as structured untrusted
+        data.
         """
 
         from unify.task_scheduler.provider_event_dispatch import (
@@ -1234,10 +1230,10 @@ class TaskScheduler(BaseTaskScheduler):
 
         if not isinstance(request, ProviderEventDispatchRequest):
             raise TypeError("request must be a ProviderEventDispatchRequest")
-        if request.dispatch_mode not in {"live", "offline"}:
-            raise ProviderEventDispatchValidationError("invalid_dispatch_mode")
-        if str(request.source_type) != RunSource.provider_event.value:
-            raise ProviderEventDispatchValidationError("run_source_type_mismatch")
+        if request.delivery not in {"live", "offline"}:
+            raise ProviderEventDispatchValidationError("invalid_delivery")
+        if str(request.wake) != Wake.provider_event.value:
+            raise ProviderEventDispatchValidationError("run_wake_mismatch")
 
         definition = self._get_provider_event_definition(task_id=request.task_id)
         if not definition.enabled:
@@ -1245,37 +1241,31 @@ class TaskScheduler(BaseTaskScheduler):
         if not self._task_has_provider_event_trigger(definition):
             raise ProviderEventDispatchValidationError("task_trigger_mismatch")
 
-        instance = self._create_provider_event_captured_instance(
-            definition=definition,
-            operation_id=request.operation_id,
-            captured_task_revision=captured_task_revision,
-            binding_id=request.binding_id,
-        )
         source_task_log_id = self._get_log_by_task_instance(
-            task_id=instance.task_id,
-            instance_id=instance.instance_id,
+            task_id=definition.task_id,
+            instance_id=definition.instance_id,
         ).id
 
         provenance = TaskRunProvenance(
             assistant_id=str(request.assistant_id),
             task_id=request.task_id,
-            source_type=RunSource.provider_event,
-            execution_mode=(
-                "offline" if request.dispatch_mode == "offline" else "live"
+            wake=Wake.provider_event,
+            delivery=(
+                Delivery.offline if request.delivery == "offline" else Delivery.live
             ),
             source_task_log_id=int(source_task_log_id),
-            activation_revision=request.accepted_activation_revision,
-            destination=instance.destination,
+            revision=request.accepted_revision,
+            destination=definition.destination,
             source_ref=request.receipt_id,
             attempt_token=request.operation_id,
-            task_name=instance.name,
-            task_description=instance.description,
+            task_name=definition.name,
+            task_description=definition.description,
         )
         remember_live_task_run_provenance(provenance)
 
         # Adopt the Orchestra-precreated run by its exact run_key. Do not let
         # ActiveTask rebuild a different key from provenance and create a second
-        # run — provider-event live dispatch is adopt-only.
+        # run — provider-event dispatch is adopt-only.
         task_run_reference = TaskRunReference(
             assistant_id=str(request.assistant_id),
             run_key=request.run_key,
@@ -1286,23 +1276,23 @@ class TaskScheduler(BaseTaskScheduler):
             {
                 "state": "running",
                 "source_task_log_id": int(source_task_log_id),
-                "activation_revision": request.accepted_activation_revision,
+                "revision": request.accepted_revision,
+                "captured_task_revision": captured_task_revision,
             },
         )
 
         fallback_actor = self._actor_for_task_run()
         if fallback_actor is None and current_task_execution_delegate.get() is None:
             raise RuntimeError(
-                "Provider-event live dispatch requires a run-scoped actor "
+                "Provider-event dispatch requires a run-scoped actor "
                 "delegate or an explicit actor.",
             )
 
-        reason = ActivatedBy.explicit
         entrypoint_kwargs = self._build_entrypoint_kwargs(
-            task=instance,
-            reason=reason,
-            source_type=RunSource.provider_event,
+            task=definition,
+            wake=Wake.provider_event,
             task_run_provenance=provenance,
+            state=Status.active.value,
         )
         entrypoint_kwargs["provider_event_context"] = provider_event_context
         entrypoint_kwargs["operation_id"] = request.operation_id
@@ -1310,38 +1300,28 @@ class TaskScheduler(BaseTaskScheduler):
         entrypoint_kwargs["binding_id"] = request.binding_id
         entrypoint_kwargs["run_id"] = request.run_id
         entrypoint_kwargs["run_key"] = request.run_key
-        entrypoint_kwargs["accepted_activation_revision"] = (
-            request.accepted_activation_revision
-        )
+        entrypoint_kwargs["accepted_revision"] = request.accepted_revision
         entrypoint_kwargs["captured_task_revision"] = captured_task_revision
-        # Prefer the authoritative precreated run key over provenance rebuild.
         if isinstance(entrypoint_kwargs.get("task_execution_context"), dict):
             entrypoint_kwargs["task_execution_context"]["run_key"] = request.run_key
+            entrypoint_kwargs["task_execution_context"][
+                "captured_task_revision"
+            ] = captured_task_revision
 
-        with self._use_task_destination(instance.destination):
-            self._update_task_status_instance(
-                task_id=instance.task_id,
-                instance_id=instance.instance_id,
-                new_status=Status.active,
-                activated_by=reason,
-            )
-
-        # Agentic runs only see request text; symbolic runs already get the
-        # payload via entrypoint_kwargs["provider_event_context"].
         task_request = (
-            build_provider_event_task_request(instance, provider_event_context)
-            if instance.entrypoint is None
-            else build_task_execution_request(instance)
+            build_provider_event_task_request(definition, provider_event_context)
+            if definition.entrypoint is None
+            else build_task_execution_request(definition)
         )
         return await ActiveTask.create(
             fallback_actor,
             task_description=task_request,
-            task_id=instance.task_id,
-            instance_id=instance.instance_id,
+            task_id=definition.task_id,
+            instance_id=definition.instance_id,
             scheduler=self,
-            entrypoint=instance.entrypoint,
+            entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=1 if instance.entrypoint is not None else 0,
+            entrypoint_repair_attempts=1 if definition.entrypoint is not None else 0,
             entrypoint_repair_context=(
                 {
                     "task_run_context": entrypoint_kwargs.get(
@@ -1350,13 +1330,14 @@ class TaskScheduler(BaseTaskScheduler):
                     ),
                     "task_request": task_request,
                 }
-                if instance.entrypoint is not None
+                if definition.entrypoint is not None
                 else None
             ),
-            destination=instance.destination,
+            destination=definition.destination,
             task_run_reference=task_run_reference,
             task_run_provenance=provenance,
-            task_guidelines=build_provider_event_run_guidelines(instance),
+            task_guidelines=build_provider_event_run_guidelines(definition),
+            preserve_definition_status=True,
         )
 
     def _get_provider_event_definition(self, *, task_id: int) -> Task:
@@ -1388,143 +1369,6 @@ class TaskScheduler(BaseTaskScheduler):
             if not rows:
                 raise ValueError(f"No task found with id={task_id}") from exc
             raise ProviderEventDispatchValidationError("task_trigger_mismatch") from exc
-
-    def _create_provider_event_captured_instance(
-        self,
-        *,
-        definition: Task,
-        operation_id: str,
-        captured_task_revision: int,
-        binding_id: str | None = None,
-    ) -> Task:
-        """Create or adopt one execution instance keyed by operation identity."""
-
-        launch_identity = f"{_PROVIDER_EVENT_OPERATION_INFO_PREFIX}{operation_id}"
-        if (
-            self._find_provider_event_captured_instance(
-                task_id=definition.task_id,
-                launch_identity=launch_identity,
-            )
-            is not None
-        ):
-            return self._adopt_canonical_provider_event_captured_instance(
-                task_id=definition.task_id,
-                launch_identity=launch_identity,
-            )
-
-        resolved_binding_id = (
-            binding_id or definition.provider_event_binding_id or ""
-        ).strip() or None
-        if resolved_binding_id is None:
-            raise ValueError(
-                "provider_event_binding_id is required to create a captured "
-                "provider-event instance.",
-            )
-
-        clone_payload = definition.model_dump(
-            exclude={"instance_id", "activated_by", "info"},
-            mode="json",
-        )
-        clone_payload["status"] = Status.triggerable
-        clone_payload["task_id"] = definition.task_id
-        clone_payload["task_revision"] = captured_task_revision
-        clone_payload["info"] = launch_identity
-        clone_payload["provider_event_binding_id"] = resolved_binding_id
-        with self._use_task_destination(definition.destination):
-            created = self._store.log(entries=clone_payload, new=True)
-        if self._num_tasks_cached is not None:
-            self._num_tasks_cached += 1
-        entries = dict(created.entries or {})
-        entries.setdefault("destination", definition.destination)
-        entries.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
-        sanitized = self._sanitize_activation(entries)
-        created_task = Task(**sanitized)
-
-        # Collapse a race where another process created the same operation sink.
-        return self._adopt_canonical_provider_event_captured_instance(
-            task_id=definition.task_id,
-            launch_identity=launch_identity,
-            fallback=created_task,
-        )
-
-    def _find_provider_event_captured_instance(
-        self,
-        *,
-        task_id: int,
-        launch_identity: str,
-    ) -> Task | None:
-        """Return the oldest captured instance for one deterministic operation."""
-
-        matches = self._list_provider_event_captured_instances(
-            task_id=task_id,
-            launch_identity=launch_identity,
-        )
-        return matches[0] if matches else None
-
-    def _list_provider_event_captured_instances(
-        self,
-        *,
-        task_id: int,
-        launch_identity: str,
-    ) -> list[Task]:
-        """Return matching captured instances oldest-first."""
-
-        rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
-        matches = [row for row in rows if str(row.info or "") == launch_identity]
-        return sorted(matches, key=lambda row: row.instance_id)
-
-    def _adopt_canonical_provider_event_captured_instance(
-        self,
-        *,
-        task_id: int,
-        launch_identity: str,
-        matches: list[Task] | None = None,
-        fallback: Task | None = None,
-    ) -> Task:
-        """Keep the oldest sink row for an operation and drop create-race losers."""
-
-        from unisdk.utils.http import RequestError as UnifyRequestError
-
-        if matches is None:
-            matches = self._list_provider_event_captured_instances(
-                task_id=task_id,
-                launch_identity=launch_identity,
-            )
-        if not matches:
-            if fallback is None:
-                raise RuntimeError(
-                    f"Missing captured instance for {launch_identity}",
-                )
-            return fallback
-        canonical = matches[0]
-        losers = matches[1:]
-        if not losers:
-            return canonical
-
-        loser_filter = " or ".join(
-            f"(task_id == {loser.task_id} and instance_id == {loser.instance_id})"
-            for loser in losers
-        )
-        loser_ids = self._store.get_rows(
-            filter=loser_filter,
-            return_ids_only=True,
-        )
-        if loser_ids:
-            try:
-                with self._use_task_destination(canonical.destination):
-                    self._store.delete(logs=loser_ids)
-            except UnifyRequestError as exc:
-                # Another concurrent adopter may have already removed the loser.
-                response = getattr(exc, "response", None)
-                if getattr(response, "status_code", None) != 404:
-                    raise
-            else:
-                if self._num_tasks_cached is not None:
-                    self._num_tasks_cached = max(
-                        0,
-                        int(self._num_tasks_cached) - len(loser_ids),
-                    )
-        return canonical
 
     def create_task(
         self,
@@ -1582,51 +1426,89 @@ class TaskScheduler(BaseTaskScheduler):
                 entries=entries,
             )
 
-    def _clone_task_instance(self, task: Task) -> None:
-        """Create the next instance for a triggerable or repeating task.
+    def _rearm_task_definition(self, task: Task) -> bool:
+        """Advance the definition so the next open Execution can be projected.
 
-        Omits ``instance_id`` so Orchestra Tasks ``auto_counting`` assigns the
-        next id via ``context_counter``. Explicit REST forks must use that same
-        counter (see orchestra ``task_trigger_service._allocate_next_instance_id``);
-        a parallel ``max(instance_id)+1`` path can collide with this clone.
+        Returns True when the definition was re-armed to another open slot
+        (scheduled or triggerable). Returns False when recurrence is exhausted
+        or the task is not a recurring/triggerable definition.
         """
 
-        clone_payload = task.model_dump(
-            exclude={"instance_id", "activated_by"},
-            mode="json",
-        )
+        updates: dict[str, Any] = {}
         if task.repeat is not None and task.schedule_start_at is not None:
-            # Recover the canonical (un-jittered) anchor before computing the
-            # next slot: the stored start_at may include a random jitter offset
-            # (see below), and feeding that back in would let interval cadences
-            # drift. Subtracting the recorded offset keeps re-arms anchored.
             applied_prev = 0.0
             if task.schedule is not None:
                 applied_prev = task.schedule.jitter_applied_seconds or 0.0
             canonical_prev = task.schedule_start_at - timedelta(seconds=applied_prev)
+            # Advance exactly one slot from the occurrence that is starting.
+            # Wall-clock catch-up belongs to projection/due selection, not re-arm.
             next_start_at = next_repeated_start_at(
                 previous_start=canonical_prev,
                 patterns=task.repeat,
-                current_occurrence_index=task.instance_id,
+                current_occurrence_index=0,
+                now=canonical_prev,
             )
             if next_start_at is None:
-                return
-            clone_payload["status"] = Status.scheduled
+                return False
+            updates["status"] = Status.scheduled
             schedule: dict[str, Any] = {"start_at": next_start_at.isoformat()}
-            # Add per-occurrence jitter to the dispatch time only. The canonical
-            # slot (next_start_at) is preserved via jitter_applied_seconds so the
-            # following re-arm can subtract it again — no cumulative drift.
             jitter = max_jitter_seconds(task.repeat)
             if jitter > 0:
                 applied = random.uniform(0.0, float(jitter))
                 jittered = next_start_at + timedelta(seconds=applied)
                 schedule["start_at"] = jittered.isoformat()
                 schedule["jitter_applied_seconds"] = applied
-            clone_payload["schedule"] = schedule
+            updates["schedule"] = schedule
+        elif task.trigger is not None:
+            updates["status"] = Status.triggerable
+        else:
+            return False
         with self._use_task_destination(task.destination):
-            self._store.log(entries=clone_payload, new=True)
-        if self._num_tasks_cached is not None:
-            self._num_tasks_cached += 1
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task.task_id}",
+                limit=1,
+                return_ids_only=False,
+            )
+            if not log_objs:
+                raise ValueError(
+                    f"No task definition found for task_id={task.task_id}.",
+                )
+            self._write_log_entries(logs=log_objs[0].id, entries=updates)
+        return True
+
+    def _update_task_definition_status(
+        self,
+        *,
+        task_id: int,
+        new_status: str | Status,
+    ) -> Dict[str, str]:
+        """Update the lifecycle status for one task definition row."""
+
+        task = self._get_task_or_raise(task_id)
+        with self._use_task_destination(task.destination):
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                return_ids_only=False,
+            )
+            if not log_objs:
+                raise ValueError(f"No task definition ({task_id}) found.")
+            if len(log_objs) != 1:
+                log_ids = [getattr(row, "id", None) for row in log_objs]
+                raise ValueError(
+                    "Tasks definition must be unique for "
+                    f"task_id={task_id}; found {len(log_objs)} rows with log ids {log_ids}.",
+                )
+
+            new_status_enum = (
+                new_status
+                if isinstance(new_status, Status)
+                else Status(str(new_status))
+            )
+            entries: Dict[str, Any] = {"status": new_status_enum}
+            return self._write_log_entries(
+                logs=log_objs[0].id,
+                entries=entries,
+            )
 
     def _validate_scheduled_invariants(
         self,
@@ -2424,6 +2306,28 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return {"detail": "No-op provider-event task update."}
 
+    def _update_task_definition_info(
+        self,
+        *,
+        task_id: int,
+        info: str,
+    ) -> Dict[str, str]:
+        """Write the execution summary onto the task definition row."""
+
+        task = self._get_task_or_raise(task_id)
+        with self._use_task_destination(task.destination):
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {task_id}",
+                limit=1,
+                return_ids_only=False,
+            )
+            if not log_objs:
+                raise ValueError(f"No task definition found for task_id={task_id}.")
+            return self._write_log_entries(
+                logs=log_objs[0].id,
+                entries={"info": info},
+            )
+
     def _update_task_instance(
         self,
         *,
@@ -2536,7 +2440,14 @@ class TaskScheduler(BaseTaskScheduler):
         )
 
     def _list_provider_trigger_catalog(self) -> ToolOutcome:
-        """List staged provider triggers for this assistant's connected apps."""
+        """List staged provider triggers visible for this assistant's connected apps.
+
+        Returns catalog metadata plus trigger slugs/config schemas for apps the
+        assistant already has an active integration connection for. An empty
+        trigger list usually means no matching connection yet, not that the
+        provider lacks the trigger globally. Prefer connecting the app first,
+        then re-list the catalog before enabling a provider-event task.
+        """
 
         catalog = typed_tasks_client.get_trigger_catalog()
         return {
@@ -2552,7 +2463,12 @@ class TaskScheduler(BaseTaskScheduler):
         canonical_app_slug: str | None = None,
         backend_id: str | None = None,
     ) -> ToolOutcome:
-        """List assistant-owned connections usable for provider triggers."""
+        """List assistant-owned connections usable for provider triggers.
+
+        Returns only active assistant-scoped integration connections that can
+        back provider-event task triggers. Filter by ``canonical_app_slug`` and
+        ``backend_id`` when the actor already knows which app/backend it needs.
+        """
 
         connections = list_eligible_provider_trigger_connections(
             canonical_app_slug=canonical_app_slug,
@@ -2569,7 +2485,12 @@ class TaskScheduler(BaseTaskScheduler):
         provider_trigger_slug: str,
         backend_id: str,
     ) -> ToolOutcome:
-        """Return config schema for one staged provider trigger."""
+        """Return config schema for one staged provider trigger.
+
+        Use the catalog listing first to discover valid
+        ``provider_trigger_slug`` / ``backend_id`` pairs, then call this tool
+        to inspect the trigger's config schema before authoring a task trigger.
+        """
 
         catalog = typed_tasks_client.get_trigger_catalog()
         trigger = describe_provider_trigger(
@@ -2621,6 +2542,111 @@ class TaskScheduler(BaseTaskScheduler):
                 include_source_body=include_source_body,
             ),
         }
+
+    def get_run_event_children(
+        self,
+        *,
+        run_key: str,
+        parent: str | None = None,
+        limit: int = 50,
+        events_base_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Return **immediate** EventBus children for one ``Tasks/Executions`` run.
+
+        Depth-1 only. Pass a child's ``node_id`` as ``parent`` to drill one level
+        deeper. Assign in ``execute_code`` and inspect selectively — do not dump
+        the full forest into the observation.
+        """
+
+        from unify.task_scheduler.task_run_events import (
+            fetch_task_run_events,
+            project_immediate_children,
+        )
+
+        key = str(run_key or "").strip()
+        if not key:
+            raise ValueError("run_key must be a non-empty string")
+
+        events_root = self._resolve_events_base_context(events_base_context)
+        hierarchy_prefix = str(parent).strip() if parent else None
+        # Root listing needs the Task.run segment; fetch by run_key only.
+        # Drills may narrow with hierarchy_label.startswith(parent).
+        tree = fetch_task_run_events(
+            key,
+            events_base_context=events_root,
+            hierarchy_prefix=hierarchy_prefix,
+            limit_per_type=1000,
+        )
+        children = project_immediate_children(
+            tree.rows,
+            run_key=key,
+            parent_prefix=hierarchy_prefix,
+            limit=int(limit),
+        )
+        return {
+            "run_key": key,
+            "parent": hierarchy_prefix,
+            "events_base_context": tree.events_base_context,
+            "children": children,
+        }
+
+    def get_run_event(
+        self,
+        *,
+        run_key: str,
+        node_id: str,
+        event_id: str | None = None,
+        events_base_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Return near-raw EventBus row(s) for **one** hierarchy node only."""
+
+        from unify.task_scheduler.task_run_events import (
+            fetch_task_run_events,
+            find_rows_at_node,
+        )
+
+        key = str(run_key or "").strip()
+        if not key:
+            raise ValueError("run_key must be a non-empty string")
+        nid = str(node_id or "").strip()
+        if not nid:
+            raise ValueError("node_id must be a non-empty hierarchy prefix")
+
+        events_root = self._resolve_events_base_context(events_base_context)
+        tree = fetch_task_run_events(
+            key,
+            events_base_context=events_root,
+            hierarchy_prefix=nid,
+            limit_per_type=1000,
+        )
+        events = find_rows_at_node(
+            tree.rows,
+            node_id=nid,
+            event_id=event_id,
+        )
+        return {
+            "run_key": key,
+            "node_id": nid,
+            "events_base_context": tree.events_base_context,
+            "events": events,
+        }
+
+    @staticmethod
+    def _resolve_events_base_context(events_base_context: str | None) -> str:
+        """Resolve the assistant Events root for task-run diagnostics."""
+
+        if events_base_context and str(events_base_context).strip():
+            return str(events_base_context).strip()
+        from unify.common.log_utils import _get_assistant_id, _get_user_id
+
+        user_id = _get_user_id()
+        assistant_id = _get_assistant_id()
+        if not user_id or not assistant_id:
+            raise RuntimeError(
+                "Cannot resolve Events context: SESSION_DETAILS user/assistant "
+                "ids are required when events_base_context is omitted.",
+            )
+        return f"{user_id}/{assistant_id}/Events"
 
     def _pause_provider_trigger(
         self,
@@ -3168,7 +3194,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _get_custom_tasks_from_db(self) -> Dict[str, Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._ctx,
-            filter="custom_hash != None and instance_id == 0",
+            filter="custom_hash != None",
             limit=1000,
             exclude_fields=list_private_fields(self._ctx),
         )
@@ -3181,10 +3207,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _delete_custom_task_by_key(self, custom_key: str) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
-            filter=(
-                f"custom_key == '{custom_key}' and custom_hash != None "
-                "and instance_id == 0"
-            ),
+            filter=f"custom_key == '{custom_key}' and custom_hash != None",
             limit=1,
         )
         if not logs:
@@ -3464,7 +3487,7 @@ class TaskScheduler(BaseTaskScheduler):
         with insert_lock:
             existing = unisdk.get_logs(
                 context=self._ctx,
-                filter=f"custom_key == '{custom_key}' and instance_id == 0",
+                filter=f"custom_key == '{custom_key}'",
                 limit=1,
             )
             if existing:

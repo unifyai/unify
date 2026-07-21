@@ -86,8 +86,8 @@ For Event Tree and Manager Logs in the GUI/REPL, set `EVENTBUS_PUBLISHING_ENABLE
 
 ### Orchestra-only execution logging (optional)
 
-To persist **only** `execute_code` / `execute_function` EventBus rows to Orchestra
-(while keeping Live Actions Pub/Sub at full fidelity when streaming is on):
+To keep interactive EventBus traffic sparse in Orchestra while still retaining a
+**dense ManagerMethod + ToolLoop tree under ActiveTask runs**:
 
 ```bash
 export EVENTBUS_PUBLISHING_ENABLED=true
@@ -97,10 +97,37 @@ export EVENTBUS_ORCHESTRA_PERSIST_TOOLS=execute_code,execute_function
 # export EVENTBUS_PUBSUB_STREAMING=true
 ```
 
+In ``allowlist`` mode:
+
+- **Outside** a task run: only allowlisted tools (default ``execute_code`` /
+  ``execute_function``) are written to ``Events/*``.
+- **Inside** an ``ActiveTask`` (``CURRENT_TASK_RUN_LINEAGE`` / payload
+  ``run_key`` + ``task_id``/``instance_id``): the full ManagerMethod + ToolLoop
+  tree is persisted and stamped for join from ``Tasks/Executions``.
+
 `EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every
-event to `Events/*`” behavior when publishing is enabled. Task-scoped runs
-annotate hierarchy with `Task.run(task_id=…,instance_id=…)` and payload fields
-`task_id` / `instance_id` / `run_key` for later diagnostics.
+event to `Events/*`” behavior when publishing is enabled.
+
+Load a run’s EventBus tree **one level at a time** (avoid saturating the
+observation with a full dump):
+
+```python
+kids = await primitives.tasks.get_run_event_children(run_key=run_key)
+# drill: await primitives.tasks.get_run_event_children(run_key=..., parent=kids["children"][0]["node_id"])
+# detail: await primitives.tasks.get_run_event(run_key=..., node_id=...)
+```
+
+Or use the low-level helper:
+
+```python
+from unify.task_scheduler.task_run_events import fetch_task_run_events, project_immediate_children
+
+tree = fetch_task_run_events(
+    run_key,  # Tasks/Executions.run_key
+    events_base_context="{user}/{assistant}/Events",
+)
+children = project_immediate_children(tree.rows, run_key=run_key)
+```
 
 ## Troubleshooting
 
