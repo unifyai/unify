@@ -1599,6 +1599,64 @@ async def ingest_api_response(records: list) -> dict:
 '''
 
 
+def get_primitives_data_external_sync_example() -> str:
+    """Example: thin local table + REST observe column + through-write."""
+
+    return '''
+# Example: REST-synced column (remote SoT, local join keys only)
+async def plant_remote_status_table() -> dict:
+    """Create a thin table, bind one observe column, read with hydrate.
+
+    Plant ``MY_API_TOKEN`` in the owning Secrets vault first
+    (``primitives.secrets`` / team Secrets). Do not full-mirror the remote DB.
+    """
+    await primitives.data.create_table(
+        context="Data/Integrations/RemoteItems",
+        fields={"item_id": "str", "note": "str"},
+        unique_keys={"item_id": "str"},
+    )
+    await primitives.data.create_external_column(
+        context="Data/Integrations/RemoteItems",
+        column_name="remote_status",
+        connector_id="http.generic",
+        binding={
+            "auth_secret_ref": "MY_API_TOKEN",  # pragma: allowlist secret
+            "auth": {"placement": "bearer"},
+            "inputs": [{"name": "item_id", "column": "item_id"}],
+            "cache": {"ttl_seconds": 300},
+            "http": {
+                "method": "GET",
+                "url_template": "https://api.example.com/items/{item_id}",
+                "response_jsonpath": "$.status",
+            },
+            "write": {
+                "method": "POST",
+                "url_template": "https://api.example.com/items/{item_id}/status",
+                "body_template": {"status": "{status}"},
+            },
+        },
+    )
+    rows = await primitives.data.filter(
+        "Data/Integrations/RemoteItems",
+        filter='item_id == "abc"',
+        hydrate="stale_ok",
+        hydrate_fields=["remote_status"],
+        include_ids=True,
+        limit=5,
+    )
+    if rows:
+        await primitives.data.request_external_write(
+            context="Data/Integrations/RemoteItems",
+            field_name="remote_status",
+            payload={"item_id": "abc", "status": "done"},
+            idempotency_key="remote-status-abc-done",
+            log_event_ids=[rows[0]["_log_id"]],
+            deliver="async",
+        )
+    return {"rows": rows}
+'''
+
+
 def get_primitives_web_ask_example() -> str:
     """Example: web research query via `primitives.web.ask(...)`."""
 
@@ -2183,6 +2241,7 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_data_filter_example": get_primitives_data_filter_example,
         "get_primitives_data_reduce_example": get_primitives_data_reduce_example,
         "get_primitives_data_ingest_example": get_primitives_data_ingest_example,
+        "get_primitives_data_external_sync_example": get_primitives_data_external_sync_example,
         # Dashboards
         "get_primitives_dashboards_baked_in_example": get_primitives_dashboards_baked_in_example,
         "get_primitives_dashboards_live_data_example": get_primitives_dashboards_live_data_example,
