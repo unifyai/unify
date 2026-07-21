@@ -975,6 +975,46 @@ async def execute_task_by_description_with_guidance(description: str) -> str:
 '''
 
 
+def get_primitives_task_run_event_children_example() -> str:
+    """Example: depth-1 EventBus walk for a failed Tasks/Executions run."""
+
+    return '''
+# Example: Diagnose a failed task execution via depth-1 EventBus walk
+async def diagnose_failed_execution(run_key: str) -> str:
+    """Walk EventBus children one level at a time; expand only failing nodes."""
+    notify({"type": "progress", "message": f"Inspecting EventBus children for {run_key}."})
+
+    kids = await primitives.tasks.get_run_event_children(run_key=run_key)
+    failed = [c for c in kids["children"] if c.get("error")]
+    if not failed:
+        # Drill one promising branch if present
+        for child in kids["children"]:
+            if child.get("has_children"):
+                deeper = await primitives.tasks.get_run_event_children(
+                    run_key=run_key,
+                    parent=child["node_id"],
+                )
+                failed = [c for c in deeper["children"] if c.get("error")]
+                if failed:
+                    break
+
+    if not failed:
+        return f"No errored EventBus children under run_key={run_key}"
+
+    node = failed[0]
+    detail = await primitives.tasks.get_run_event(
+        run_key=run_key,
+        node_id=node["node_id"],
+    )
+    # Keep the observation small: summarize instead of returning raw rows as the
+    # last expression when payloads may be large.
+    return (
+        f"Failed node={node['segment']} events={len(detail['events'])} "
+        f"error={node.get('error')}"
+    )
+'''
+
+
 def get_primitives_task_recurring_creation_example() -> str:
     """Example: creating durable scheduled and triggered tasks."""
 
@@ -2122,6 +2162,7 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_contact_update_example": get_primitives_contact_update_example,
         # Tasks
         "get_primitives_task_execute_example": get_primitives_task_execute_example,
+        "get_primitives_task_run_event_children_example": get_primitives_task_run_event_children_example,
         "get_primitives_task_recurring_creation_example": get_primitives_task_recurring_creation_example,
         # Knowledge (JSON tools — not primitives)
         "get_knowledge_manager_search_example": get_knowledge_manager_search_example,

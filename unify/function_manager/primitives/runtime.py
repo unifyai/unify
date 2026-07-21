@@ -1646,7 +1646,7 @@ class Primitives:
 
     @property
     def tasks(self) -> "TaskScheduler":
-        """Task scheduling primitives (ask, update, execute)."""
+        """Task scheduling primitives (ask, update, execute, get_run_event_children, get_run_event)."""
         return self._get_manager("tasks")
 
     @property

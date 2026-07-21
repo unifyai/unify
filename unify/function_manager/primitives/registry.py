@@ -205,9 +205,9 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         excluded_methods=frozenset({"get_active_singleton_handle"}),
         priority=4,
         domain="Durable Work & Tracking",
-        description="Task management, assignments, deadlines, priorities",
-        use_when="Questions about tasks/work items, 'what's due?', 'tasks assigned to X?', 'high-priority items?'",
-        examples="'What tasks are due today?', 'Show Alice's open tasks', 'List high-priority items'",
+        description="Task management, assignments, deadlines, priorities, execution event diagnostics",
+        use_when="Questions about tasks/work items, 'what's due?', diagnosing a failed Tasks/Executions run via EventBus tree walk",
+        examples="'What tasks are due today?', 'Show Alice's open tasks', 'Walk EventBus children for run_key=…'",
     ),
     ManagerSpec(
         manager_alias="secrets",
@@ -514,6 +514,7 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
     ],
     "tasks": [
         "get_primitives_task_execute_example",
+        "get_primitives_task_run_event_children_example",
     ],
     "transcripts": [
         "get_primitives_transcript_ask_example",

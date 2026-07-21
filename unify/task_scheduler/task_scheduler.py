@@ -235,8 +235,12 @@ class TaskScheduler(BaseTaskScheduler):
                     display_label="Inspecting provider event context",
                 ),
                 ToolSpec(
-                    fn=self.get_execution_events,
-                    display_label="Loading task execution event tree",
+                    fn=self.get_run_event_children,
+                    display_label="Listing task-run event children",
+                ),
+                ToolSpec(
+                    fn=self.get_run_event,
+                    display_label="Loading one task-run event node",
                 ),
                 include_class_name=False,
             ),
@@ -2539,56 +2543,110 @@ class TaskScheduler(BaseTaskScheduler):
             ),
         }
 
-    def get_execution_events(
+    def get_run_event_children(
         self,
         *,
         run_key: str,
-        limit_per_type: int = 1000,
+        parent: str | None = None,
+        limit: int = 50,
         events_base_context: str | None = None,
-    ) -> ToolOutcome:
-        """Load the EventBus tree for one ``Tasks/Executions`` row (read-only).
+    ) -> dict[str, Any]:
+        """Return **immediate** EventBus children for one ``Tasks/Executions`` run.
 
-        Joins ``Events/ManagerMethod`` + ``Events/ToolLoop`` by ``run_key`` under
-        the executing assistant's Events root. Does not duplicate event payloads
-        onto the Execution row. Use after inspecting ``Tasks/Executions.error``
-        when diagnosing a failed offline or live task run.
+        Depth-1 only. Pass a child's ``node_id`` as ``parent`` to drill one level
+        deeper. Assign in ``execute_code`` and inspect selectively — do not dump
+        the full forest into the observation.
         """
 
-        from unify.common.log_utils import _get_assistant_id, _get_user_id
-        from unify.task_scheduler.task_run_events import fetch_task_run_events
+        from unify.task_scheduler.task_run_events import (
+            fetch_task_run_events,
+            project_immediate_children,
+        )
 
         key = str(run_key or "").strip()
         if not key:
             raise ValueError("run_key must be a non-empty string")
 
-        events_root = events_base_context
-        if not events_root:
-            user_id = _get_user_id()
-            assistant_id = _get_assistant_id()
-            if not user_id or not assistant_id:
-                raise RuntimeError(
-                    "Cannot resolve Events context: SESSION_DETAILS user/assistant "
-                    "ids are required when events_base_context is omitted.",
-                )
-            events_root = f"{user_id}/{assistant_id}/Events"
-
+        events_root = self._resolve_events_base_context(events_base_context)
+        hierarchy_prefix = str(parent).strip() if parent else None
+        # Root listing needs the Task.run segment; fetch by run_key only.
+        # Drills may narrow with hierarchy_label.startswith(parent).
         tree = fetch_task_run_events(
             key,
             events_base_context=events_root,
-            limit_per_type=int(limit_per_type),
+            hierarchy_prefix=hierarchy_prefix,
+            limit_per_type=1000,
+        )
+        children = project_immediate_children(
+            tree.rows,
+            run_key=key,
+            parent_prefix=hierarchy_prefix,
+            limit=int(limit),
         )
         return {
-            "outcome": "execution event tree loaded",
-            "details": {
-                "run_key": tree.run_key,
-                "events_base_context": tree.events_base_context,
-                "hierarchy_roots": tree.hierarchy_roots(),
-                "manager_method_count": len(tree.manager_methods),
-                "tool_loop_count": len(tree.tool_loops),
-                "manager_methods": tree.manager_methods,
-                "tool_loops": tree.tool_loops,
-            },
+            "run_key": key,
+            "parent": hierarchy_prefix,
+            "events_base_context": tree.events_base_context,
+            "children": children,
         }
+
+    def get_run_event(
+        self,
+        *,
+        run_key: str,
+        node_id: str,
+        event_id: str | None = None,
+        events_base_context: str | None = None,
+    ) -> dict[str, Any]:
+        """Return near-raw EventBus row(s) for **one** hierarchy node only."""
+
+        from unify.task_scheduler.task_run_events import (
+            fetch_task_run_events,
+            find_rows_at_node,
+        )
+
+        key = str(run_key or "").strip()
+        if not key:
+            raise ValueError("run_key must be a non-empty string")
+        nid = str(node_id or "").strip()
+        if not nid:
+            raise ValueError("node_id must be a non-empty hierarchy prefix")
+
+        events_root = self._resolve_events_base_context(events_base_context)
+        tree = fetch_task_run_events(
+            key,
+            events_base_context=events_root,
+            hierarchy_prefix=nid,
+            limit_per_type=1000,
+        )
+        events = find_rows_at_node(
+            tree.rows,
+            node_id=nid,
+            event_id=event_id,
+        )
+        return {
+            "run_key": key,
+            "node_id": nid,
+            "events_base_context": tree.events_base_context,
+            "events": events,
+        }
+
+    @staticmethod
+    def _resolve_events_base_context(events_base_context: str | None) -> str:
+        """Resolve the assistant Events root for task-run diagnostics."""
+
+        if events_base_context and str(events_base_context).strip():
+            return str(events_base_context).strip()
+        from unify.common.log_utils import _get_assistant_id, _get_user_id
+
+        user_id = _get_user_id()
+        assistant_id = _get_assistant_id()
+        if not user_id or not assistant_id:
+            raise RuntimeError(
+                "Cannot resolve Events context: SESSION_DETAILS user/assistant "
+                "ids are required when events_base_context is omitted.",
+            )
+        return f"{user_id}/{assistant_id}/Events"
 
     def _pause_provider_trigger(
         self,
