@@ -239,7 +239,10 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
 
         Offline tasks run in the hidden headless lane. Offline is a delivery
         choice only: description-driven offline tasks keep ``entrypoint=None``
-        and symbolic offline tasks use a numeric ``entrypoint``.
+        and symbolic offline tasks use a numeric ``entrypoint``. Offline Jobs
+        already own an event loop via ``asyncio.run``; sync entrypoints must
+        not nest another ``asyncio.run`` (prefer ``async def`` + ``await``, or
+        ``run_coro_sync``).
 
         Do not create an entrypoint function merely because a new recurring task
         was described. Entrypoint persistence should follow an explicit user
@@ -323,6 +326,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
           ``logging`` PHASE/SKIP/SOFT_FAIL trails in stored entrypoints /
           helpers called via ``execute_function``.
         - Putting diagnostic detail in user-facing ``notify()`` instead of logs.
+        - Nesting ``asyncio.run(...)`` in sync symbolic entrypoints or helpers —
+          the offline runner already calls ``asyncio.run`` around task
+          execution. Prefer ``async def`` + ``await``, or ``run_coro_sync``.
         """
 
     @abstractmethod

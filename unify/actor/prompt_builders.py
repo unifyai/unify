@@ -289,7 +289,7 @@ _EXECUTION_RULES = textwrap.dedent("""
        - Choose `state_mode="read_only"` when you need to use an existing session's state without persisting changes.
        - Use `list_sessions()` / `inspect_state()` to discover and understand active sessions.
 
-    2. **Use `await`**: The execution sandbox is asynchronous. You **MUST** use `await` for any async calls.
+    2. **Use `await`**: The execution sandbox is asynchronous. You **MUST** use `await` for any async calls. Prefer `async def` helpers and `await` end-to-end. Never wrap work in bare `asyncio.run(...)` here — the runtime already owns a loop. If a sync façade must drive async work, call the injected `run_coro_sync(factory)` helper (or `from unify.common.asyncio_compat import run_coro_sync`) instead of nesting `asyncio.run`.
 
     3. **Imports Inside Code**: All necessary imports must be included in the code you provide.
 
@@ -682,6 +682,9 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     In ``execute_code``, ``primitives`` is already in scope — do not
     ``import primitives``, ``from primitives import ...``, or wrap calls in
     ``asyncio.run(...)`` (the runtime is already async; ``asyncio.run`` raises).
+    Offline TaskScheduler Jobs also already run under ``asyncio.run``; sync
+    stored entrypoints / helpers must not nest another ``asyncio.run``. Prefer
+    ``async def`` + ``await``, or use ``run_coro_sync(...)`` for a sync façade.
 
     Natural-language recurring tasks should normally start as description-driven
     tasks with `entrypoint=None`. The future due wake will call
@@ -689,8 +692,9 @@ _TASK_SCHEDULING_WORKFLOWS = textwrap.dedent("""
     child actor dedicated to that task. Do not write and attach an untested
     entrypoint function at task creation unless the user explicitly requested a
     stored function-backed workflow. When you do store an entrypoint or helper,
-    keep expressive stdlib `logging` (PHASE/SKIP/SOFT_FAIL markers) in the body —
-    soft failures need logs, not only exceptions.
+    prefer ``async def`` with ``await`` for LLM / I/O work; keep expressive
+    stdlib `logging` (PHASE/SKIP/SOFT_FAIL markers) in the body — soft failures
+    need logs, not only exceptions.
 
     If a workflow has just been completed interactively and the user wants it
     repeated, include the relevant context in the task description. Use

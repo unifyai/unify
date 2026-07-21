@@ -80,7 +80,6 @@ from unify.function_manager.primitives.scope import (
 from unify.function_manager.primitives.registry import get_registry
 from unify.common.diagnostic_logging import (
     log_staging_diagnostic,
-    staging_diagnostics_enabled,
 )
 from unify.integrations.function_metadata import (
     function_metadata,
@@ -6704,6 +6703,11 @@ class FunctionManager(BaseFunctionManager):
         Raises:
             ValueError: If the function doesn't exist or has no implementation.
             ValueError: If state_mode requires a pool but none is provided.
+
+        Anti-patterns:
+            - Nesting ``asyncio.run(...)`` inside sync helpers called from
+              offline Jobs / actor sandboxes (already under a running loop).
+              Prefer ``async def`` + ``await``, or ``run_coro_sync``.
         """
         ns = extra_namespaces or {}
         # Look up function by name (compositional first, then optionally primitives).

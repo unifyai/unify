@@ -214,6 +214,8 @@ def create_execution_globals() -> Dict[str, Any]:
       (SteerableToolHandle)
     - The `unillm` module for advanced direct LLM usage
     - The `query_llm` helper for focused one-shot LLM queries
+    - The `run_coro_sync` helper for sync façades that must drive async work
+      under an already-running event loop (offline Jobs / actor sandboxes)
 
     All primitive imports and instantiations are lazy - only the primitives
     actually used by a function are loaded. This means functions that don't
@@ -239,6 +241,7 @@ def create_execution_globals() -> Dict[str, Any]:
     # Steerable handle type - allows compositional functions to return handles
     # that the execution layer can detect and wire up for steering operations.
     from unify.common.async_tool_loop import SteerableToolHandle
+    from unify.common.asyncio_compat import run_coro_sync
     from unify.common.reasoning import list_llms, query_llm
     from unify.common.runtime_oauth import get_oauth_access_token
 
@@ -246,6 +249,7 @@ def create_execution_globals() -> Dict[str, Any]:
     globals_dict["query_llm"] = query_llm
     globals_dict["list_llms"] = list_llms
     globals_dict["get_oauth_access_token"] = get_oauth_access_token
+    globals_dict["run_coro_sync"] = run_coro_sync
     globals_dict["unillm"] = unillm
 
     return globals_dict
