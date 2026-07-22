@@ -228,6 +228,23 @@ def update_by_ids_impl(
     return len(log_ids)
 
 
+def claim_impl(
+    context: str,
+    *,
+    expect: Dict[str, Any],
+    updates: Dict[str, Any],
+    limit: int = 1,
+) -> List[Dict[str, Any]]:
+    """Atomic compare-and-set claim (Orchestra POST /logs/claim)."""
+    response = unisdk.claim_logs(
+        context=context,
+        expect=expect,
+        updates=updates,
+        limit=limit,
+    )
+    return list(response.get("claimed") or [])
+
+
 def delete_rows_impl(
     context: str,
     *,

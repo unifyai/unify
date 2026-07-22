@@ -49,6 +49,7 @@ from unify.data_manager.ops.mutation_ops import (
     insert_rows_impl,
     update_rows_impl,
     update_by_ids_impl,
+    claim_impl,
     delete_rows_impl,
 )
 from unify.data_manager.ops.join_ops import (
@@ -1213,6 +1214,30 @@ class DataManager(BaseDataManager):
             updates,
             overwrite=overwrite,
             context=resolved,
+        )
+
+    @functools.wraps(BaseDataManager.claim, updated=())
+    def claim(
+        self,
+        context: str,
+        *,
+        expect: Dict[str, Any],
+        updates: Dict[str, Any],
+        limit: int = 1,
+        destination: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            resolved = self._resolve_context_for_write(
+                context,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return self._tool_error(exc)  # type: ignore[return-value]
+        return claim_impl(
+            resolved,
+            expect=expect,
+            updates=updates,
+            limit=limit,
         )
 
     @functools.wraps(BaseDataManager.delete_rows, updated=())
