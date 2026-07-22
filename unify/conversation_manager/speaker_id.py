@@ -47,18 +47,13 @@ SPEAKER_MODEL_URL = (
 # telephone-band audio typically score 0.6-0.8; different speakers < 0.4.
 SPEAKER_MATCH_THRESHOLD = 0.55
 
-# A segment whose cosine similarity to an *established* diarization-id centroid
-# falls below this is treated as a different, co-located voice sharing the same
-# Deepgram id: it is kept out of the centroid (no contamination) and marks the
-# id provisional. It sits below SPEAKER_MATCH_THRESHOLD but well above the
-# different-speaker floor (~0.4) so within-speaker variation still merges.
-CONTAMINATION_SIM = 0.5
-
-# A centroid is only trusted as a contamination reference once it carries this
-# much corroborating speech, so a single fluke first segment cannot lock out
-# the real primary voice before the reference has settled.
-GUARD_MIN_SEGMENTS = 2
-GUARD_MIN_DURATION_S = 3.0
+# Cosine-similarity threshold for a segment to join an existing within-id voice
+# cluster rather than seed a new one. A single diarization id can carry more
+# than one physically co-located voice (the STT engine under-splits); each such
+# voice becomes its own cluster. Set below SPEAKER_MATCH_THRESHOLD so ordinary
+# within-speaker variation (typically > 0.6) always merges, but well above the
+# different-speaker floor (~0.4) so a genuinely different voice spawns a cluster.
+CLUSTER_JOIN_SIM = 0.5
 
 # Auto-enrollment bounds (seconds of accumulated speech from a single voice).
 ENROLLMENT_TARGET_S = 60.0
@@ -257,47 +252,28 @@ class SpeakerEmbedder:
 
 @dataclass
 class CentroidAccumulator:
-    """Running duration-weighted centroid of embeddings for one speaker id.
+    """Running duration-weighted centroid of embeddings for one voice cluster.
 
-    Once the centroid is established (``is_established``), a segment that is too
-    dissimilar is rejected as *contamination* — a different, co-located voice
-    sharing the same diarization id — rather than being averaged in, which
-    would smear the centroid toward a meaningless midpoint. Rejected segments
-    are counted so callers can flag the id as provisional.
+    A cluster holds a single acoustic identity: cross-voice separation is done
+    one level up (a diarization id owns a *set* of these), so this accumulator
+    stays a plain running mean with no rejection logic.
     """
 
     _sum: np.ndarray | None = None
     total_duration_s: float = 0.0
     segments: int = 0
-    outlier_segments: int = 0
-
-    @property
-    def is_established(self) -> bool:
-        return (
-            self.segments >= GUARD_MIN_SEGMENTS
-            and self.total_duration_s >= GUARD_MIN_DURATION_S
-        )
 
     def similarity(self, embedding: np.ndarray) -> float:
         """Cosine similarity of an embedding to the current centroid.
 
-        An empty accumulator returns 1.0 so the first segments always seed it.
+        An empty accumulator returns 1.0 so its first segment always seeds it.
         """
         centroid = self.centroid
         if centroid is None:
             return 1.0
         return cosine_similarity(embedding, centroid)
 
-    def add(self, embedding: np.ndarray, duration_s: float) -> bool:
-        """Merge a segment into the centroid.
-
-        Returns True when the segment is merged, False when it is rejected as a
-        contaminating outlier (an established centroid plus a segment scoring
-        below ``CONTAMINATION_SIM``).
-        """
-        if self.is_established and self.similarity(embedding) < CONTAMINATION_SIM:
-            self.outlier_segments += 1
-            return False
+    def add(self, embedding: np.ndarray, duration_s: float) -> None:
         weighted = embedding * max(duration_s, 0.1)
         if self._sum is None:
             self._sum = weighted.copy()
@@ -305,7 +281,6 @@ class CentroidAccumulator:
             self._sum += weighted
         self.total_duration_s += duration_s
         self.segments += 1
-        return True
 
     @property
     def centroid(self) -> np.ndarray | None:
@@ -372,12 +347,13 @@ class AudioRingBuffer:
 
 @dataclass
 class SpeakerResolution:
-    """Resolution of an anonymous diarization speaker id.
+    """Resolution of a single diarized utterance.
 
-    ``provisional`` marks an id that has absorbed at least one clearly
-    different, co-located voice: the primary voice can still be attributed, but
-    verification is withheld because a single utterance under that id can no
-    longer be certified to belong to it.
+    Attribution is per *voice cluster*, not per diarization id: when one id
+    carries several co-located voices, the resolution names the cluster the
+    current utterance's audio actually joined. ``provisional`` marks that the
+    id spans more than one voice cluster, so downstream consumers know the
+    diarization id alone is not a reliable speaker key.
     """
 
     contact_id: Optional[int] = None
@@ -387,10 +363,31 @@ class SpeakerResolution:
 
 
 @dataclass
-class _SpeakerState:
+class _VoiceCluster:
+    """One acoustic identity within a diarization id.
+
+    A diarization id under-split by the STT engine can hold several of these,
+    one per physically co-located voice. Each carries its own centroid and its
+    own resolved identity (an enrolled-contact pin or a minted anonymous label).
+    """
+
     accumulator: CentroidAccumulator = field(default_factory=CentroidAccumulator)
     pinned_contact_id: Optional[int] = None
     anonymous_label: Optional[str] = None
+
+
+@dataclass
+class _SpeakerState:
+    """Per-diarization-id state: a set of voice clusters plus enrollment audio.
+
+    ``last_cluster`` is the cluster the most recently processed segment joined;
+    ``resolve`` reports on it so the answer tracks the voice that just spoke.
+    Enrollment audio is accumulated at the id level but only while the id holds
+    a single cluster, so a co-located second voice never poisons the voiceprint.
+    """
+
+    clusters: list[_VoiceCluster] = field(default_factory=list)
+    last_cluster: Optional[_VoiceCluster] = None
     enrollment_audio: list[np.ndarray] = field(default_factory=list)
     enrollment_duration_s: float = 0.0
     enrollment_sample_rate: int = ENROLLMENT_SAMPLE_RATE
@@ -492,19 +489,46 @@ class SpeakerTracker:
     ) -> None:
         embedding = await self._embedder.embed(pcm, sample_rate)
         state = self._speakers.setdefault(speaker_id, _SpeakerState())
-        merged = state.accumulator.add(embedding, duration_s)
-        self._try_pin(state)
-        if merged:
-            # A contaminating outlier belongs to a different, co-located voice;
-            # feeding it to enrollment would poison the captured voiceprint.
+        cluster = self._assign_cluster(state, embedding, duration_s)
+        self._try_pin(cluster)
+        state.last_cluster = cluster
+        if len(state.clusters) == 1:
+            # A second cluster means a co-located voice shares this id; only the
+            # sole-voice case is safe to feed into the enrolled voiceprint.
             self._accumulate_enrollment(state, pcm, sample_rate, duration_s)
         self._check_enrollment_progress()
         self._check_suggestion()
 
-    def _try_pin(self, state: _SpeakerState) -> None:
+    def _assign_cluster(
+        self,
+        state: _SpeakerState,
+        embedding: np.ndarray,
+        duration_s: float,
+    ) -> _VoiceCluster:
+        """Join the segment to its nearest within-id cluster, or seed a new one.
+
+        A segment merges into the closest cluster when their cosine similarity
+        clears ``CLUSTER_JOIN_SIM``; otherwise it is a different co-located voice
+        and gets its own cluster. This is the core fix for a diarization id that
+        the STT engine failed to split into distinct speakers.
+        """
+        best, best_sim = None, 0.0
+        for cluster in state.clusters:
+            sim = cluster.accumulator.similarity(embedding)
+            if sim > best_sim:
+                best, best_sim = cluster, sim
+        if best is not None and best_sim >= CLUSTER_JOIN_SIM:
+            best.accumulator.add(embedding, duration_s)
+            return best
+        cluster = _VoiceCluster()
+        cluster.accumulator.add(embedding, duration_s)
+        state.clusters.append(cluster)
+        return cluster
+
+    def _try_pin(self, cluster: _VoiceCluster) -> None:
         if not self._enrolled:
             return
-        centroid = state.accumulator.centroid
+        centroid = cluster.accumulator.centroid
         if centroid is None:
             return
         best_cid, best_score = None, 0.0
@@ -513,18 +537,18 @@ class SpeakerTracker:
             if score > best_score:
                 best_cid, best_score = cid, score
         if best_cid is not None and best_score >= self._match_threshold:
-            # The centroid is re-scored on every segment (and is guarded
-            # against cross-voice contamination), so pinning is not a one-way
-            # latch: a pin is revoked below if the voice later drifts away.
-            state.pinned_contact_id = best_cid
+            # The cluster centroid is re-scored on every segment, so pinning is
+            # not a one-way latch: a pin is revoked below if the cluster's voice
+            # later drifts away from every enrolled profile.
+            cluster.pinned_contact_id = best_cid
         else:
-            state.pinned_contact_id = None
-            if state.anonymous_label is None and self._call_contact_enrolled:
+            cluster.pinned_contact_id = None
+            if cluster.anonymous_label is None and self._call_contact_enrolled:
                 # The call contact is enrolled but this voice does not match:
-                # mint a stable session-scoped anonymous identity. It is kept
-                # even if the id is later pinned (resolution prefers the pin),
-                # so the ordinal never churns as the pin flips.
-                state.anonymous_label = f"Speaker {self._next_anonymous_index}"
+                # mint a stable session-scoped anonymous identity for the
+                # cluster. It is kept even if the cluster is later pinned
+                # (resolution prefers the pin), so the ordinal never churns.
+                cluster.anonymous_label = f"Speaker {self._next_anonymous_index}"
                 self._next_anonymous_index += 1
 
     @property
@@ -557,8 +581,12 @@ class SpeakerTracker:
         state.enrollment_sample_rate = ENROLLMENT_SAMPLE_RATE
         state.enrollment_duration_s += duration_s
 
+    def _total_clusters(self) -> int:
+        """Distinct voices heard so far, counting co-located voices per id."""
+        return sum(len(state.clusters) for state in self._speakers.values())
+
     def _check_enrollment_progress(self) -> None:
-        if len(self._speakers) != 1:
+        if self._total_clusters() != 1:
             return
         state = next(iter(self._speakers.values()))
         if state.enrollment_duration_s >= self._enrollment_target_s:
@@ -595,45 +623,57 @@ class SpeakerTracker:
             or self._on_enrollment_suggested is None
             or self._call_contact_id is None
             or self._call_contact_enrolled
-            or len(self._speakers) < 2
+            or self._total_clusters() < 2
         ):
             return
         self._suggestion_fired = True
-        self._on_enrollment_suggested(len(self._speakers))
+        self._on_enrollment_suggested(self._total_clusters())
+
+    async def await_pending(self) -> None:
+        """Flush in-flight embedding work.
+
+        Callers that need per-utterance attribution (``resolve`` reports on the
+        last *processed* segment) await this after a final transcript so the
+        current utterance's segment has been clustered before they resolve.
+        """
+        if self._pending_tasks:
+            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
     async def finalize(self) -> None:
         """Call-end hook: flush pending work and fire a partial enrollment."""
-        if self._pending_tasks:
-            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
-        if not self._enrollment_fired and len(self._speakers) == 1:
+        await self.await_pending()
+        if not self._enrollment_fired and self._total_clusters() == 1:
             state = next(iter(self._speakers.values()))
             if state.enrollment_duration_s >= self._enrollment_min_s:
                 self._fire_enrollment(state)
-        if self._pending_tasks:
-            await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
+        await self.await_pending()
 
     # ── resolution ───────────────────────────────────────────────────────
 
     def resolve(self, speaker_id: str | None) -> SpeakerResolution | None:
-        """Resolve a diarization speaker id to a contact or anonymous label."""
+        """Resolve a diarization id to the identity of the voice that just spoke.
+
+        Attribution is to ``last_cluster`` — the cluster the most recently
+        processed segment joined — so when an id carries several co-located
+        voices the answer names the specific one, not a blurred average.
+        ``provisional`` is set whenever the id spans more than one cluster.
+        """
         if not speaker_id:
             return None
         state = self._speakers.get(speaker_id)
-        if state is None:
+        if state is None or state.last_cluster is None:
             return None
-        # A provisional id has absorbed a clearly different, co-located voice.
-        # We still surface the primary voice, but withhold verification because
-        # this utterance cannot be certified to belong to it.
-        provisional = state.accumulator.outlier_segments > 0
-        if state.pinned_contact_id is not None:
+        cluster = state.last_cluster
+        provisional = len(state.clusters) > 1
+        if cluster.pinned_contact_id is not None:
             return SpeakerResolution(
-                contact_id=state.pinned_contact_id,
-                verified=not provisional,
+                contact_id=cluster.pinned_contact_id,
+                verified=True,
                 provisional=provisional,
             )
-        if state.anonymous_label:
+        if cluster.anonymous_label:
             return SpeakerResolution(
-                label=state.anonymous_label,
+                label=cluster.anonymous_label,
                 provisional=provisional,
             )
         return None
@@ -644,7 +684,7 @@ class SpeakerTracker:
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         """Split every known voice profile into (engaged, non-engaged) lists.
 
-        Combines enrolled contact embeddings with this call's per-speaker
+        Combines enrolled contact embeddings with this call's per-voice-cluster
         session centroids, so both an engaged-but-unenrolled guest and the
         enrolled caller on this exact channel/mic are representable. Voices
         that are not yet confidently resolved contribute to the *engaged*
@@ -658,24 +698,25 @@ class SpeakerTracker:
             )
             target.append(vec)
         for state in self._speakers.values():
-            centroid = state.accumulator.centroid
-            if centroid is None:
-                continue
-            if state.pinned_contact_id is not None:
-                target = (
-                    engaged_profiles
-                    if engaged.is_engaged_contact(state.pinned_contact_id)
-                    else other_profiles
-                )
-            elif state.anonymous_label:
-                target = (
-                    engaged_profiles
-                    if engaged.is_engaged_label(state.anonymous_label)
-                    else other_profiles
-                )
-            else:
-                target = engaged_profiles
-            target.append(centroid)
+            for cluster in state.clusters:
+                centroid = cluster.accumulator.centroid
+                if centroid is None:
+                    continue
+                if cluster.pinned_contact_id is not None:
+                    target = (
+                        engaged_profiles
+                        if engaged.is_engaged_contact(cluster.pinned_contact_id)
+                        else other_profiles
+                    )
+                elif cluster.anonymous_label:
+                    target = (
+                        engaged_profiles
+                        if engaged.is_engaged_label(cluster.anonymous_label)
+                        else other_profiles
+                    )
+                else:
+                    target = engaged_profiles
+                target.append(centroid)
         return engaged_profiles, other_profiles
 
 
