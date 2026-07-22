@@ -40,6 +40,11 @@ from unify.dashboard_manager.ops.dashboard_ops import (
     deserialize_layout,
     serialize_layout,
 )
+from unify.dashboard_manager.ops.action_ops import (
+    delete_tile_actions,
+    replace_tile_actions,
+    validate_tile_actions,
+)
 from unify.dashboard_manager.ops.tile_ops import (
     _contexts_for_binding,
     build_tile_record_row,
@@ -61,6 +66,7 @@ from unify.dashboard_manager.types.dashboard import (
     DashboardResult,
     TilePosition,
 )
+from unify.dashboard_manager.types.action import ActionRecordRow, TileAction
 from unify.dashboard_manager.types.tile import (
     DataBinding,
     TileRecord,
@@ -73,6 +79,7 @@ from unify.settings import SETTINGS
 logger = logging.getLogger(__name__)
 
 TILES_TABLE = "Dashboards/Tiles"
+ACTIONS_TABLE = "Dashboards/Actions"
 LAYOUTS_TABLE = "Dashboards/Layouts"
 DASHBOARDS_META_TABLE = "Dashboards/Meta"
 
@@ -144,6 +151,17 @@ class DashboardManager(BaseDashboardManager):
                 auto_counting={"tile_id": None},
             ),
             TableContext(
+                name=ACTIONS_TABLE,
+                description=(
+                    "Registry of tile actions that authenticated Console can "
+                    "dispatch. Each row wires a Functions-catalogue id to a "
+                    "tile button (label, icon, result_mode)."
+                ),
+                fields=model_to_fields(ActionRecordRow),
+                unique_keys={"action_id": "int"},
+                auto_counting={"action_id": None},
+            ),
+            TableContext(
                 name="Dashboards/Layouts",
                 description=(
                     "Registry of composed dashboard layouts. "
@@ -173,6 +191,11 @@ class DashboardManager(BaseDashboardManager):
         from unify.manager_registry import ManagerRegistry
 
         return ManagerRegistry.get_data_manager()
+
+    def _get_fm(self):
+        from unify.manager_registry import ManagerRegistry
+
+        return ManagerRegistry.get_function_manager()
 
     def _table_context_for_root(self, root_context: str, table_name: str) -> str:
         """Return the concrete dashboard context under one registry root."""
@@ -257,6 +280,7 @@ class DashboardManager(BaseDashboardManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: str = DASHBOARD_DATA_SCOPE,
     ) -> TileResult:
@@ -265,9 +289,14 @@ class DashboardManager(BaseDashboardManager):
                 TILES_TABLE,
                 destination,
             )
+            actions_context = self._table_context_for_destination(
+                ACTIONS_TABLE,
+                destination,
+            )
             dm = self._get_dm()
             token = generate_token()
             bindings = validate_data_bindings(data_bindings)
+            tile_actions = validate_tile_actions(actions)
 
             validate_on_data(on_data, bindings)
 
@@ -308,6 +337,15 @@ class DashboardManager(BaseDashboardManager):
 
             register_token(token, "tile", tile_context, _get_active_project())
 
+            if tile_actions is not None:
+                replace_tile_actions(
+                    actions_context=actions_context,
+                    tile_token=token,
+                    actions=tile_actions,
+                    data_manager=dm,
+                    function_manager=self._get_fm(),
+                )
+
             return TileResult(
                 url=_build_tile_url(token),
                 token=token,
@@ -342,6 +380,7 @@ class DashboardManager(BaseDashboardManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: Optional[str] = None,
     ) -> TileResult:
@@ -355,6 +394,10 @@ class DashboardManager(BaseDashboardManager):
                 )
             tile_context = self._table_context_for_destination(
                 TILES_TABLE,
+                destination,
+            )
+            actions_context = self._table_context_for_destination(
+                ACTIONS_TABLE,
                 destination,
             )
             dm = self._get_dm()
@@ -438,6 +481,16 @@ class DashboardManager(BaseDashboardManager):
             if updated_count == 0:
                 return TileResult(error=f"Tile '{token}' not found")
 
+            if actions is not None:
+                tile_actions = validate_tile_actions(actions)
+                replace_tile_actions(
+                    actions_context=actions_context,
+                    tile_token=token,
+                    actions=tile_actions,
+                    data_manager=dm,
+                    function_manager=self._get_fm(),
+                )
+
             return TileResult(
                 url=_build_tile_url(token),
                 token=token,
@@ -453,7 +506,16 @@ class DashboardManager(BaseDashboardManager):
     def delete_tile(self, token: str, *, destination: str | None = None) -> bool:
         try:
             context = self._table_context_for_destination(TILES_TABLE, destination)
+            actions_context = self._table_context_for_destination(
+                ACTIONS_TABLE,
+                destination,
+            )
             dm = self._get_dm()
+            delete_tile_actions(
+                actions_context=actions_context,
+                tile_token=token,
+                data_manager=dm,
+            )
             deleted = dm.delete_rows(
                 context,
                 filter=f"token == '{token}'",

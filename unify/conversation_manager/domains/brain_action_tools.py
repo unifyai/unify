@@ -1599,6 +1599,18 @@ class ConversationManagerBrainActionTools:
         _bat_log.debug(f"⏱️ [CM.act tool +{_bat_ms()}] entered")
         cm = self._cm
 
+        from unify.runtime.drain_gate import is_admission_blocked
+
+        if is_admission_blocked():
+            return {
+                "status": "refused",
+                "reason": "drain_in_progress",
+                "detail": (
+                    "Assistant drain/restart is in progress; new act calls "
+                    "are refused until the pod recycles"
+                ),
+            }
+
         suppression = cm.suppress_duplicate_commissioning_tool(
             tool_name="act",
             tool_args={

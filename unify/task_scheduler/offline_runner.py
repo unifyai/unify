@@ -107,6 +107,8 @@ class OfflineTaskConfig:
     source_contact_id: str = ""
     requires_filesystem: bool = False
     requires_computer: bool = False
+    mode: str = "actor"
+    call_kwargs: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -201,17 +203,27 @@ def _load_config_from_env() -> OfflineTaskConfig:
         destination = ContextRegistry.canonical_destination(raw_destination)
     except ValueError as exc:
         raise RuntimeError(f"Invalid TASK_DESTINATION: {raw_destination}") from exc
+    mode = (os.environ.get("UNITY_OFFLINE_TASK_MODE") or "actor").strip().lower()
+    if mode == "function":
+        revision = os.environ.get("UNITY_OFFLINE_TASK_REVISION", "").strip()
+        request = (
+            os.environ.get("UNITY_OFFLINE_TASK_REQUEST", "").strip()
+            or "Execute dashboard action"
+        )
+    else:
+        revision = _require_env("UNITY_OFFLINE_TASK_REVISION")
+        request = _require_env("UNITY_OFFLINE_TASK_REQUEST")
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
         run_key=_require_env("UNITY_OFFLINE_RUN_KEY"),
         task_id=int(_require_env("UNITY_OFFLINE_TASK_ID")),
         function_id=_optional_int_env("UNITY_OFFLINE_TASK_FUNCTION_ID"),
-        request=_require_env("UNITY_OFFLINE_TASK_REQUEST"),
+        request=request,
         wake=Wake.normalize(
             os.environ.get("UNITY_OFFLINE_TASK_WAKE", Wake.scheduled),
         ),
         source_task_log_id=int(_require_env("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID")),
-        revision=_require_env("UNITY_OFFLINE_TASK_REVISION"),
+        revision=revision,
         destination=destination,
         task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
         task_description=os.environ.get("UNITY_OFFLINE_TASK_DESCRIPTION", ""),
@@ -221,7 +233,21 @@ def _load_config_from_env() -> OfflineTaskConfig:
         source_contact_id=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID", ""),
         requires_filesystem=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_FILESYSTEM"),
         requires_computer=_bool_env("UNITY_OFFLINE_TASK_REQUIRES_COMPUTER"),
+        mode=mode,
+        call_kwargs=_load_call_kwargs_from_env(),
     )
+
+
+def _load_call_kwargs_from_env() -> dict[str, Any] | None:
+    """Parse optional JSON call kwargs for function-mode dashboard actions."""
+
+    raw = os.environ.get("UNITY_OFFLINE_TASK_CALL_KWARGS", "").strip()
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("UNITY_OFFLINE_TASK_CALL_KWARGS must be a JSON object")
+    return parsed
 
 
 def _orchestra_admin_headers() -> dict[str, str]:
@@ -285,6 +311,8 @@ def _update_task_run(
 def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
     """Mark the source task row failed when scheduler finalization did not run."""
 
+    if config.mode == "function" or config.source_task_log_id <= 0:
+        return
     try:
         SESSION_DETAILS.populate_from_env()
         unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
@@ -389,6 +417,10 @@ def _build_result_summary(config: OfflineTaskConfig, execution_result: Any) -> s
         result_value: Any = execution_result
         stdout = ""
         stderr = ""
+    elif isinstance(execution_result, dict):
+        result_value = execution_result.get("result", execution_result)
+        stdout = str(execution_result.get("stdout", "") or "")
+        stderr = str(execution_result.get("stderr", "") or "")
     else:
         result_value = getattr(execution_result, "result", None)
         stdout = str(getattr(execution_result, "stdout", "") or "")
@@ -653,9 +685,89 @@ def _bootstrap_offline_runtime() -> None:
     )
 
 
+async def _execute_function_mode_task(config: OfflineTaskConfig) -> Any:
+    """Run one Functions-catalogue entry without TaskScheduler lifecycle.
+
+    Used by authenticated Console dashboard actions. Resolves ``function_id``
+    to a name, executes via FunctionManager, and writes the terminal
+    ``result_summary`` onto the pre-created run row.
+    """
+
+    if config.function_id is None:
+        raise RuntimeError(
+            "function-mode offline runs require UNITY_OFFLINE_TASK_FUNCTION_ID",
+        )
+
+    _ensure_desktop_env_for_resources(config)
+    SESSION_DETAILS.populate_from_env()
+    _bootstrap_offline_runtime()
+
+    from unify.manager_registry import ManagerRegistry
+
+    function_manager = ManagerRegistry.get_function_manager()
+    rows = function_manager.filter_functions(
+        filter=f"function_id == {int(config.function_id)}",
+        limit=1,
+        include_implementations=False,
+    )
+    if not rows:
+        raise RuntimeError(
+            f"function_id {config.function_id} not found in Functions catalogue",
+        )
+    function_name = str(rows[0].get("name") or "").strip()
+    if not function_name:
+        raise RuntimeError(
+            f"function_id {config.function_id} has no name in Functions catalogue",
+        )
+
+    call_kwargs = dict(config.call_kwargs or {})
+    execution_result = await function_manager.execute_function(
+        function_name=function_name,
+        call_kwargs=call_kwargs,
+    )
+    error = ""
+    if isinstance(execution_result, dict):
+        error = str(execution_result.get("error") or "").strip()
+    else:
+        error = str(getattr(execution_result, "error", "") or "").strip()
+
+    if error:
+        _update_task_run(
+            config.assistant_id,
+            config.run_key,
+            source_task_log_id=(
+                config.source_task_log_id if config.source_task_log_id > 0 else None
+            ),
+            updates={
+                "state": "failed",
+                "completed_at": _now_iso(),
+                "error": _truncate_text(error),
+                "result_summary": _build_result_summary(config, execution_result),
+            },
+        )
+        raise RuntimeError(error)
+
+    _update_task_run(
+        config.assistant_id,
+        config.run_key,
+        source_task_log_id=(
+            config.source_task_log_id if config.source_task_log_id > 0 else None
+        ),
+        updates={
+            "state": "completed",
+            "completed_at": _now_iso(),
+            "error": None,
+            "result_summary": _build_result_summary(config, execution_result),
+        },
+    )
+    return execution_result
+
+
 async def _execute_offline_task(config: OfflineTaskConfig) -> Any:
     """Execute one offline task with assistant session context."""
 
+    if config.mode == "function":
+        return await _execute_function_mode_task(config)
     _ensure_desktop_env_for_resources(config)
     SESSION_DETAILS.populate_from_env()
     _bootstrap_offline_runtime()
