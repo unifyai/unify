@@ -345,6 +345,31 @@ class AudioRingBuffer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Provenance of a resolved speaker display label — the single documented
+# authority ordering, highest first. A transcript row carries its source so it
+# is self-describing ("is voice fingerprinting actually working?" is answerable
+# from the row alone), and the late-binding Google-Meet transcript reconciler
+# (Orchestra-side, fed by the Workspace-Events ``meet_bridge``) has one place to
+# honour: a lower source must never overwrite a name already set by a higher
+# one. ``anonymous`` is the only source that is a placeholder ("Speaker N")
+# rather than a real name — consumers key off it instead of "no voice match".
+LABEL_SOURCE_VOICE_PIN = "voice_pin"
+LABEL_SOURCE_MEET_ROSTER = "meet_roster"
+LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT = "google_meet_transcript"
+LABEL_SOURCE_DOM_MEET_MAP = "dom_meet_map"
+LABEL_SOURCE_DOM_ACTIVE_SPEAKER = "dom_active_speaker"
+LABEL_SOURCE_ANONYMOUS = "anonymous"
+
+LABEL_SOURCE_PRECEDENCE = (
+    LABEL_SOURCE_VOICE_PIN,
+    LABEL_SOURCE_MEET_ROSTER,
+    LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT,
+    LABEL_SOURCE_DOM_MEET_MAP,
+    LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+    LABEL_SOURCE_ANONYMOUS,
+)
+
+
 @dataclass
 class SpeakerResolution:
     """Resolution of a single diarized utterance.
@@ -353,13 +378,18 @@ class SpeakerResolution:
     carries several co-located voices, the resolution names the cluster the
     current utterance's audio actually joined. ``provisional`` marks that the
     id spans more than one voice cluster, so downstream consumers know the
-    diarization id alone is not a reliable speaker key.
+    diarization id alone is not a reliable speaker key. ``source`` records how
+    the identity was derived (``LABEL_SOURCE_VOICE_PIN`` for an embedding match,
+    ``LABEL_SOURCE_ANONYMOUS`` for a minted "Speaker N"); higher-authority
+    sources (roster, DOM, recorded transcript) are stamped one level up in the
+    call script, not here.
     """
 
     contact_id: Optional[int] = None
     label: Optional[str] = None
     verified: bool = False
     provisional: bool = False
+    source: Optional[str] = None
 
 
 @dataclass
@@ -670,11 +700,13 @@ class SpeakerTracker:
                 contact_id=cluster.pinned_contact_id,
                 verified=True,
                 provisional=provisional,
+                source=LABEL_SOURCE_VOICE_PIN,
             )
         if cluster.anonymous_label:
             return SpeakerResolution(
                 label=cluster.anonymous_label,
                 provisional=provisional,
+                source=LABEL_SOURCE_ANONYMOUS,
             )
         return None
 
