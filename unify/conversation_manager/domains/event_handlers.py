@@ -13,6 +13,7 @@ from unify.contact_manager.types.contact import UNASSIGNED
 from unify.common.context_registry import ContextRegistry
 from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
+from unify.conversation_manager import speaker_id
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.comms_utils import (
@@ -1508,10 +1509,14 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         sender_name = event.speaker_label
 
     # Track anonymous voice labels for the engagement tools' status appendix.
+    # Keyed on provenance, not "no voice match": a roster/DOM-resolved *real*
+    # name is also unverified, but it is not a "Speaker N" placeholder and must
+    # not pollute the anonymous-label roster.
     if (
         role == "user"
         and getattr(event, "speaker_label", None)
-        and not getattr(event, "voice_verified", False)
+        and getattr(event, "speaker_label_source", None)
+        == speaker_id.LABEL_SOURCE_ANONYMOUS
     ):
         cm.call_manager.note_speaker_label(event.speaker_label)
 

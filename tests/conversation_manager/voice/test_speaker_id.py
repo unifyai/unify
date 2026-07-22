@@ -227,6 +227,7 @@ class TestSpeakerTracker:
         assert resolution is not None
         assert resolution.contact_id == 5
         assert resolution.verified is True
+        assert resolution.source == speaker_id.LABEL_SOURCE_VOICE_PIN
 
     async def test_anonymous_label_for_unmatched_voice(self):
         tracker = _make_tracker(enrolled={5: VOICE_A})
@@ -243,6 +244,9 @@ class TestSpeakerTracker:
         assert other.contact_id is None
         assert other.label == "Speaker 2"
         assert other.verified is False
+        assert other.source == speaker_id.LABEL_SOURCE_ANONYMOUS
+        # The enrolled voice is stamped as a verified pin, not a placeholder.
+        assert boss.source == speaker_id.LABEL_SOURCE_VOICE_PIN
 
     async def test_no_anonymous_label_without_enrollment(self):
         # Contact NOT enrolled: unmatched voices must not get anonymous labels

@@ -1533,6 +1533,10 @@ async def log_message(
             if speaker_label:
                 metadata = metadata or {}
                 metadata["speaker_label"] = speaker_label
+            speaker_label_source = getattr(event, "speaker_label_source", None)
+            if speaker_label_source:
+                metadata = metadata or {}
+                metadata["speaker_label_source"] = speaker_label_source
             if getattr(event, "voice_verified", False):
                 metadata = metadata or {}
                 metadata["voice_verified"] = True
