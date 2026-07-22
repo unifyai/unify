@@ -434,6 +434,13 @@ class SpeakerTracker:
       single-voice call has accumulated enough speech to enroll the contact.
     - ``on_enrollment_suggested(num_speakers)`` when multiple voices are heard
       but the call contact has no enrollment to disambiguate them.
+
+    ``multi_party`` marks a call with many concurrent speakers and no single
+    primary (a meet). It only affects *labeling*: every distinct voice cluster
+    gets a stable anonymous "Speaker N" identity even when nobody is enrolled,
+    so meet transcripts are per-speaker attributable from the voice track alone.
+    Auto-enrollment stays single-voice-gated regardless, so a meet never enrolls
+    an arbitrary participant as the call contact.
     """
 
     def __init__(
@@ -442,6 +449,7 @@ class SpeakerTracker:
         embedder: SpeakerEmbedder,
         enrolled_profiles: dict[int, np.ndarray],
         call_contact_id: int | None,
+        multi_party: bool = False,
         match_threshold: float = SPEAKER_MATCH_THRESHOLD,
         enrollment_target_s: float = ENROLLMENT_TARGET_S,
         enrollment_min_s: float = ENROLLMENT_MIN_S,
@@ -456,6 +464,7 @@ class SpeakerTracker:
         self._call_contact_id = (
             int(call_contact_id) if call_contact_id is not None else None
         )
+        self._multi_party = multi_party
         self._match_threshold = match_threshold
         self._enrollment_target_s = enrollment_target_s
         self._enrollment_min_s = enrollment_min_s
@@ -465,7 +474,12 @@ class SpeakerTracker:
         self._ring = AudioRingBuffer()
         self._speakers: dict[str, _SpeakerState] = {}
         self._last_final_ts: float = 0.0
-        self._next_anonymous_index = 2
+        # "Speaker 1" is reserved for the enrolled primary caller only when there
+        # is one (a phone contact who resolves by name, never by ordinal). With
+        # no reserved primary — an unenrolled multi-party meet — the sequence
+        # starts at 1 so the first unidentified voice is "Speaker 1", not a
+        # gap-leaving "Speaker 2".
+        self._next_anonymous_index = 2 if self._call_contact_enrolled else 1
         self._enrollment_fired = False
         self._suggestion_fired = False
         self._pending_tasks: set[asyncio.Task] = set()
@@ -556,7 +570,10 @@ class SpeakerTracker:
         return cluster
 
     def _try_pin(self, cluster: _VoiceCluster) -> None:
-        if not self._enrolled:
+        # With no enrolled profiles there is nothing to pin against, but a
+        # multi-party call still needs a per-cluster anonymous label, so fall
+        # through to the minting branch below instead of bailing.
+        if not self._enrolled and not self._multi_party:
             return
         centroid = cluster.accumulator.centroid
         if centroid is None:
@@ -573,11 +590,17 @@ class SpeakerTracker:
             cluster.pinned_contact_id = best_cid
         else:
             cluster.pinned_contact_id = None
-            if cluster.anonymous_label is None and self._call_contact_enrolled:
-                # The call contact is enrolled but this voice does not match:
-                # mint a stable session-scoped anonymous identity for the
-                # cluster. It is kept even if the cluster is later pinned
-                # (resolution prefers the pin), so the ordinal never churns.
+            if cluster.anonymous_label is None and (
+                self._call_contact_enrolled or self._multi_party
+            ):
+                # This voice does not match an enrolled profile: mint a stable
+                # session-scoped anonymous identity for the cluster. Warranted
+                # either because the call contact is enrolled (so a non-matching
+                # voice is confidently *someone else*) or because this is a
+                # multi-party call (a meet) where every distinct voice needs a
+                # per-speaker label even with nobody enrolled. The label is kept
+                # even if the cluster is later pinned (resolution prefers the
+                # pin), so the ordinal never churns.
                 cluster.anonymous_label = f"Speaker {self._next_anonymous_index}"
                 self._next_anonymous_index += 1
 

@@ -1717,6 +1717,7 @@ async def entrypoint(ctx: agents.JobContext):
             embedder=SPEAKER_EMBEDDER,
             enrolled_profiles=voice_profiles,
             call_contact_id=contact.get("contact_id"),
+            multi_party=channel in ("google_meet", "teams_meet"),
             on_enrollment_captured=_on_enrollment_captured,
             on_enrollment_suggested=_on_enrollment_suggested,
         )
@@ -1869,45 +1870,45 @@ async def entrypoint(ctx: agents.JobContext):
         tag recording which of the signals below produced ``display_name`` (None
         when no name was resolved). Signals in priority order — the same ordering
         as ``LABEL_SOURCE_PRECEDENCE``:
-        1. Voice-embedding match against enrolled contact profiles (all channels).
+        1. Voice-embedding pin against enrolled contact profiles (all channels).
         2. LiveKit identity → org-call roster (Unify Meet multi-party).
         3. Diarization speaker_id → DOM correlation mapping (browser meets).
         4. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
+        5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
+           name from 1-4 always outranks this placeholder, so it is evaluated
+           last even though it comes from the same tracker resolution as 1.
         """
         sid = _meet_last_speaker_id
         engaged = _speaker_is_engaged(sid)
 
-        # Primary: embedding-pinned identity from the speaker tracker
-        if sid and speaker_tracker is not None:
-            resolution = speaker_tracker.resolve(sid)
-            if resolution is not None:
-                if resolution.contact_id is not None:
-                    for cand in (contact, boss):
-                        if cand.get("contact_id") == resolution.contact_id:
-                            label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                            # Not literally True: a provisional (co-located,
-                            # contaminated) id attributes the primary voice for
-                            # routing but cannot certify this utterance.
-                            return (
-                                cand,
-                                label or None,
-                                sid,
-                                resolution.verified,
-                                engaged,
-                                speaker_id.LABEL_SOURCE_VOICE_PIN,
-                            )
-                elif resolution.label:
-                    # Confidently a different, unenrolled voice: keep the call
-                    # contact for routing but surface the anonymous label.
+        # Resolve once, then consume in documented-authority order
+        # (``speaker_id.LABEL_SOURCE_PRECEDENCE``): the embedding pin is returned
+        # immediately, but the anonymous "Speaker N" fallback is held to the very
+        # end so a real roster/DOM name always wins over a placeholder ordinal.
+        resolution = (
+            speaker_tracker.resolve(sid)
+            if sid and speaker_tracker is not None
+            else None
+        )
+
+        # 1. Embedding-pinned enrolled contact (all channels).
+        if resolution is not None and resolution.contact_id is not None:
+            for cand in (contact, boss):
+                if cand.get("contact_id") == resolution.contact_id:
+                    label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                    # Not literally True: a provisional (co-located,
+                    # contaminated) id attributes the primary voice for
+                    # routing but cannot certify this utterance.
                     return (
-                        contact,
-                        resolution.label,
+                        cand,
+                        label or None,
                         sid,
-                        False,
+                        resolution.verified,
                         engaged,
-                        speaker_id.LABEL_SOURCE_ANONYMOUS,
+                        speaker_id.LABEL_SOURCE_VOICE_PIN,
                     )
 
+        # 2. Unify-meet roster identity.
         if channel == "unify_meet" and unify_meet_roster:
             identity = _unify_meet_active_identity
             if identity:
@@ -1926,58 +1927,70 @@ async def entrypoint(ctx: agents.JobContext):
                             speaker_id.LABEL_SOURCE_MEET_ROSTER,
                         )
 
-        if channel not in ("google_meet", "teams_meet"):
-            return contact, None, sid, False, engaged, None
-
-        # Diarization speaker_id → mapped display name (browser meets)
-        if sid and sid in _meet_speaker_map:
-            votes = _meet_speaker_map[sid]
-            if votes:
-                top_name = max(votes, key=votes.get)
-                top_count = votes[top_name]
-                total = sum(votes.values())
-                if top_count >= 2 and top_count / total > 0.6:
-                    resolved = _resolve_contact_by_name(top_name)
-                    if resolved:
-                        label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+        # 3-4. Browser-meet DOM name resolution.
+        if channel in ("google_meet", "teams_meet"):
+            # 3. Diarization speaker_id → DOM-correlated display name.
+            if sid and sid in _meet_speaker_map:
+                votes = _meet_speaker_map[sid]
+                if votes:
+                    top_name = max(votes, key=votes.get)
+                    top_count = votes[top_name]
+                    total = sum(votes.values())
+                    if top_count >= 2 and top_count / total > 0.6:
+                        resolved = _resolve_contact_by_name(top_name)
+                        if resolved:
+                            label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+                            return (
+                                resolved,
+                                label or None,
+                                sid,
+                                False,
+                                engaged,
+                                speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                            )
                         return (
-                            resolved,
-                            label or None,
+                            contact,
+                            top_name,
                             sid,
                             False,
                             engaged,
                             speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
                         )
+
+            # 4. DOM active speaker.
+            active_name = _meet_cached_active_speaker
+            if active_name:
+                resolved = _resolve_contact_by_name(active_name)
+                if resolved:
+                    label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
                     return (
-                        contact,
-                        top_name,
+                        resolved,
+                        label or None,
                         sid,
                         False,
                         engaged,
-                        speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                        speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
                     )
-
-        # Fallback: DOM active speaker
-        active_name = _meet_cached_active_speaker
-        if active_name:
-            resolved = _resolve_contact_by_name(active_name)
-            if resolved:
-                label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
                 return (
-                    resolved,
-                    label or None,
+                    contact,
+                    active_name,
                     sid,
                     False,
                     engaged,
                     speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
                 )
+
+        # 5. Anonymous "Speaker N" from the voice tracker (lowest authority, all
+        # channels): a confidently distinct but unidentified voice. Keep the call
+        # contact for routing but surface the placeholder label.
+        if resolution is not None and resolution.label:
             return (
                 contact,
-                active_name,
+                resolution.label,
                 sid,
                 False,
                 engaged,
-                speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                speaker_id.LABEL_SOURCE_ANONYMOUS,
             )
 
         return contact, None, sid, False, engaged, None
