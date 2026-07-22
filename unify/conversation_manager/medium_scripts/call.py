@@ -1880,7 +1880,16 @@ async def entrypoint(ctx: agents.JobContext):
                     for cand in (contact, boss):
                         if cand.get("contact_id") == resolution.contact_id:
                             label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                            return cand, label or None, sid, True, engaged
+                            # Not literally True: a provisional (co-located,
+                            # contaminated) id attributes the primary voice for
+                            # routing but cannot certify this utterance.
+                            return (
+                                cand,
+                                label or None,
+                                sid,
+                                resolution.verified,
+                                engaged,
+                            )
                 elif resolution.label:
                     # Confidently a different, unenrolled voice: keep the call
                     # contact for routing but surface the anonymous label.

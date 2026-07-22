@@ -127,6 +127,28 @@ class TestCentroidAccumulator:
     def test_empty(self):
         assert CentroidAccumulator().centroid is None
 
+    def test_seeds_before_established(self):
+        # With no trustworthy reference yet, even a dissimilar segment is
+        # absorbed rather than rejected.
+        acc = CentroidAccumulator()
+        assert acc.add(np.array([1.0, 0.0], dtype=np.float32), 1.0) is True
+        assert acc.add(np.array([0.0, 1.0], dtype=np.float32), 1.0) is True
+        assert acc.outlier_segments == 0
+
+    def test_rejects_contaminating_outlier_once_established(self):
+        acc = CentroidAccumulator()
+        # Two matching segments past the guard duration establish the centroid.
+        assert acc.add(np.array([1.0, 0.0], dtype=np.float32), 2.0) is True
+        assert acc.add(np.array([1.0, 0.0], dtype=np.float32), 2.0) is True
+        assert acc.is_established
+        # A clearly different (orthogonal) voice is rejected, not averaged in.
+        assert acc.add(np.array([0.0, 1.0], dtype=np.float32), 3.0) is False
+        assert acc.outlier_segments == 1
+        assert acc.segments == 2
+        centroid = acc.centroid
+        assert centroid[0] == pytest.approx(1.0)
+        assert centroid[1] == pytest.approx(0.0)
+
 
 class TestAudioRingBuffer:
     def test_slice_returns_window(self):
@@ -325,6 +347,51 @@ class TestSpeakerTracker:
         _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.2)
         await tracker.finalize()
         assert tracker.resolve("S0") is None
+
+    async def test_pin_holds_but_flags_provisional_under_contamination(self):
+        # A co-located second voice arriving under an already-pinned
+        # diarization id must not silently keep certifying the pinned contact.
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.finalize()
+        pinned = tracker.resolve("S0")
+        assert pinned.contact_id == 5
+        assert pinned.verified is True
+        assert pinned.provisional is False
+
+        # A different, louder voice speaks under the same id.
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+        after = tracker.resolve("S0")
+        # The pin holds for routing (the centroid stayed clean), but the id is
+        # now provisional so verification is withheld.
+        assert after.contact_id == 5
+        assert after.provisional is True
+        assert after.verified is False
+
+    async def test_contamination_excluded_from_enrollment(self):
+        captured: list[tuple] = []
+        tracker = _make_tracker(
+            enrolled={},
+            on_captured=lambda emb, path, dur: captured.append((emb, path, dur)),
+        )
+        clock = _Clock()
+        # Establish the primary voice (2 + 2 = 4s, below the 6s target).
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=2.0)
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=2.0)
+        # A different, co-located voice under the same id: rejected, and its
+        # audio must neither count toward nor contaminate the capture.
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        # More primary speech crosses the 6s target and fires the capture.
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.finalize()
+
+        assert len(captured) == 1
+        embedding, wav_path, _duration_s = captured[0]
+        assert cosine_similarity(np.asarray(embedding), np.array(VOICE_A)) > 0.9
+        os.unlink(wav_path)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
