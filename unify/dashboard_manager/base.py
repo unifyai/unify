@@ -14,6 +14,7 @@ from abc import abstractmethod
 from typing import List, Optional
 
 from unify.common.state_managers import BaseStateManager
+from unify.dashboard_manager.types.action import TileAction
 from unify.dashboard_manager.types.tile import (
     DataBinding,
     TileRecord,
@@ -135,6 +136,7 @@ class BaseDashboardManager(BaseStateManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: str = DASHBOARD_DATA_SCOPE,
     ) -> TileResult:
@@ -366,6 +368,58 @@ class BaseDashboardManager(BaseStateManager):
               ``ValueError``
             - Duplicate aliases across bindings -> ``ValueError``
 
+        actions : list[TileAction] | None, default ``None``
+            Declarative Console action buttons for this tile.  Each
+            ``TileAction`` wires a Python function from the Functions
+            catalogue to an authenticated Console button (public share
+            pages stay read-only).
+
+            Provide **exactly one** of:
+
+            - ``implementation`` -- Python source; authored into the
+              Functions catalogue and wired by the resulting
+              ``function_id``.
+            - ``function_id`` -- wire an existing catalogue entry by id.
+            - ``function_name`` -- wire an existing catalogue entry by
+              name.
+
+            Required fields: ``action_name`` (stable key within the
+            tile), ``label`` (button text).  Optional: ``icon``,
+            ``request`` (NL brief for the offline runner).
+
+            ``result_mode`` controls Console delivery after dispatch:
+
+            - ``"fire_and_forget"`` (default) -- side-effect actions
+              (send email, kick a sync). Console shows that the action
+              started and does not wait for a return value.
+            - ``"show_result"`` -- compute/report actions. Console polls
+              the offline run and presents ``result_summary`` in the UI.
+
+            Do **not** put Python side-effect click handlers in tile
+            HTML; Console owns action chrome. Duplicate ``action_name``
+            values on the same tile raise ``ValueError``.
+
+            Example::
+
+                actions=[
+                    TileAction(
+                        action_name="send_digest",
+                        label="Send Digest",
+                        icon="mail",
+                        implementation=(
+                            "async def send_digest():\\n"
+                            "    return 'sent'\\n"
+                        ),
+                        result_mode="fire_and_forget",
+                    ),
+                    TileAction(
+                        action_name="compute_kpi",
+                        label="Compute KPI",
+                        function_name="compute_kpi",
+                        result_mode="show_result",
+                    ),
+                ]
+
         destination : str | None, default ``None``
             Where this tile row lives -- i.e., which dashboard pool this
             tile belongs to. Pass ``"personal"`` (the default) for tiles
@@ -595,6 +649,10 @@ class BaseDashboardManager(BaseStateManager):
           CORRECT: Always check ``result.succeeded`` before using the URL
           or token.
 
+        - WRONG: Putting Python side-effect click handlers in tile HTML.
+          CORRECT: Declare ``actions=[TileAction(...)]`` so authenticated
+          Console renders buttons and dispatches offline runs.
+
         Notes
         -----
         - The token is generated server-side and is guaranteed unique.
@@ -715,6 +773,7 @@ class BaseDashboardManager(BaseStateManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: Optional[str] = None,
     ) -> TileResult:
@@ -790,6 +849,14 @@ class BaseDashboardManager(BaseStateManager):
             To **clear** a tile's ``on_data_script``, pass ``on_data=""``.
             An empty string signals "remove the script"; ``None`` signals
             "don't change it".
+
+        actions : list[TileAction] | None, default ``None``
+            Replacement action set for this tile.  When provided, the
+            entire previous action set is replaced (pass ``[]`` to clear).
+            When ``None``, existing actions are preserved.  See
+            ``create_tile()`` for ``TileAction`` fields and
+            ``result_mode`` guidance.  Functions already in the catalogue
+            are not deleted when actions are removed.
 
         destination : str | None, default ``None``
             Which tile pool to update. Pass ``"personal"`` for your private

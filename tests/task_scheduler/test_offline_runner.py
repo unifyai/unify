@@ -342,3 +342,73 @@ def test_build_offline_actor_omits_computer_unless_required(monkeypatch):
 
     assert not any(isinstance(env, ComputerEnvironment) for env in captured[0])
     assert any(isinstance(env, ComputerEnvironment) for env in captured[1])
+
+
+def test_offline_runner_function_mode_executes_and_writes_result(monkeypatch):
+    """Dashboard-action function mode bypasses TaskScheduler and writes result_summary."""
+
+    import asyncio
+
+    from unify.task_scheduler import offline_runner
+
+    monkeypatch.setenv("ASSISTANT_ID", "42")
+    monkeypatch.setenv("UNITY_OFFLINE_RUN_KEY", "dashboard_action:42:tile:act:abc")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_ID", "0")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_FUNCTION_ID", "777")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REQUEST", "Run dashboard action")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_WAKE", "explicit")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID", "0")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_MODE", "function")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_CALL_KWARGS", '{"x": 1}')
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_NAME", "compute_health")
+    monkeypatch.setenv("ORCHESTRA_URL", "https://orchestra.test")
+    monkeypatch.setenv("UNIFY_KEY", "user-key")
+
+    updates = []
+    _stub_runtime_initialization(monkeypatch, offline_runner)
+    monkeypatch.setattr(
+        offline_runner,
+        "_ensure_desktop_env_for_resources",
+        lambda config: None,
+    )
+    monkeypatch.setattr(
+        offline_runner,
+        "_update_task_run",
+        lambda assistant_id, run_key, **kwargs: updates.append(
+            {
+                "assistant_id": assistant_id,
+                "run_key": run_key,
+                "updates": kwargs.get("updates"),
+            },
+        ),
+    )
+
+    class _FakeFM:
+        def filter_functions(self, *, filter, limit=1, include_implementations=False):
+            assert "777" in filter
+            return [{"function_id": 777, "name": "compute_health"}]
+
+        async def execute_function(self, *, function_name, call_kwargs=None, **kwargs):
+            assert function_name == "compute_health"
+            assert call_kwargs == {"x": 1}
+            return {"result": {"score": 98}, "error": "", "stdout": "", "stderr": ""}
+
+    class _FakeRegistry:
+        @staticmethod
+        def get_function_manager():
+            return _FakeFM()
+
+    import unify.manager_registry as manager_registry
+
+    monkeypatch.setattr(manager_registry, "ManagerRegistry", _FakeRegistry)
+
+    config = offline_runner._load_config_from_env()
+    assert config.mode == "function"
+    assert config.call_kwargs == {"x": 1}
+
+    result = asyncio.run(offline_runner._execute_function_mode_task(config))
+    assert result["result"]["score"] == 98
+    assert len(updates) == 1
+    assert updates[0]["updates"]["state"] == "completed"
+    assert "score" in updates[0]["updates"]["result_summary"]
