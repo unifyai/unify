@@ -2452,6 +2452,60 @@ class BaseDataManager(BaseStateManager):
         """
 
     @abstractmethod
+    def claim(
+        self,
+        context: str,
+        *,
+        expect: Dict[str, Any],
+        updates: Dict[str, Any],
+        limit: int = 1,
+        destination: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Atomically claim rows via compare-and-set (race-safe under concurrency).
+
+        Selects up to ``limit`` rows whose fields equal every ``expect``
+        entry, locks them server-side (``FOR UPDATE SKIP LOCKED``), and
+        merges ``updates`` into them in a single statement. Concurrent
+        claimers never receive the same row, which makes this the correct
+        primitive for work-queue transitions (e.g. claiming a job by moving
+        ``status`` from ``"queued"`` to ``"processing"``): exactly one caller
+        wins each row; the others get an empty result.
+
+        Parameters
+        ----------
+        context : str
+            Target context path.
+        expect : dict
+            Equality conditions a row must satisfy to be claimable. Values
+            may be str, int, float, bool, or None (None matches a
+            missing/null field).
+        updates : dict
+            Fields merged into each claimed row.
+        limit : int, default ``1``
+            Maximum number of rows to claim.
+        destination : str | None, default ``None``
+            Which Data root contains the rows (same semantics as
+            ``update_rows``).
+
+        Returns
+        -------
+        list[dict]
+            The claimed rows, each as ``{"id": <log id>, "data": {...}}``
+            with post-update data. Empty when nothing matched.
+
+        Examples
+        --------
+        rows = dm.claim(
+            "Data/GTM/SmartLeadReplyJobs",
+            expect={"job_id": "abc", "status": "queued"},
+            updates={"status": "processing"},
+        )
+        if not rows:
+            return  # another worker owns this job
+        """
+
+    @abstractmethod
     def delete_rows(
         self,
         context: str,
