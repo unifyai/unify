@@ -2604,6 +2604,25 @@ class ConversationManager(metaclass=SingletonABCMeta):
             has_active_work = active_work.active_count > 0
             effective_idle_seconds = 0.0 if has_active_work else idle_seconds
 
+            # Control-plane drain: once in-flight work is gone, shut down so
+            # the next wake loads a fresh client bundle.
+            if not has_active_work:
+                try:
+                    from unify.runtime.drain_gate import is_admission_blocked
+
+                    if is_admission_blocked():
+                        LOGGER.info(
+                            "Drain in progress and ACTIVE_WORK empty; "
+                            "shutting down for restart",
+                        )
+                        await self.stop()
+                        return
+                except Exception:  # noqa: BLE001 — never break inactivity loop
+                    LOGGER.debug(
+                        "drain gate probe in inactivity failed",
+                        exc_info=True,
+                    )
+
             if (
                 not has_active_work
                 and pubsub_idle > self.inactivity_timeout
