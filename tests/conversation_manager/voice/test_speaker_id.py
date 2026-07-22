@@ -468,6 +468,31 @@ class TestProfilesPartition:
         assert len(engaged_profiles) == 3
         assert not other_profiles
 
+    async def test_co_located_clusters_split_across_engagement(self):
+        # Two co-located voices collapsed into one diarization id (S0) must be
+        # partitioned independently: the enrolled/engaged voice on the engaged
+        # side, the second (anonymous) voice on the other side so it can be
+        # gated even though the STT engine never split it into its own id.
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        engaged = EngagedSpeakers(permanent_contact_ids={5})
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        # Enrolled profile + S0's pinned cluster on the engaged side; S0's
+        # second cluster (anonymous "Speaker 2") on the other side.
+        assert len(engaged_profiles) == 2
+        assert len(other_profiles) == 1
+        assert cosine_similarity(other_profiles[0], np.array(VOICE_B)) > 0.9
+
+        # Engaging the co-located voice's label moves only that cluster across.
+        engaged.engage(label="Speaker 2")
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        assert len(engaged_profiles) == 3
+        assert not other_profiles
+
     async def test_unresolved_centroids_stay_engaged(self):
         # Contact NOT enrolled: no anonymous labels are assigned, so all
         # session centroids remain on the engaged (fail-open) side.

@@ -728,11 +728,14 @@ class SpeakerTracker:
 class EngagedSpeakers:
     """Per-call attention set consulted by the floor/turn/reply gates.
 
-    Membership is by ``contact_id`` (enrolled voices) or session-scoped
-    anonymous label ("Speaker 2"). The permanent members (call contact and
-    boss) can never be disengaged. All checks fail open: an unresolved or
-    ambiguous speaker is treated as engaged, so the worst failure mode is
-    today's ungated behavior, never a deaf assistant.
+    Membership is by resolved identity — ``contact_id`` (enrolled voices) or
+    session-scoped anonymous label ("Speaker 2") — never by diarization id. A
+    single diarization id the STT engine under-split carries one cluster per
+    co-located voice, each with its own identity, so co-located voices are
+    engaged and gated independently even when they share an id. The permanent
+    members (call contact and boss) can never be disengaged. All checks fail
+    open: an unresolved or ambiguous speaker is treated as engaged, so the
+    worst failure mode is today's ungated behavior, never a deaf assistant.
     """
 
     def __init__(self, *, permanent_contact_ids: Iterable[int] = ()) -> None:
