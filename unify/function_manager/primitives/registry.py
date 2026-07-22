@@ -152,7 +152,13 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "asking for an existing token. Live data tiles are essential for "
             "production: large datasets, joins, aggregation, and frequently "
             "updated data. Only bake data into HTML for very small static "
-            "snapshots."
+            "snapshots. For authenticated Console buttons that run Python, "
+            "declare ``actions=[TileAction(...)]`` on create_tile/update_tile "
+            "(author via ``implementation`` or wire ``function_id``/"
+            "``function_name``). Use ``result_mode='fire_and_forget'`` for "
+            "side effects and ``result_mode='show_result'`` when Console "
+            "should present the return value. Do not put Python side-effect "
+            "click handlers in tile HTML -- Console owns action chrome."
         ),
     ),
     ManagerSpec(
@@ -544,6 +550,7 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_dashboards_live_data_example",
         "get_primitives_dashboards_rich_live_data_example",
         "get_primitives_dashboards_composition_example",
+        "get_primitives_dashboards_actions_example",
     ],
     "integrations": [
         "get_primitives_integrations_function_manager_search_example",

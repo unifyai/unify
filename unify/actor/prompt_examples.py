@@ -1493,6 +1493,55 @@ async def live_revenue_by_category() -> str:
 '''
 
 
+def get_primitives_dashboards_actions_example() -> str:
+    """Example: tile actions with fire_and_forget and show_result modes."""
+
+    return '''
+# Example: Authenticated Console action buttons on a tile
+# Console owns the buttons; declare TileAction specs (do not put Python
+# click handlers in tile HTML). result_mode chooses delivery:
+#   fire_and_forget — side effects (toast "started", no wait)
+#   show_result — Console polls and presents result_summary
+async def ops_tile_with_actions() -> str:
+    """Create a tile with one fire-and-forget and one show-result action."""
+    from unify.dashboard_manager.types.action import TileAction
+
+    html = """<!DOCTYPE html>
+<html><body style="margin:0;padding:24px;font-family:system-ui;">
+  <h2>Ops Controls</h2>
+  <p>Use the Console action buttons above this tile.</p>
+</body></html>"""
+    result = await primitives.dashboards.create_tile(
+        html,
+        title="Ops Controls",
+        actions=[
+            TileAction(
+                action_name="send_digest",
+                label="Send Digest",
+                icon="mail",
+                implementation=(
+                    "async def send_digest():\\n"
+                    "    \\"\\"\\"Kick off the daily digest email.\\"\\"\\"\\n"
+                    "    return \\"digest queued\\"\\n"
+                ),
+                result_mode="fire_and_forget",
+            ),
+            TileAction(
+                action_name="compute_health",
+                label="Compute Health",
+                implementation=(
+                    "async def compute_health():\\n"
+                    "    \\"\\"\\"Return a compact health score for Console.\\"\\"\\"\\n"
+                    "    return {\\"score\\": 98, \\"status\\": \\"ok\\"}\\n"
+                ),
+                result_mode="show_result",
+            ),
+        ],
+    )
+    return result.url if result.succeeded else f"Failed: {result.error}"
+'''
+
+
 def get_primitives_dashboards_composition_example() -> str:
     """Example: composing tiles into dashboards via ``primitives.dashboards``."""
 
@@ -2247,6 +2296,7 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_dashboards_live_data_example": get_primitives_dashboards_live_data_example,
         "get_primitives_dashboards_rich_live_data_example": get_primitives_dashboards_rich_live_data_example,
         "get_primitives_dashboards_composition_example": get_primitives_dashboards_composition_example,
+        "get_primitives_dashboards_actions_example": get_primitives_dashboards_actions_example,
         # Integrations
         "get_primitives_integrations_function_manager_search_example": get_primitives_integrations_function_manager_search_example,
         "get_primitives_integrations_catalog_status_example": get_primitives_integrations_catalog_status_example,

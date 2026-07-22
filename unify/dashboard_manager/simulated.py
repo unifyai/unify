@@ -28,6 +28,7 @@ from unify.dashboard_manager.types.dashboard import (
     DashboardResult,
     TilePosition,
 )
+from unify.dashboard_manager.ops.action_ops import validate_tile_actions
 from unify.dashboard_manager.ops.tile_ops import (
     _contexts_for_binding,
     ensure_binding_aliases,
@@ -35,6 +36,7 @@ from unify.dashboard_manager.ops.tile_ops import (
     serialize_bindings,
     validate_on_data,
 )
+from unify.dashboard_manager.types.action import TileAction
 from unify.dashboard_manager.types.tile import (
     DataBinding,
     FilterBinding,
@@ -67,8 +69,42 @@ class SimulatedDashboardManager(BaseDashboardManager):
         super().__init__()
         self._tiles: Dict[str, Dict[str, Any]] = {}
         self._dashboards: Dict[str, Dict[str, Any]] = {}
+        self._actions: Dict[str, List[Dict[str, Any]]] = {}
         self._tile_counter = 0
         self._dashboard_counter = 0
+        self._action_counter = 0
+
+    def _get_fm(self):
+        from unify.manager_registry import ManagerRegistry
+
+        return ManagerRegistry.get_function_manager()
+
+    def _replace_actions(
+        self,
+        token: str,
+        actions: Optional[List[TileAction]],
+    ) -> None:
+        """Store resolved action metadata for a simulated tile."""
+        if actions is None:
+            return
+        validated = validate_tile_actions(actions) or []
+        if not validated:
+            self._actions[token] = []
+            return
+        from unify.dashboard_manager.ops.action_ops import build_action_record_rows
+
+        rows = build_action_record_rows(
+            tile_token=token,
+            actions=validated,
+            function_manager=self._get_fm(),
+        )
+        stored: List[Dict[str, Any]] = []
+        for row in rows:
+            self._action_counter += 1
+            payload = row.model_dump()
+            payload["action_id"] = self._action_counter
+            stored.append(payload)
+        self._actions[token] = stored
 
     def _validate_data_scope(self, data_scope: str) -> None:
         """Validate the tile data-source scope used by simulated primitives."""
@@ -169,8 +205,10 @@ class SimulatedDashboardManager(BaseDashboardManager):
         """Reset all in-memory storage."""
         self._tiles.clear()
         self._dashboards.clear()
+        self._actions.clear()
         self._tile_counter = 0
         self._dashboard_counter = 0
+        self._action_counter = 0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Tiles
@@ -185,6 +223,7 @@ class SimulatedDashboardManager(BaseDashboardManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: str = DASHBOARD_DATA_SCOPE,
     ) -> TileResult:
@@ -196,6 +235,8 @@ class SimulatedDashboardManager(BaseDashboardManager):
                     "data_scope can only be set when fresh data_bindings are supplied.",
                 )
             self._validate_data_scope(data_scope)
+            if actions is not None:
+                validate_tile_actions(actions)
         except Exception as exc:
             return TileResult(error=str(exc))
 
@@ -239,6 +280,11 @@ class SimulatedDashboardManager(BaseDashboardManager):
             "created_at": now,
             "updated_at": now,
         }
+        try:
+            self._replace_actions(token, actions)
+        except Exception as exc:
+            del self._tiles[token]
+            return TileResult(error=str(exc))
 
         return TileResult(
             url=f"https://simulated-console.example.com/tile/view/{token}",
@@ -266,6 +312,7 @@ class SimulatedDashboardManager(BaseDashboardManager):
         description: Optional[str] = None,
         data_bindings: Optional[List[DataBinding]] = None,
         on_data: Optional[str] = None,
+        actions: Optional[List[TileAction]] = None,
         destination: str | None = None,
         data_scope: Optional[str] = None,
     ) -> TileResult:
@@ -346,6 +393,11 @@ class SimulatedDashboardManager(BaseDashboardManager):
 
         tile_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+        try:
+            self._replace_actions(token, actions)
+        except Exception as exc:
+            return TileResult(error=str(exc))
+
         return TileResult(
             url=f"https://simulated-console.example.com/tile/view/{token}",
             token=token,
@@ -362,6 +414,7 @@ class SimulatedDashboardManager(BaseDashboardManager):
         if data is None or data.get("destination", "personal") != row_destination:
             return False
         self._tiles.pop(token)
+        self._actions.pop(token, None)
         return True
 
     @functools.wraps(BaseDashboardManager.list_tiles, updated=())
