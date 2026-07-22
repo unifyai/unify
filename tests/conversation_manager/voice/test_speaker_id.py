@@ -176,6 +176,7 @@ def _make_tracker(
     *,
     enrolled: dict[int, list[float]] | None = None,
     call_contact_id: int | None = 5,
+    multi_party: bool = False,
     on_captured=None,
     on_suggested=None,
 ) -> SpeakerTracker:
@@ -183,6 +184,7 @@ def _make_tracker(
         embedder=StubEmbedder(),
         enrolled_profiles=enrolled or {},
         call_contact_id=call_contact_id,
+        multi_party=multi_party,
         enrollment_target_s=6.0,
         enrollment_min_s=2.0,
         on_enrollment_captured=on_captured,
@@ -395,6 +397,69 @@ class TestSpeakerTracker:
 
         assert not captured
         assert suggested == [2]
+
+    async def test_multi_party_mints_anonymous_labels_without_enrollment(self):
+        # A browser meet with nobody enrolled: every distinct voice must still
+        # get a stable per-speaker label so the transcript is attributable. The
+        # ordinal base is 1 (no primary caller is reserved).
+        tracker = _make_tracker(enrolled={}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        first = tracker.resolve("S0")
+        second = tracker.resolve("S1")
+        assert first is not None and first.contact_id is None
+        assert first.label == "Speaker 1"
+        assert first.source == speaker_id.LABEL_SOURCE_ANONYMOUS
+        assert second is not None and second.label == "Speaker 2"
+
+    async def test_multi_party_labels_stable_across_turns(self):
+        # Ordinals must not churn as speakers take turns: a voice keeps its label
+        # when it speaks again, and co-located voices under one id stay split.
+        tracker = _make_tracker(enrolled={}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 1"
+
+        # A second, co-located voice under the same diarization id.
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 2"
+
+        # The first voice returns: its original ordinal is preserved.
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 1"
+
+    async def test_non_multi_party_unenrolled_mints_nothing(self):
+        # A phone call (single primary, not multi-party) with an unenrolled
+        # contact must not mint anonymous labels — we cannot tell which voice is
+        # the contact, so a placeholder would be misleading.
+        tracker = _make_tracker(enrolled={}, multi_party=False)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        assert tracker.resolve("S0") is None
+        assert tracker.resolve("S1") is None
+
+    async def test_enrolled_contact_reserves_speaker_one(self):
+        # When the primary caller is enrolled, "Speaker 1" is reserved for them
+        # (they resolve by name via the pin) and anonymous ordinals start at 2.
+        tracker = _make_tracker(enrolled={5: VOICE_A}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        assert tracker.resolve("S0").contact_id == 5
+        other = tracker.resolve("S1")
+        assert other.contact_id is None
+        assert other.label == "Speaker 2"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
