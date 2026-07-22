@@ -2811,6 +2811,11 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
+                # Drain in-flight embedding work so resolution reflects this
+                # utterance's own segment (clustered into the right voice),
+                # not the previous one — the STT-filter path only schedules it.
+                if speaker_tracker is not None:
+                    await speaker_tracker.await_pending()
                 (
                     resolved_contact,
                     speaker_label,
