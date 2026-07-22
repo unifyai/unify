@@ -1,5 +1,11 @@
 """Dashboard manager type definitions."""
 
+from unify.dashboard_manager.types.action import (
+    ActionRecord,
+    ActionRecordRow,
+    ResultMode,
+    TileAction,
+)
 from unify.dashboard_manager.types.tile import (
     DataBinding,
     FilterBinding,
@@ -18,6 +24,10 @@ from unify.dashboard_manager.types.dashboard import (
 )
 
 __all__ = [
+    "ActionRecord",
+    "ActionRecordRow",
+    "ResultMode",
+    "TileAction",
     "DataBinding",
     "FilterBinding",
     "JoinBinding",

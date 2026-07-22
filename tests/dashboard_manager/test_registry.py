@@ -44,6 +44,7 @@ class TestPrimitivesRegistry:
         assert "get_primitives_dashboards_baked_in_example" in names
         assert "get_primitives_dashboards_live_data_example" in names
         assert "get_primitives_dashboards_composition_example" in names
+        assert "get_primitives_dashboards_actions_example" in names
 
     def test_dashboards_in_alias_to_getter(self):
         from unify.function_manager.primitives.runtime import _ALIAS_TO_GETTER
@@ -224,3 +225,15 @@ class TestPromptExampleFunctions:
         assert isinstance(result, str)
         assert "create_dashboard" in result
         assert "TilePosition" in result
+
+    def test_actions_example_covers_result_modes(self):
+        from unify.actor.prompt_examples import (
+            get_primitives_dashboards_actions_example,
+        )
+
+        result = get_primitives_dashboards_actions_example()
+        assert isinstance(result, str)
+        assert "TileAction" in result
+        assert "fire_and_forget" in result
+        assert "show_result" in result
+        assert "actions=" in result
