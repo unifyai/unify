@@ -470,10 +470,12 @@ def build_update_prompt(
             "Browse with drive_id + parent_item_id, or search with query=.",
             "Native Chat: select a named space when the user named one; use spaces/- only when "
             "allowed and the user did not name a space.",
-            "If multiple resources match or the user said 'this folder/space' without naming it, "
-            f"call `{request_clar_fname}(question='Which folder/space did you mean?')` before create."
-            if request_clar_fname
-            else "If multiple resources match, ask which folder/space/meeting before create.",
+            (
+                "If multiple resources match or the user said 'this folder/space' without naming it, "
+                f"call `{request_clar_fname}(question='Which folder/space did you mean?')` before create."
+                if request_clar_fname
+                else "If multiple resources match, ask which folder/space/meeting before create."
+            ),
             "Meet user-level triggers and other empty config_schema rows leave trigger_config {}.",
             (
                 f"Create with `{create_task_fname}(..., status='triggerable', trigger={{"

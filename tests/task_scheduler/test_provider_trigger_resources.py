@@ -149,7 +149,9 @@ def test_list_provider_trigger_resources_lists_chat_spaces_with_spaces_dash_fall
         query="sales",
         http_get=http_get,
     )
-    assert [item["trigger_config"]["target_resource"] for item in filtered["resources"]] == [
+    assert [
+        item["trigger_config"]["target_resource"] for item in filtered["resources"]
+    ] == [
         "spaces/BBBB",
     ]
     assert all(
