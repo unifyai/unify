@@ -1075,6 +1075,31 @@ class SimulatedDataManager(BaseDataManager):
             overwrite=overwrite,
         )
 
+    @functools.wraps(BaseDataManager.claim, updated=())
+    def claim(
+        self,
+        context: str,
+        *,
+        expect: Dict[str, Any],
+        updates: Dict[str, Any],
+        limit: int = 1,
+        destination: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        resolved = self._resolve_context(context)
+        claimed: List[Dict[str, Any]] = []
+        for row in self._tables.get(resolved, []):
+            if len(claimed) >= limit:
+                break
+            if all(row.get(key) == value for key, value in expect.items()):
+                row.update(updates)
+                claimed.append(
+                    {
+                        "id": row.get("_log_id"),
+                        "data": {k: v for k, v in row.items() if k != "_log_id"},
+                    },
+                )
+        return claimed
+
     @functools.wraps(BaseDataManager.delete_rows, updated=())
     def delete_rows(
         self,

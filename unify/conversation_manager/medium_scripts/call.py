@@ -1717,6 +1717,7 @@ async def entrypoint(ctx: agents.JobContext):
             embedder=SPEAKER_EMBEDDER,
             enrolled_profiles=voice_profiles,
             call_contact_id=contact.get("contact_id"),
+            multi_party=channel in ("google_meet", "teams_meet"),
             on_enrollment_captured=_on_enrollment_captured,
             on_enrollment_suggested=_on_enrollment_suggested,
         )
@@ -1859,33 +1860,55 @@ async def entrypoint(ctx: agents.JobContext):
             _merge_unify_meet_roster_from_identity(identity)
         return (names or None), (ids or None)
 
-    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool, bool]:
+    def _resolve_speaker() -> (
+        tuple[dict, str | None, str | None, bool, bool, str | None]
+    ):
         """Resolve the current speaker.
 
         Returns (contact_dict, display_name, speaker_id, voice_verified,
-        engaged). Signals in priority order:
-        1. Voice-embedding match against enrolled contact profiles (all channels).
+        engaged, label_source). ``label_source`` is a ``speaker_id.LABEL_SOURCE_*``
+        tag recording which of the signals below produced ``display_name`` (None
+        when no name was resolved). Signals in priority order — the same ordering
+        as ``LABEL_SOURCE_PRECEDENCE``:
+        1. Voice-embedding pin against enrolled contact profiles (all channels).
         2. LiveKit identity → org-call roster (Unify Meet multi-party).
         3. Diarization speaker_id → DOM correlation mapping (browser meets).
         4. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
+        5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
+           name from 1-4 always outranks this placeholder, so it is evaluated
+           last even though it comes from the same tracker resolution as 1.
         """
         sid = _meet_last_speaker_id
         engaged = _speaker_is_engaged(sid)
 
-        # Primary: embedding-pinned identity from the speaker tracker
-        if sid and speaker_tracker is not None:
-            resolution = speaker_tracker.resolve(sid)
-            if resolution is not None:
-                if resolution.contact_id is not None:
-                    for cand in (contact, boss):
-                        if cand.get("contact_id") == resolution.contact_id:
-                            label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                            return cand, label or None, sid, True, engaged
-                elif resolution.label:
-                    # Confidently a different, unenrolled voice: keep the call
-                    # contact for routing but surface the anonymous label.
-                    return contact, resolution.label, sid, False, engaged
+        # Resolve once, then consume in documented-authority order
+        # (``speaker_id.LABEL_SOURCE_PRECEDENCE``): the embedding pin is returned
+        # immediately, but the anonymous "Speaker N" fallback is held to the very
+        # end so a real roster/DOM name always wins over a placeholder ordinal.
+        resolution = (
+            speaker_tracker.resolve(sid)
+            if sid and speaker_tracker is not None
+            else None
+        )
 
+        # 1. Embedding-pinned enrolled contact (all channels).
+        if resolution is not None and resolution.contact_id is not None:
+            for cand in (contact, boss):
+                if cand.get("contact_id") == resolution.contact_id:
+                    label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
+                    # Not literally True: a provisional (co-located,
+                    # contaminated) id attributes the primary voice for
+                    # routing but cannot certify this utterance.
+                    return (
+                        cand,
+                        label or None,
+                        sid,
+                        resolution.verified,
+                        engaged,
+                        speaker_id.LABEL_SOURCE_VOICE_PIN,
+                    )
+
+        # 2. Unify-meet roster identity.
         if channel == "unify_meet" and unify_meet_roster:
             identity = _unify_meet_active_identity
             if identity:
@@ -1895,60 +1918,111 @@ async def entrypoint(ctx: agents.JobContext):
                     if member is not None and member.get("contact_id") is not None:
                         resolved = _contact_from_roster_member(member)
                         label = (member.get("display_name") or "").strip() or None
-                        return resolved, label, sid, False, engaged
+                        return (
+                            resolved,
+                            label,
+                            sid,
+                            False,
+                            engaged,
+                            speaker_id.LABEL_SOURCE_MEET_ROSTER,
+                        )
 
-        if channel not in ("google_meet", "teams_meet"):
-            return contact, None, sid, False, engaged
+        # 3-4. Browser-meet DOM name resolution.
+        if channel in ("google_meet", "teams_meet"):
+            # 3. Diarization speaker_id → DOM-correlated display name.
+            if sid and sid in _meet_speaker_map:
+                votes = _meet_speaker_map[sid]
+                if votes:
+                    top_name = max(votes, key=votes.get)
+                    top_count = votes[top_name]
+                    total = sum(votes.values())
+                    if top_count >= 2 and top_count / total > 0.6:
+                        resolved = _resolve_contact_by_name(top_name)
+                        if resolved:
+                            label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+                            return (
+                                resolved,
+                                label or None,
+                                sid,
+                                False,
+                                engaged,
+                                speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                            )
+                        return (
+                            contact,
+                            top_name,
+                            sid,
+                            False,
+                            engaged,
+                            speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                        )
 
-        # Diarization speaker_id → mapped display name (browser meets)
-        if sid and sid in _meet_speaker_map:
-            votes = _meet_speaker_map[sid]
-            if votes:
-                top_name = max(votes, key=votes.get)
-                top_count = votes[top_name]
-                total = sum(votes.values())
-                if top_count >= 2 and top_count / total > 0.6:
-                    resolved = _resolve_contact_by_name(top_name)
-                    if resolved:
-                        label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                        return resolved, label or None, sid, False, engaged
-                    return contact, top_name, sid, False, engaged
+            # 4. DOM active speaker.
+            active_name = _meet_cached_active_speaker
+            if active_name:
+                resolved = _resolve_contact_by_name(active_name)
+                if resolved:
+                    label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+                    return (
+                        resolved,
+                        label or None,
+                        sid,
+                        False,
+                        engaged,
+                        speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                    )
+                return (
+                    contact,
+                    active_name,
+                    sid,
+                    False,
+                    engaged,
+                    speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                )
 
-        # Fallback: DOM active speaker
-        active_name = _meet_cached_active_speaker
-        if active_name:
-            resolved = _resolve_contact_by_name(active_name)
-            if resolved:
-                label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                return resolved, label or None, sid, False, engaged
-            return contact, active_name, sid, False, engaged
+        # 5. Anonymous "Speaker N" from the voice tracker (lowest authority, all
+        # channels): a confidently distinct but unidentified voice. Keep the call
+        # contact for routing but surface the placeholder label.
+        if resolution is not None and resolution.label:
+            return (
+                contact,
+                resolution.label,
+                sid,
+                False,
+                engaged,
+                speaker_id.LABEL_SOURCE_ANONYMOUS,
+            )
 
-        return contact, None, sid, False, engaged
+        return contact, None, sid, False, engaged, None
 
-    def _background_label_for(sid: str | None) -> str | None:
+    def _background_label_for(sid: str | None) -> tuple[str | None, str | None]:
         """Best display label for a background (non-engaged) voice.
 
         Prefers a pinned contact name, then a confidently DOM-correlated meet
-        display name, then the tracker's session-scoped anonymous label.
+        display name, then the tracker's session-scoped anonymous label. Returns
+        ``(label, label_source)`` where ``label_source`` is a
+        ``speaker_id.LABEL_SOURCE_*`` tag (None when no label resolved).
         """
         if speaker_tracker is None or not sid:
-            return None
+            return None, None
         resolution = speaker_tracker.resolve(sid)
         if resolution is None:
-            return None
+            return None, None
         if resolution.contact_id is not None:
             for cand in (contact, boss):
                 if cand.get("contact_id") == resolution.contact_id:
                     name = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
                     if name:
-                        return name
+                        return name, speaker_id.LABEL_SOURCE_VOICE_PIN
         if channel in ("google_meet", "teams_meet") and sid in _meet_speaker_map:
             votes = _meet_speaker_map[sid]
             if votes:
                 top_name = max(votes, key=votes.get)
                 if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
-                    return top_name
-        return resolution.label
+                    return top_name, speaker_id.LABEL_SOURCE_DOM_MEET_MAP
+        if resolution.label:
+            return resolution.label, speaker_id.LABEL_SOURCE_ANONYMOUS
+        return None, None
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -2452,6 +2526,7 @@ async def entrypoint(ctx: agents.JobContext):
         text: str,
         label: str | None,
         sid: str | None,
+        label_source: str | None = None,
     ) -> None:
         """Publish a non-engaged voice's line as labeled context (no turn)."""
         if channel == "google_meet":
@@ -2462,6 +2537,7 @@ async def entrypoint(ctx: agents.JobContext):
                 participant_names=_get_meet_participant_names() or None,
                 diarization_speaker_id=sid,
                 voice_verified=False,
+                speaker_label_source=label_source,
                 engaged=False,
             )
         elif channel == "teams_meet":
@@ -2472,6 +2548,7 @@ async def entrypoint(ctx: agents.JobContext):
                 participant_names=_get_meet_participant_names() or None,
                 diarization_speaker_id=sid,
                 voice_verified=False,
+                speaker_label_source=label_source,
                 engaged=False,
             )
         elif channel == "unify_meet":
@@ -2484,6 +2561,7 @@ async def entrypoint(ctx: agents.JobContext):
                 speaker_label=label,
                 diarization_speaker_id=sid,
                 voice_verified=False,
+                speaker_label_source=label_source,
                 engaged=False,
                 participant_names=names,
                 participant_contact_ids=cids,
@@ -2495,6 +2573,7 @@ async def entrypoint(ctx: agents.JobContext):
                 speaker_label=label,
                 diarization_speaker_id=sid,
                 voice_verified=False,
+                speaker_label_source=label_source,
                 engaged=False,
             )
         await event_broker.publish(
@@ -2802,12 +2881,18 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
+                # Drain in-flight embedding work so resolution reflects this
+                # utterance's own segment (clustered into the right voice),
+                # not the previous one — the STT-filter path only schedules it.
+                if speaker_tracker is not None:
+                    await speaker_tracker.await_pending()
                 (
                     resolved_contact,
                     speaker_label,
                     dia_sid,
                     voice_verified,
                     speaker_engaged,
+                    speaker_label_source,
                 ) = _resolve_speaker()
                 _meet_last_speaker_id = None
                 # Stamp the current turn so the slow-brain run scheduled after
@@ -2822,6 +2907,7 @@ async def entrypoint(ctx: agents.JobContext):
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
                         voice_verified=voice_verified,
+                        speaker_label_source=speaker_label_source,
                         engaged=speaker_engaged,
                     )
                 elif channel == "teams_meet":
@@ -2833,6 +2919,7 @@ async def entrypoint(ctx: agents.JobContext):
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
                         voice_verified=voice_verified,
+                        speaker_label_source=speaker_label_source,
                         engaged=speaker_engaged,
                     )
                 elif channel == "unify_meet":
@@ -2846,6 +2933,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
                         voice_verified=voice_verified,
+                        speaker_label_source=speaker_label_source,
                         engaged=speaker_engaged,
                         participant_names=names,
                         participant_contact_ids=cids,
@@ -2858,6 +2946,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
                         voice_verified=voice_verified,
+                        speaker_label_source=speaker_label_source,
                         engaged=speaker_engaged,
                     )
                 await event_broker.publish(
@@ -3262,9 +3351,12 @@ async def entrypoint(ctx: agents.JobContext):
         cleaned = (text or "").strip()
         if not cleaned:
             return
-        label = _background_label_for(sid) or "Unknown speaker"
+        label, label_source = _background_label_for(sid)
+        label = label or "Unknown speaker"
         _log.info(f"Background speech ({label}): {cleaned}")
-        asyncio.create_task(_publish_background_utterance(cleaned, label, sid))
+        asyncio.create_task(
+            _publish_background_utterance(cleaned, label, sid, label_source),
+        )
         asyncio.create_task(_maybe_resume_after_background_bargein())
 
     assistant._on_background_final = _handle_background_final

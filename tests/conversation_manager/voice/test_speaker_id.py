@@ -127,6 +127,21 @@ class TestCentroidAccumulator:
     def test_empty(self):
         assert CentroidAccumulator().centroid is None
 
+    def test_similarity_seeds_empty_then_tracks_centroid(self):
+        # An empty accumulator matches anything (so its first segment always
+        # seeds it); once seeded, similarity tracks the running centroid.
+        acc = CentroidAccumulator()
+        assert acc.similarity(np.array([0.0, 1.0], dtype=np.float32)) == pytest.approx(
+            1.0,
+        )
+        acc.add(np.array([1.0, 0.0], dtype=np.float32), 1.0)
+        assert acc.similarity(np.array([1.0, 0.0], dtype=np.float32)) == pytest.approx(
+            1.0,
+        )
+        assert acc.similarity(np.array([0.0, 1.0], dtype=np.float32)) == pytest.approx(
+            0.0,
+        )
+
 
 class TestAudioRingBuffer:
     def test_slice_returns_window(self):
@@ -161,6 +176,7 @@ def _make_tracker(
     *,
     enrolled: dict[int, list[float]] | None = None,
     call_contact_id: int | None = 5,
+    multi_party: bool = False,
     on_captured=None,
     on_suggested=None,
 ) -> SpeakerTracker:
@@ -168,6 +184,7 @@ def _make_tracker(
         embedder=StubEmbedder(),
         enrolled_profiles=enrolled or {},
         call_contact_id=call_contact_id,
+        multi_party=multi_party,
         enrollment_target_s=6.0,
         enrollment_min_s=2.0,
         on_enrollment_captured=on_captured,
@@ -212,6 +229,7 @@ class TestSpeakerTracker:
         assert resolution is not None
         assert resolution.contact_id == 5
         assert resolution.verified is True
+        assert resolution.source == speaker_id.LABEL_SOURCE_VOICE_PIN
 
     async def test_anonymous_label_for_unmatched_voice(self):
         tracker = _make_tracker(enrolled={5: VOICE_A})
@@ -228,6 +246,9 @@ class TestSpeakerTracker:
         assert other.contact_id is None
         assert other.label == "Speaker 2"
         assert other.verified is False
+        assert other.source == speaker_id.LABEL_SOURCE_ANONYMOUS
+        # The enrolled voice is stamped as a verified pin, not a placeholder.
+        assert boss.source == speaker_id.LABEL_SOURCE_VOICE_PIN
 
     async def test_no_anonymous_label_without_enrollment(self):
         # Contact NOT enrolled: unmatched voices must not get anonymous labels
@@ -326,6 +347,120 @@ class TestSpeakerTracker:
         await tracker.finalize()
         assert tracker.resolve("S0") is None
 
+    async def test_co_located_voices_split_into_clusters(self):
+        # A single diarization id (S0) that actually carries two physically
+        # co-located voices must be split into separate clusters, each
+        # resolving to its own identity for the utterance that just spoke.
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        first = tracker.resolve("S0")
+        assert first.contact_id == 5
+        assert first.verified is True
+        assert first.provisional is False
+
+        # A different, co-located voice speaks under the same id.
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.await_pending()
+        second = tracker.resolve("S0")
+        # Attribution follows the voice that just spoke — the second, unmatched
+        # cluster with its own anonymous label — and the id is now provisional.
+        assert second.contact_id is None
+        assert second.label == "Speaker 2"
+        assert second.provisional is True
+
+        # The enrolled voice returns: attribution swings back to its pinned
+        # cluster (verified), though the id stays provisional (multi-voice).
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        third = tracker.resolve("S0")
+        assert third.contact_id == 5
+        assert third.verified is True
+        assert third.provisional is True
+
+    async def test_co_located_second_voice_blocks_enrollment_and_suggests(self):
+        # Two voices under one diarization id count as two speakers: the
+        # contact's voiceprint must not be auto-captured, and enrollment is
+        # suggested — even though the STT engine emitted only a single id.
+        captured: list[tuple] = []
+        suggested: list[int] = []
+        tracker = _make_tracker(
+            enrolled={},
+            on_captured=lambda emb, path, dur: captured.append((emb, path, dur)),
+            on_suggested=suggested.append,
+        )
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=4.0)
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=4.0)
+        await tracker.finalize()
+
+        assert not captured
+        assert suggested == [2]
+
+    async def test_multi_party_mints_anonymous_labels_without_enrollment(self):
+        # A browser meet with nobody enrolled: every distinct voice must still
+        # get a stable per-speaker label so the transcript is attributable. The
+        # ordinal base is 1 (no primary caller is reserved).
+        tracker = _make_tracker(enrolled={}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        first = tracker.resolve("S0")
+        second = tracker.resolve("S1")
+        assert first is not None and first.contact_id is None
+        assert first.label == "Speaker 1"
+        assert first.source == speaker_id.LABEL_SOURCE_ANONYMOUS
+        assert second is not None and second.label == "Speaker 2"
+
+    async def test_multi_party_labels_stable_across_turns(self):
+        # Ordinals must not churn as speakers take turns: a voice keeps its label
+        # when it speaks again, and co-located voices under one id stay split.
+        tracker = _make_tracker(enrolled={}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 1"
+
+        # A second, co-located voice under the same diarization id.
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 2"
+
+        # The first voice returns: its original ordinal is preserved.
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").label == "Speaker 1"
+
+    async def test_non_multi_party_unenrolled_mints_nothing(self):
+        # A phone call (single primary, not multi-party) with an unenrolled
+        # contact must not mint anonymous labels — we cannot tell which voice is
+        # the contact, so a placeholder would be misleading.
+        tracker = _make_tracker(enrolled={}, multi_party=False)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        assert tracker.resolve("S0") is None
+        assert tracker.resolve("S1") is None
+
+    async def test_enrolled_contact_reserves_speaker_one(self):
+        # When the primary caller is enrolled, "Speaker 1" is reserved for them
+        # (they resolve by name via the pin) and anonymous ordinals start at 2.
+        tracker = _make_tracker(enrolled={5: VOICE_A}, multi_party=True)
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        assert tracker.resolve("S0").contact_id == 5
+        other = tracker.resolve("S1")
+        assert other.contact_id is None
+        assert other.label == "Speaker 2"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EngagedSpeakers
@@ -397,6 +532,31 @@ class TestProfilesPartition:
         assert cosine_similarity(other_profiles[0], np.array(VOICE_B)) > 0.9
 
         # Engaging the anonymous label moves its centroid across.
+        engaged.engage(label="Speaker 2")
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        assert len(engaged_profiles) == 3
+        assert not other_profiles
+
+    async def test_co_located_clusters_split_across_engagement(self):
+        # Two co-located voices collapsed into one diarization id (S0) must be
+        # partitioned independently: the enrolled/engaged voice on the engaged
+        # side, the second (anonymous) voice on the other side so it can be
+        # gated even though the STT engine never split it into its own id.
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.finalize()
+
+        engaged = EngagedSpeakers(permanent_contact_ids={5})
+        engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
+        # Enrolled profile + S0's pinned cluster on the engaged side; S0's
+        # second cluster (anonymous "Speaker 2") on the other side.
+        assert len(engaged_profiles) == 2
+        assert len(other_profiles) == 1
+        assert cosine_similarity(other_profiles[0], np.array(VOICE_B)) > 0.9
+
+        # Engaging the co-located voice's label moves only that cluster across.
         engaged.engage(label="Speaker 2")
         engaged_profiles, other_profiles = tracker.profiles_partition(engaged)
         assert len(engaged_profiles) == 3

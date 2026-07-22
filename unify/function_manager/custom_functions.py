@@ -14,7 +14,7 @@ import logging
 import sys
 import types
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Mapping
 
 from .dependency_analysis import collect_dependencies_from_source
 
@@ -30,6 +30,21 @@ class CustomFunctionCollectError(RuntimeError):
     snapshot would look like intentional removals and delete still-present
     deployment-owned (``custom_hash``) functions upstream.
     """
+
+
+class CustomFunctionSyncPartialFailure(RuntimeError):
+    """Raised after a custom-function sync where one or more names failed.
+
+    Successful names are still written. The aggregate custom-functions hash is
+    not stored so the next reconcile retries the failed names. Callers should
+    treat this as a degraded-but-continuable outcome, not a hard abort of the
+    rest of runtime setup.
+    """
+
+    def __init__(self, failures: Mapping[str, BaseException]) -> None:
+        self.failures = dict(failures)
+        names = ", ".join(sorted(self.failures))
+        super().__init__(f"Custom function sync partially failed for: {names}")
 
 
 # ────────────────────────────────────────────────────────────────────────────

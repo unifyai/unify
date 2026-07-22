@@ -138,6 +138,7 @@ def build_ask_prompt(
     catalog_fname = tool_name(tools, "list_provider_trigger_catalog")
     connections_fname = tool_name(tools, "list_provider_trigger_connections")
     trigger_fname = tool_name(tools, "describe_provider_trigger")
+    resources_fname = tool_name(tools, "list_provider_trigger_resources")
     health_fname = tool_name(tools, "get_provider_trigger_health")
     context_fname = tool_name(tools, "get_provider_event_context")
 
@@ -220,6 +221,12 @@ def build_ask_prompt(
                     else ""
                 ),
                 (
+                    f"Resolve Drive folders/files/shared drives, Chat spaces, or delegated Microsoft meetings: "
+                    f"`{resources_fname}(target_resource_family='<family from describe>', query='<optional name>')`."
+                    if resources_fname
+                    else ""
+                ),
+                (
                     f"Inspect runtime health/coverage: `{health_fname}(task_id=<id>)`."
                     if health_fname
                     else ""
@@ -231,6 +238,8 @@ def build_ask_prompt(
                 ),
                 "The catalog and connection list are connection-gated: they only show apps with an active connection on this assistant.",
                 "If the user asks about an app with no eligible connection or no triggers listed, say that clearly, guide them to connect the integration first, then re-check — do not claim the provider lacks that trigger globally.",
+                "When config_schema requires a resource, list resources and copy a selectable item's `trigger_config` fields; do not invent provider ids.",
+                "Rows with live_ready=false, provisionable=false, or delivery_only=true cannot be enabled yet — say so clearly.",
                 "Request full source_body only when the user explicitly asks to inspect raw event data.",
             ],
         )
@@ -434,13 +443,40 @@ def build_update_prompt(
             "Provider-event triggers",
             "-----------------------",
             "Use provider-event triggers for third-party SaaS events configured in the trigger catalog.",
-            "Before creating one, list the catalog, eligible connections for the target app, and the trigger config schema.",
+            "Authoring order: list catalog → list eligible connections → describe schema → "
+            "resolve required resources → create with trigger_config filled → enable.",
+            "Stop before create/enable when the catalog row is not `live_ready`, "
+            "`provisionable=false`, or `delivery_only=true` (for example Chat batch rows). "
+            "Tell the user that trigger is not available yet; do not invent a workaround.",
             (
-                f"Use `{ask_fname}` for discovery tools such as the trigger catalog, "
-                f"eligible connections, and trigger schema before creating the task."
+                f"Use `{ask_fname}` for discovery tools (catalog, connections, schema, "
+                f"and resource listing) before creating the task."
                 if ask_fname
                 else "Use the provider-trigger discovery tools before creating a provider-event task."
             ),
+            (
+                f"When `describe_provider_trigger` returns a non-empty config_schema or a "
+                f"`target_resource_family` that needs a resource, use `{ask_fname}` to call "
+                "`list_provider_trigger_resources(target_resource_family=..., query='<name>')` "
+                "and copy a selectable item's `trigger_config` (never invent provider ids)."
+                if ask_fname
+                else (
+                    "When config_schema requires a resource, call "
+                    "`list_provider_trigger_resources` and copy a selectable item's "
+                    "trigger_config; do not invent ids."
+                )
+            ),
+            "Native Drive: never watch all of My Drive; select a folder, file, or shared drive. "
+            "Browse with drive_id + parent_item_id, or search with query=.",
+            "Native Chat: select a named space when the user named one; use spaces/- only when "
+            "allowed and the user did not name a space.",
+            (
+                "If multiple resources match or the user said 'this folder/space' without naming it, "
+                f"call `{request_clar_fname}(question='Which folder/space did you mean?')` before create."
+                if request_clar_fname
+                else "If multiple resources match, ask which folder/space/meeting before create."
+            ),
+            "Meet user-level triggers and other empty config_schema rows leave trigger_config {}.",
             (
                 f"Create with `{create_task_fname}(..., status='triggerable', trigger={{"
                 "'kind': 'provider_event', 'state': 'enabled', 'connection_id': <exact id>, "

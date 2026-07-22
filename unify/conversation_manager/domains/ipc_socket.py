@@ -101,6 +101,13 @@ class CallEventSocketServer:
         self._connected_clients: list[socket.socket] = []
         self._pending_messages: list[tuple[str, str]] = []
 
+        # Serializes every ``sock_sendall`` on the I/O loop. A message larger
+        # than the socket send buffer makes ``sock_sendall`` yield mid-write;
+        # without this lock a concurrently-dispatched forward would interleave
+        # its bytes into the same fd, corrupting the newline-framed stream.
+        # Created on the I/O loop in ``_run_io_loop`` so it binds to that loop.
+        self._send_lock: asyncio.Lock | None = None
+
         # Forward subscription (runs in main loop)
         self._forward_task: asyncio.Task | None = None
         self._forward_ready = asyncio.Event()
@@ -269,6 +276,7 @@ class CallEventSocketServer:
         try:
             self._io_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._io_loop)
+            self._send_lock = asyncio.Lock()
             self._io_ready.set()
             self._io_loop.run_forever()
         except Exception as e:
@@ -312,10 +320,11 @@ class CallEventSocketServer:
                                 )
                                 + "\n"
                             )
-                            await loop.sock_sendall(
-                                client_socket,
-                                msg.encode("utf-8"),
-                            )
+                            async with self._send_lock:
+                                await loop.sock_sendall(
+                                    client_socket,
+                                    msg.encode("utf-8"),
+                                )
                             LOGGER.debug(
                                 f"{ICONS['ipc']} {
                                     trace_kv(
@@ -479,17 +488,19 @@ class CallEventSocketServer:
             )
             return
 
-        for client in self._connected_clients:
-            try:
-                await loop.sock_sendall(client, message_bytes)
-            except Exception as e:
-                _log.warning(
-                    "[CallEventSocketServer] sock_sendall failed " "(client kept): %s",
-                    e,
-                )
-                LOGGER.debug(
-                    f"{ICONS['ipc']} [CallEventSocketServer] Failed to send to client: {e}",
-                )
+        async with self._send_lock:
+            for client in self._connected_clients:
+                try:
+                    await loop.sock_sendall(client, message_bytes)
+                except Exception as e:
+                    _log.warning(
+                        "[CallEventSocketServer] sock_sendall failed "
+                        "(client kept): %s",
+                        e,
+                    )
+                    LOGGER.debug(
+                        f"{ICONS['ipc']} [CallEventSocketServer] Failed to send to client: {e}",
+                    )
 
         if self._connected_clients:
             _log.debug(

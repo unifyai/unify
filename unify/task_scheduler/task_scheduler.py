@@ -88,6 +88,7 @@ from .provider_trigger_actor import (
     list_eligible_provider_trigger_connections,
     task_revision_conflict_outcome,
 )
+from .provider_trigger_resources import list_provider_trigger_resources
 from .provider_trigger_health import (
     compose_provider_trigger_state,
     sanitize_event_context_for_actor,
@@ -225,6 +226,10 @@ class TaskScheduler(BaseTaskScheduler):
                 ToolSpec(
                     fn=self._describe_provider_trigger,
                     display_label="Describing provider trigger config",
+                ),
+                ToolSpec(
+                    fn=self._list_provider_trigger_resources,
+                    display_label="Listing provider trigger resources",
                 ),
                 ToolSpec(
                     fn=self._get_provider_trigger_health,
@@ -2501,6 +2506,32 @@ class TaskScheduler(BaseTaskScheduler):
         return {
             "outcome": "provider trigger described",
             "details": trigger,
+        }
+
+    def _list_provider_trigger_resources(
+        self,
+        *,
+        target_resource_family: str,
+        query: str | None = None,
+        drive_id: str | None = None,
+        parent_item_id: str | None = None,
+    ) -> ToolOutcome:
+        """List workspace resources for native provider-event trigger_config.
+
+        Pass ``target_resource_family`` from ``describe_provider_trigger``. For
+        Drive, omit parents to list roots, pass ``drive_id`` + ``parent_item_id``
+        to browse children, or pass ``query`` to search by name.
+        """
+
+        details = list_provider_trigger_resources(
+            target_resource_family=target_resource_family,
+            query=query,
+            drive_id=drive_id,
+            parent_item_id=parent_item_id,
+        )
+        return {
+            "outcome": "provider trigger resources listed",
+            "details": details,
         }
 
     def _get_provider_trigger_health(self, *, task_id: int) -> ToolOutcome:

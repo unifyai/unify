@@ -129,6 +129,17 @@ def test_build_update_prompt_includes_provider_event_guidance() -> None:
     assert "pause_provider_trigger" in prompt
     assert "provider_event_context" in prompt
     assert "**kwargs" in prompt
+    assert (
+        "list catalog → list eligible connections → describe schema → "
+        "resolve required resources → create with trigger_config filled → enable"
+        in prompt
+    )
+    assert "not `live_ready`" in prompt
+    assert "delivery_only=true" in prompt
+    assert "list_provider_trigger_resources" in prompt
+    assert "never watch all of My Drive" in prompt
+    assert "select a named space when the user named one" in prompt
+    assert "If multiple resources match" in prompt
 
 
 def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
@@ -141,7 +152,11 @@ def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
     ).flatten()
     assert "Provider-event triggers (read-only)" in prompt
     assert "list_provider_trigger_catalog" in prompt
+    assert "list_provider_trigger_resources" in prompt
     assert "get_provider_trigger_health" in prompt
     assert "connection-gated" in prompt
     assert "connect the integration first" in prompt
     assert "do not claim the provider lacks that trigger globally" in prompt
+    assert "copy a selectable item's `trigger_config`" in prompt
+    assert "do not invent provider ids" in prompt
+    assert "live_ready=false" in prompt
