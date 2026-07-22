@@ -192,7 +192,12 @@ def update_rows_impl(
             existing = dict(log)
         else:
             continue
-        new_entries = {**existing, **cleaned_updates}
+        # Merge then strip authorship: existing rows carry immutable
+        # authoring_assistant_id, and Orchestra rejects overwrite payloads that
+        # include immutable fields even when the value is unchanged.
+        new_entries = strip_authoring_assistant_id(
+            {**existing, **cleaned_updates},
+        )
         unisdk.update_logs(
             logs=[log_id],
             context=context,
@@ -221,6 +226,23 @@ def update_by_ids_impl(
         overwrite=overwrite,
     )
     return len(log_ids)
+
+
+def claim_impl(
+    context: str,
+    *,
+    expect: Dict[str, Any],
+    updates: Dict[str, Any],
+    limit: int = 1,
+) -> List[Dict[str, Any]]:
+    """Atomic compare-and-set claim (Orchestra POST /logs/claim)."""
+    response = unisdk.claim_logs(
+        context=context,
+        expect=expect,
+        updates=updates,
+        limit=limit,
+    )
+    return list(response.get("claimed") or [])
 
 
 def delete_rows_impl(

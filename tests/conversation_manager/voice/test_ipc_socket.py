@@ -713,6 +713,75 @@ class TestBidirectionalCommunication:
         await server.stop()
 
     @pytest.mark.asyncio
+    async def test_large_concurrent_forwards_are_not_interleaved(
+        self,
+        real_event_broker,
+    ):
+        """Concurrent forwards larger than the socket buffer must not corrupt framing.
+
+        ``sock_sendall`` yields mid-write when a message exceeds the socket send
+        buffer (~8 KB). The forward loop dispatches each broker event to the I/O
+        loop fire-and-forget, so without a send lock two large sends interleave
+        their bytes on the same fd — the newline framing breaks and the client
+        raises ``JSONDecodeError: Expecting ',' delimiter``. This reproduces the
+        staging org-meet roster corruption: every forwarded message must arrive
+        as intact, correctly-indexed JSON.
+        """
+        received_events: list[tuple[str, str]] = []
+
+        async def on_event(channel: str, event_json: str):
+            received_events.append((channel, event_json))
+
+        server = CallEventSocketServer(
+            real_event_broker,
+            forward_channels=["app:call:*"],
+        )
+        socket_path = await server.start()
+
+        client = CallEventSocketClient(socket_path)
+        await client.start_receive_loop(on_event)
+        await _wait_for_condition(lambda: server.has_connected_clients, timeout=2.0)
+
+        # Each payload is well over the ~8 KB socket send buffer so sock_sendall
+        # is forced to yield mid-write, exposing any interleaving.
+        num_messages = 25
+        for idx in range(num_messages):
+            roster = [
+                {
+                    "contact_id": p,
+                    "display_name": f"Participant {p} of meet {idx}",
+                    "role": "attendee",
+                    "diarization_id": f"spk-{idx}-{p}",
+                }
+                for p in range(200)
+            ]
+            payload = json.dumps(
+                {"type": "unify_meet_roster", "idx": idx, "participants": roster},
+            )
+            assert len(payload) > 8192, "payload must exceed the socket send buffer"
+            await real_event_broker.publish("app:call:status", payload)
+
+        arrived = await _wait_for_condition(
+            lambda: len(received_events) >= num_messages,
+            timeout=5.0,
+        )
+        assert arrived, (
+            f"only {len(received_events)}/{num_messages} messages arrived — "
+            "framing was corrupted by interleaved writes"
+        )
+
+        # Every message must be intact JSON with the correct index (no split /
+        # interleaved frames), and each index must appear exactly once.
+        seen_indices = []
+        for _, event_json in received_events:
+            parsed = json.loads(event_json)  # raises if a frame was corrupted
+            seen_indices.append(parsed["idx"])
+        assert sorted(seen_indices) == list(range(num_messages))
+
+        await client.close()
+        await server.stop()
+
+    @pytest.mark.asyncio
     async def test_client_attempts_reconnect_on_server_disconnect(
         self,
         real_event_broker,

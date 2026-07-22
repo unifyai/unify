@@ -223,6 +223,10 @@ class InboundPhoneUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    # Provenance of ``speaker_label`` (see speaker_id.LABEL_SOURCE_*): lets the
+    # transcript row be self-describing and downstream reconcilers honour the
+    # authority ordering. ``"anonymous"`` marks a "Speaker N" placeholder.
+    speaker_label_source: str | None = None
     # Whether the speaker holds conversational standing on the call. False for
     # background voices: the line is context only — it triggered no fast-brain
     # reply and no slow-brain user turn.
@@ -241,6 +245,7 @@ class InboundUnifyMeetUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    speaker_label_source: str | None = None
     engaged: bool = True
     participant_names: list[str] | None = None
     participant_contact_ids: list[int] | None = None
@@ -258,6 +263,7 @@ class InboundWhatsAppCallUtterance(Event):
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
     voice_verified: bool = False
+    speaker_label_source: str | None = None
     engaged: bool = True
 
 
@@ -421,6 +427,7 @@ class InboundGoogleMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
     voice_verified: bool = False
+    speaker_label_source: str | None = None
     engaged: bool = True
 
 
@@ -514,6 +521,7 @@ class InboundTeamsMeetUtterance(Event):
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
     voice_verified: bool = False
+    speaker_label_source: str | None = None
     engaged: bool = True
 
 
