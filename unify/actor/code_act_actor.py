@@ -4858,6 +4858,10 @@ class CodeActActor(BaseCodeActActor):
 
         logger.debug(f"⏱️ [CodeActActor.act +{_act_ms()}] entered")
 
+        from unify.runtime.drain_gate import refuse_if_draining
+
+        refuse_if_draining()
+
         entrypoint_repair_attempts = int(entrypoint_repair_attempts or 0)
 
         effective_can_compose = (
