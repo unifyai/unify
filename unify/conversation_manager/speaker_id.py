@@ -47,6 +47,19 @@ SPEAKER_MODEL_URL = (
 # telephone-band audio typically score 0.6-0.8; different speakers < 0.4.
 SPEAKER_MATCH_THRESHOLD = 0.55
 
+# A segment whose cosine similarity to an *established* diarization-id centroid
+# falls below this is treated as a different, co-located voice sharing the same
+# Deepgram id: it is kept out of the centroid (no contamination) and marks the
+# id provisional. It sits below SPEAKER_MATCH_THRESHOLD but well above the
+# different-speaker floor (~0.4) so within-speaker variation still merges.
+CONTAMINATION_SIM = 0.5
+
+# A centroid is only trusted as a contamination reference once it carries this
+# much corroborating speech, so a single fluke first segment cannot lock out
+# the real primary voice before the reference has settled.
+GUARD_MIN_SEGMENTS = 2
+GUARD_MIN_DURATION_S = 3.0
+
 # Auto-enrollment bounds (seconds of accumulated speech from a single voice).
 ENROLLMENT_TARGET_S = 60.0
 ENROLLMENT_MIN_S = 15.0
@@ -244,13 +257,47 @@ class SpeakerEmbedder:
 
 @dataclass
 class CentroidAccumulator:
-    """Running duration-weighted centroid of embeddings for one speaker id."""
+    """Running duration-weighted centroid of embeddings for one speaker id.
+
+    Once the centroid is established (``is_established``), a segment that is too
+    dissimilar is rejected as *contamination* — a different, co-located voice
+    sharing the same diarization id — rather than being averaged in, which
+    would smear the centroid toward a meaningless midpoint. Rejected segments
+    are counted so callers can flag the id as provisional.
+    """
 
     _sum: np.ndarray | None = None
     total_duration_s: float = 0.0
     segments: int = 0
+    outlier_segments: int = 0
 
-    def add(self, embedding: np.ndarray, duration_s: float) -> None:
+    @property
+    def is_established(self) -> bool:
+        return (
+            self.segments >= GUARD_MIN_SEGMENTS
+            and self.total_duration_s >= GUARD_MIN_DURATION_S
+        )
+
+    def similarity(self, embedding: np.ndarray) -> float:
+        """Cosine similarity of an embedding to the current centroid.
+
+        An empty accumulator returns 1.0 so the first segments always seed it.
+        """
+        centroid = self.centroid
+        if centroid is None:
+            return 1.0
+        return cosine_similarity(embedding, centroid)
+
+    def add(self, embedding: np.ndarray, duration_s: float) -> bool:
+        """Merge a segment into the centroid.
+
+        Returns True when the segment is merged, False when it is rejected as a
+        contaminating outlier (an established centroid plus a segment scoring
+        below ``CONTAMINATION_SIM``).
+        """
+        if self.is_established and self.similarity(embedding) < CONTAMINATION_SIM:
+            self.outlier_segments += 1
+            return False
         weighted = embedding * max(duration_s, 0.1)
         if self._sum is None:
             self._sum = weighted.copy()
@@ -258,6 +305,7 @@ class CentroidAccumulator:
             self._sum += weighted
         self.total_duration_s += duration_s
         self.segments += 1
+        return True
 
     @property
     def centroid(self) -> np.ndarray | None:
@@ -324,11 +372,18 @@ class AudioRingBuffer:
 
 @dataclass
 class SpeakerResolution:
-    """Resolution of an anonymous diarization speaker id."""
+    """Resolution of an anonymous diarization speaker id.
+
+    ``provisional`` marks an id that has absorbed at least one clearly
+    different, co-located voice: the primary voice can still be attributed, but
+    verification is withheld because a single utterance under that id can no
+    longer be certified to belong to it.
+    """
 
     contact_id: Optional[int] = None
     label: Optional[str] = None
     verified: bool = False
+    provisional: bool = False
 
 
 @dataclass
@@ -437,14 +492,17 @@ class SpeakerTracker:
     ) -> None:
         embedding = await self._embedder.embed(pcm, sample_rate)
         state = self._speakers.setdefault(speaker_id, _SpeakerState())
-        state.accumulator.add(embedding, duration_s)
+        merged = state.accumulator.add(embedding, duration_s)
         self._try_pin(state)
-        self._accumulate_enrollment(state, pcm, sample_rate, duration_s)
+        if merged:
+            # A contaminating outlier belongs to a different, co-located voice;
+            # feeding it to enrollment would poison the captured voiceprint.
+            self._accumulate_enrollment(state, pcm, sample_rate, duration_s)
         self._check_enrollment_progress()
         self._check_suggestion()
 
     def _try_pin(self, state: _SpeakerState) -> None:
-        if state.pinned_contact_id is not None or not self._enrolled:
+        if not self._enrolled:
             return
         centroid = state.accumulator.centroid
         if centroid is None:
@@ -455,13 +513,19 @@ class SpeakerTracker:
             if score > best_score:
                 best_cid, best_score = cid, score
         if best_cid is not None and best_score >= self._match_threshold:
+            # The centroid is re-scored on every segment (and is guarded
+            # against cross-voice contamination), so pinning is not a one-way
+            # latch: a pin is revoked below if the voice later drifts away.
             state.pinned_contact_id = best_cid
-            state.anonymous_label = None
-        elif state.anonymous_label is None and self._call_contact_enrolled:
-            # The call contact is enrolled but this voice does not match:
-            # give it a stable session-scoped anonymous identity.
-            state.anonymous_label = f"Speaker {self._next_anonymous_index}"
-            self._next_anonymous_index += 1
+        else:
+            state.pinned_contact_id = None
+            if state.anonymous_label is None and self._call_contact_enrolled:
+                # The call contact is enrolled but this voice does not match:
+                # mint a stable session-scoped anonymous identity. It is kept
+                # even if the id is later pinned (resolution prefers the pin),
+                # so the ordinal never churns as the pin flips.
+                state.anonymous_label = f"Speaker {self._next_anonymous_index}"
+                self._next_anonymous_index += 1
 
     @property
     def _call_contact_enrolled(self) -> bool:
@@ -557,13 +621,21 @@ class SpeakerTracker:
         state = self._speakers.get(speaker_id)
         if state is None:
             return None
+        # A provisional id has absorbed a clearly different, co-located voice.
+        # We still surface the primary voice, but withhold verification because
+        # this utterance cannot be certified to belong to it.
+        provisional = state.accumulator.outlier_segments > 0
         if state.pinned_contact_id is not None:
             return SpeakerResolution(
                 contact_id=state.pinned_contact_id,
-                verified=True,
+                verified=not provisional,
+                provisional=provisional,
             )
         if state.anonymous_label:
-            return SpeakerResolution(label=state.anonymous_label)
+            return SpeakerResolution(
+                label=state.anonymous_label,
+                provisional=provisional,
+            )
         return None
 
     def profiles_partition(
