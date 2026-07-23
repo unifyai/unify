@@ -451,10 +451,13 @@ def _coordinator_onboarding_notification_text(
             " If the tool starts a call, put the full spoken line in the required "
             "`opener` argument — verbatim at call start — AND put the full task "
             "design in the `briefing` argument (the answer I have in mind, likely "
-            "mishearings to accept, how to confirm a correct guess, and the exact "
-            "wrap-up to say when done). The voice agent runs the whole interaction "
-            "from the briefing by itself; nothing from this notification needs "
-            "repeating via guide_voice_agent."
+            "mishearings to accept, how to confirm a correct guess, the exact "
+            "wrap-up to say when done, and that the call should end once the "
+            "guess is resolved). The voice agent can run the live quiz from that "
+            "briefing; I do not also speak the clue via guide_voice_agent. If I "
+            "later confirm their guess on that call, same turn I speak confirm + "
+            "wrap-up and `allow_hang_up` (re-arming if I had withdrawn for think "
+            "time) — never bare confirm + wait."
             if tool_name.startswith("make_") or "call" in channel
             else ""
         )
