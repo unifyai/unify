@@ -778,13 +778,17 @@ class TestEntrypointMetadata:
             SESSION_DETAILS.reset()
 
     def test_hydrate_session_details_from_metadata_sets_unify_key(self):
+        import os
+
         from unify.conversation_manager.medium_scripts.call import (
             _hydrate_session_details_from_metadata,
         )
         from unify.session_details import SESSION_DETAILS
 
+        previous_unify_key = os.environ.get("UNIFY_KEY")
         SESSION_DETAILS.reset()
         try:
+            os.environ["UNIFY_KEY"] = "stale-build-key"
             _hydrate_session_details_from_metadata(
                 {
                     "assistant_bio": "Bio",
@@ -793,8 +797,13 @@ class TestEntrypointMetadata:
             )
 
             assert SESSION_DETAILS.unify_key == "assigned-tenant-key"
+            assert os.environ["UNIFY_KEY"] == "assigned-tenant-key"
         finally:
             SESSION_DETAILS.reset()
+            if previous_unify_key is None:
+                os.environ.pop("UNIFY_KEY", None)
+            else:
+                os.environ["UNIFY_KEY"] = previous_unify_key
 
     def test_voice_call_channel_defers_desktop_binding(self):
         from unify.conversation_manager.medium_scripts.call import (
