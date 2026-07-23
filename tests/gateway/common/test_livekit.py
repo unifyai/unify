@@ -291,3 +291,76 @@ async def test_create_room_and_dispatch_agent_passes_room_and_agent_through(
 
     api.agent_dispatch.create_dispatch.assert_awaited_once()
     api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_room_and_dispatch_agent_starts_egress_when_record(
+    _livekit_credentials: EnvCredentialStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """record=True must start an audio-only egress with the linkage webhook."""
+    from unify.gateway.common.livekit import create_room_and_dispatch_agent
+
+    monkeypatch.setenv("GCP_SA_KEY", "sa-json")
+    monkeypatch.setenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
+
+    api = _fake_livekit_api()
+    api.agent_dispatch = MagicMock()
+    api.agent_dispatch.create_dispatch = AsyncMock(
+        return_value=MagicMock(id="DISPATCH_123"),
+    )
+    api.egress = MagicMock()
+    api.egress.start_room_composite_egress = AsyncMock(
+        return_value=MagicMock(egress_id="EG_1"),
+    )
+
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await create_room_and_dispatch_agent(
+            "unity_42_phone",
+            "unity_42_phone",
+            _livekit_credentials,
+            record=True,
+            assistant_id="42",
+            user_id="7",
+            provider_call_sid="CA_abc",
+        )
+
+    api.agent_dispatch.create_dispatch.assert_awaited_once()
+    api.egress.start_room_composite_egress.assert_awaited_once()
+    request = api.egress.start_room_composite_egress.await_args.args[0]
+    assert request.room_name == "unity_42_phone"
+    assert request.audio_only is True
+    assert request.file_outputs[0].gcp.bucket == "unity-call-recordings"
+    assert "provider_call_sid=CA_abc" in request.webhooks[0].url
+    assert "/livekit/recording-complete" in request.webhooks[0].url
+
+
+@pytest.mark.asyncio
+async def test_create_room_and_dispatch_agent_no_egress_without_record(
+    _livekit_credentials: EnvCredentialStore,
+) -> None:
+    """record defaults False, so no egress is started for a bare dispatch."""
+    from unify.gateway.common.livekit import create_room_and_dispatch_agent
+
+    api = _fake_livekit_api()
+    api.agent_dispatch = MagicMock()
+    api.agent_dispatch.create_dispatch = AsyncMock(
+        return_value=MagicMock(id="DISPATCH_123"),
+    )
+    api.egress = MagicMock()
+    api.egress.start_room_composite_egress = AsyncMock()
+
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await create_room_and_dispatch_agent(
+            "unity_42_phone",
+            "unity_42_phone",
+            _livekit_credentials,
+        )
+
+    api.egress.start_room_composite_egress.assert_not_awaited()

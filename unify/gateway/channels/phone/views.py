@@ -171,14 +171,32 @@ def _create_conference_response(sip_uri: str) -> VoiceResponse:
 
 @auth_router.post("/dispatch-livekit-agent")
 async def dispatch_livekit_agent(request: Request):
-    """Create a LiveKit room and dispatch the LiveKit agent into it."""
+    """Create a LiveKit room, dispatch the agent, and start recording.
+
+    The runtime dispatch always requests ``record`` so the call is captured to
+    GCS via an audio-only Room Composite Egress. ``assistant_id``/``user_id``
+    (and, when known, the ``call_session_id``/``provider_call_sid``/
+    ``conference_name`` linkage IDs) are threaded into the egress completion
+    webhook so the recording can be attributed back to the call.
+
+    ``livekit_agent_name`` is honoured as the agent worker registration name
+    (distinct from ``room_name`` for org multi-assistant meet rooms that share a
+    single room); it falls back to ``room_name`` for single-assistant callers.
+    """
     credentials = EnvCredentialStore()
     data = await _json_object_or_empty(request)
     room_name = data.get("room_name") or data.get("livekit_agent_name", "")
+    agent_name = data.get("livekit_agent_name") or room_name
     await create_room_and_dispatch_agent(
         room_name,
-        room_name,
+        agent_name,
         credentials,
+        record=bool(data.get("record", True)),
+        assistant_id=data.get("assistant_id", ""),
+        user_id=data.get("user_id", ""),
+        call_session_id=data.get("call_session_id", ""),
+        provider_call_sid=data.get("provider_call_sid", ""),
+        conference_name=data.get("conference_name", ""),
     )
     return {"success": True}
 
