@@ -6,7 +6,7 @@ Unify depends on two sibling repositories. Clone all three as siblings:
 
 ```bash
 git clone https://github.com/unifyai/unify.git
-git clone https://github.com/unifyai/unify.git
+git clone https://github.com/unifyai/unisdk.git
 git clone https://github.com/unifyai/unillm.git
 
 cd unify
@@ -32,7 +32,7 @@ tests/parallel_run.sh tests/contact_manager/
 tests/parallel_run.sh tests/contact_manager/test_ask.py::test_name
 ```
 
-Tests require a running backend (Orchestra). The test runner starts a local instance automatically via Docker (requires Docker Desktop). See [tests/README.md](tests/README.md) for the full testing philosophy.
+Tests require an Orchestra backend, selected via `ORCHESTRA_URL` in `.env`. Point it at the hosted backend (`https://api.unify.ai/v0`, with your `UNIFY_KEY`); a localhost URL instead makes the runner boot a local Orchestra from a sibling checkout, which is an internal development path. See [tests/README.md](tests/README.md) for the full testing philosophy.
 
 ## Code style
 

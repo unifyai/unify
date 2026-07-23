@@ -1,6 +1,6 @@
 # Tests
 
-This directory contains the test suite for Unity.
+This directory contains the test suite for Unify.
 
 ## Table of Contents
 

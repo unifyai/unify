@@ -239,7 +239,7 @@ _NUM_CORES=$DETECTED_CPU_CORES
 #
 # SHARED ORCHESTRA HANDLING:
 # When running from a git worktree (e.g., Cursor Background Agents) or an
-# adjacent clone (created by clone_adjacent.sh), we don't restart orchestra
+# adjacent clone (created by scripts/clone_adjacent.sh), we don't restart orchestra
 # just to change log directories. Instead, we create symlinks from the
 # worktree/clone's logs/ to wherever orchestra is currently logging. This
 # avoids disrupting concurrent tests in the main repo, other worktrees, or
@@ -257,7 +257,7 @@ _is_git_worktree() {
 }
 
 _is_adjacent_clone() {
-  # Adjacent clones (created by clone_adjacent.sh) symlink .venv to the main repo.
+  # Adjacent clones (created by scripts/clone_adjacent.sh) symlink .venv to the main repo.
   # They share the same orchestra instance and should not restart it.
   [[ -L "$REPO_ROOT/.venv" ]]
 }

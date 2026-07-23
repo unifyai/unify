@@ -129,16 +129,17 @@ The supported posture for adversarial inbound surfaces is to run Unify
 inside a whole-process sandbox (container, VM, or per-session sandbox).
 That is on the operator; Unify does not ship one.
 
-### 2.6 Bundled Orchestra Postgres
+### 2.6 Hosted Orchestra backend
 
-The local install runs `orchestra` as a Docker container with a named
-volume, bound to `127.0.0.1`. The API key for it is generated locally and
-written to `~/.unity/unity/.env`. There is **no multi-tenant isolation**;
-the container is a single-tenant database that holds everything the
-assistant remembers.
+The local install persists to the hosted Orchestra backend over HTTPS
+(`ORCHESTRA_URL`), authenticated with the `UNIFY_KEY` written to
+`~/.unity/unity/.env`. Everything the assistant remembers — contacts,
+knowledge, transcripts, tasks — is stored in that per-tenant backend, so
+the `UNIFY_KEY` is the credential that guards it: anyone holding the key
+can read and write the assistant's memory through the API.
 
-If the operator chooses to expose the Orchestra port on a non-loopback
-interface, that's an explicit operator choice and is unsupported.
+Protect `~/.unity/unity/.env` like any credentials file. Key rotation is
+done from [console.unify.ai](https://console.unify.ai).
 
 ---
 
