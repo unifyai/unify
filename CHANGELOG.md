@@ -17,15 +17,16 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
 
 ### Added
 
-- **Local install** — `scripts/install.sh` one-liner that clones the four
-  required repos (`unify`, `unisdk`, `unillm`, `orchestra`), boots the
-  local Orchestra in Docker, writes `~/.unity/unity/.env`, and creates a
-  `unify` CLI shim. No Unify account or signup required.
+- **Local install** — `scripts/install.sh` one-liner that clones the open
+  runtime repos (`unify`, `unisdk`, `unillm`), runs the key wizard, writes
+  `~/.unity/unity/.env`, and creates a `unify` CLI shim. The runtime talks
+  to the hosted Orchestra backend; get your `UNIFY_KEY` and `ASSISTANT_ID`
+  at [console.unify.ai](https://console.unify.ai).
 - **Voice runtime** — `unify --live-voice` wires the slow-brain ↔ fast-brain
   pipeline and opens the LiveKit agents-playground in the browser using the
   configured LiveKit Cloud credentials.
 - **`unify doctor`** for diagnosing missing dependencies, env keys, and
-  Docker-autostart configuration.
+  gateway configuration.
 - **`deploy_runtime` SPI** — small Service Provider Interface for
   session assignment, job lifecycle hooks, metrics export, and shutdown
   log archival, with local/no-op defaults when no private hosted
@@ -44,8 +45,9 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
 - **`.env` template split** — `.env.example` covers everything needed
   for the default local install; `.env.advanced.example` documents
   optional integrations (Tavily, hosted comms, visual caching, etc.).
-- **Local Orchestra integration** — uses the public unified `orchestra`
-  backend so the entire local stack is open-source.
+- **Hosted Orchestra integration** — the local runtime persists to the
+  hosted Orchestra backend (`ORCHESTRA_URL`); no local database or Docker
+  is required.
 
 ### Security
 
