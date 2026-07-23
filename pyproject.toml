@@ -66,7 +66,12 @@ dependencies = [
     # Telemetry (OTel metrics → GCP Managed Prometheus)
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-gcp-monitoring>=1.9.0a0",
+    # Pin the GCP exporter and its resource-detector companion to the same
+    # release series. They share an internal module path; a newer detector
+    # (1.13.x) drops the layout the 1.12.x exporter imports, breaking the
+    # opentelemetry.resourcedetector namespace at import time.
+    "opentelemetry-exporter-gcp-monitoring>=1.9.0a0,<1.13",
+    "opentelemetry-resourcedetector-gcp>=1.9.0a0,<1.13",
     "pymupdf>=1.27.1",
     "pypdf>=6.0.0",
     "openpyxl>=3.1.5",
