@@ -14,6 +14,7 @@ def dispatch_livekit_agent(
     assistant_id: str = "",
     user_id: str = "",
     agent_name: str | None = None,
+    call_session_id: str = "",
 ):
     """
     Dispatch a LiveKit agent via the communication service.
@@ -51,6 +52,7 @@ def dispatch_livekit_agent(
                 "record": record,
                 "assistant_id": assistant_id,
                 "user_id": user_id,
+                "call_session_id": call_session_id,
             },
             timeout=1,
         )

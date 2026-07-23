@@ -496,6 +496,43 @@ def test_dispatch_livekit_agent_falls_back_to_legacy_livekit_agent_name(
     assert args[0] == "legacy_agent_name"
 
 
+def test_dispatch_livekit_agent_forwards_record_and_linkage(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    """record + assistant/user/session linkage must reach the egress helper.
+
+    Regression guard: the gateway port previously dropped ``record`` so no
+    recording was ever started for meet / dispatched calls.
+    """
+    mock_create = AsyncMock()
+    with patch(
+        "unify.gateway.channels.phone.views.create_room_and_dispatch_agent",
+        new=mock_create,
+    ):
+        resp = client.post(
+            "/phone/dispatch-livekit-agent",
+            json={
+                "room_name": "unity_42_meet",
+                "livekit_agent_name": "unity_42",
+                "record": True,
+                "assistant_id": "42",
+                "user_id": "7",
+                "call_session_id": "CS_1",
+            },
+        )
+
+    assert resp.status_code == 200
+    args, kwargs = mock_create.await_args
+    assert args[0] == "unity_42_meet"  # room_name
+    assert args[1] == "unity_42"  # distinct agent worker name
+    assert kwargs["record"] is True
+    assert kwargs["assistant_id"] == "42"
+    assert kwargs["user_id"] == "7"
+    assert kwargs["call_session_id"] == "CS_1"
+
+
 # ---------------------------------------------------------------------------
 # GET /available-countries
 # ---------------------------------------------------------------------------
