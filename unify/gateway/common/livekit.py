@@ -34,14 +34,19 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote_plus, urlencode
 
 from livekit.api import (
     CreateAgentDispatchRequest,
     CreateSIPDispatchRuleRequest,
+    EncodedFileOutput,
+    GCPUpload,
     LiveKitAPI,
+    RoomCompositeEgressRequest,
     SIPDispatchRuleInfo,
+    WebhookConfig,
 )
 from livekit.protocol.sip import (
     DeleteSIPDispatchRuleRequest,
@@ -52,6 +57,7 @@ from livekit.protocol.sip import (
 )
 
 from unify.gateway.credentials import CredentialNotFoundError, CredentialStore
+from unify.settings import SETTINGS
 
 _log = logging.getLogger("unify.gateway.common.livekit")
 
@@ -276,15 +282,129 @@ async def delete_sip_dispatch_rule(
         await livekit_api.aclose()
 
 
+async def _start_room_egress(
+    livekit_api: LiveKitAPI,
+    room_name: str,
+    assistant_id: str,
+    user_id: str,
+    credentials: CredentialStore,
+    *,
+    call_session_id: str = "",
+    provider_call_sid: str = "",
+    conference_name: str = "",
+) -> None:
+    """Start an audio-only Room Composite Egress that writes MP3 to GCS.
+
+    LiveKit uploads the recording directly to GCS and calls the adapters
+    ``/livekit/recording-complete`` webhook on completion. That webhook
+    back-links the ``recording_url`` onto the call session (when a
+    ``provider_call_sid`` is present) and republishes a ``recording_ready``
+    event so the assistant runtime can attach it to the transcript exchange.
+    The linkage query params are threaded through the webhook URL so the
+    completion handler can resolve the correct session / exchange.
+    """
+    gcs_credentials = credentials.get_optional("GCP_SA_KEY", "")
+    gcs_bucket = credentials.get_optional(
+        "LIVEKIT_EGRESS_GCS_BUCKET",
+        "unity-call-recordings",
+    )
+    adapters_url = SETTINGS.conversation.ADAPTERS_URL
+    api_key = credentials.get("LIVEKIT_API_KEY")
+
+    prefix = SETTINGS.DEPLOY_ENV
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
+
+    webhook_url = (
+        f"{adapters_url}/livekit/recording-complete"
+        f"?assistant_id={quote_plus(str(assistant_id))}"
+        f"&user_id={quote_plus(str(user_id))}"
+        f"&room_name={quote_plus(room_name)}"
+    )
+    if call_session_id:
+        webhook_url += f"&call_session_id={quote_plus(call_session_id)}"
+    if provider_call_sid:
+        webhook_url += f"&provider_call_sid={quote_plus(provider_call_sid)}"
+    if conference_name:
+        webhook_url += f"&conference_name={quote_plus(conference_name)}"
+
+    egress_request = RoomCompositeEgressRequest(
+        room_name=room_name,
+        audio_only=True,
+        file_outputs=[
+            EncodedFileOutput(
+                file_type=3,  # MP3
+                filepath=filepath,
+                gcp=GCPUpload(credentials=gcs_credentials, bucket=gcs_bucket),
+            ),
+        ],
+        webhooks=[WebhookConfig(url=webhook_url, signing_key=api_key)],
+    )
+    info = await livekit_api.egress.start_room_composite_egress(egress_request)
+    _log.info(
+        "started room composite egress %s for room %r -> gs://%s/%s",
+        getattr(info, "egress_id", "?"),
+        room_name,
+        gcs_bucket,
+        filepath,
+    )
+
+
+async def start_room_egress(
+    room_name: str,
+    assistant_id: str,
+    credentials: CredentialStore,
+    user_id: str = "",
+    *,
+    call_session_id: str = "",
+    provider_call_sid: str = "",
+    conference_name: str = "",
+) -> None:
+    """Start an audio-only Room Composite Egress on an existing room.
+
+    Use this when the room was created externally (e.g. by a SIP trunk) and you
+    only need to start recording. Egress failures are logged and swallowed so a
+    recording problem never breaks call setup.
+    """
+    livekit_api = get_livekit_api(credentials)
+    try:
+        await _start_room_egress(
+            livekit_api,
+            room_name,
+            assistant_id,
+            user_id,
+            credentials,
+            call_session_id=call_session_id,
+            provider_call_sid=provider_call_sid,
+            conference_name=conference_name,
+        )
+    except Exception as exc:
+        _log.error("failed to start egress for room %r: %s", room_name, exc)
+    finally:
+        await livekit_api.aclose()
+
+
 async def create_room_and_dispatch_agent(
     room_name: str,
     agent_name: str,
     credentials: CredentialStore,
     metadata: dict | None = None,
+    *,
+    record: bool = False,
+    assistant_id: str | int = "",
+    user_id: str | int = "",
+    call_session_id: str = "",
+    provider_call_sid: str = "",
+    conference_name: str = "",
 ) -> Any:
     """Create a LiveKit room and dispatch an agent into it.
 
-    Returns the LiveKit dispatch object. Re-raises on failure after
+    When ``record`` is set, an audio-only Room Composite Egress is also started
+    for the room so the call is captured to GCS. Egress is best-effort: a
+    recording failure is logged but never fails the agent dispatch (which is
+    the critical path for the call to connect).
+
+    Returns the LiveKit dispatch object. Re-raises dispatch failures after
     logging so the caller's error handler sees the exception.
     """
     livekit_api = get_livekit_api(credentials)
@@ -303,6 +423,24 @@ async def create_room_and_dispatch_agent(
             agent_name,
             getattr(dispatch, "id", "?"),
         )
+        if record:
+            try:
+                await _start_room_egress(
+                    livekit_api,
+                    room_name,
+                    str(assistant_id),
+                    str(user_id),
+                    credentials,
+                    call_session_id=call_session_id,
+                    provider_call_sid=provider_call_sid,
+                    conference_name=conference_name,
+                )
+            except Exception as exc:
+                _log.error(
+                    "agent dispatched but failed to start egress for room %r: %s",
+                    room_name,
+                    exc,
+                )
         return dispatch
     except Exception as exc:
         _log.error(
@@ -323,4 +461,5 @@ __all__ = [
     "get_livekit_api",
     "make_call_scoped_sip_uri",
     "make_sip_uri",
+    "start_room_egress",
 ]
