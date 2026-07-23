@@ -4254,6 +4254,7 @@ if __name__ == "__main__":
             assistant_id=SESSION_DETAILS.assistant.agent_id,
             user_id=SESSION_DETAILS.user.id,
             agent_name=agent_name,
+            call_session_id=call_session_id,
         )
         _log.dispatch(f"LiveKit agent {agent_name} dispatched")
 
