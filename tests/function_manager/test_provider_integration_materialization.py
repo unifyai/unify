@@ -531,6 +531,48 @@ def test_one_app_mismatch_does_not_block_sibling_app_sync(monkeypatch) -> None:
     assert "composio:slack" not in fm._stored_hashes
 
 
+def test_write_verification_retries_transient_undercount(monkeypatch) -> None:
+    import time
+
+    client = FakeIntegrationOps()
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_private_fields",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(time, "sleep", lambda *_args, **_kwargs: None)
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+    # Use the real recount+retry path instead of the fixture's shortcut fake.
+    del fm._count_provider_integration_rows_for_app
+
+    read_calls = {"n": 0}
+
+    def fake_get_logs(**_kwargs):
+        read_calls["n"] += 1
+        # First re-read undercounts, as if the batch write were not yet
+        # fully visible; the next re-read reflects the completed write.
+        return [] if read_calls["n"] == 1 else list(fm._inserted_rows)
+
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.unisdk.get_logs",
+        fake_get_logs,
+    )
+
+    result = fm.sync_provider_integration_tools(app_slug="hubspot")
+
+    assert result["status"] == "synced"
+    assert read_calls["n"] == 2
+    assert "composio:hubspot" in fm._stored_hashes
+
+
 def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
     client = FakeIntegrationOps()
     client.results = [
