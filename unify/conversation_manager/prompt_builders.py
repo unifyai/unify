@@ -1117,10 +1117,13 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "When the clue goes out on a call channel, the clue and framing are in "
             "the required `opener` argument — spoken verbatim at call start — and "
             "the full task design goes in `briefing` (the answer, likely "
-            "mishearings to accept, how to confirm, and the exact wrap-up). The "
-            "Voice Agent runs the whole quiz from the briefing by itself; I do NOT "
-            "also `guide_voice_agent` the clue or answer on that call. For instant "
-            "guess confirmation on message channels, I bundle the answer into "
+            "mishearings to accept, how to confirm, the exact wrap-up, and that "
+            "this call should end once the guess is resolved). The Voice Agent "
+            "can run the live quiz from that briefing; I do NOT also "
+            "`guide_voice_agent` the clue itself on that call. If I do speak on "
+            "that call to confirm their guess, I close the excursion in the "
+            "same turn — never bare confirm + `wait`. For instant guess "
+            "confirmation on message channels, I bundle the answer into "
             "`guide_voice_agent`'s `fast_brain_guidance` alongside my spoken line "
             '(for example: "The answer is <title>. If the caller guesses it, '
             'confirm warmly; never state the answer before they guess."), so the '
@@ -1136,23 +1139,29 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  5. If the event starts a call, put the clue, framing, and any spoken "
             "setup into the required `opener` argument — the exact words spoken at "
             "call start — and put the answer, accepted mishearings, confirmation "
-            "style, and wrap-up line into `briefing` so the Voice Agent runs the "
-            "interaction itself.",
+            "style, wrap-up line, and end-of-call intent into `briefing`.",
             "  6. Do not mark or describe the trigger as done just because the user "
             "clicked it. Completion is detected only after my outbound message/call "
             "appears in the transcript.",
             "  7. Do not hardcode onboarding game design here. If the framing changes in "
             "Orchestra, follow the new framing from the notification/live progress block.",
-            "  8. Unify Meet is the home base for onboarding. The WhatsApp-call and "
-            "phone-call steps are short excursions purely to prove those voice "
-            "channels work. Once the clue has gone out on that call, the user has "
-            "guessed, and I have told them whether they were right, I do NOT keep "
-            "rolling into the next step on that call: I tell them I'll hop back onto "
-            "the Unify Meet, then `hang_up` and `start_unify_meet` (with a short "
-            "`opener` so I open by continuing onboarding). This keeps everything on "
-            "the in-app live call so the user isn't stuck holding a phone. (Message "
-            "channels — email, SMS, WhatsApp message — never leave the call, so this "
-            "return-to-Meet only applies after the WhatsApp-call and phone-call steps.)",
+            "  8. Unify Meet / Console is the home base for onboarding. The "
+            "WhatsApp-call and phone-call steps are short excursions purely to "
+            "prove those voice channels work. Once the caller has guessed and I "
+            "am confirming whether they were right on that call, the same turn "
+            "must (a) `guide_voice_agent` with confirm + wrap-up — that this "
+            "channel works and we continue onboarding in Console / Unify Meet — "
+            "and (b) `allow_hang_up` with a short reason so the live voice can "
+            "end the call at the natural close (or `hang_up` if they ask to end "
+            "now). If I earlier `withdraw_hang_up` so they could think, I re-arm "
+            "with `allow_hang_up` in that confirm turn. I do NOT confirm alone "
+            "and `wait`, and I do NOT keep rolling into the next onboarding step "
+            "on the phone. After the call has ended, I `start_unify_meet` with "
+            "a short `opener` if we still need the in-app live call — not in the "
+            "same turn as the still-active WhatsApp/phone call. (Message "
+            "channels — email, SMS, WhatsApp message — never leave the call, so "
+            "this return-to-Meet only applies after the WhatsApp-call and "
+            "phone-call steps.)",
             "Rules for unify_message during onboarding:",
             "  1. Every inbound unify_message gets a chat reply unless my immediately "
             "previous chat line already fully answers it.",

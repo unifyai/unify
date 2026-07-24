@@ -1,12 +1,12 @@
 ConversationManager Sandbox
 ==========================
 
-Interactive playground for the `ConversationManager` component (`unity/conversation_manager/`). OSS users normally reach this through the **`unity`** CLI; developers can also run the module directly.
+Interactive playground for the `ConversationManager` component (`unify/conversation_manager/`). OSS users normally reach this through the **`unify`** CLI; developers can also run the module directly.
 
 ## Quick start (OSS)
 
 ```bash
-unity
+unify
 ```
 
 That opens the ConversationManager sandbox REPL against your hosted assistant (`UNIFY_KEY` + `ASSISTANT_ID` in `~/.unity/unity/.env`). Type `help` at the `>` prompt for the current command list.

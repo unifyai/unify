@@ -327,6 +327,64 @@ class TestSpeakerTracker:
         assert not captured
         assert suggested == [2]
 
+    async def test_diarization_oversplit_same_voice_enrolls_without_suggestion(self):
+        # Streaming STT often labels one talker as both S0 and S1. Matching
+        # centroids must collapse to a single voice so auto-enrollment still
+        # fires and the manual-recording suggestion does not.
+        captured: list[tuple] = []
+        suggested: list[int] = []
+        tracker = _make_tracker(
+            enrolled={},
+            on_captured=lambda emb, path, dur: captured.append((emb, path, dur)),
+            on_suggested=suggested.append,
+        )
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=2.0)
+        _feed_segment(tracker, clock, "S1", amplitude=1000, seconds=2.0)
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=2.0)
+        await tracker.finalize()
+
+        assert not suggested
+        assert len(captured) == 1
+        # Speech was split across ids; combined duration still enrolls.
+        assert captured[0][2] == pytest.approx(6.0, abs=0.05)
+        os.unlink(captured[0][1])
+
+    async def test_cross_id_merge_respects_similarity_threshold(self):
+        # Centroids that only barely miss CROSS_ID_MERGE_SIM stay distinct so
+        # a real second voice still triggers the enrollment suggestion.
+        captured: list[tuple] = []
+        suggested: list[int] = []
+
+        class _AngledEmbedder(StubEmbedder):
+            async def embed(self, pcm: np.ndarray, sample_rate: int) -> np.ndarray:
+                mean_amp = (
+                    float(np.abs(pcm.astype(np.int32)).mean()) if len(pcm) else 0.0
+                )
+                if mean_amp >= 5000:
+                    # Cosine with [1,0] is 0.2 — below CROSS_ID_MERGE_SIM (0.3).
+                    return np.array([0.2, np.sqrt(1.0 - 0.2**2)], dtype=np.float32)
+                return np.array([1.0, 0.0], dtype=np.float32)
+
+        tracker = SpeakerTracker(
+            embedder=_AngledEmbedder(),
+            enrolled_profiles={},
+            call_contact_id=5,
+            enrollment_target_s=6.0,
+            enrollment_min_s=2.0,
+            on_enrollment_captured=lambda emb, path, dur: captured.append(
+                (emb, path, dur),
+            ),
+            on_enrollment_suggested=suggested.append,
+        )
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=4.0)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=4.0)
+        await tracker.finalize()
+
+        assert not captured
+        assert suggested == [2]
+
     async def test_no_suggestion_when_contact_enrolled(self):
         suggested: list[int] = []
         tracker = _make_tracker(

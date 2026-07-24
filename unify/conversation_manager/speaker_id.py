@@ -55,6 +55,17 @@ SPEAKER_MATCH_THRESHOLD = 0.55
 # different-speaker floor (~0.4) so a genuinely different voice spawns a cluster.
 CLUSTER_JOIN_SIM = 0.5
 
+# Cosine-similarity threshold for treating clusters under *different*
+# diarization ids as the same physical voice when gating auto-enrollment.
+# Streaming diarization often over-splits one talker into S0/S1/…; without this
+# merge those ids each count as a distinct voice and spuriously block
+# enrollment. Same-speaker CAM++ scores typically land in 0.6–0.8 and different
+# speakers below ~0.4. Set at half the same-speaker floor (0.6 → 0.3) so genuine
+# over-splits clear the bar with ~50% relative margin while orthogonal
+# different-speaker pairs stay separate. Raise gradually if real multi-speaker
+# calls start collapsing; lower if over-splits still trip the suggestion.
+CROSS_ID_MERGE_SIM = 0.3
+
 # Auto-enrollment bounds (seconds of accumulated speech from a single voice).
 ENROLLMENT_TARGET_S = 60.0
 ENROLLMENT_MIN_S = 15.0
@@ -441,6 +452,10 @@ class SpeakerTracker:
     so meet transcripts are per-speaker attributable from the voice track alone.
     Auto-enrollment stays single-voice-gated regardless, so a meet never enrolls
     an arbitrary participant as the call contact.
+
+    Enrollment gating counts *physically* distinct voices: clusters under
+    different diarization ids whose centroids clear ``cross_id_merge_sim``
+    collapse into one voice, so STT over-splits do not block auto-enrollment.
     """
 
     def __init__(
@@ -451,6 +466,7 @@ class SpeakerTracker:
         call_contact_id: int | None,
         multi_party: bool = False,
         match_threshold: float = SPEAKER_MATCH_THRESHOLD,
+        cross_id_merge_sim: float = CROSS_ID_MERGE_SIM,
         enrollment_target_s: float = ENROLLMENT_TARGET_S,
         enrollment_min_s: float = ENROLLMENT_MIN_S,
         on_enrollment_captured: Callable[[np.ndarray, str, float], None] | None = None,
@@ -466,6 +482,7 @@ class SpeakerTracker:
         )
         self._multi_party = multi_party
         self._match_threshold = match_threshold
+        self._cross_id_merge_sim = cross_id_merge_sim
         self._enrollment_target_s = enrollment_target_s
         self._enrollment_min_s = enrollment_min_s
         self._on_enrollment_captured = on_enrollment_captured
@@ -634,29 +651,79 @@ class SpeakerTracker:
         state.enrollment_sample_rate = ENROLLMENT_SAMPLE_RATE
         state.enrollment_duration_s += duration_s
 
-    def _total_clusters(self) -> int:
-        """Distinct voices heard so far, counting co-located voices per id."""
-        return sum(len(state.clusters) for state in self._speakers.values())
+    def _distinct_voice_count(self) -> int:
+        """Physically distinct voices after merging cross-id near-duplicates.
+
+        Within an id, ``CLUSTER_JOIN_SIM`` already splits co-located voices into
+        separate clusters. Across ids, streaming diarization may over-split one
+        talker (S0 vs S1); centroids that clear ``cross_id_merge_sim`` collapse
+        into a single voice for enrollment / suggestion gating.
+        """
+        centroids: list[np.ndarray] = []
+        for state in self._speakers.values():
+            for cluster in state.clusters:
+                centroid = cluster.accumulator.centroid
+                if centroid is not None:
+                    centroids.append(centroid)
+        if not centroids:
+            return 0
+        representatives: list[np.ndarray] = []
+        for centroid in centroids:
+            if any(
+                cosine_similarity(centroid, rep) >= self._cross_id_merge_sim
+                for rep in representatives
+            ):
+                continue
+            representatives.append(centroid)
+        return len(representatives)
+
+    def _single_voice_enrollment_audio(
+        self,
+    ) -> tuple[list[np.ndarray], int, float] | None:
+        """Enrollment PCM across all ids when exactly one physical voice exists.
+
+        Speech may be split across over-split diarization ids; combine their
+        enrollment buffers so duration thresholds see the full single-voice
+        total rather than a per-id fragment.
+        """
+        if self._distinct_voice_count() != 1:
+            return None
+        audio_parts: list[np.ndarray] = []
+        sample_rate = ENROLLMENT_SAMPLE_RATE
+        duration_s = 0.0
+        for state in self._speakers.values():
+            if not state.enrollment_audio:
+                continue
+            audio_parts.extend(state.enrollment_audio)
+            sample_rate = state.enrollment_sample_rate
+            duration_s += state.enrollment_duration_s
+        if not audio_parts:
+            return None
+        return audio_parts, sample_rate, duration_s
 
     def _check_enrollment_progress(self) -> None:
-        if self._total_clusters() != 1:
+        material = self._single_voice_enrollment_audio()
+        if material is None:
             return
-        state = next(iter(self._speakers.values()))
-        if state.enrollment_duration_s >= self._enrollment_target_s:
-            self._fire_enrollment(state)
+        audio_parts, sample_rate, duration_s = material
+        if duration_s >= self._enrollment_target_s:
+            self._fire_enrollment(audio_parts, sample_rate)
 
-    def _fire_enrollment(self, state: _SpeakerState) -> None:
+    def _fire_enrollment(
+        self,
+        audio_parts: list[np.ndarray],
+        sample_rate: int,
+    ) -> None:
         if (
             self._enrollment_fired
             or self._on_enrollment_captured is None
             or self._call_contact_id is None
             or self._call_contact_enrolled
-            or not state.enrollment_audio
+            or not audio_parts
         ):
             return
         self._enrollment_fired = True
-        pcm = np.concatenate(state.enrollment_audio)
-        sample_rate = state.enrollment_sample_rate
+        pcm = np.concatenate(audio_parts)
         task = asyncio.create_task(self._emit_enrollment(pcm, sample_rate))
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
@@ -671,16 +738,17 @@ class SpeakerTracker:
         self._on_enrollment_captured(embedding, wav_path, duration_s)
 
     def _check_suggestion(self) -> None:
+        distinct = self._distinct_voice_count()
         if (
             self._suggestion_fired
             or self._on_enrollment_suggested is None
             or self._call_contact_id is None
             or self._call_contact_enrolled
-            or self._total_clusters() < 2
+            or distinct < 2
         ):
             return
         self._suggestion_fired = True
-        self._on_enrollment_suggested(self._total_clusters())
+        self._on_enrollment_suggested(distinct)
 
     async def await_pending(self) -> None:
         """Flush in-flight embedding work.
@@ -695,10 +763,12 @@ class SpeakerTracker:
     async def finalize(self) -> None:
         """Call-end hook: flush pending work and fire a partial enrollment."""
         await self.await_pending()
-        if not self._enrollment_fired and self._total_clusters() == 1:
-            state = next(iter(self._speakers.values()))
-            if state.enrollment_duration_s >= self._enrollment_min_s:
-                self._fire_enrollment(state)
+        if not self._enrollment_fired:
+            material = self._single_voice_enrollment_audio()
+            if material is not None:
+                audio_parts, sample_rate, duration_s = material
+                if duration_s >= self._enrollment_min_s:
+                    self._fire_enrollment(audio_parts, sample_rate)
         await self.await_pending()
 
     # ── resolution ───────────────────────────────────────────────────────

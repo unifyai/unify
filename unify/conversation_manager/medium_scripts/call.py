@@ -1005,6 +1005,9 @@ def _hydrate_session_details_from_metadata(meta: dict) -> None:
         SESSION_DETAILS.assistant.surname = parts[1] if len(parts) > 1 else ""
     if meta.get("unify_key"):
         SESSION_DETAILS.unify_key = str(meta["unify_key"])
+    # Credit gate / UniLLM deduct still read os.environ["UNIFY_KEY"]. Without
+    # this, the voice worker keeps the image-baked key after metadata hydrate.
+    SESSION_DETAILS.export_to_env()
 
 
 def _voice_call_channel_defers_desktop_binding(channel: str) -> bool:

@@ -322,6 +322,25 @@ def _proactive_speech_control_from_payload(
     )
 
 
+def _action_stop_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> ActionStopRequested | None:
+    if not isinstance(payload, dict):
+        return None
+    extra = payload.get("extra_event_fields")
+    fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+    calling_id = fields.get("calling_id")
+    if not isinstance(calling_id, str) or not calling_id.strip():
+        return None
+    return ActionStopRequested(
+        calling_id=calling_id.strip(),
+        reason=str(fields.get("reason") or reason or ""),
+        source=str(fields.get("source") or "console"),
+    )
+
+
 # Map subscription IDs to their corresponding event types
 events_map: dict[str, Event] = {
     "msg": SMSReceived,
@@ -1091,6 +1110,10 @@ class CommsManager:
                         reason=r,
                     ),
                     "proactive_speech_control": lambda r: _proactive_speech_control_from_payload(
+                        event,
+                        reason=r,
+                    ),
+                    "action_stop": lambda r: _action_stop_from_payload(
                         event,
                         reason=r,
                     ),

@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2f9d97.svg?style=for-the-badge&labelColor=241a2b" alt="MIT License"></a>
-  <a href="https://docs.unify.ai/basics/overview"><img src="https://img.shields.io/badge/Docs-docs.unify.ai-6e4a86?style=for-the-badge&labelColor=241a2b" alt="Docs"></a>
+  <a href="https://docs.unify.ai"><img src="https://img.shields.io/badge/Docs-docs.unify.ai-6e4a86?style=for-the-badge&labelColor=241a2b" alt="Docs"></a>
   <a href="https://github.com/unifyai/unify/actions"><img src="https://img.shields.io/github/actions/workflow/status/unifyai/unify/tests.yml?branch=staging&style=for-the-badge&labelColor=241a2b" alt="CI"></a>
   <a href="https://discord.com/invite/sXyFF8tDtm"><img src="https://img.shields.io/badge/Discord-3478f6?style=for-the-badge&logo=discord&logoColor=f3ead9&labelColor=241a2b" alt="Discord"></a>
   <a href="https://unify.ai"><img src="https://img.shields.io/badge/Built%20by-Unify-f3ead9?style=for-the-badge&labelColor=241a2b" alt="Built by Unify"></a>
@@ -78,7 +78,7 @@ Get your `UNIFY_KEY` and `ASSISTANT_ID` from [console.unify.ai](https://console.
 
 ## Voice — talking to them in the browser
 
-Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and Unify voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys. The all-repo source stack managed by `unity-deploy/selfhost` loads those LiveKit Cloud credentials from its self-host state directory.
+Real voice calls run the production fast-brain (interruption-handling, telephony-aware) locally with sub-second latency. Voice uses LiveKit Cloud for browser Meet, SIP calls, and Unify voice workers, so set `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` alongside your speech keys.
 
 Add a speech-to-text and a text-to-speech key (both have free tiers; pick **one** TTS provider). The install wizard prompts for these; to add them later, edit `~/.unity/unity/.env` and run `unify setup`.
 
@@ -493,7 +493,7 @@ This repository is one of three MIT-licensed repos that make up the open one-tea
 | Repo | Role |
 |------|------|
 | **unify** (this) | Agent runtime — managers, tool loops, CodeAct, voice, orchestration |
-| **[unify](https://github.com/unifyai/unify)** | Python SDK — how Unify talks to Orchestra |
+| **[unisdk](https://github.com/unifyai/unisdk)** | Python SDK — how Unify talks to Orchestra |
 | **[unillm](https://github.com/unifyai/unillm)** | LLM access layer — OpenAI, Anthropic, or any compatible endpoint |
 | **orchestra** | Persistence backend — FastAPI + Postgres + pgvector; hosted at [console.unify.ai](https://console.unify.ai) |
 

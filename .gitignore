@@ -85,3 +85,6 @@ logs/ci/*
 .repairs_queries/
 # Self-hosted LiveKit Agents Playground (sandbox developer tooling)
 .livekit-playground/
+# Legacy rename leftovers (never re-track)
+droid/
+benchmarks/
