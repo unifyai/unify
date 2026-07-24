@@ -1880,6 +1880,26 @@ async def _(
         await cm.schedule_proactive_speech()
 
 
+@EventHandler.register(ActionStopRequested)
+async def _(
+    event: ActionStopRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    stopped = await cm.stop_in_flight_action_by_calling_id(
+        event.calling_id,
+        reason=event.reason or "Stopped from Console Actions pane.",
+    )
+    if not stopped:
+        LOGGER.info(
+            "%s Action stop requested for unknown calling_id=%s (source=%s)",
+            DEFAULT_ICON,
+            event.calling_id,
+            event.source or "console",
+        )
+
+
 @EventHandler.register(
     (
         PhoneCallEnded,

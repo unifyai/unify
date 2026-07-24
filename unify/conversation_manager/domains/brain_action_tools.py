@@ -1717,6 +1717,7 @@ class ConversationManagerBrainActionTools:
             "persist": persist,
             "llm_profile": llm_profile,
             "action_type": "act",
+            "calling_id": getattr(handle, "_manager_call_id", None),
             "handle_actions": [
                 {
                     "action_name": "act_started",
@@ -1809,6 +1810,7 @@ class ConversationManagerBrainActionTools:
             "query": text,
             "persist": False,
             "action_type": action_type,
+            "calling_id": getattr(handle, "_manager_call_id", None),
             "handle_actions": [
                 {
                     "action_name": f"{action_type}_started",
@@ -2048,6 +2050,7 @@ class ConversationManagerBrainActionTools:
             "query": text,
             "persist": False,
             "action_type": action_type,
+            "calling_id": getattr(handle, "_manager_call_id", None),
             "handle_actions": [
                 {
                     "action_name": f"{action_type}_started",

@@ -52,6 +52,7 @@ from unify.conversation_manager.events import (
     FastBrainNotification,
     AssistantTurnInjected,
     ProactiveSpeechControl,
+    ActionStopRequested,
     GetChatHistory,
     ActorHandleStarted,
     ActorHandleResponse,
@@ -1564,6 +1565,22 @@ class TestVoiceUtteranceHandlers:
         await EventHandler.handle_event(enable_event, mock_cm)
         assert mock_cm.set_proactive_speech_enabled.call_args_list[-1].args == (True,)
         mock_cm.schedule_proactive_speech.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_action_stop_requested_stops_matching_calling_id(self, mock_cm):
+        mock_cm.stop_in_flight_action_by_calling_id = AsyncMock(return_value=True)
+        event = ActionStopRequested(
+            calling_id="call-xyz",
+            reason="Stopped from Console Actions pane.",
+            source="console",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.stop_in_flight_action_by_calling_id.assert_awaited_once_with(
+            "call-xyz",
+            reason="Stopped from Console Actions pane.",
+        )
 
 
 # =============================================================================

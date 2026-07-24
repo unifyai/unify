@@ -1226,6 +1226,17 @@ class ProactiveSpeechControl(Event):
 
 
 @dataclass
+class ActionStopRequested(Event):
+    """Console (or other UI) requested stop of an in-flight act by calling_id."""
+
+    topic: ClassVar[str | None] = "app:comms:action_stop"
+
+    calling_id: str
+    reason: str = ""
+    source: str = ""
+
+
+@dataclass
 class EmailReceived(Event):
     """An email was received from a contact.
 
