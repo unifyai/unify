@@ -460,6 +460,77 @@ def test_sync_fails_when_write_verification_mismatches(monkeypatch, caplog) -> N
     assert "Provider integration write verification mismatch" in caplog.text
 
 
+def test_one_app_mismatch_does_not_block_sibling_app_sync(monkeypatch) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-1",
+            "canonical_app_slug": "hubspot",
+            "status": "connected",
+            "backend_id": "composio",
+        },
+        {
+            "connection_id": "conn-2",
+            "canonical_app_slug": "slack",
+            "status": "connected",
+            "backend_id": "composio",
+        },
+    ]
+    client.results = [
+        MOCK_TOOL,
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:slack:send_message",
+            "provider_app_id": "slack",
+            "provider_tool_id": "send_message",
+            "canonical_name": "primitives.integrations.slack.send_message",
+            "function_manager_name": "primitives_integrations__slack__send_message",
+            "app_slug": "slack",
+            "app_display_name": "Slack",
+            "connection_id": "conn-2",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+    # Slack's write never verifies; hubspot's does. A single flaky app must
+    # not stop hubspot from being synced and hash-stamped in the same call.
+    fm._count_provider_integration_rows_for_app = lambda **kwargs: (
+        0 if kwargs.get("app_slug") == "slack" else 1
+    )
+
+    result = fm.sync_provider_integration_tools()
+
+    assert result["status"] == "error"
+    assert result["error"]["code"] == "provider_write_verification_mismatch"
+    assert result["errors"] == [
+        {
+            "key": "composio:slack",
+            "code": "provider_write_verification_mismatch",
+            "message": (
+                "Provider integration write verification mismatch "
+                "key=composio:slack expected_rows=1 observed_rows=0"
+            ),
+        },
+    ]
+    assert result["apps"] == [
+        {"key": "composio:hubspot", "rows": 1, "rows_deleted": 0},
+    ]
+    assert {row["name"] for row in fm._inserted_rows} == {
+        "primitives.integrations.hubspot.search_contacts",
+        "primitives.integrations.slack.send_message",
+    }
+    assert "composio:hubspot" in fm._stored_hashes
+    assert "composio:slack" not in fm._stored_hashes
+
+
 def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
     client = FakeIntegrationOps()
     client.results = [
