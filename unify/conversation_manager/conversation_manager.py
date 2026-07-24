@@ -374,7 +374,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             dict,
         ] = (
             {}
-        )  # dict[int, {"handle": "SteerableTool", "query": "str", "handle_actions": []}]
+        )  # dict[int, {"handle": SteerableTool, "query": str, "calling_id": str|None, ...}]
         self.completed_actions: dict[
             int,
             dict,
@@ -3507,6 +3507,46 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not enabled:
             self._proactive_speech_gen += 1
             await self.cancel_proactive_speech()
+
+    async def stop_in_flight_action_by_calling_id(
+        self,
+        calling_id: str,
+        *,
+        reason: str = "",
+    ) -> bool:
+        """Stop the in-flight act whose ManagerMethod ``calling_id`` matches.
+
+        Console Live Actions identifies roots by EventBus ``calling_id`` (UUID).
+        CM steering uses integer ``handle_id``; this bridges the two.
+        """
+        if not calling_id:
+            return False
+
+        for handle_id, handle_data in list(self.in_flight_actions.items()):
+            handle = handle_data.get("handle")
+            stored = handle_data.get("calling_id") or getattr(
+                handle,
+                "_manager_call_id",
+                None,
+            )
+            if stored != calling_id:
+                continue
+
+            stop_reason = reason or "Stopped from Console Actions pane."
+            handle_data.setdefault("handle_actions", []).append(
+                {
+                    "action_name": f"stop_{handle_id}",
+                    "query": stop_reason,
+                    "timestamp": prompt_now(),
+                },
+            )
+            if handle is not None:
+                await handle.stop(reason=stop_reason)
+            stopped = self.in_flight_actions.pop(handle_id, None)
+            if stopped is not None:
+                self.completed_actions[handle_id] = stopped
+            return True
+        return False
 
     async def _proactive_speech_loop(self, gen: int = 0):
         _log = self._proactive_logger

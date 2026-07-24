@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-src="$(cd "$(dirname "$0")" && pwd)"
+src="$(cd "$(dirname "$0")/.." && pwd)"
 parent="$(dirname "$src")"
 
 tmpdir=$(mktemp -d)

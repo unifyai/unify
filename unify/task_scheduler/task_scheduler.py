@@ -162,6 +162,16 @@ def _missing_certification_value(value: Any) -> bool:
 _UNSET = _UnsetSentinel()
 
 
+class StaleActivationSuperseded(Exception):
+    """A scheduled activation no longer matches the task definition's slot.
+
+    Raised when the definition's ``schedule.start_at`` moved after the
+    activation was projected (re-arm on a concurrent run start, manual
+    re-arm, reconcile jitter). The activation is superseded — the run is a
+    benign no-op and must never terminalize the definition row.
+    """
+
+
 class TaskScheduler(BaseTaskScheduler):
     """Concrete scheduler backed by the Tasks context."""
 
@@ -851,8 +861,8 @@ class TaskScheduler(BaseTaskScheduler):
             provenance.scheduled_for,
         )
         if task_scheduled_for != provenance_scheduled_for:
-            raise ValueError(
-                "Scheduled activation does not match selected task instance: "
+            raise StaleActivationSuperseded(
+                "Scheduled activation superseded by re-armed task definition: "
                 f"task_id={task.task_id}, instance_id={task.instance_id}, "
                 f"task_start_at={task_scheduled_for}, "
                 f"activation_scheduled_for={provenance_scheduled_for}.",

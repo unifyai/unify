@@ -62,7 +62,10 @@ from unify.task_scheduler.machine_state import (
     TaskRunProvenance,
     remember_live_task_run_provenance,
 )
-from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import (
+    StaleActivationSuperseded,
+    TaskScheduler,
+)
 from unify.task_scheduler.provider_event_context import (
     fetch_provider_event_context,
     provider_event_context_as_untrusted_data,
@@ -309,7 +312,14 @@ def _update_task_run(
 
 
 def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
-    """Mark the source task row failed when scheduler finalization did not run."""
+    """Terminalize the source task row when scheduler finalization did not run.
+
+    One-shot definitions are marked ``failed``. Recurring/triggerable
+    definitions are restored to their open slot (``scheduled`` /
+    ``triggerable``) instead — a single crashed, killed, or timed-out
+    occurrence must never disarm the schedule (the failure itself is
+    recorded on the Tasks/Executions run row).
+    """
 
     if config.mode == "function" or config.source_task_log_id <= 0:
         return
@@ -326,10 +336,18 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
         entries = dict(row.entries or {})
         if str(entries.get("status") or "") != "active":
             return
+        is_recurring = entries.get("repeat") is not None
+        is_triggerable = entries.get("trigger") is not None and not is_recurring
+        if is_recurring:
+            new_status = "scheduled"
+        elif is_triggerable:
+            new_status = "triggerable"
+        else:
+            new_status = "failed"
         scheduler._write_log_entries(  # type: ignore[attr-defined]
             logs=config.source_task_log_id,
             entries={
-                "status": "failed",
+                "status": new_status,
                 "info": _truncate_text(
                     "Offline task runner failed before task lifecycle finalization "
                     f"completed: {error_text}",
@@ -795,6 +813,32 @@ def main() -> int:
     )
     try:
         asyncio.run(_execute_offline_task(config))
+    except StaleActivationSuperseded as exc:
+        # The definition's schedule moved after this activation was
+        # projected (re-arm on a concurrent run start, manual re-arm,
+        # overdue catch-up heads). Nothing to run — finalize the run row
+        # as a benign no-op and leave the definition untouched.
+        LOGGER.info(
+            "Offline task runner skipping superseded activation for task %s "
+            "(run_key=%s): %s",
+            config.task_id,
+            config.run_key,
+            exc,
+        )
+        _update_task_run(
+            config.assistant_id,
+            config.run_key,
+            source_task_log_id=config.source_task_log_id,
+            updates={
+                "state": "completed",
+                "completed_at": _now_iso(),
+                "error": None,
+                "result_summary": _truncate_text(
+                    f"Skipped: stale activation superseded by re-armed schedule. {exc}",
+                ),
+            },
+        )
+        return 0
     except Exception as exc:
         error_text = _truncate_text(traceback.format_exc())
         LOGGER.exception(

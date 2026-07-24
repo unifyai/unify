@@ -11,7 +11,7 @@ Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first for the system design. This file
 Unify implements an AI assistant's brain as a **distributed back office**. A central `Actor` orchestrates specialized **state managers** (`ContactManager`, `KnowledgeManager`, `TaskScheduler`, `TranscriptManager`, `GuidanceManager`, `FunctionManager`, ...) through code-first plans. Most public manager methods run inside an **async LLM tool loop** and return a **steerable handle** that supports `ask`, `interject`, `pause`, `resume`, `stop` — all the way down the nesting tree. Typed catalogues such as Knowledge and Guidance expose direct CRUD/lifecycle methods as Actor JSON tools (`KnowledgeManager_*`, `GuidanceManager_*`) rather than NL tool loops or `primitives.*`.
 
 Sibling repos consumed via editable installs (see `[tool.uv.sources]` in `pyproject.toml`):
-- **`unify`** — Python SDK wrapping the Orchestra REST API
+- **`unisdk`** — Python SDK wrapping the Orchestra REST API
 - **`unillm`** — LLM client with caching, provider normalization, observability
 
 The open agent runtime (`unify`, `unisdk`, `unillm`) talks to the **hosted Orchestra backend** (`ORCHESTRA_URL`, default `https://api.unify.ai/v0`). `orchestra` and `console` are private/hosted and are not part of the open-source repo set.
