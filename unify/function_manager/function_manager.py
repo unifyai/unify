@@ -2826,32 +2826,49 @@ class FunctionManager(BaseFunctionManager):
         *,
         backend_id: str | None,
         app_slug: str,
+        expected_rows: int | None = None,
     ) -> int | None:
-        """Count materialized provider-backed rows for one app."""
+        """Count materialized provider-backed rows for one app.
+
+        This is a re-read of a batch we may have just inserted, so for large
+        apps (GitHub alone is ~900 rows) the count can briefly undercount
+        before the write is fully visible. When *expected_rows* is given,
+        retry a few times with a short delay before accepting a mismatch.
+        """
+        import time as _time  # local import to avoid polluting module namespace
+
         filter_expr = self._provider_integration_filter(
             backend_id=backend_id or "provider",
             app_slug=app_slug,
         )
-        try:
-            rows = unisdk.get_logs(
-                context=self._primitives_ctx,
-                filter=filter_expr,
-                exclude_fields=list_private_fields(self._primitives_ctx),
-            )
-            return len(rows or [])
-        except Exception as exc:
-            log_staging_diagnostic(
-                logger,
-                (
-                    "Provider integration write verification failed "
-                    "backend_id=%s app_slug=%s error=%s"
-                ),
-                backend_id or "provider",
-                app_slug,
-                exc,
-                level=logging.WARNING,
-            )
-            return None
+        observed: int | None = None
+        for attempt, delay in enumerate((0.0, 0.25, 0.5)):
+            if delay:
+                _time.sleep(delay)
+            try:
+                rows = unisdk.get_logs(
+                    context=self._primitives_ctx,
+                    filter=filter_expr,
+                    exclude_fields=list_private_fields(self._primitives_ctx),
+                )
+                observed = len(rows or [])
+            except Exception as exc:
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration write verification failed "
+                        "backend_id=%s app_slug=%s attempt=%d error=%s"
+                    ),
+                    backend_id or "provider",
+                    app_slug,
+                    attempt + 1,
+                    exc,
+                    level=logging.WARNING,
+                )
+                observed = None
+            if expected_rows is None or observed == expected_rows:
+                return observed
+        return observed
 
     def sync_provider_integration_tools(
         self,
@@ -3281,10 +3298,10 @@ class FunctionManager(BaseFunctionManager):
                     },
                 )
                 continue
-            # ponytail: full get_logs re-read to count; swap for cheap count API.
             observed_rows = self._count_provider_integration_rows_for_app(
                 backend_id=backend_id,
                 app_slug=item_app,
+                expected_rows=len(rows),
             )
             if observed_rows is None or observed_rows != len(rows):
                 message = (
