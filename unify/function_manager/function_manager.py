@@ -3016,6 +3016,7 @@ class FunctionManager(BaseFunctionManager):
         changed_apps: list[dict[str, Any]] = []
         unchanged_apps: list[dict[str, Any]] = []
         removed_apps: list[str] = []
+        sync_errors: list[dict[str, Any]] = []
 
         if normalized_app and operation == "cleanup":
             # Rows are connection-agnostic catalogue entries, so a single
@@ -3270,18 +3271,16 @@ class FunctionManager(BaseFunctionManager):
                     len(rows),
                     exc,
                 )
-                return {
-                    "status": "error",
-                    "error": {
+                sync_errors.append(
+                    {
+                        "key": key,
                         "code": "provider_primitive_insert_failed",
                         "message": (
                             f"Failed to insert provider primitives for {key}: {exc}"
                         ),
                     },
-                    "apps": changed_apps,
-                    "unchanged_apps": unchanged_apps,
-                    "removed_apps": removed_apps,
-                }
+                )
+                continue
             # ponytail: full get_logs re-read to count; swap for cheap count API.
             observed_rows = self._count_provider_integration_rows_for_app(
                 backend_id=backend_id,
@@ -3294,16 +3293,14 @@ class FunctionManager(BaseFunctionManager):
                     f"observed_rows={observed_rows}"
                 )
                 logger.error(message)
-                return {
-                    "status": "error",
-                    "error": {
+                sync_errors.append(
+                    {
+                        "key": key,
                         "code": "provider_write_verification_mismatch",
                         "message": message,
                     },
-                    "apps": changed_apps,
-                    "unchanged_apps": unchanged_apps,
-                    "removed_apps": removed_apps,
-                }
+                )
+                continue
             new_hashes[key] = expected_hash
             changed_apps.append(
                 {"key": key, "rows": len(rows), "rows_deleted": deleted},
@@ -3329,23 +3326,38 @@ class FunctionManager(BaseFunctionManager):
         if changed_apps or removed_apps:
             self._store_integration_tool_hash_by_app(new_hashes)
 
-        result = {
-            "status": "synced" if changed_apps or removed_apps else "unchanged",
-            "apps": changed_apps,
-            "unchanged_apps": unchanged_apps,
-            "removed_apps": removed_apps,
-        }
+        if sync_errors:
+            # The first failure is a real per-app error (code/message a
+            # caller can act on); `errors` carries the rest for anyone
+            # inspecting the full multi-app result.
+            result = {
+                "status": "error",
+                "error": sync_errors[0],
+                "errors": sync_errors,
+                "apps": changed_apps,
+                "unchanged_apps": unchanged_apps,
+                "removed_apps": removed_apps,
+            }
+        else:
+            result = {
+                "status": "synced" if changed_apps or removed_apps else "unchanged",
+                "apps": changed_apps,
+                "unchanged_apps": unchanged_apps,
+                "removed_apps": removed_apps,
+            }
         log_staging_diagnostic(
             logger,
             (
                 "Provider integration sync completed app_slug=%s status=%s "
-                "changed_apps=%s unchanged_apps=%s removed_apps=%s duration=%.2fs"
+                "changed_apps=%s unchanged_apps=%s removed_apps=%s errors=%s "
+                "duration=%.2fs"
             ),
             normalized_app or "-",
             result["status"],
             changed_apps,
             unchanged_apps,
             removed_apps,
+            sync_errors,
             _sync_duration(),
         )
         return result
