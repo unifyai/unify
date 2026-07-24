@@ -71,6 +71,7 @@ from unify.conversation_manager.events import (
     AssistantPresenceObserved,
     AssistantTurnInjected,
     ProactiveSpeechControl,
+    ActionStopRequested,
     UserScreenShareStarted,
     UserScreenShareStopped,
     UserRemoteControlStarted,
@@ -1972,6 +1973,48 @@ class TestSystemEvents:
             assert event.enabled is False
             assert event.source == "twin_onboarding_intro"
             assert event.reason == "cinematic_intro"
+
+    @pytest.mark.asyncio
+    async def test_handle_action_stop_event(
+        self,
+        broker,
+        mock_session_details,
+        mock_settings,
+    ):
+        """Console can request stop of an in-flight act via system events."""
+        from unify.conversation_manager.comms_manager import CommsManager
+
+        cm = CommsManager(broker)
+        cm.loop = asyncio.get_event_loop()
+
+        async with broker.pubsub() as pubsub:
+            await pubsub.psubscribe("app:comms:*")
+
+            message = create_pubsub_message(
+                "unity_system_event",
+                {
+                    "event_type": "action_stop",
+                    "message": "Stopped from Console Actions pane.",
+                    "calling_id": "call-abc-123",
+                    "source": "console",
+                    "reason": "Stopped from Console Actions pane.",
+                },
+            )
+
+            cm.handle_message(message)
+            await _wait_for_condition(lambda: message._acked)
+
+            msg = await get_message_on_channel(
+                pubsub,
+                "app:comms:action_stop",
+            )
+            assert msg is not None
+
+            event = Event.from_json(msg["data"])
+            assert isinstance(event, ActionStopRequested)
+            assert event.calling_id == "call-abc-123"
+            assert event.source == "console"
+            assert event.reason == "Stopped from Console Actions pane."
 
     @pytest.mark.asyncio
     async def test_handle_task_due_event_canonicalizes_destination(
