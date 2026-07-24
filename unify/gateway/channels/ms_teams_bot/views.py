@@ -50,6 +50,19 @@ auth_router = APIRouter()
 # registration), so no separate Teams-bot tenant env var is needed.
 _BOT_TOKEN_SCOPE = "https://api.botframework.com/.default"
 
+# Teams renders a native "AI generated" caption beneath a message when the
+# activity carries this schema.org entity. Every live assistant reply routes
+# through ``POST /send``, so attaching it there labels all AI-authored content
+# in-product (Store certification requires AI-generated content be disclosed to
+# users), without appending text or altering the message body.
+_AI_GENERATED_CONTENT_ENTITY = {
+    "type": "https://schema.org/Message",
+    "@type": "Message",
+    "@context": "https://schema.org",
+    "@id": "",
+    "additionalType": ["AIGeneratedContent"],
+}
+
 # The bot is one app registration, so a single minted token (valid ~24h)
 # authenticates every outbound send; a tiny process-local cache avoids a
 # token round-trip on each one.
@@ -281,6 +294,7 @@ async def send_ms_teams_bot_message(request: Request):
     activity = {
         "type": "message",
         "text": body,
+        "entities": [_AI_GENERATED_CONTENT_ENTITY],
     }
     endpoint = (
         f"{service_url.rstrip('/')}/v3/conversations/" f"{conversation_id}/activities"
