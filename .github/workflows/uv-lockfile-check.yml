@@ -63,12 +63,12 @@ jobs:
     # lock --check fails with "Distribution not found at file:///../unisdk"
     # because the workspace root has no `unisdk/` or `unillm/` dirs.
     - name: Checkout unify
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         path: unify
 
     - name: Checkout unisdk (sibling editable dep)
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unisdk
         path: unisdk
@@ -79,7 +79,7 @@ jobs:
         token: ${{ secrets.CLONE_TOKEN || github.token }}
 
     - name: Checkout unillm (sibling editable dep)
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unillm
         path: unillm
