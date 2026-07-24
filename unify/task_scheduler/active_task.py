@@ -541,9 +541,12 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     and not self._preserve_definition_status
                 ):
                     definition_status = final_status
-                    if final_status == "completed" and self._definition_rearmed:
+                    if self._definition_rearmed:
                         # Rearm-on-start already advanced the definition to the
-                        # next open slot; restore scheduled/triggerable status.
+                        # next open slot; restore scheduled/triggerable status
+                        # regardless of the run outcome. A failed occurrence
+                        # belongs to the run row — it must never terminalize
+                        # the recurring definition and disarm the schedule.
                         task = self._scheduler._get_task_or_raise(self._task_id)
                         definition_status = (
                             "triggerable"
