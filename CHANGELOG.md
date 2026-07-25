@@ -60,3 +60,235 @@ first tag they'll be regrouped under a `[0.1.0]` entry.
   GitHub's CVE-fired security updates as the safety net.
 
 [Unreleased]: https://github.com/unifyai/unify/commits/staging
+
+---
+
+<!-- BEGIN GENERATED RELEASE NOTES -->
+
+## Release notes
+
+Derived from the commit history of every repo behind the platform, then
+written up for the person using a droid rather than the person who built
+it. Grouped by the week the work landed.
+
+
+### Week of 20 July 2026
+
+#### Added
+
+- **Add your droid to Microsoft Teams** — Add your droid to Microsoft Teams from its settings, then open a chat and send the first message. The droid can reply in direct chats and team conversations, and setup includes a connect link plus controls to reconnect or disconnect it later. Microsoft Teams labels droid replies as AI-generated.
+- **Create offline automations from Google Workspace and Microsoft 365 events** — Droids can now create offline automations triggered by supported events in connected Google Workspace and Microsoft 365 accounts. Reconnect an account if it needs the new event permissions.
+- **Disable tasks without deleting them** — You can disable a task without deleting it. Disabled tasks stop responding to schedules and triggers until you enable them again. Recurring tasks stay scheduled after an individual run fails or is stopped.
+- **Droids can recognize speakers on calls** — Droids can use an enrolled voice sample to recognize callers and label their speech in call transcripts. On calls with several people, droids keep background participants as context while responding only to speakers involved in the conversation. If automatic voice capture cannot identify a caller, the droid can ask for a short recording after the call.
+- **Import and manage data in tables** — Import files into Data or create a new table there. You can add rows or typed columns, edit allowed cells in place, and filter or group records. Tables can also use formula fields or connect fields to an external service for reads and write-backs.
+- **Run dashboard tile actions and review results** — Dashboard tiles can now run a job or function directly from the dashboard. Tiles can show the result when it finishes, and review dashboards can display reply drafts for approval.
+- **Shared teams now have their own workspace** — Organizations can create shared teams with a workspace and team-owned droids. Teams can use rooms for messages and multiparty calls, while direct and group chats also support attachments and reactions.
+
+### Week of 13 July 2026
+
+#### Added
+
+- **A step-by-step tour of your droid** — The new onboarding checklist walks through setting up a scheduled task and testing a triggered one. It can also demonstrate work on your linked computer and show how the droid improves after a correction. You can start the tour in chat or on a call, then open each task when ready.
+- **Keep calls open while you work elsewhere** — Unify Meets lets a call stay available across the app: minimize it while you work, then bring it back to a full stage with screen sharing and live droid tiles. When more than one droid joins, they take turns speaking instead of talking over each other. Hanging up from a docked call now keeps an unsent chat draft intact.
+- **Knowledge now shows claims with their sources** — Knowledge now appears as a list of claims instead of separate tables. Filter claims by topic or status, then open their sources or related claims. Claims show confidence and warn when a source or dependency has been removed.
+
+### Week of 6 July 2026
+
+#### Added
+
+- **Choose separate models for conversations and tasks** — Each droid can now use separate models and reasoning settings for conversations and tasks. The model picker shows estimated credit use and links to benchmark results, and the droid uses the choices you save.
+- **Droids can handle more protected websites** — Browser sessions can use stealth settings and human-like mouse movement and scrolling to reduce automation detection. Droids can also make a best-effort attempt to solve supported CAPTCHA challenges, while page extraction continues if an embedded frame blocks inline expansion.
+- **Droids can send and reply from connected email accounts** — Droids can now send and reply to email through connected Gmail and Outlook accounts. Replies stay in the existing email thread and use the connected mailbox as the sender.
+
+#### Changed
+
+- **Droids keep reasoning until they need to wait** — Droids now continue with another reasoning turn when they finish without deciding to wait. Previously, a droid could stop after a turn even when it still had work to do.
+
+### Week of 29 June 2026
+
+#### Added
+
+- **Calls stay open while you move around** — A voice call now stays active as you move between pages, appearing in a small floating window until you return. Calls start with your microphone muted, and the controls show when you are speaking while muted. When a call ends, the droid can continue work that was already underway.
+- **Link a desktop to a droid** — You can link a desktop to a droid so it can run code and work on that machine when you ask it to. You can separately allow file access to your home folder; that permission can be revoked at any time, and file transfers are recorded.
+- **Outbound calls now start with the configured opening** — Droids now wait until the person speaks, or up to five seconds, before delivering the configured opening line. They also avoid repeated or fragmented replies and can resume an interrupted response.
+- **Resume Twin onboarding where you left off** — Twin onboarding now saves your progress and highlights the setup steps available next. You can continue in chat or on a call, defer a step or section, and resume later. Your droid can also pass confirmed setup work to colleague droids.
+- **Share knowledge and memory across a team** — Droids in the same team can save and use shared knowledge and memory while keeping personal information separate. Messages sent to a team droid can go into that team’s shared context, and shared entries show which droid added them.
+
+#### Changed
+
+- **A persistent workspace for each droid** — The Console now keeps navigation in place as you move between droids and their workspace views. You can switch droids reliably and resize the information panel. The Console also shows when a droid is active in external communications.
+
+### Week of 22 June 2026
+
+#### Added
+
+- **Answer droid calls in the Console** — When a droid calls you on Unify Meet, the Console now shows an Answer or Decline card. If you do not answer, the conversation returns to text. When a call ends, the Console disconnects cleanly.
+- **Browse and connect apps from the Integrations gallery** — The Integrations gallery now lets you search supported apps, connect accounts with OAuth or an API key, and see connected apps at the top. After you connect an app, its available tools are added to your droid. You can set permissions for each connected account and approve tool actions when needed.
+- **Choose which workspace files each droid can access** — Set file and folder access separately for each droid connected to Google Drive, Microsoft 365, or SharePoint. You can allow selected files, choose whether new files are available by default, and use personal or Twin-connected workspace accounts.
+- **Choose your droid’s look and voice** — When hiring a droid, you can choose its appearance, including an outfit, and preview voices from the selection list. The droid now animates while a voice preview plays. A voice you choose stays selected after reseeding and is used across calls.
+
+### Week of 15 June 2026
+
+#### Added
+
+- **Droids now include built-in skills** — Every droid now has access to a built-in skills library for tasks such as creating documents and testing websites. Existing Guidance still works, and skill files from OpenClaw or Hermes can be converted into Guidance.
+- **Trigger droid tasks through the API** — External systems can now start delegated droid tasks through the public REST API. Existing tasks created before the latest task ownership updates can also be triggered.
+
+### Week of 1 June 2026
+
+#### Fixed
+
+- **Scheduled tasks keep their destination and recover after failures** — Scheduled and event-triggered tasks now run in their intended destination, including shared spaces, and recurring runs update the correct task instance. Failed or stalled background runs can retry instead of blocking later runs, while unchanged schedules no longer create duplicate deliveries.
+
+### Week of 25 May 2026
+
+#### Added
+
+- **A pinned droid guides workspace setup** — The pinned droid walks you through workspace setup step by step, with a checklist that shows progress and current activity. It opens the relevant workspace panels as you complete each step. In organization workspaces, only the owner can view and use the droid.
+- **Connect a Slack workspace to your droids** — Organization owners and admins can connect or disconnect a shared Slack workspace from a droid’s contact details. In Slack, direct messages and channel mentions can reach a droid by name or ID, and channel replies stay in the same thread.
+- **Droids can solve reCAPTCHA v2 challenges in browser sessions** — Droids can now solve visible reCAPTCHA v2 challenges during hosted browser sessions and continue the page’s normal submit flow.
+- **Droids can use semantic reasoning in code and saved functions** — Droids can now use semantic reasoning inside generated Python and saved functions when a task needs judgment instead of deterministic code. Saved functions now use their own dependency environments, and droids can replace older functions when they create a combined version. Function guidance and searches also work reliably with larger function libraries.
+
+#### Changed
+
+- **CSV and knowledge ingestion recovers more safely** — CSV ingestion now handles retries, resumed jobs, and duplicate deliveries without adding the same rows twice. Jobs left unfinished can recover automatically, and single-row knowledge updates use the correct update path.
+- **New accounts receive $100 in signup credit** — New accounts now receive $100 in one-time promotional credit after completing onboarding. Previously, the signup credit was $50.
+- **Set recurring tasks to run every minute or hour** — Recurring tasks can now run at minute- and hour-based intervals, such as every 30 minutes. Scheduled and triggered tasks also keep their run history and repeat schedule when they run in the background or on a local installation.
+- **Voice calls keep better context** — Droids can explain why they are calling when the caller asks. They also avoid repeating the same response and keep track of other people introduced during the call.
+
+#### Fixed
+
+- **Contact and conversation setup now syncs correctly** — Contacts and Conversations now synchronize their required setup correctly. If setup is still pending or has failed, the droid tells you instead of treating it as ready.
+
+### Week of 18 May 2026
+
+#### Added
+
+- **Connect services from a droid’s Integrations tab** — Each droid now has an Integrations tab, where you can add supported service connections and manage their credentials. New connections are available for more services, and HubSpot can sync more CRM and content data. OAuth connections now keep refreshed credentials available when the droid uses them.
+- **Group droids into shared workspaces** — The sidebar now groups droids by shared workspace and marks droids that belong to more than one. In Memory, switch between personal context and a shared workspace; chat history and search show only messages from the droid you selected.
+
+#### Changed
+
+- **Keep calls in chat or move them to a window** — Active voice calls now open in the chat area, so the side panel stays visible. Use the pop-out control to move a call into a floating window, then dock it back when you want.
+
+### Week of 11 May 2026
+
+#### Added
+
+- **Pay monthly for droid usage** — Metered accounts can keep using droids with a zero wallet balance. Usage appears on a monthly invoice instead of coming from prepaid credits. The Billing page shows usage and invoices.
+
+#### Fixed
+
+- **Droids stay active during long-running work** — Droids now keep the conversation active while code or tools run for a long time, instead of being treated as idle. They also report occasional progress, and in-process Python code now follows the same execution time limit as other code runs.
+
+### Week of 27 April 2026
+
+#### Added
+
+- **Connect your Gmail or Microsoft 365 mailbox to a droid** — You can connect your own Gmail or Microsoft 365 mailbox so a droid can send and receive email. Droids can include attachments in outgoing Microsoft 365 messages. When you disconnect a Gmail mailbox, the droid stops monitoring it for new mail.
+- **Create and share live-data dashboards** — Droids can now create dashboards that query live data, including joined data and calculated totals. You can share or embed a dashboard with its link. Tiles can run actions, and dashboards can be downloaded.
+- **Droids can create Microsoft Teams chats and channels** — Droids can now send and receive Microsoft Teams messages in chats and channels, including attachments. They can create a new chat or channel when an existing conversation does not fit. Incoming messages include readable text and conversation context, while duplicate deliveries are ignored.
+- **Droids can follow up on stalled conversations** — Droids can now detect when a conversation has gone quiet and send a follow-up based on its context. They will not send follow-ups for local droids.
+- **Droids can join Microsoft Teams meetings** — Droids can now create and join Microsoft Teams meetings. They can speak during a meeting and leave when it ends.
+- **Make and receive WhatsApp calls** — Your droid can now make and receive calls through WhatsApp. It avoids placing the same outbound call twice and records call transcripts more reliably. Phone-number verification now uses the phone type you selected.
+- **Run droid tasks on a schedule or when an email arrives** — Droids can now run tasks on a schedule or when an email arrives. Scheduled tasks can run during a live conversation or in the background while the droid is offline.
+
+#### Changed
+
+- **Keep chat open beside another workspace view** — You can split the assistant workspace into two resizable panes, keeping Chat open beside another view. The workspace remembers the layout and marks unread messages when Chat is hidden. You can copy messages, and long conversations now stay responsive while you type.
+
+#### Fixed
+
+- **Droid desktops recover without losing workspace files** — Droids now retry a fresh desktop when startup fails or an active desktop stops responding. Restarts and cleanup no longer leave stale sessions blocking the next assignment, and workspace files are preserved when a desktop is recycled.
+
+### Week of 13 April 2026
+
+#### Added
+
+- **Inspect droid memory and task activity** — Memory now has its own view, so you can search and inspect the information a droid has stored, including conversation records and knowledge. A separate Tasks view shows configured work and activity, with plain-language status details for tasks that are ready or running. Open any row to view its full contents and copy a field when needed.
+- **Use your droid in Discord** — Connect a droid to Discord and manage its Discord contacts from the droid’s settings. It can reply in direct messages and shared channels, while keeping conversations in sync and ignoring duplicate messages.
+
+#### Changed
+
+- **Send attachments in WhatsApp messages** — WhatsApp messages to and from droids can now include media attachments. WhatsApp routing now supports droids used personally or through an organization. If WhatsApp’s 24-hour reply window has closed, the droid retries the original message after the recipient replies.
+
+### Week of 6 April 2026
+
+#### Added
+
+- **Search past conversation messages** — Search the full conversation history by message text, medium, sender, attachment type, or date. Open a result to jump to that message and browse messages before or after it, then return to the present conversation.
+- **Use your droid in Google Meet calls** — Droids can join Google Meet calls again, with screen sharing and awareness of the meeting view. They join more reliably, track who is speaking and who enters or leaves, and can leave when asked.
+
+### Week of 30 March 2026
+
+#### Added
+
+- **Droids can ingest messy data and share it in chat** — Droids can now bulk-ingest structured data and infer column types before loading it. Values that do not match a column’s type are stored as empty values. Droids can also create shareable interactive tables and charts that appear directly in chat.
+- **Droids check each screen before moving on** — During voice screen-share walkthroughs, droids use the current screen and respond after each desktop action. They give one step at a time and check the screen before saying an action worked.
+- **Manage your droid’s contact details** — You can now add and manage contact details for your droid, including WhatsApp. Phone numbers are verified before use, and communication tools appear only when the required contact detail is saved.
+
+#### Changed
+
+- **Voice calls start sooner** — Voice calls now connect and begin speaking sooner. While a call connects, the droid’s profile photo appears with a spinning ring, and you can mute the ringtone. Ending a call now releases the microphone and closes the call cleanly.
+
+#### Fixed
+
+- **Droids recover more reliably after startup problems** — Droids now avoid starting duplicate runtimes when several messages or wake-ups arrive together. If a runtime or desktop setup fails, Unify can replace stalled work and retry the assignment instead of sending messages to a stopped droid.
+
+### Week of 23 March 2026
+
+#### Added
+
+- **Droids can save reusable functions during a task** — Droids can now save reusable functions while they work, without stopping the current task. They can also delete saved functions when asked. Functions that use external packages are saved with an associated environment, and functions can import code from nearby files.
+- **Files stay available across droid sessions** — Files you exchange with a droid are saved for later use instead of disappearing when a session ends. When the droid’s desktop starts, its persistent files sync before the droid uses them.
+- **More reliable desktop clicks and keyboard control** — Your droid can now press more keys and key combinations during a desktop session. It handles simple direct actions faster and can check its work during longer multi-step tasks when needed. Screenshots show the latest desktop state, and clicks use the same coordinates as the image the droid sees.
+
+### Week of 16 March 2026
+
+#### Added
+
+- **Claude 4.6, larger contexts, and safer images** — Droids can now use Claude 4.6 models and supported Anthropic models with up to a million tokens of context. Screenshots and images that exceed Anthropic’s size limits are resized or compressed before they are sent, instead of causing the request to fail.
+- **Manage several browser and desktop sessions** — Browser windows are numbered and labeled, so a droid can return to the right one or close a specific session. Canceling a remote browser or desktop action now stops it instead of letting it continue in the background.
+
+#### Changed
+
+- **Voice conversations wait for a real pause before responding** — The droid now keeps listening through short pauses in continuous dictation and uses the previous utterance to interpret follow-up fragments. It prioritizes new actionable instructions over stale background work, and gives progress or clarification updates without repeating old notifications.
+
+### Week of 9 March 2026
+
+#### Changed
+
+- **Droids can continue longer tasks** — Droids can now continue long-running work when their working context fills up. Before they compress earlier context, they save reusable skills and recovery lessons for later steps.
+- **Droids show their assumptions and missing sources** — Droids now break uncertain browser, UI, and unfamiliar API work into smaller steps and check each one before continuing. When they make a judgment call, they can list the assumptions they used. If an external source is unavailable, they report the gap instead of inventing records or citations.
+- **Droids start faster and respond sooner** — Your first action no longer waits for setup that used to add several seconds. Droids also process screenshots after responding, rather than holding up the response.
+
+### Week of 23 February 2026
+
+#### Added
+
+- **Attach files up to 25 MB in chat** — You can attach files up to 25 MB to a message, and droids can access their contents when they reply. Attachments stay in the chat history with their filenames and can be downloaded from the conversation.
+- **Droids can delegate and steer long-running work** — Droids can now hand focused, longer-running tasks to subagents that share the relevant computer environment and conversation context. They can check progress, send new instructions, or stop work while it runs. Completed results stay available for follow-up questions, and droids can choose a model for delegated work.
+- **Droids can see your webcam and shared screen in voice calls** — In a live voice call, a droid can use your webcam and shared-screen video when you ask about what it sees. It keeps relevant screenshots available during the call and clears visual context when you stop sharing, so it does not rely on an old view.
+- **Droids can speak up during calls** — Droids now greet callers and can share messages from call participants or updates on work in progress. They avoid repeating queued messages and wait to confirm work is complete before saying so.
+- **Droids can use your browser or desktop** — Droids can now use a managed browser or the full desktop. They can inspect the screen, use the clipboard, and recognise when you take remote control during a live session.
+- **Follow a droid’s actions as they happen** — You can follow a droid’s work in a live, ordered timeline with clear action labels, nested steps, and progress updates. Choose a time range, expand or collapse steps, view multi-line content and code, and open linked nested work or reusable skills.
+- **Sign in with your email and password** — You can now create an account and sign in with a verified email address and password. The sign-in page includes password reset, and changing your password signs out existing sessions. Invited members can accept an invitation during onboarding and set up multi-factor authentication when their organization requires it.
+
+#### Changed
+
+- **Droids stay available during longer tasks** — Droids now retain access to their tools and working environment throughout a task. They no longer shut down while they are still working internally, and waking a sleeping droid now starts its job.
+- **Reusable functions now work across droid sessions** — Droids can now find and run reusable functions that call other functions or use available tools, including in stateless sessions and nested droid work. After a task, droids can review the work in the background and save reusable functions or guidance without delaying the result.
+- **Your droid keeps more of the conversation** — Your droid now carries up to 100 recent messages across calls, texts, emails, and other conversations, including after it restarts. It also keeps clarification questions and completed task details available for follow-ups, rather than repeating an earlier question or starting over.
+
+### Week of 16 February 2026
+
+#### Added
+
+- **Ask droids about JPEG and PNG files** — Droids can now inspect JPEG and PNG files and answer questions about what they show. This works for screenshots and other image files stored in your files.
+- **Automations can pause and resume later** — Conversation automations can now wait for a set amount of time before continuing. They can also keep the same session context when a multi-step walkthrough resumes.
+
+#### Changed
+
+- **Lower default droid usage prices** — Droid usage now uses a lower default price margin. Charges based on LLM costs are now set at 2× the underlying cost instead of 5×.
+
+<!-- END GENERATED RELEASE NOTES -->
