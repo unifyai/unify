@@ -59,9 +59,9 @@ class ConversationSettings(BaseSettings):
             construction so rotating quick tunnels take effect immediately.
     """
 
-    FAST_BRAIN_MODEL: str = "gpt-5.4-mini@openai"
+    FAST_BRAIN_MODEL: str = "openai/gpt-5.4-mini@openrouter"
     FAST_BRAIN_REASONING_EFFORT: str = "low"
-    SLOW_BRAIN_MODEL: str = "gpt-5.6-terra@openai"
+    SLOW_BRAIN_MODEL: str = "openai/gpt-5.6-terra@openrouter"
     SLOW_BRAIN_REASONING_EFFORT: str = "high"
     FAST_BRAIN_CONTEXT_WINDOW: int = 50
     IMPL: str = "real"

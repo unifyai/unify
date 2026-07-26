@@ -341,8 +341,13 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
         kind="capability",
         credentials=(
             CredentialSpec(
+                "OPENROUTER_API_KEY",
+                "OpenRouter API key for *@openrouter model calls",
+                required=False,
+            ),
+            CredentialSpec(
                 "OPENAI_API_KEY",
-                "OpenAI API key for local model calls",
+                "OpenAI API key for native *@openai model calls",
                 required=False,
             ),
             CredentialSpec(

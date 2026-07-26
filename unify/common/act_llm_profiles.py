@@ -31,12 +31,12 @@ GPT_5_5_HIGH_ACT_LLM_PROFILE = "gpt_5_5_high"
 _MINIMAX_PRICE_BASELINE = (
     "Baseline profile. Uses the actor's configured model: the assistant's "
     "per-assistant default model when one is set, otherwise the platform "
-    "default (normally gpt-5.6-sol@openai at high reasoning effort). The "
+    "default (normally openai/gpt-5.6-sol@openrouter at high reasoning effort). The "
     "platform Sol registry rate is about $5/M input tokens and $30/M output "
     "tokens; cheaper options such as MiniMax M3 cost substantially less."
 )
 _GPT_5_5_PRICE = (
-    "Premium OpenAI profile. gpt-5.5@openai is about $5/M input tokens and "
+    "Premium OpenAI profile. openai/gpt-5.5@openrouter is about $5/M input tokens and "
     "$30/M output tokens, roughly 17x the MiniMax input-token rate and "
     "25x the MiniMax output-token rate before accounting for any extra "
     "reasoning/output tokens used by higher effort."
@@ -57,7 +57,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
     ),
     "gpt_5_5_low": ActLLMProfile(
         name="gpt_5_5_low",
-        model="gpt-5.5@openai",
+        model="openai/gpt-5.5@openrouter",
         reasoning_effort="low",
         description=(
             "Use GPT-5.5 with low reasoning effort for premium-model quality "
@@ -67,7 +67,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
     ),
     "gpt_5_5_medium": ActLLMProfile(
         name="gpt_5_5_medium",
-        model="gpt-5.5@openai",
+        model="openai/gpt-5.5@openrouter",
         reasoning_effort="medium",
         description=(
             "Use GPT-5.5 with medium reasoning effort for difficult work that "
@@ -77,7 +77,7 @@ ACT_LLM_PROFILES: dict[str, ActLLMProfile] = {
     ),
     GPT_5_5_HIGH_ACT_LLM_PROFILE: ActLLMProfile(
         name=GPT_5_5_HIGH_ACT_LLM_PROFILE,
-        model="gpt-5.5@openai",
+        model="openai/gpt-5.5@openrouter",
         reasoning_effort="high",
         description=(
             "Use GPT-5.5 with high reasoning effort when the user explicitly "

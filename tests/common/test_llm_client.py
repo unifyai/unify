@@ -75,7 +75,7 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
         new_slow_brain_llm_client(origin="ConversationManager")
         mock_async.assert_called_once_with(
-            "gpt-5.6-terra@openai",
+            "openai/gpt-5.6-terra@openrouter",
             reasoning_effort="high",
             stateful=False,
             origin="ConversationManager",
@@ -83,12 +83,12 @@ def test_new_slow_brain_llm_client_uses_terra_high_by_default() -> None:
 
 
 def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
-    SESSION_DETAILS.assistant.slow_brain_model = "gpt-5.6-luna@openai"
+    SESSION_DETAILS.assistant.slow_brain_model = "openai/gpt-5.6-luna@openrouter"
     SESSION_DETAILS.assistant.slow_brain_reasoning_effort = "low"
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
         new_slow_brain_llm_client(origin="ConversationManager")
         mock_async.assert_called_once_with(
-            "gpt-5.6-luna@openai",
+            "openai/gpt-5.6-luna@openrouter",
             reasoning_effort="low",
             stateful=False,
             origin="ConversationManager",
@@ -97,12 +97,12 @@ def test_new_slow_brain_llm_client_uses_assistant_slow_brain() -> None:
 
 def test_new_llm_client_uses_assistant_default_model_and_effort() -> None:
     """The assistant default pins model and overrides call-site effort."""
-    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
+    SESSION_DETAILS.assistant.default_model = "openai/gpt-5.5@openrouter"
     SESSION_DETAILS.assistant.default_reasoning_effort = "low"
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
         new_llm_client(reasoning_effort="high")
         mock_async.assert_called_once_with(
-            "gpt-5.5@openai",
+            "openai/gpt-5.5@openrouter",
             reasoning_effort="low",
             stateful=False,
             origin=None,
@@ -125,7 +125,7 @@ def test_new_llm_client_without_effort_keeps_call_site_effort() -> None:
 
 def test_new_llm_client_explicit_model_bypasses_assistant_default() -> None:
     """Call sites pinning a model (fast brain, profiles) are untouched."""
-    SESSION_DETAILS.assistant.default_model = "gpt-5.5@openai"
+    SESSION_DETAILS.assistant.default_model = "openai/gpt-5.5@openrouter"
     SESSION_DETAILS.assistant.default_reasoning_effort = "low"
     with patch("unify.common.llm_client.unillm.AsyncUnify") as mock_async:
         new_llm_client("claude-4.8-opus@anthropic", reasoning_effort="high")

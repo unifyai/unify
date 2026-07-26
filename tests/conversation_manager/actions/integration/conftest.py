@@ -64,7 +64,7 @@ def pytest_configure(config) -> None:
     os.environ["UNITY_WEB_ENABLED"] = "false"
     os.environ["UNITY_MEMORY_ENABLED"] = "false"
 
-    # Production actor/model defaults (gpt-5.6-sol@openai) come from SETTINGS.
+    # Production actor/model defaults (openai/gpt-5.6-sol@openrouter) come from SETTINGS.
 
     # Ensure NEW marker comparisons are stable in tests.
     os.environ.setdefault("UNITY_INCREMENTING_TIMESTAMPS", "true")
