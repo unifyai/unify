@@ -3155,46 +3155,40 @@ class CommsPrimitives:
         self,
         *,
         content: str,
-        contact_id: int | str,
+        contact_id: int | str | None = None,
         attachment_filepath: str | None = None,
         team_id: int | None = None,
         group_id: int | None = None,
     ) -> dict[str, Any]:
-        """Send an assistant-owned Unify inbox message to one contact.
+        """Send an assistant-owned Unify Console chat message.
 
-        Use this when the assistant should message someone inside the Unify
-        product rather than over an external channel like SMS or email. The
-        recipient must already exist as a contact. You may include one local
-        file attachment, which will be uploaded first and then referenced from
-        the outbound message and transcript history.
+        Destination must be exactly one of ``contact_id``, ``team_id``, or
+        ``group_id``:
 
-        ``contact_id`` must be the integer id of an existing contact record.
-        Shared-team routing tokens such as ``team:80`` are for memory and
-        task destinations only; they are not valid here.
+        - ``contact_id``: private 1:1 with that human contact. Peer-assistant
+          contacts are rejected (use a team/group room instead).
+        - ``team_id``: that team's group chat (visible to every member).
+        - ``group_id``: that org chat group room.
 
-        Team / org-group chat: when an inbound Unify message carries a
-        ``team_id`` or ``group_id`` in its context, it was posted in that
-        room, which every member (human and AI) can read — like a large email
-        CC chain. To reply IN THAT ROOM, pass the same ``team_id`` or
-        ``group_id`` here; the message is then visible to the whole room.
-        Without either, the reply goes to the contact's private 1:1 thread
-        instead. Room replies do not support attachments. If both are set,
-        ``group_id`` is preferred.
+        ``contact_id`` must be an integer contact id when used. Shared-team
+        routing tokens such as ``team:80`` are for memory and task
+        destinations only; they are not valid here.
+
+        Room sends do not support attachments.
 
         Parameters
         ----------
         content : str
             Message body to send through the Unify platform.
-        contact_id : int | str
-            Integer contact id for the recipient. Not a ``team:<id>`` token.
+        contact_id : int | str | None, optional
+            Human contact id for a private 1:1. Mutually exclusive with
+            ``team_id`` / ``group_id``.
         attachment_filepath : str | None, optional
-            Workspace-local file path for one attachment to upload and include.
+            Workspace-local file path for one attachment (1:1 only).
         team_id : int | None, optional
-            Post into this team's group chat instead of the 1:1 thread. Use
-            the ``team_id`` from the inbound message context.
+            Team group-chat destination from inbound room context.
         group_id : int | None, optional
-            Post into this org chat group instead of the 1:1 thread. Use the
-            ``group_id`` from the inbound message context.
+            Org chat-group destination from inbound room context.
 
         Returns
         -------
@@ -3202,47 +3196,75 @@ class CommsPrimitives:
             ``{"status": "ok"}`` on success, or an error payload describing
             why the message or attachment flow failed.
         """
-        contact_id = _coerce_contact_id(contact_id)
+        destination_error = comms_utils._unify_destination_error(
+            None if contact_id is None else _coerce_contact_id(contact_id),
+            team_id,
+            group_id,
+        )
+        if destination_error:
+            return {"error": destination_error}
+
+        normalized_contact_id = (
+            None if contact_id is None else _coerce_contact_id(contact_id)
+        )
         content = normalize_outbound_plain_text(content)
         if (team_id is not None or group_id is not None) and attachment_filepath:
             return {
                 "error": "Team/group chat messages do not support attachments. "
                 "Send the attachment to individual contacts instead.",
             }
-        offline_reservation, offline_response = self._reserve_offline_operation(
-            method_name="send_unify_message",
-            medium=Medium.UNIFY_MESSAGE,
-            target_kind="contact",
-            target_metadata={
-                "contact_id": contact_id,
-                "attachment_filepath": attachment_filepath or "",
-            },
-            contact_id=contact_id,
-        )
-        if offline_response is not None:
-            return offline_response
-        contact = self._get_contact(contact_id=contact_id)
-        topic = "app:comms:unify_message_sent"
 
-        if contact:
-            outbound_error = self._check_outbound_allowed(contact)
-            if outbound_error:
-                return await self._surface_comms_error(
-                    outbound_error,
-                    topic,
-                    contact_id=contact_id,
-                    medium=Medium.UNIFY_MESSAGE,
-                    offline_reservation=offline_reservation,
-                    attempted_content=content,
-                    receiver_ids=[contact_id],
-                    target_metadata={
-                        "contact_id": contact_id,
-                        "attachment_filepath": attachment_filepath or "",
-                    },
-                    history_metadata={
-                        "contact_display_name": _get_contact_display_name(contact),
-                    },
-                )
+        topic = "app:comms:unify_message_sent"
+        contact: dict | None = None
+        offline_reservation = None
+
+        if normalized_contact_id is not None:
+            offline_reservation, offline_response = self._reserve_offline_operation(
+                method_name="send_unify_message",
+                medium=Medium.UNIFY_MESSAGE,
+                target_kind="contact",
+                target_metadata={
+                    "contact_id": normalized_contact_id,
+                    "attachment_filepath": attachment_filepath or "",
+                },
+                contact_id=normalized_contact_id,
+            )
+            if offline_response is not None:
+                return offline_response
+            contact = self._get_contact(contact_id=normalized_contact_id)
+            if contact:
+                outbound_error = self._check_outbound_allowed(contact)
+                if outbound_error:
+                    return await self._surface_comms_error(
+                        outbound_error,
+                        topic,
+                        contact_id=normalized_contact_id,
+                        medium=Medium.UNIFY_MESSAGE,
+                        offline_reservation=offline_reservation,
+                        attempted_content=content,
+                        receiver_ids=[normalized_contact_id],
+                        target_metadata={
+                            "contact_id": normalized_contact_id,
+                            "attachment_filepath": attachment_filepath or "",
+                        },
+                        history_metadata={
+                            "contact_display_name": _get_contact_display_name(contact),
+                        },
+                    )
+        else:
+            offline_reservation, offline_response = self._reserve_offline_operation(
+                method_name="send_unify_message",
+                medium=Medium.UNIFY_MESSAGE,
+                target_kind="room",
+                target_metadata={
+                    "team_id": team_id if team_id is not None else "",
+                    "group_id": group_id if group_id is not None else "",
+                    "attachment_filepath": attachment_filepath or "",
+                },
+                contact_id=SESSION_DETAILS.self_contact_id,
+            )
+            if offline_response is not None:
+                return offline_response
 
         attachment = None
         if attachment_filepath:
@@ -3262,13 +3284,17 @@ class CommsPrimitives:
                     return await self._surface_comms_error(
                         f"File too large: {file_size_mb:.1f}MB exceeds 25MB attachment limit.",
                         topic,
-                        contact_id=contact_id,
+                        contact_id=normalized_contact_id,
                         medium=Medium.UNIFY_MESSAGE,
                         offline_reservation=offline_reservation,
                         attempted_content=content,
-                        receiver_ids=[contact_id],
+                        receiver_ids=(
+                            [normalized_contact_id]
+                            if normalized_contact_id is not None
+                            else None
+                        ),
                         target_metadata={
-                            "contact_id": contact_id,
+                            "contact_id": normalized_contact_id,
                             "attachment_filepath": attachment_filepath or "",
                         },
                         history_metadata={
@@ -3285,13 +3311,17 @@ class CommsPrimitives:
                     return await self._surface_comms_error(
                         f"Failed to upload attachment: {upload_result['error']}",
                         topic,
-                        contact_id=contact_id,
+                        contact_id=normalized_contact_id,
                         medium=Medium.UNIFY_MESSAGE,
                         offline_reservation=offline_reservation,
                         attempted_content=content,
-                        receiver_ids=[contact_id],
+                        receiver_ids=(
+                            [normalized_contact_id]
+                            if normalized_contact_id is not None
+                            else None
+                        ),
                         target_metadata={
-                            "contact_id": contact_id,
+                            "contact_id": normalized_contact_id,
                             "attachment_filepath": attachment_filepath or "",
                         },
                         history_metadata={
@@ -3321,13 +3351,17 @@ class CommsPrimitives:
                 return await self._surface_comms_error(
                     f"File not found: {attachment_filepath}",
                     topic,
-                    contact_id=contact_id,
+                    contact_id=normalized_contact_id,
                     medium=Medium.UNIFY_MESSAGE,
                     offline_reservation=offline_reservation,
                     attempted_content=content,
-                    receiver_ids=[contact_id],
+                    receiver_ids=(
+                        [normalized_contact_id]
+                        if normalized_contact_id is not None
+                        else None
+                    ),
                     target_metadata={
-                        "contact_id": contact_id,
+                        "contact_id": normalized_contact_id,
                         "attachment_filepath": attachment_filepath or "",
                     },
                     history_metadata={
@@ -3338,13 +3372,17 @@ class CommsPrimitives:
                 return await self._surface_comms_error(
                     f"Failed to read file: {exc}",
                     topic,
-                    contact_id=contact_id,
+                    contact_id=normalized_contact_id,
                     medium=Medium.UNIFY_MESSAGE,
                     offline_reservation=offline_reservation,
                     attempted_content=content,
-                    receiver_ids=[contact_id],
+                    receiver_ids=(
+                        [normalized_contact_id]
+                        if normalized_contact_id is not None
+                        else None
+                    ),
                     target_metadata={
-                        "contact_id": contact_id,
+                        "contact_id": normalized_contact_id,
                         "attachment_filepath": attachment_filepath or "",
                     },
                     history_metadata={
@@ -3354,34 +3392,53 @@ class CommsPrimitives:
 
         response = await comms_utils.send_unify_message(
             content=content,
-            contact_id=contact_id,
+            contact_id=normalized_contact_id,
             attachment=attachment,
             team_id=team_id,
             group_id=group_id,
         )
         if response.get("success"):
-            fresh_contact = self._get_contact(contact_id=contact_id) or contact or {}
+            participant_contact_ids = response.get("participant_contact_ids")
+            if normalized_contact_id is not None:
+                fresh_contact = (
+                    self._get_contact(contact_id=normalized_contact_id) or contact or {}
+                )
+                receiver_ids = [
+                    fresh_contact.get("contact_id") or normalized_contact_id,
+                ]
+                history_name = _get_contact_display_name(fresh_contact)
+                event_contact = fresh_contact
+            else:
+                fresh_contact = self._get_contact(
+                    contact_id=SESSION_DETAILS.self_contact_id,
+                ) or {"contact_id": SESSION_DETAILS.self_contact_id}
+                receiver_ids = list(participant_contact_ids or [])
+                history_name = "team chat" if team_id is not None else "group chat"
+                event_contact = fresh_contact
             event = UnifyMessageSent(
-                contact=fresh_contact,
+                contact=event_contact,
                 content=content,
                 attachments=[attachment] if attachment else [],
                 thread_id=response.get("thread_id"),
                 chat_message_id=response.get("chat_message_id"),
                 team_id=team_id,
                 group_id=group_id,
+                participant_contact_ids=participant_contact_ids,
                 **self._onboarding_event_kwargs(Medium.UNIFY_MESSAGE),
             )
             await self._publish_comms_event(topic, event)
             self._record_offline_success(
                 offline_reservation,
                 attempted_content=content,
-                receiver_ids=[fresh_contact.get("contact_id") or contact_id],
+                receiver_ids=receiver_ids,
                 target_metadata={
-                    "contact_id": fresh_contact.get("contact_id") or contact_id,
+                    "contact_id": normalized_contact_id,
+                    "team_id": team_id if team_id is not None else "",
+                    "group_id": group_id if group_id is not None else "",
                     "attachment_filepath": attachment_filepath or "",
                 },
                 history_metadata={
-                    "contact_display_name": _get_contact_display_name(fresh_contact),
+                    "contact_display_name": history_name,
                 },
                 attachments=[attachment] if attachment else None,
                 provider_response=response,
@@ -3389,15 +3446,19 @@ class CommsPrimitives:
             return {"status": "ok"}
 
         return await self._surface_comms_error(
-            "Failed to send unify message",
+            response.get("error") or "Failed to send unify message",
             topic,
-            contact_id=contact_id,
+            contact_id=normalized_contact_id,
             medium=Medium.UNIFY_MESSAGE,
             offline_reservation=offline_reservation,
             attempted_content=content,
-            receiver_ids=[contact_id],
+            receiver_ids=(
+                [normalized_contact_id] if normalized_contact_id is not None else None
+            ),
             target_metadata={
-                "contact_id": contact_id,
+                "contact_id": normalized_contact_id,
+                "team_id": team_id if team_id is not None else "",
+                "group_id": group_id if group_id is not None else "",
                 "attachment_filepath": attachment_filepath or "",
             },
             history_metadata={
