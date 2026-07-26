@@ -75,3 +75,12 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
+
+- repo: local
+  hooks:
+  - id: agents-md-fresh
+    name: AGENTS.md is up to date
+    entry: python3 .agents/global-rules/build_agents_md.py --check
+    language: system
+    pass_filenames: false
+    files: ^(\.agents/|AGENTS\.md$)

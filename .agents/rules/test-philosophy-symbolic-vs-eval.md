@@ -1,7 +1,5 @@
 ---
 description: Test Philosophy – Symbolic vs Eval Spectrum
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # Test Philosophy

@@ -1,7 +1,5 @@
 ---
 description: State Manager Interface Design (Base APIs, Prompts, and Tool Docstrings)
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # State Manager Interface Design

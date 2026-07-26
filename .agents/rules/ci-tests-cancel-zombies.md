@@ -1,7 +1,5 @@
 ---
 description: Diagnose GitHub Actions Tests cancel hangs — zombie runs vs always() wind-down; force-cancel escape hatch
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # CI Tests Cancel: Zombies vs Wind-Down
