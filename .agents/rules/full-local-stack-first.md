@@ -1,6 +1,5 @@
 ---
 description: Prefer the full local Unity stack for internal development
-alwaysApply: true
 ---
 
 # Full Local Stack First

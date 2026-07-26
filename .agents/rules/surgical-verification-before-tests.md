@@ -1,7 +1,5 @@
 ---
 description: Write quick verification scripts before running slow tests
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # Surgical Verification Before Running Tests

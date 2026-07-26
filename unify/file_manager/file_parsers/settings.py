@@ -25,7 +25,7 @@ class FileParserSettings(BaseSettings):
     # LLM settings used by parser enrichment steps (summaries, metadata)
     # ---------------------------------------------------------------------
     # Default model is aligned with project preference.
-    SUMMARY_MODEL: str = "gpt-5.2@openai"
+    SUMMARY_MODEL: str = "openai/gpt-5.2@openrouter"
 
     # Summariser token accounting / backoff
     SUMMARY_ENCODING: str = "o200k_base"

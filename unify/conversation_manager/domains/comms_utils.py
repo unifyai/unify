@@ -5,6 +5,7 @@ import aiohttp
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
@@ -358,53 +359,296 @@ def post_call_utterances_to_orchestra(
         return {"success": False, "error": str(exc)}
 
 
+def _unify_destination_error(
+    contact_id: int | None,
+    team_id: int | None,
+    group_id: int | None,
+) -> str | None:
+    """Return an error when destination args are not exactly one of three."""
+    provided = [
+        name
+        for name, value in (
+            ("contact_id", contact_id),
+            ("team_id", team_id),
+            ("group_id", group_id),
+        )
+        if value is not None
+    ]
+    if len(provided) == 1:
+        return None
+    if not provided:
+        return (
+            "send_unify_message requires exactly one of contact_id, team_id, "
+            "or group_id"
+        )
+    return (
+        "send_unify_message accepts exactly one of contact_id, team_id, or "
+        f"group_id; got {', '.join(provided)}"
+    )
+
+
+def _contact_dict_for_id(contact_id: int) -> dict | None:
+    """Load one contact row from the live ContactManager, if available."""
+    from unify.manager_registry import ManagerRegistry
+
+    manager = ManagerRegistry.get_contact_manager()
+    if manager is None:
+        return None
+    info = manager.get_contact_info(contact_id) or {}
+    contact = info.get(contact_id)
+    if contact is None:
+        return None
+    if isinstance(contact, dict):
+        return contact
+    if hasattr(contact, "model_dump"):
+        return contact.model_dump()
+    return dict(contact)
+
+
+def resolve_unify_dm_destination(
+    contact_id: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Map a 1:1 Unify contact to Orchestra destination kwargs.
+
+    Human contacts resolve to ``to_user_id``. Peer-assistant contacts
+    (``agent_id`` without a human ``user_id``) resolve to
+    ``to_assistant_id`` for an ``assistant_peer_dm`` thread.
+    """
+    contact = _contact_dict_for_id(contact_id)
+    if contact is None:
+        # Sandbox / early boot: ContactManager may be absent. Boss DMs can
+        # still resolve from session identity; anything else fails loud.
+        if contact_id == SESSION_DETAILS.boss_contact_id and SESSION_DETAILS.user.id:
+            return {"to_user_id": str(SESSION_DETAILS.user.id)}, None
+        return None, (
+            f"contact_id={contact_id} could not be loaded from Contacts; "
+            "cannot open a Unify 1:1 thread"
+        )
+
+    agent_id = contact.get("agent_id")
+    user_id = contact.get("user_id") or contact.get("org_user_id")
+    if agent_id and not user_id:
+        return {"to_assistant_id": int(agent_id)}, None
+    if not user_id and contact_id == SESSION_DETAILS.boss_contact_id:
+        user_id = SESSION_DETAILS.user.id
+    if not user_id:
+        return None, (
+            f"contact_id={contact_id} has no platform user_id; cannot open a "
+            "Unify 1:1 thread"
+        )
+    return {"to_user_id": str(user_id)}, None
+
+
+def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None]:
+    """Map a 1:1 Unify contact to Orchestra ``to_user_id``.
+
+    Prefer :func:`resolve_unify_dm_destination` when peer-assistant DMs are
+    allowed. This helper rejects peer-assistant contacts.
+    """
+    destination, error = resolve_unify_dm_destination(contact_id)
+    if error:
+        return None, error
+    assert destination is not None
+    to_user_id = destination.get("to_user_id")
+    if to_user_id:
+        return str(to_user_id), None
+    return None, (
+        "assistant peer Unify 1:1 requires to_assistant_id; use "
+        "resolve_unify_dm_destination"
+    )
+
+
+def _fetch_org_roster() -> dict | None:
+    """Fetch the Console org roster (teams + groups with member ids)."""
+    base_url = SETTINGS.ORCHESTRA_URL or ""
+    unify_key = SESSION_DETAILS.unify_key or ""
+    org_id = SESSION_DETAILS.org_id
+    if not base_url or not unify_key or org_id is None:
+        return None
+    try:
+        from unisdk.utils import http
+
+        response = http.get(
+            f"{base_url.rstrip('/')}/organizations/{int(org_id)}/roster",
+            headers={"Authorization": f"Bearer {unify_key}"},
+            timeout=15,
+        )
+        if 200 <= response.status_code < 300:
+            payload = response.json()
+            return payload if isinstance(payload, dict) else None
+    except Exception as exc:
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} Failed to fetch org roster: {exc}",
+        )
+    return None
+
+
+def _map_roster_ids_to_contact_ids(
+    *,
+    member_user_ids: list[str],
+    assistant_member_ids: list[int],
+) -> tuple[list[int], str | None]:
+    """Map roster user/assistant ids onto this assistant's Contacts rows."""
+    from unify.manager_registry import ManagerRegistry
+
+    manager = ManagerRegistry.get_contact_manager()
+    if manager is None:
+        return [], "ContactManager is not available to resolve room members"
+
+    def _row_contact_id(row: Any) -> int | None:
+        if isinstance(row, dict):
+            cid = row.get("contact_id")
+        else:
+            cid = getattr(row, "contact_id", None)
+        return int(cid) if cid is not None else None
+
+    resolved: set[int] = set()
+    missing: list[str] = []
+    self_id = SESSION_DETAILS.self_contact_id
+
+    for user_id in member_user_ids:
+        uid = str(user_id)
+        result = manager.filter_contacts(filter=f"user_id == '{uid}'", limit=1)
+        contacts = (result or {}).get("contacts") or []
+        if not contacts:
+            missing.append(f"user_id={uid}")
+            continue
+        cid = _row_contact_id(contacts[0])
+        if cid is not None and cid != self_id:
+            resolved.add(cid)
+
+    for agent_id in assistant_member_ids:
+        aid = str(agent_id)
+        if str(SESSION_DETAILS.assistant.agent_id) == aid:
+            continue
+        result = manager.filter_contacts(filter=f"agent_id == '{aid}'", limit=1)
+        contacts = (result or {}).get("contacts") or []
+        if not contacts:
+            missing.append(f"agent_id={aid}")
+            continue
+        cid = _row_contact_id(contacts[0])
+        if cid is not None and cid != self_id:
+            resolved.add(cid)
+
+    if missing:
+        return [], (
+            "Unify room members missing from Contacts (expected auto-synced "
+            f"system contacts): {', '.join(missing)}"
+        )
+    return sorted(resolved), None
+
+
+def resolve_unify_room_member_contact_ids(
+    *,
+    team_id: int | None = None,
+    group_id: int | None = None,
+) -> tuple[list[int], str | None]:
+    """Resolve every human + assistant member of a Unify room to contact ids."""
+    if (team_id is None) == (group_id is None):
+        return [], "resolve_unify_room_member_contact_ids needs team_id or group_id"
+
+    roster = _fetch_org_roster()
+    if roster is None:
+        return [], "failed to fetch organization roster for Unify room members"
+
+    if team_id is not None:
+        teams = roster.get("teams") or []
+        match = next(
+            (row for row in teams if int(row.get("team_id") or -1) == int(team_id)),
+            None,
+        )
+        if match is None:
+            return [], f"team_id={team_id} not found in organization roster"
+        return _map_roster_ids_to_contact_ids(
+            member_user_ids=[str(uid) for uid in (match.get("member_user_ids") or [])],
+            assistant_member_ids=[
+                int(aid) for aid in (match.get("assistant_member_ids") or [])
+            ],
+        )
+
+    groups = roster.get("groups") or []
+    match = next(
+        (row for row in groups if int(row.get("group_id") or -1) == int(group_id)),
+        None,
+    )
+    if match is None:
+        return [], f"group_id={group_id} not found in organization roster"
+    return _map_roster_ids_to_contact_ids(
+        member_user_ids=[str(uid) for uid in (match.get("member_user_ids") or [])],
+        assistant_member_ids=[
+            int(aid) for aid in (match.get("assistant_member_ids") or [])
+        ],
+    )
+
+
 async def send_unify_message(
     content: str,
-    contact_id: int = 1,
+    contact_id: int | None = None,
     attachment: dict | None = None,
     team_id: int | None = None,
     group_id: int | None = None,
-    thread_id: int | None = None,
 ) -> dict:
     """
-    Send a unify message to a contact, optionally with an attachment.
+    Send a Unify Console chat message to exactly one destination.
 
     Every send persists to Orchestra's unified chat store; Orchestra then
     publishes the Console frame (assistant topic for DMs, org topic for
     rooms). The runtime's own Transcripts mirror is written by the
     ``UnifyMessageSent`` event handler, never read by Console.
 
+    Destination (exactly one required):
+        contact_id: private 1:1 with that contact. Human contacts map to
+            Orchestra ``to_user_id``; peer-assistant contacts map to
+            ``to_assistant_id`` (``assistant_peer_dm``).
+        team_id: that team's group chat room.
+        group_id: that org chat group room.
+
     Args:
         content: The message content to send.
-        contact_id: The target contact's ID. Defaults to 1 (boss).
+        contact_id: Contact id for a private 1:1 (human or peer assistant).
         attachment: Optional attachment dict with keys:
             - id: Unique identifier for the attachment
             - filename: The name of the file
             - url: Signed URL to download the file
-        team_id: When set, the message is posted into that team's group chat
-            instead of the contact's 1:1 Console thread.
-        group_id: When set, the message is posted into that org chat group
-            instead of the contact's 1:1 Console thread. Preferred over
-            ``team_id`` if both are set.
-        thread_id: Unified chat-store thread to post into (from an inbound
-            message's ``thread_id``). Takes precedence over team/group ids.
+        team_id: Team group-chat destination.
+        group_id: Org chat-group destination.
 
     Returns:
-        dict with "success" plus, on success, "thread_id" and
-        "chat_message_id" of the stored message.
+        dict with "success" plus, on success, "thread_id",
+        "chat_message_id", and for rooms "participant_contact_ids".
     """
+    destination_error = _unify_destination_error(contact_id, team_id, group_id)
+    if destination_error:
+        return {"success": False, "error": destination_error}
+
     content = normalize_outbound_plain_text(content)
 
     payload: dict = {"content": content}
     if attachment:
         payload["attachments"] = [attachment]
-    if thread_id is not None:
-        payload["thread_id"] = int(thread_id)
-    elif group_id is not None:
+
+    participant_contact_ids: list[int] | None = None
+    if group_id is not None:
         payload["group_id"] = int(group_id)
+        participant_contact_ids, room_error = resolve_unify_room_member_contact_ids(
+            group_id=int(group_id),
+        )
+        if room_error:
+            return {"success": False, "error": room_error}
     elif team_id is not None:
         payload["team_id"] = int(team_id)
-    # No explicit scope: assistant DM with the owner (Orchestra default).
+        participant_contact_ids, room_error = resolve_unify_room_member_contact_ids(
+            team_id=int(team_id),
+        )
+        if room_error:
+            return {"success": False, "error": room_error}
+    else:
+        assert contact_id is not None
+        destination, resolve_error = resolve_unify_dm_destination(int(contact_id))
+        if resolve_error:
+            return {"success": False, "error": resolve_error}
+        assert destination is not None
+        payload.update(destination)
 
     result = await asyncio.to_thread(_post_chat_message_to_orchestra, payload)
     stored = (result.get("message") or {}) if result.get("success") else {}
@@ -412,9 +656,16 @@ async def send_unify_message(
     event_data = {
         "content": content,
         "role": "assistant",
-        "contact_id": contact_id,
     }
-    stored_thread_id = stored.get("thread_id") or thread_id
+    if contact_id is not None:
+        event_data["contact_id"] = contact_id
+    if team_id is not None:
+        event_data["team_id"] = int(team_id)
+    if group_id is not None:
+        event_data["group_id"] = int(group_id)
+    if participant_contact_ids is not None:
+        event_data["participant_contact_ids"] = participant_contact_ids
+    stored_thread_id = stored.get("thread_id")
     if stored_thread_id is not None:
         event_data["thread_id"] = stored_thread_id
     if attachment:
@@ -437,11 +688,14 @@ async def send_unify_message(
             f"{ICONS['comms_outbound']} Unify message stored "
             f"(thread_id={stored.get('thread_id')}, id={stored.get('id')})",
         )
-        return {
+        success_payload = {
             "success": True,
             "thread_id": stored.get("thread_id"),
             "chat_message_id": stored.get("id"),
         }
+        if participant_contact_ids is not None:
+            success_payload["participant_contact_ids"] = participant_contact_ids
+        return success_payload
 
     # Sandbox runtimes without an Orchestra assistant identity (open-source
     # local runs, test harnesses) have no unified chat store to post into;
@@ -456,7 +710,10 @@ async def send_unify_message(
             thread="unify_message_outbound",
             event=event_data,
         )
-        return {"success": bool(message_id)}
+        fallback = {"success": bool(message_id)}
+        if participant_contact_ids is not None:
+            fallback["participant_contact_ids"] = participant_contact_ids
+        return fallback
     except Exception as e:
         LOGGER.error(f"{ICONS['comms_outbound']} Error sending unify message: {e}")
         return {"success": False, "error": str(e)}

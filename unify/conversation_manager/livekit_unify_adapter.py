@@ -47,7 +47,7 @@ class UnifyLLM(llm.LLM):
 
     def __init__(
         self,
-        model: str = "gpt-5.4-mini@openai",
+        model: str = "openai/gpt-5.4-mini@openrouter",
         *,
         reasoning_effort: str | None = None,
         temperature: float | None = None,

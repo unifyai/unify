@@ -131,6 +131,23 @@ def _build_send_arguments(
             return None
         return args
 
+    if contact_id is None and medium not in (
+        Medium.API_MESSAGE,
+        Medium.UNIFY_MESSAGE,
+    ):
+        return None
+
+    if medium == Medium.UNIFY_MESSAGE:
+        raw_group_id = reply_context.get("group_id")
+        raw_team_id = reply_context.get("team_id")
+        if raw_group_id not in (None, ""):
+            return {"content": prose, "group_id": int(raw_group_id)}
+        if raw_team_id not in (None, ""):
+            return {"content": prose, "team_id": int(raw_team_id)}
+        if contact_id is None:
+            return None
+        return {"content": prose, "contact_id": contact_id}
+
     if contact_id is None and medium != Medium.API_MESSAGE:
         return None
 

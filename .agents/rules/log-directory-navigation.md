@@ -1,7 +1,5 @@
 ---
 description: How to navigate and read log files (logs/pytest/, logs/unity/, logs/unillm/, logs/unisdk/, logs/orchestra/, logs/all/)
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # Log Directory Navigation

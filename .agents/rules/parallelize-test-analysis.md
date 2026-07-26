@@ -1,7 +1,5 @@
 ---
 description: Run tests in background and analyze failures while they run
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # Parallelize Test Analysis
@@ -42,6 +40,6 @@ This doesn't mean being hasty or sacrificing thoroughness. It means: **don't wai
 
 ## Relationship to Other Rules
 
-- **`surgical-verification-before-tests.mdc`**: Covers *pre-test* optimization (quick verification scripts)
+- **`surgical-verification-before-tests.md`**: Covers *pre-test* optimization (quick verification scripts)
 - **This rule**: Covers *mid-test* optimization (incremental analysis)
-- **`log-directory-navigation.mdc`**: Explains how to read from `logs/pytest/` (use Shell for `ls`, Read tool for file contents)
+- **`log-directory-navigation.md`**: Explains how to read from `logs/pytest/` (use Shell for `ls`, Read tool for file contents)

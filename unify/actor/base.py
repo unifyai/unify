@@ -310,13 +310,13 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
                 in more than one catalog.
             llm_profile: Optional curated model profile for this actor run.
                 Leave unset for the default profile, which uses the actor's
-                configured model (normally ``gpt-5.6-sol@openai`` at high
+                configured model (normally ``openai/gpt-5.6-sol@openrouter`` at high
                 reasoning effort). Available premium profiles are
                 ``gpt_5_5_low``, ``gpt_5_5_medium``, and ``gpt_5_5_high``. Use
                 ``gpt_5_5_high`` when the user explicitly asks for maximum
                 thinking effort or the task is highly ambiguous/high-stakes
                 enough to justify premium cost and latency. GPT-5.5 profiles
-                use ``gpt-5.5@openai`` and are priced similarly to the Sol
+                use ``openai/gpt-5.5@openrouter`` and are priced similarly to the Sol
                 default on a per-token basis; prefer them when the caller
                 wants the GPT-5.5 family specifically.
         """

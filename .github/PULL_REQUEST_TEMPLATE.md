@@ -45,7 +45,7 @@ The default expectation is to run the relevant directory:
 
 For infrastructure changes that are hard to reach via tests, a quick
 verification script under tests/_verify_*.py is encouraged
-(see .cursor/rules/surgical-verification-before-tests.mdc).
+(see .agents/rules/surgical-verification-before-tests.md).
 -->
 
 ```
@@ -71,6 +71,6 @@ None.
 - [ ] PR is targeted at `staging` (not `main`)
 - [ ] Followed conventional commit style (`feat(scope):`, `fix(scope):`, `refactor(scope):`, `chore(scope):`, etc.)
 - [ ] No `try/except` added defensively — only around specific, recoverable errors
-- [ ] No "new" / "updated" / "TODO from chat" temporal comments (see `.cursor/rules/no-temporal-comments.mdc`)
-- [ ] No test-specific shortcuts in production code (see `.cursor/rules/no-test-info-in-production-code.mdc`)
+- [ ] No "new" / "updated" / "TODO from chat" temporal comments (see `.agents/rules/no-temporal-comments.md`)
+- [ ] No test-specific shortcuts in production code (see `.agents/rules/no-test-info-in-production-code.md`)
 - [ ] Updated `AGENTS.md` / `ARCHITECTURE.md` if I changed architectural conventions

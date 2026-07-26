@@ -1,7 +1,5 @@
 ---
 description: Instructions for local development, test execution, and environment management
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 # Local Development Environment
@@ -20,7 +18,7 @@ alwaysApply: true
 ## Running Tests
 
 ### Terminal Isolation (Automatic)
-Each terminal session (including each Cursor agent) automatically gets its own **isolated tmux server**. This means:
+Each terminal session (including each A coding agent) automatically gets its own **isolated tmux server**. This means:
 - Your tests don't interfere with other agents' tests
 - `tmux kill-server` only affects YOUR terminal's sessions
 - No configuration needed - it's automatic
@@ -35,7 +33,7 @@ The script **always blocks** until all tests complete (or timeout), streaming pa
 | **Serial mode** (one session per file) | `tests/parallel_run.sh -s [path]` |
 | **With timeout** | `tests/parallel_run.sh --timeout 300 [path]` |
 
-**Note:** Do not use `parallel_cloud_run.sh` directly. For CI, use commit message tags (see `propose-ci-tests-for-commits.mdc`).
+**Note:** Do not use `parallel_cloud_run.sh` directly. For CI, use commit message tags (see `propose-ci-tests-for-commits.md`).
 
 - The script blocks until all tests complete, then reports success (exit 0), failure (exit 1), or timeout (exit 2).
 - `--timeout N` aborts if tests don't complete within N seconds.

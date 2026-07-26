@@ -1385,6 +1385,36 @@ async def log_message(
                 if resolved_ids:
                     receiver_ids = sorted(resolved_ids)
 
+    # For Unify team/group rooms, expand receiver_ids to every known room
+    # member contact (already resolved on the event, or via org roster).
+    if isinstance(event, (UnifyMessageReceived, UnifyMessageSent)) and (
+        getattr(event, "team_id", None) is not None
+        or getattr(event, "group_id", None) is not None
+    ):
+        resolved_ids: set[int] = set(
+            getattr(event, "participant_contact_ids", None) or [],
+        )
+        if not resolved_ids:
+            from unify.conversation_manager.domains.comms_utils import (
+                resolve_unify_room_member_contact_ids,
+            )
+
+            room_ids, _room_error = resolve_unify_room_member_contact_ids(
+                team_id=getattr(event, "team_id", None),
+                group_id=getattr(event, "group_id", None),
+            )
+            resolved_ids = set(room_ids)
+        if resolved_ids:
+            if role == "Assistant":
+                resolved_ids.discard(SESSION_DETAILS.self_contact_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+            else:
+                resolved_ids.add(SESSION_DETAILS.self_contact_id)
+                resolved_ids.discard(sender_id)
+                if resolved_ids:
+                    receiver_ids = sorted(resolved_ids)
+
     exchange_id = getattr(event, "exchange_id", UNASSIGNED)
 
     # For pre-hire messages, reuse the cached exchange_id if available
@@ -1476,6 +1506,8 @@ async def log_message(
                     "cc": event.cc,
                     "bcc": event.bcc,
                 }
+                if event.thread_id:
+                    metadata["thread_id"] = event.thread_id
             elif isinstance(event, EmailSent):
                 metadata = {
                     "email_id_replied_to": event.email_id_replied_to,
@@ -1483,6 +1515,8 @@ async def log_message(
                     "cc": event.cc,
                     "bcc": event.bcc,
                 }
+                if getattr(event, "thread_id", None):
+                    metadata["thread_id"] = event.thread_id
             elif isinstance(event, (UnifyMessageReceived, UnifyMessageSent)):
                 # Mirror the unified chat-store scope onto the Transcripts
                 # row: thread_id keys the conversation, team_id/group_id mark

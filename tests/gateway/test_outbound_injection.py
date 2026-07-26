@@ -279,6 +279,11 @@ async def test_send_unify_message_routes_through_injected_transport(
         "_post_chat_message_to_orchestra",
         lambda payload: {"success": False, "error": "orchestra config missing"},
     )
+    monkeypatch.setattr(
+        comms_utils,
+        "resolve_unify_dm_destination",
+        lambda contact_id: ({"to_user_id": "user-7"}, None),
+    )
     transport = InMemoryOutboundTransport()
     comms_utils.set_outbound_transport(transport)
 

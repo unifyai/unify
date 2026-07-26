@@ -689,11 +689,9 @@ class TranscriptManager(BaseTranscriptManager):
 
         # ── 5. Inactivity-followup activity sync (best-effort, async) ──────
         # Tell orchestra that the assistant just exchanged a message so its
-        # inactivity-followup routine sees fresh ``last_correspondence_at``
-        # and clears any pending ``last_followup_sent_at``. Skipped for
-        # internal/system-bus-only writes. Dispatched to a daemon thread so
-        # the network round-trip never blocks message logging; failures are
-        # swallowed inside ``touch_assistant_activity``.
+        # inactivity-followup routine sees fresh ``last_correspondence_at``.
+        # Pass email ``thread_id`` when present so check-in replies do not
+        # re-arm cadence. Skipped for internal/system-bus-only writes.
         if not _skip_event_bus and created_messages:
             try:
                 from .activity_sync import (
@@ -704,9 +702,18 @@ class TranscriptManager(BaseTranscriptManager):
 
                 agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
                 if agent_id is not None:
+                    touch_thread_id = None
+                    for _msg in created_messages:
+                        meta = getattr(_msg, "metadata", None) or {}
+                        if isinstance(meta, dict) and meta.get("thread_id"):
+                            touch_thread_id = meta.get("thread_id")
+                            break
                     threading.Thread(
                         target=touch_assistant_activity,
-                        args=(agent_id,),
+                        kwargs={
+                            "assistant_id": agent_id,
+                            "thread_id": touch_thread_id,
+                        },
                         daemon=True,
                         name="touch_assistant_activity",
                     ).start()
@@ -1718,9 +1725,16 @@ class TranscriptManager(BaseTranscriptManager):
 
             agent_id = getattr(SESSION_DETAILS.assistant, "agent_id", None)
             if agent_id is not None:
+                meta = getattr(created_model, "metadata", None) or {}
+                touch_thread_id = (
+                    meta.get("thread_id") if isinstance(meta, dict) else None
+                )
                 threading.Thread(
                     target=touch_assistant_activity,
-                    args=(agent_id,),
+                    kwargs={
+                        "assistant_id": agent_id,
+                        "thread_id": touch_thread_id,
+                    },
                     daemon=True,
                     name="touch_assistant_activity",
                 ).start()
