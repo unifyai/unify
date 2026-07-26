@@ -748,7 +748,7 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        contact_id: int | str,
+        contact_id: int | str | None = None,
         attachment_filepath: str | None = None,
         team_id: int | None = None,
         group_id: int | None = None,

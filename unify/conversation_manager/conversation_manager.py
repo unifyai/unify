@@ -1573,11 +1573,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
         contact_id = reply_context.get("contact_id")
         tools = ConversationManagerBrainActionTools(self)
 
-        if medium == Medium.UNIFY_MESSAGE.value and contact_id is not None:
-            await tools.send_unify_message(
-                contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-            )
+        if medium == Medium.UNIFY_MESSAGE.value:
+            send_kwargs: dict[str, Any] = {
+                "content": DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            }
+            raw_group_id = reply_context.get("group_id")
+            raw_team_id = reply_context.get("team_id")
+            if raw_group_id not in (None, ""):
+                send_kwargs["group_id"] = int(raw_group_id)
+            elif raw_team_id not in (None, ""):
+                send_kwargs["team_id"] = int(raw_team_id)
+            elif contact_id is not None:
+                send_kwargs["contact_id"] = contact_id
+            else:
+                return False
+            await tools.send_unify_message(**send_kwargs)
         elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
             await tools.send_sms(
                 contact_id=contact_id,

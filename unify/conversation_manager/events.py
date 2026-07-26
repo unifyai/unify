@@ -1076,23 +1076,25 @@ class UnifyMessageReceived(Event):
     content: str
     # List of attachment dicts with full metadata (files saved to Attachments/).
     attachments: list[dict] = field(default_factory=list)
-    # Unified chat-store thread this message belongs to. Every Console chat
-    # surface (assistant DM, team, group) has one thread id; replies pass it
-    # back to ``send_unify_message`` so they land in the same room.
+    # Unified chat-store thread this message belongs to (Transcripts / store
+    # identity). Destination for replies is ``contact_id`` XOR ``team_id`` XOR
+    # ``group_id`` on ``send_unify_message``, not this thread id.
     thread_id: int | None = None
     # Unified chat-store id of this message (for reaction / edit targeting).
     chat_message_id: int | None = None
     # Set when the message was posted in a team group chat (Console org
     # chat). Team chat is ordinary unify_message traffic — like a large
     # email CC chain, every team assistant receives a copy — but replies to
-    # the room must pass this team_id (or thread_id) back to
-    # ``send_unify_message``.
+    # the room must pass this team_id alone to ``send_unify_message``.
     team_id: int | None = None
     team_name: str = ""
     # Set when the message was posted in an org chat group (non-team room).
-    # Same reply routing as team_id: pass group_id back to
+    # Same reply routing as team_id: pass group_id alone to
     # ``send_unify_message`` to reply in the room.
     group_id: int | None = None
+    # All known room member contact ids (humans + peer assistants), excluding
+    # self. Used to expand Transcripts ``receiver_ids`` for room traffic.
+    participant_contact_ids: list[int] | None = None
 
 
 @dataclass
@@ -1317,6 +1319,8 @@ class UnifyMessageSent(Event):
     # group room rather than a 1:1 Console thread.
     team_id: int | None = None
     group_id: int | None = None
+    # All known room member contact ids for team/group sends (excludes self).
+    participant_contact_ids: list[int] | None = None
     onboarding_trigger_step_id: str | None = None
     onboarding_reply_step_id: str | None = None
     onboarding_request_id: str | None = None

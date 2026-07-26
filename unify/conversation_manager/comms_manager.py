@@ -1313,6 +1313,20 @@ class CommsManager:
                     attachments = event.get("attachments") or []
                     thread_id_value = event.get("thread_id")
                     chat_message_id_value = event.get("chat_message_id")
+                    resolved_team_id = int(team_id) if team_id else None
+                    resolved_group_id = int(group_id) if group_id else None
+                    participant_contact_ids = None
+                    if resolved_team_id is not None or resolved_group_id is not None:
+                        from unify.conversation_manager.domains.comms_utils import (
+                            resolve_unify_room_member_contact_ids,
+                        )
+
+                        participant_contact_ids, _room_error = (
+                            resolve_unify_room_member_contact_ids(
+                                team_id=resolved_team_id,
+                                group_id=resolved_group_id,
+                            )
+                        )
                     await publish(
                         f"app:comms:{thread}_message",
                         events_map[thread](
@@ -1327,9 +1341,10 @@ class CommsManager:
                                 if chat_message_id_value
                                 else None
                             ),
-                            team_id=int(team_id) if team_id else None,
+                            team_id=resolved_team_id,
                             team_name=str(event.get("team_name") or ""),
-                            group_id=int(group_id) if group_id else None,
+                            group_id=resolved_group_id,
+                            participant_contact_ids=participant_contact_ids or None,
                         ).to_json(),
                     )
 
