@@ -1421,11 +1421,12 @@ class TaskScheduler(BaseTaskScheduler):
             if len(log_objs) != 1:
                 log_ids = [getattr(row, "id", None) for row in log_objs]
                 raise ValueError(
-                    "Composite primary key must be unique for "
+                    "Task identity must resolve to one row for "
                     f"task_id={task_id}, instance_id={instance_id}; "
                     f"found {len(log_objs)} rows with log ids {log_ids}. "
-                    "This usually means a fork allocated instance_id outside "
-                    "Tasks auto_counting while a clone reused the same id.",
+                    "Tasks holds one definition per task_id, so duplicates are "
+                    "pre-migration rows or hand-written identity fields; delete "
+                    "the stale row rather than renumbering instance_id.",
                 )
 
             new_status_enum = (
