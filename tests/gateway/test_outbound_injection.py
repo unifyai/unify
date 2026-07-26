@@ -281,8 +281,8 @@ async def test_send_unify_message_routes_through_injected_transport(
     )
     monkeypatch.setattr(
         comms_utils,
-        "resolve_unify_dm_to_user_id",
-        lambda contact_id: ("user-7", None),
+        "resolve_unify_dm_destination",
+        lambda contact_id: ({"to_user_id": "user-7"}, None),
     )
     transport = InMemoryOutboundTransport()
     comms_utils.set_outbound_transport(transport)

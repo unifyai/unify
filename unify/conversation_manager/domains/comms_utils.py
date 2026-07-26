@@ -405,18 +405,21 @@ def _contact_dict_for_id(contact_id: int) -> dict | None:
     return dict(contact)
 
 
-def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None]:
-    """Map a 1:1 Unify contact to Orchestra ``to_user_id``.
+def resolve_unify_dm_destination(
+    contact_id: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Map a 1:1 Unify contact to Orchestra destination kwargs.
 
-    Peer-assistant contacts (``agent_id`` without a human ``user_id``) are
-    rejected — assistant↔assistant 1:1 is not supported; use team/group chat.
+    Human contacts resolve to ``to_user_id``. Peer-assistant contacts
+    (``agent_id`` without a human ``user_id``) resolve to
+    ``to_assistant_id`` for an ``assistant_peer_dm`` thread.
     """
     contact = _contact_dict_for_id(contact_id)
     if contact is None:
         # Sandbox / early boot: ContactManager may be absent. Boss DMs can
         # still resolve from session identity; anything else fails loud.
         if contact_id == SESSION_DETAILS.boss_contact_id and SESSION_DETAILS.user.id:
-            return str(SESSION_DETAILS.user.id), None
+            return {"to_user_id": str(SESSION_DETAILS.user.id)}, None
         return None, (
             f"contact_id={contact_id} could not be loaded from Contacts; "
             "cannot open a Unify 1:1 thread"
@@ -425,10 +428,7 @@ def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None
     agent_id = contact.get("agent_id")
     user_id = contact.get("user_id") or contact.get("org_user_id")
     if agent_id and not user_id:
-        return None, (
-            "assistant-to-assistant Unify 1:1 is not supported; post in a "
-            "team or group room instead"
-        )
+        return {"to_assistant_id": int(agent_id)}, None
     if not user_id and contact_id == SESSION_DETAILS.boss_contact_id:
         user_id = SESSION_DETAILS.user.id
     if not user_id:
@@ -436,7 +436,26 @@ def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None
             f"contact_id={contact_id} has no platform user_id; cannot open a "
             "Unify 1:1 thread"
         )
-    return str(user_id), None
+    return {"to_user_id": str(user_id)}, None
+
+
+def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None]:
+    """Map a 1:1 Unify contact to Orchestra ``to_user_id``.
+
+    Prefer :func:`resolve_unify_dm_destination` when peer-assistant DMs are
+    allowed. This helper rejects peer-assistant contacts.
+    """
+    destination, error = resolve_unify_dm_destination(contact_id)
+    if error:
+        return None, error
+    assert destination is not None
+    to_user_id = destination.get("to_user_id")
+    if to_user_id:
+        return str(to_user_id), None
+    return None, (
+        "assistant peer Unify 1:1 requires to_assistant_id; use "
+        "resolve_unify_dm_destination"
+    )
 
 
 def _fetch_org_roster() -> dict | None:
@@ -578,14 +597,15 @@ async def send_unify_message(
     ``UnifyMessageSent`` event handler, never read by Console.
 
     Destination (exactly one required):
-        contact_id: private 1:1 with that human contact (mapped to
-            Orchestra ``to_user_id``). Peer-assistant contacts are rejected.
+        contact_id: private 1:1 with that contact. Human contacts map to
+            Orchestra ``to_user_id``; peer-assistant contacts map to
+            ``to_assistant_id`` (``assistant_peer_dm``).
         team_id: that team's group chat room.
         group_id: that org chat group room.
 
     Args:
         content: The message content to send.
-        contact_id: Human contact id for a private 1:1.
+        contact_id: Contact id for a private 1:1 (human or peer assistant).
         attachment: Optional attachment dict with keys:
             - id: Unique identifier for the attachment
             - filename: The name of the file
@@ -624,10 +644,11 @@ async def send_unify_message(
             return {"success": False, "error": room_error}
     else:
         assert contact_id is not None
-        to_user_id, resolve_error = resolve_unify_dm_to_user_id(int(contact_id))
+        destination, resolve_error = resolve_unify_dm_destination(int(contact_id))
         if resolve_error:
             return {"success": False, "error": resolve_error}
-        payload["to_user_id"] = to_user_id
+        assert destination is not None
+        payload.update(destination)
 
     result = await asyncio.to_thread(_post_chat_message_to_orchestra, payload)
     stored = (result.get("message") or {}) if result.get("success") else {}
