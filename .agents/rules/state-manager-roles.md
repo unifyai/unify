@@ -1,7 +1,5 @@
 ---
 description: State Manager Roles and Boundaries (Routing Guide)
-globs: ["**/*"]
-alwaysApply: true
 ---
 
 Use this to decide which manager to call, what each owns, and where its jurisdiction ends. Keep manager docstrings implementation‑agnostic; this guide is only for high‑level routing and composition.

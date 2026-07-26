@@ -748,7 +748,7 @@ class ConversationManagerBrainActionTools:
         self,
         *,
         content: str,
-        contact_id: int | str,
+        contact_id: int | str | None = None,
         attachment_filepath: str | None = None,
         team_id: int | None = None,
         group_id: int | None = None,
@@ -1563,7 +1563,7 @@ class ConversationManagerBrainActionTools:
                 (interject, ask) on this action will also skip context forwarding.
             llm_profile: Optional curated LLM profile for this action. Leave
                 unset for the default actor profile, normally
-                ``gpt-5.6-sol@openai`` at high reasoning effort. Use
+                ``openai/gpt-5.6-sol@openrouter`` at high reasoning effort. Use
                 ``gpt_5_5_low``, ``gpt_5_5_medium``, or ``gpt_5_5_high`` only
                 when the task or the user's wording warrants the GPT-5.5
                 family specifically. Requests to "use all of your thinking effort"

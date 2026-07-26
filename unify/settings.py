@@ -68,7 +68,7 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # Core LLM Settings
     # ─────────────────────────────────────────────────────────────────────────
-    UNIFY_MODEL: str = "gpt-5.6-sol@openai"
+    UNIFY_MODEL: str = "openai/gpt-5.6-sol@openrouter"
     # Reasoning effort paired with UNIFY_MODEL when no per-assistant default is
     # set. Empty leaves per-call-site effort levels untouched.
     UNIFY_REASONING_EFFORT: str = "high"
@@ -79,6 +79,8 @@ class ProductionSettings(BaseSettings):
     OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
+    # OpenRouter — used for ``*@openrouter`` endpoints (platform defaults).
+    OPENROUTER_API_KEY: SecretStr = SecretStr("")
     UNITY_VALIDATE_LLM_PROVIDERS: bool = True
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -305,11 +307,13 @@ class ProductionSettings(BaseSettings):
             "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
+            "OPENROUTER_API_KEY": self.OPENROUTER_API_KEY,
         }
         if not any(available.values()):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
-                "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, and/or DEEPSEEK_API_KEY.",
+                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+                "and/or DEEPSEEK_API_KEY.",
             )
 
 

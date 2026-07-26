@@ -33,9 +33,9 @@ class DataStore:
     - Single-key tables (e.g. Contacts):
       data[contact_id]            → row dict
       data[(contact_id,)]         → row dict
-    - Composite-key tables (e.g. Tasks):
-      data[(task_id, instance_id)]        → row dict
-      data["<task_id>.<instance_id>"]    → row dict
+    - Composite-key tables (e.g. Secrets):
+      data[(secret_id, name)]         → row dict
+      data["<secret_id>.<name>"]      → row dict
 
     Notes
     -----

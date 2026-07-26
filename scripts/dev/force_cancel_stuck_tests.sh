@@ -2,7 +2,7 @@
 # Force-cancel Tests workflow runs that ignore ordinary cancel.
 #
 # Agent policy (do not rediscover under pressure):
-#   .cursor/rules/ci-tests-cancel-zombies.mdc
+#   .agents/rules/ci-tests-cancel-zombies.md
 #
 # Symptom: gh run cancel "succeeds" but cancel_requested_at stays null and
 # jobs remain in_progress on "Run tests" for tens of minutes, holding the

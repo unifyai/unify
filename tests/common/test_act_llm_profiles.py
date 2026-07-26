@@ -24,7 +24,7 @@ def test_default_profile_uses_actor_model():
 def test_gpt_5_5_high_profile_uses_openai_high_effort():
     profile = resolve_act_llm_profile(GPT_5_5_HIGH_ACT_LLM_PROFILE)
 
-    assert profile.model == "gpt-5.5@openai"
+    assert profile.model == "openai/gpt-5.5@openrouter"
     assert profile.reasoning_effort == "high"
     assert profile.client_kwargs == {"reasoning_effort": "high"}
 
@@ -45,8 +45,8 @@ def test_profile_docs_are_curated_and_include_relative_prices():
     }
     assert "roughly 17x the MiniMax input-token rate" in docs
     assert "25x the MiniMax output-token rate" in docs
-    assert "gpt-5.5@openai" in docs
-    assert "gpt-5.6-sol@openai" in docs
+    assert "openai/gpt-5.5@openrouter" in docs
+    assert "openai/gpt-5.6-sol@openrouter" in docs
 
 
 def test_profile_context_is_scoped():

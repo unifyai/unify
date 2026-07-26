@@ -7,6 +7,7 @@
   "providerMaxEdge": {
     "anthropic": 1568,
     "openai": 2048,
+    "openrouter": 2048,
     "google": 4096,
     "gemini": 4096,
     "minimax": 2048,
@@ -15,10 +16,10 @@
     "modelObservationMaxEdge": {
     "claude-4.6-sonnet@anthropic": 1568,
     "claude-4.6-opus@anthropic": 1568,
-    "gpt-5.5@openai": 2048,
-    "gpt-5.6-sol@openai": 2048,
-    "gpt-5.6-terra@openai": 2048,
-    "gpt-5.6-luna@openai": 2048,
+    "openai/gpt-5.5@openrouter": 2048,
+    "openai/gpt-5.6-sol@openrouter": 2048,
+    "openai/gpt-5.6-terra@openrouter": 2048,
+    "openai/gpt-5.6-luna@openrouter": 2048,
     "minimax-v3@minimax": 2048
   }
 }

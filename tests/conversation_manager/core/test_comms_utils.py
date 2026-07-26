@@ -362,6 +362,10 @@ class TestSendUnifyMessage:
                 "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-1"}, None),
+            ),
+            patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
@@ -370,7 +374,11 @@ class TestSendUnifyMessage:
         ):
             mock_settings.DEPLOY_ENV = "production"
             mock_settings.ENV_SUFFIX = ""
+            mock_settings.ORCHESTRA_URL = ""
             mock_session.assistant.agent_id = 42
+            mock_session.unify_key = ""
+            mock_session.boss_contact_id = 1
+            mock_session.user.id = "user-1"
 
             mock_publisher = MagicMock()
             mock_future = MagicMock()
@@ -398,6 +406,10 @@ class TestSendUnifyMessage:
                 "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-1"}, None),
+            ),
+            patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
@@ -406,7 +418,11 @@ class TestSendUnifyMessage:
         ):
             mock_settings.DEPLOY_ENV = "production"
             mock_settings.ENV_SUFFIX = ""
+            mock_settings.ORCHESTRA_URL = ""
             mock_session.assistant.agent_id = 42
+            mock_session.unify_key = ""
+            mock_session.boss_contact_id = 1
+            mock_session.user.id = "user-1"
 
             mock_publisher = MagicMock()
             mock_future = MagicMock()
@@ -436,10 +452,11 @@ class TestSendUnifyMessage:
             assert published_data["event"]["attachments"] == [attachment]
 
     @pytest.mark.asyncio
-    async def test_send_with_team_id_posts_to_orchestra_team_path(self):
-        """Team chat replies post to Orchestra's assistant team messages path."""
+    async def test_send_with_team_id_posts_to_orchestra_chat_messages(self):
+        """Team chat replies post team_id to Orchestra's unified chat path."""
         mock_response = MagicMock()
         mock_response.status_code = 201
+        mock_response.json.return_value = {"id": 99, "thread_id": 5}
         mock_response.text = ""
 
         with (
@@ -447,6 +464,10 @@ class TestSendUnifyMessage:
                 "unisdk.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_room_member_contact_ids",
+                return_value=([1, 4, 6], None),
+            ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
@@ -460,23 +481,27 @@ class TestSendUnifyMessage:
 
             result = await comms_utils.send_unify_message(
                 content="Hello team",
-                contact_id=1,
                 team_id=7,
             )
 
             assert result["success"] is True
+            assert result["participant_contact_ids"] == [1, 4, 6]
             mock_post.assert_called_once()
             assert (
                 mock_post.call_args[0][0]
-                == "http://orchestra.test/v0/assistant/42/teams/7/messages"
+                == "http://orchestra.test/v0/assistant/42/chat/messages"
             )
-            assert mock_post.call_args[1]["json"] == {"content": "Hello team"}
+            assert mock_post.call_args[1]["json"] == {
+                "content": "Hello team",
+                "team_id": 7,
+            }
 
     @pytest.mark.asyncio
-    async def test_send_with_group_id_posts_to_orchestra_group_path(self):
-        """Org chat-group replies post to Orchestra's assistant group messages path."""
+    async def test_send_with_group_id_posts_to_orchestra_chat_messages(self):
+        """Org chat-group replies post group_id to Orchestra's unified chat path."""
         mock_response = MagicMock()
         mock_response.status_code = 201
+        mock_response.json.return_value = {"id": 99, "thread_id": 5}
         mock_response.text = ""
 
         with (
@@ -484,6 +509,10 @@ class TestSendUnifyMessage:
                 "unisdk.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_room_member_contact_ids",
+                return_value=([1, 4], None),
+            ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
@@ -497,7 +526,6 @@ class TestSendUnifyMessage:
 
             result = await comms_utils.send_unify_message(
                 content="Hello group",
-                contact_id=1,
                 group_id=9,
             )
 
@@ -505,15 +533,30 @@ class TestSendUnifyMessage:
             mock_post.assert_called_once()
             assert (
                 mock_post.call_args[0][0]
-                == "http://orchestra.test/v0/assistant/42/groups/9/messages"
+                == "http://orchestra.test/v0/assistant/42/chat/messages"
             )
-            assert mock_post.call_args[1]["json"] == {"content": "Hello group"}
+            assert mock_post.call_args[1]["json"] == {
+                "content": "Hello group",
+                "group_id": 9,
+            }
 
     @pytest.mark.asyncio
-    async def test_group_id_preferred_over_team_id(self):
-        """When both room ids are set, group_id wins."""
+    async def test_rejects_combined_contact_and_team_destination(self):
+        """contact_id and team_id together are invalid."""
+        result = await comms_utils.send_unify_message(
+            content="Nope",
+            contact_id=1,
+            team_id=7,
+        )
+        assert result["success"] is False
+        assert "exactly one" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_contact_id_posts_to_user_id_on_orchestra(self):
+        """1:1 sends map contact_id to Orchestra to_user_id."""
         mock_response = MagicMock()
         mock_response.status_code = 201
+        mock_response.json.return_value = {"id": 11, "thread_id": 3}
         mock_response.text = ""
 
         with (
@@ -521,6 +564,10 @@ class TestSendUnifyMessage:
                 "unisdk.utils.http.post",
                 return_value=mock_response,
             ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-abc"}, None),
+            ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
@@ -533,15 +580,58 @@ class TestSendUnifyMessage:
             mock_session.assistant.agent_id = 42
 
             result = await comms_utils.send_unify_message(
-                content="Prefer group",
-                contact_id=1,
-                team_id=7,
-                group_id=9,
+                content="Hello human",
+                contact_id=4,
             )
 
             assert result["success"] is True
-            assert "/groups/9/messages" in mock_post.call_args[0][0]
-            assert "/teams/" not in mock_post.call_args[0][0]
+            assert mock_post.call_args[1]["json"] == {
+                "content": "Hello human",
+                "to_user_id": "user-abc",
+            }
+
+    @pytest.mark.asyncio
+    async def test_assistant_peer_contact_posts_to_assistant_id(self):
+        """Peer-assistant contacts map to Orchestra to_assistant_id."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {
+            "id": 12,
+            "thread_id": 9,
+            "kind": "assistant_peer_dm",
+        }
+        mock_response.text = ""
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_assistant_id": 777}, None),
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
+            result = await comms_utils.send_unify_message(
+                content="Hello peer",
+                contact_id=9,
+            )
+
+            assert result["success"] is True
+            assert mock_post.call_args[1]["json"] == {
+                "content": "Hello peer",
+                "to_assistant_id": 777,
+            }
 
 
 class TestSendEmailViaAddress:
@@ -741,7 +831,20 @@ class TestLocalCommsBackends:
                 "unify.conversation_manager.domains.comms_utils._get_publisher",
                 return_value=mock_publisher,
             ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-7"}, None),
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
         ):
+            mock_settings.ORCHESTRA_URL = ""
+            mock_session.unify_key = ""
+            mock_session.assistant.agent_id = 42
             result = await comms_utils.send_unify_message(
                 content="Hello world",
                 contact_id=7,

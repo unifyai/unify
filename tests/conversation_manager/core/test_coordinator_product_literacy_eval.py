@@ -43,7 +43,7 @@ _ACCESSIBLE_ORGANIZATIONS = [
 ]
 
 _PRIMARY_LLM_CONFIG = {
-    "model": "gpt-5.5@openai",
+    "model": "openai/gpt-5.5@openrouter",
     "reasoning_effort": "high",
 }
 

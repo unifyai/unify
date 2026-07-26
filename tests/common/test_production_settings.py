@@ -16,7 +16,7 @@ class TestLLMProviderValidation:
     def test_default_model_is_gpt_5_6_sol(self):
         """UNIFY_MODEL defaults to the primary production reasoning model."""
         field_info = ProductionSettings.model_fields["UNIFY_MODEL"]
-        assert field_info.default == "gpt-5.6-sol@openai"
+        assert field_info.default == "openai/gpt-5.6-sol@openrouter"
         effort = ProductionSettings.model_fields["UNIFY_REASONING_EFFORT"]
         assert effort.default == "high"
 
@@ -27,6 +27,7 @@ class TestLLMProviderValidation:
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="",
         )
         with pytest.raises(RuntimeError) as exc_info:
             settings.validate_llm_providers()
@@ -41,6 +42,18 @@ class TestLLMProviderValidation:
             OPENAI_API_KEY="sk-test",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="",
+        )
+        settings.validate_llm_providers()
+
+    def test_validation_passes_when_openrouter_credential_provided(self):
+        """Validation accepts OpenRouter for *@openrouter platform defaults."""
+        settings = ProductionSettings(
+            UNITY_VALIDATE_LLM_PROVIDERS=True,
+            OPENAI_API_KEY="",
+            ANTHROPIC_API_KEY="",
+            DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="sk-or-test",
         )
         settings.validate_llm_providers()
 
@@ -51,6 +64,7 @@ class TestLLMProviderValidation:
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="sk-test",
+            OPENROUTER_API_KEY="",
         )
         settings.validate_llm_providers()
 
@@ -61,6 +75,7 @@ class TestLLMProviderValidation:
             OPENAI_API_KEY="sk-test-openai",
             ANTHROPIC_API_KEY="sk-ant-test",
             DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="sk-or-test",
         )
         # Should not raise
         settings.validate_llm_providers()
@@ -72,6 +87,7 @@ class TestLLMProviderValidation:
             OPENAI_API_KEY="",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="",
         )
         # Should not raise even with empty credentials
         settings.validate_llm_providers()
