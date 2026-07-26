@@ -3165,8 +3165,9 @@ class CommsPrimitives:
         Destination must be exactly one of ``contact_id``, ``team_id``, or
         ``group_id``:
 
-        - ``contact_id``: private 1:1 with that human contact. Peer-assistant
-          contacts are rejected (use a team/group room instead).
+        - ``contact_id``: private 1:1 with that contact (human → owner/peer
+          DM via ``to_user_id``, peer assistant → ``assistant_peer_dm`` via
+          ``to_assistant_id``).
         - ``team_id``: that team's group chat (visible to every member).
         - ``group_id``: that org chat group room.
 
@@ -3181,8 +3182,8 @@ class CommsPrimitives:
         content : str
             Message body to send through the Unify platform.
         contact_id : int | str | None, optional
-            Human contact id for a private 1:1. Mutually exclusive with
-            ``team_id`` / ``group_id``.
+            Contact id for a private 1:1 (human or peer assistant). Mutually
+            exclusive with ``team_id`` / ``group_id``.
         attachment_filepath : str | None, optional
             Workspace-local file path for one attachment (1:1 only).
         team_id : int | None, optional

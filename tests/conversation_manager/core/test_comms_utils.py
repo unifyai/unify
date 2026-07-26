@@ -362,6 +362,10 @@ class TestSendUnifyMessage:
                 "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
             patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-1"}, None),
+            ),
+            patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
             patch(
@@ -401,6 +405,10 @@ class TestSendUnifyMessage:
             patch(
                 "unify.conversation_manager.domains.comms_utils._get_publisher",
             ) as mock_get_publisher,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-1"}, None),
+            ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
             ) as mock_session,
@@ -557,8 +565,8 @@ class TestSendUnifyMessage:
                 return_value=mock_response,
             ) as mock_post,
             patch(
-                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_to_user_id",
-                return_value=("user-abc", None),
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-abc"}, None),
             ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
@@ -583,22 +591,47 @@ class TestSendUnifyMessage:
             }
 
     @pytest.mark.asyncio
-    async def test_rejects_assistant_peer_dm(self):
-        """Peer-assistant contacts cannot be used for Unify 1:1."""
-        with patch(
-            "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_to_user_id",
-            return_value=(
-                None,
-                "assistant-to-assistant Unify 1:1 is not supported; post in a "
-                "team or group room instead",
+    async def test_assistant_peer_contact_posts_to_assistant_id(self):
+        """Peer-assistant contacts map to Orchestra to_assistant_id."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {
+            "id": 12,
+            "thread_id": 9,
+            "kind": "assistant_peer_dm",
+        }
+        mock_response.text = ""
+
+        with (
+            patch(
+                "unisdk.utils.http.post",
+                return_value=mock_response,
+            ) as mock_post,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_assistant_id": 777}, None),
             ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SESSION_DETAILS",
+            ) as mock_session,
+            patch(
+                "unify.conversation_manager.domains.comms_utils.SETTINGS",
+            ) as mock_settings,
         ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.assistant.agent_id = 42
+
             result = await comms_utils.send_unify_message(
                 content="Hello peer",
                 contact_id=9,
             )
-        assert result["success"] is False
-        assert "assistant-to-assistant" in result["error"]
+
+            assert result["success"] is True
+            assert mock_post.call_args[1]["json"] == {
+                "content": "Hello peer",
+                "to_assistant_id": 777,
+            }
 
 
 class TestSendEmailViaAddress:
@@ -799,8 +832,8 @@ class TestLocalCommsBackends:
                 return_value=mock_publisher,
             ),
             patch(
-                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_to_user_id",
-                return_value=("user-7", None),
+                "unify.conversation_manager.domains.comms_utils.resolve_unify_dm_destination",
+                return_value=({"to_user_id": "user-7"}, None),
             ),
             patch(
                 "unify.conversation_manager.domains.comms_utils.SETTINGS",
