@@ -43,7 +43,11 @@ def _admin_key() -> Optional[str]:
     return SESSION_DETAILS.unify_key or None
 
 
-def touch_assistant_activity(assistant_id: int | str | None) -> bool:
+def touch_assistant_activity(
+    assistant_id: int | str | None,
+    *,
+    thread_id: str | None = None,
+) -> bool:
     """Notify orchestra that the assistant just exchanged a message.
 
     Best-effort: returns True on 2xx, False otherwise (including any
@@ -51,6 +55,8 @@ def touch_assistant_activity(assistant_id: int | str | None) -> bool:
     orchestra config is missing.
 
     :param assistant_id: The assistant's agent_id. Coerced to int.
+    :param thread_id: Optional email thread id. When it matches a stored
+        inactivity check-in thread, Orchestra skips re-arming cadence.
     :return: True if the call succeeded, False otherwise.
     """
     if assistant_id is None:
@@ -78,7 +84,15 @@ def touch_assistant_activity(assistant_id: int | str | None) -> bool:
 
         url = f"{base_url.rstrip('/')}/assistant/{agent_id_int}/touch-activity"
         headers = {"Authorization": f"Bearer {admin_key}"}
-        resp = http.post(url, headers=headers, timeout=10)
+        payload = {}
+        if thread_id:
+            payload["thread_id"] = str(thread_id)
+        resp = http.post(
+            url,
+            headers=headers,
+            json=payload if payload else None,
+            timeout=10,
+        )
         if 200 <= resp.status_code < 300:
             return True
         _log.warning(

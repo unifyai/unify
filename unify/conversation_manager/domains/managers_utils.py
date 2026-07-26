@@ -1506,6 +1506,8 @@ async def log_message(
                     "cc": event.cc,
                     "bcc": event.bcc,
                 }
+                if event.thread_id:
+                    metadata["thread_id"] = event.thread_id
             elif isinstance(event, EmailSent):
                 metadata = {
                     "email_id_replied_to": event.email_id_replied_to,
@@ -1513,6 +1515,8 @@ async def log_message(
                     "cc": event.cc,
                     "bcc": event.bcc,
                 }
+                if getattr(event, "thread_id", None):
+                    metadata["thread_id"] = event.thread_id
             elif isinstance(event, (UnifyMessageReceived, UnifyMessageSent)):
                 # Mirror the unified chat-store scope onto the Transcripts
                 # row: thread_id keys the conversation, team_id/group_id mark
