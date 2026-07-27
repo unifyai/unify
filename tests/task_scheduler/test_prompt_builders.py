@@ -134,7 +134,10 @@ def test_build_update_prompt_includes_provider_event_guidance() -> None:
         "resolve required resources → create with trigger_config filled → enable"
         in prompt
     )
-    assert "not `live_ready`" in prompt
+    assert "only when the catalog row explicitly has `live_ready=false`" in prompt
+    assert "`null` means there is no native lifecycle gate" in prompt
+    assert "not that the trigger is unavailable" in prompt
+    assert "provisioning, and health checks" in prompt
     assert "delivery_only=true" in prompt
     assert "list_provider_trigger_resources" in prompt
     assert "never watch all of My Drive" in prompt
@@ -159,4 +162,6 @@ def test_build_ask_prompt_includes_provider_event_discovery_guidance() -> None:
     assert "do not claim the provider lacks that trigger globally" in prompt
     assert "copy a selectable item's `trigger_config`" in prompt
     assert "do not invent provider ids" in prompt
-    assert "live_ready=false" in prompt
+    assert "Only explicit live_ready=false, provisionable=false, or delivery_only=true" in prompt
+    assert "null means the catalog has no native lifecycle gate" in prompt
+    assert "provisioning, and health checks" in prompt
