@@ -1372,8 +1372,9 @@ Prefer the durable full stack above. When isolated Orchestra is required
 
 # Shared agent conversation archive
 
-Unify keeps a private repo of **raw** agent transcripts at `~/shared_context`
-(GitHub: `unifyai/shared_context`) for `dan`, `haris`, and `julia`.
+Unify keeps a private repo of **raw** agent transcripts at `~/unify/shared_context`
+(GitHub: `unifyai/shared_context`, submodule of `unify`) keyed by **GitHub login**
+(e.g. `djl11`).
 
 ## When to load this
 
@@ -1384,24 +1385,36 @@ only the current chat.
 
 ## How to search
 
-Prefer ripgrep over reading whole files:
+Prefer ripgrep over reading whole files. Search **tracked** login trees only —
+**do not** search `yours/` unless the user explicitly asks about their local /
+unexported chats:
 
 ```bash
-rg -n -i "keyword" ~/shared_context/raw
-rg -n -i "keyword" ~/shared_context/derived/index.jsonl
+rg -n -i "keyword" ~/unify/shared_context/derived/index.jsonl
+rg -n -i "keyword" ~/unify/shared_context -g '!yours/**' -g '!tools/**' -g '!.git/**'
 ```
 
 `derived/index.jsonl` is rebuilt locally by `tools/sync.sh` / `tools/export.py`
-after pull (gitignored). If it is missing, search `raw/` directly or run:
+after pull (gitignored). If it is missing, search tracked trees directly or run:
 
 ```bash
-python3 ~/shared_context/tools/export.py --index-only
+python3 ~/unify/shared_context/tools/export.py --index-only
 ```
 
-Sessions live at `raw/<user>/<tool>/<yyyy-mm>/<id>/{meta.json,transcript.jsonl}`.
+Sessions live at
+`<github_login>/{cursor|codex|claude-code}/<yyyy-mm>/<id>/{meta.json,transcript.jsonl}`.
 
-If `~/shared_context` is missing, say so and point at
-`git clone git@github.com:unifyai/shared_context.git ~/shared_context`.
+`yours/{cursor,codex,claude-code}` are local symlinks to personal stores and are
+gitignored.
+
+If `~/unify/shared_context` is missing, say so and suggest:
+
+```bash
+cd ~/unify && git submodule update --init shared_context
+```
+
+A legacy symlink `~/shared_context` → `~/unify/shared_context` may exist; prefer
+the unify submodule path.
 
 ## Citing
 
@@ -1412,6 +1425,7 @@ Cite **user**, **tool**, **date**, and **path** so a human can open the same ses
 - Do not confuse this with `brain` (curated company memory).
 - Do not scrub or rewrite historical transcripts.
 - Do not push/sync unless the user asked you to.
+- Do not grep `yours/` unless the user asked for local-only context.
 
 # Orchestra / DataManager: Server-Side Queries First
 
