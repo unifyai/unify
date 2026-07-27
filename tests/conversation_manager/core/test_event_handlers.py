@@ -2648,6 +2648,7 @@ class TestTaskDueEventHandlers:
             source_task_log_id=555,
             revision="rev-1",
             task_name="Morning briefing",
+            task_description="Deliver the overnight briefing summary unprompted.",
         )
         mock_cm.actor = MagicMock()
         captured: dict[str, object] = {}
@@ -2688,6 +2689,10 @@ class TestTaskDueEventHandlers:
         assert captured["task_id"] == 101
         assert captured["_activated_by"] == ActivatedBy.schedule
         assert captured["delegate"] is not None
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver the overnight briefing summary unprompted."
+        )
 
     @pytest.mark.asyncio
     @_handle_project
@@ -2759,6 +2764,7 @@ class TestTaskDueEventHandlers:
             source_task_log_id=source_task_log_id,
             revision="rev-1",
             task_name="Scheduled integration report",
+            task_description="Prepare the scheduled report.",
         )
         mock_cm.actor = actor
 
@@ -2819,6 +2825,10 @@ class TestTaskDueEventHandlers:
         assert calls
         assert calls[0]["guidelines"] is not None
         assert calls[0]["persist"] is False
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Prepare the scheduled report."
+        )
 
         rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
@@ -3184,6 +3194,145 @@ class TestTriggeredTaskNotifications:
         assert provenance.source_task_log_id == 9001
         assert provenance.source_ref == "req-abc"
         mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rest_task_trigger_start_passes_task_description_through(
+        self,
+        mock_cm,
+    ):
+        """REST-triggered task registration must carry the authored task
+        description through to completed-actions rendering, so the brain
+        sees delivery intent (e.g. "deliver unprompted") next to the result.
+        """
+
+        from types import SimpleNamespace
+
+        from unify.conversation_manager.domains.renderer import Renderer
+        from unify.conversation_manager.domains.task_execution import (
+            _start_live_task_trigger_execution,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_task = SimpleNamespace(
+            description=(
+                "Deliver this summary unprompted to Yusha via task "
+                "completion delivery."
+            ),
+        )
+        fake_scheduler = MagicMock()
+        fake_scheduler.execute = AsyncMock(return_value=MagicMock())
+        fake_scheduler._get_task_or_raise = MagicMock(return_value=fake_task)
+
+        event = TaskTriggerRequested(
+            task_id=301,
+            source_task_log_id=9001,
+            source_ref="req-abc",
+            task_label="Review report",
+            task_summary="Review the weekly report.",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
+                return_value=fake_scheduler,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            handle_id = await _start_live_task_trigger_execution(event, mock_cm)
+
+        fake_scheduler._get_task_or_raise.assert_called_once_with(301)
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver this summary unprompted to Yusha via task completion delivery."
+        )
+
+        # Simulate the handle reaching completion and confirm the rendered
+        # <completed_actions> block carries both tags the brain relies on.
+        completed_actions = {
+            handle_id: {
+                **mock_cm.in_flight_actions[handle_id],
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Report reviewed.",
+                        "success": True,
+                        "result": "Report reviewed.",
+                    },
+                ],
+            },
+        }
+        rendered = Renderer().render_completed_actions(completed_actions)
+        assert "<original_request>" in rendered
+        assert (
+            "<task_description>Deliver this summary unprompted to Yusha via "
+            "task completion delivery.</task_description>" in rendered
+        )
+
+    @pytest.mark.asyncio
+    async def test_rest_task_trigger_start_tolerates_missing_task_lookup(
+        self,
+        mock_cm,
+    ):
+        """A failed description lookup must not block task-trigger startup."""
+
+        from unify.conversation_manager.domains.task_execution import (
+            _start_live_task_trigger_execution,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_scheduler = MagicMock()
+        fake_scheduler.execute = AsyncMock(return_value=MagicMock())
+        fake_scheduler._get_task_or_raise = MagicMock(
+            side_effect=ValueError("No task found with id=301"),
+        )
+
+        event = TaskTriggerRequested(
+            task_id=301,
+            source_task_log_id=9001,
+            source_ref="req-abc",
+            task_label="Review report",
+            task_summary="Review the weekly report.",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
+                return_value=fake_scheduler,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            handle_id = await _start_live_task_trigger_execution(event, mock_cm)
+
+        assert handle_id in mock_cm.in_flight_actions
+        assert "task_description" not in mock_cm.in_flight_actions[handle_id]
 
     @pytest.mark.asyncio
     async def test_inbound_message_surfaces_trigger_candidates(self, mock_cm):
