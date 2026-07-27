@@ -843,6 +843,25 @@ const startBrowserOnVm = async (
 }
 
 // --- Google Meet browser launcher ---
+
+// Fixed page geometry for the Meet browser.
+//
+// The width is capped by the vision budget, not by taste: the planner receives
+// a screenshot scaled only by 1/devicePixelRatio (magnitude-core's WebHarness)
+// and answers in CSS pixels, so the image must reach the model unresized or its
+// coordinates land short of their target. ``modelObservationMaxEdge`` in
+// ``unify/common/observation_scaling_policy.json`` puts that ceiling at 1568px
+// for the Claude models this service runs on, and 1280x800 is one of the
+// declared ``defaultAspectTargets`` underneath it — wide enough for Meet's
+// desktop layout, small enough to survive the trip intact.
+const MEET_VIEWPORT = { width: 1280, height: 800 };
+
+// The OS window has to outsize the page it hosts, or the tab renders into
+// something smaller than the viewport it was promised and the screenshot no
+// longer matches what a click at those coordinates will hit. The slack covers
+// the tab strip and omnibox.
+const MEET_WINDOW_HEIGHT = MEET_VIEWPORT.height + 120;
+
 const startGoogleMeetBrowser = async (
   meetUrl: string,
   storageStateName?: string,
@@ -862,6 +881,8 @@ const startGoogleMeetBrowser = async (
           "--disable-features=IsolateOrigins,site-per-process",
           '--auto-select-desktop-capture-source="Entire screen"',
           '--auto-select-tab-capture-source-by-title=Desktop',
+          `--window-size=${MEET_VIEWPORT.width},${MEET_WINDOW_HEIGHT}`,
+          "--window-position=0,0",
         ],
         env: {
           ...process.env,
@@ -872,7 +893,15 @@ const startGoogleMeetBrowser = async (
         tracesDir: defaultBrowserPaths.tracesDir || undefined,
       },
       contextOptions: {
-        viewport: null,
+        // Pinned rather than inherited from the window (``viewport: null``):
+        // every click the planner emits is an absolute coordinate read off a
+        // screenshot, so the join is only as reliable as the layout is
+        // reproducible. An inherited viewport is whatever Chromium negotiates
+        // with the window manager — a 1920x1080 desktop yielded a 937px-wide
+        // page, which is Meet's narrow layout and a different control map from
+        // the one the same prompts hit elsewhere. See MEET_VIEWPORT for the
+        // width choice.
+        viewport: { ...MEET_VIEWPORT },
         ignoreHTTPSErrors: true,
         permissions: ['camera', 'microphone'],
       },
