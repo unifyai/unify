@@ -102,6 +102,11 @@ class _FailingHandle:
         raise RuntimeError("occurrence blew up")
 
 
+class _SuccessfulHandle:
+    async def result(self):
+        return "completed inbox summary"
+
+
 class _FakeScheduler:
     def __init__(self):
         self.status_updates: list[tuple[int, str]] = []
@@ -124,7 +129,6 @@ def _active_task(scheduler: _FakeScheduler, *, rearmed: bool) -> ActiveTask:
     task._preserve_definition_status = False
     task._definition_rearmed = rearmed
     task._summary_scheduled = True
-    task._task_run_lineage_tokens = None
 
     async def _noop_persist(**kwargs):
         return None
@@ -147,6 +151,19 @@ def test_failed_run_terminalizes_non_rearmed_definition():
     with pytest.raises(RuntimeError, match="occurrence blew up"):
         asyncio.run(task.result())
     assert scheduler.status_updates == [(10, "failed")]
+
+
+def test_successful_result_survives_terminal_persistence_failure():
+    scheduler = _FakeScheduler()
+    task = _active_task(scheduler, rearmed=False)
+    task._actor_handle = _SuccessfulHandle()
+
+    async def _failing_persist(**kwargs):
+        raise RuntimeError("storage unavailable")
+
+    task._persist_task_run_terminal_state = _failing_persist
+
+    assert asyncio.run(task.result()) == "completed inbox summary"
 
 
 # --------------------------------------------------------------------------- #
