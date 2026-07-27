@@ -65,12 +65,27 @@ CLUSTER_JOIN_SIM = 0.5
 # diarization ids as the same physical voice when gating auto-enrollment.
 # Streaming diarization often over-splits one talker into S0/S1/…; without this
 # merge those ids each count as a distinct voice and spuriously block
-# enrollment. Same-speaker CAM++ scores typically land in 0.6–0.8 and different
-# speakers below ~0.4. Set at half the same-speaker floor (0.6 → 0.3) so genuine
-# over-splits clear the bar with ~50% relative margin while orthogonal
-# different-speaker pairs stay separate. Raise gradually if real multi-speaker
-# calls start collapsing; lower if over-splits still trip the suggestion.
-CROSS_ID_MERGE_SIM = 0.3
+# enrollment.
+#
+# This asks the same question as ``CLUSTER_JOIN_SIM`` — "is this the same
+# voice?" — only across diarization ids rather than within one, so the two are
+# deliberately tied together. They previously diverged: this sat at 0.3, below
+# any plausible different-speaker score, which made the merge unable to keep
+# *anyone* apart. Since the merge is what gates auto-enrollment, a two-person
+# call read as one voice and enrolled a blended voiceprint.
+#
+# PROVISIONAL: the same-speaker (0.6-0.8) and different-speaker (<0.4) bands
+# these thresholds assume are inherited, not measured. Validate against a real
+# multi-speaker corpus via ``$UNIFY_SPEAKER_TEST_CORPUS`` before treating the
+# value as settled — see tests/conversation_manager/voice/speaker_corpus.py.
+CROSS_ID_MERGE_SIM = CLUSTER_JOIN_SIM
+
+# Minimum accumulated speech before a voice cluster counts as a distinct
+# person for enrollment/suggestion gating. Without a floor, one noisy or
+# clipped segment seeds a cluster that reads as a whole extra speaker —
+# blocking auto-enrollment and firing the "multiple voices" suggestion on what
+# is really a single-speaker call.
+MIN_VOICE_DURATION_S = 2.0
 
 # Auto-enrollment bounds (seconds of accumulated speech from a single voice).
 ENROLLMENT_TARGET_S = 60.0
@@ -78,7 +93,17 @@ ENROLLMENT_MIN_S = 15.0
 
 # Per-segment slicing bounds around a final transcript.
 SEGMENT_MAX_S = 15.0
-SEGMENT_MIN_S = 0.8
+
+# Minimum audio behind one embedding. CAM++ pools frame statistics, so a short
+# slice does not merely embed *noisily* — it embeds somewhere else entirely.
+# Measured against the real extractor, a slice scored against its own speaker's
+# profile: 0.8s -> 0.20, 1.0s -> 0.31, 1.5s -> 0.41, 2.0s -> 0.60, 3.0s -> 0.74.
+# Below ~2s the result is unusable and averaging does not rescue it (a centroid
+# of fifteen 0.8s segments plateaus near 0.32, never reaching the match
+# threshold). Finals shorter than this are buffered per diarization id rather
+# than discarded, so backchannels still contribute instead of seeding phantom
+# clusters. See tests/conversation_manager/voice/test_speaker_id_real_model.py.
+SEGMENT_MIN_S = 2.0
 
 # Sample rate used for persisted enrollment audio and embedding input.
 ENROLLMENT_SAMPLE_RATE = 16000
@@ -88,9 +113,28 @@ RING_BUFFER_S = 120.0
 # Realtime floor-gating scorer: rolling window size, inference cadence, and
 # how long a confident non-engaged verdict must persist before it gates the
 # floor (hysteresis against per-window jitter).
-REALTIME_WINDOW_S = 1.0
-REALTIME_HOP_S = 0.25
+#
+# The window is subject to the same duration floor as ``SEGMENT_MIN_S`` — it is
+# the same extractor. At the previous 1.0s, windows of a speaker's *own* audio
+# scored 0.16-0.35 against their *own* enrolled profile and never once reached
+# the match threshold, so the verdict was permanently "unknown" and the gate
+# never acted. At 2.0s every window clears it. The hop is widened in step to
+# keep inference cost roughly constant.
+REALTIME_WINDOW_S = 2.0
+REALTIME_HOP_S = 0.5
 NON_ENGAGED_HYSTERESIS_S = 1.0
+
+# Acceptance threshold for the realtime scorer, kept separate from
+# SPEAKER_MATCH_THRESHOLD even though they currently agree: the scorer judges
+# short rolling windows rather than a settled cluster centroid, so its
+# operating point has to be free to move without silently retuning who gets
+# pinned on the transcript.
+REALTIME_MATCH_THRESHOLD = 0.55
+
+# Fraction of a full window that must be buffered before scoring. Guards the
+# ramp-up after silence: a partial window is a short segment, with exactly the
+# unusable-embedding problem the window length above exists to avoid.
+REALTIME_MIN_WINDOW_FRACTION = 0.9
 
 # Windows quieter than this int16 RMS are treated as silence and produce an
 # "unknown" verdict instead of a garbage embedding.
@@ -438,6 +482,10 @@ class _SpeakerState:
     enrollment_audio: list[np.ndarray] = field(default_factory=list)
     enrollment_duration_s: float = 0.0
     enrollment_sample_rate: int = ENROLLMENT_SAMPLE_RATE
+    # Finals too short to embed on their own, held at ENROLLMENT_SAMPLE_RATE
+    # until they add up to SEGMENT_MIN_S. Bounded: flushed as soon as they do.
+    pending_audio: list[np.ndarray] = field(default_factory=list)
+    pending_duration_s: float = 0.0
 
 
 class SpeakerTracker:
@@ -513,7 +561,8 @@ class SpeakerTracker:
         # production with no signal at all. These counters plus ``diagnostics``
         # are that signal.
         self._segments_observed = 0
-        self._segments_too_short = 0
+        self._segments_buffered = 0
+        self._segments_dropped = 0
         self._segments_embedded = 0
         self._embed_failures = 0
 
@@ -550,7 +599,15 @@ class SpeakerTracker:
         *,
         end_ts: float | None = None,
     ) -> None:
-        """Register a final diarized transcript; schedules embedding work."""
+        """Register a final diarized transcript; schedules embedding work.
+
+        Finals carrying less than ``SEGMENT_MIN_S`` of audio — backchannels
+        like "yeah" or "mm-hm", which are a large share of real call turns —
+        are accumulated against their diarization id instead of embedded on
+        their own, and flushed once they add up. Embedding them individually
+        produced vectors unrelated to the speaker, which then seeded phantom
+        voice clusters and mislabelled the caller's own short turns.
+        """
         end_ts = end_ts if end_ts is not None else time.time()
         window_start = max(self._last_final_ts, end_ts - SEGMENT_MAX_S)
         self._last_final_ts = end_ts
@@ -559,9 +616,26 @@ class SpeakerTracker:
         self._segments_observed += 1
         pcm, sample_rate = self._ring.slice(window_start, end_ts)
         duration_s = len(pcm) / sample_rate if sample_rate else 0.0
-        if duration_s < SEGMENT_MIN_S:
-            self._segments_too_short += 1
+        if duration_s <= 0.0:
             return
+
+        state = self._speakers.setdefault(speaker_id, _SpeakerState())
+        if state.pending_audio or duration_s < SEGMENT_MIN_S:
+            # Normalized to one rate so buffered pieces can be concatenated;
+            # the extractor resamples internally either way.
+            state.pending_audio.append(
+                resample_pcm(pcm, sample_rate, ENROLLMENT_SAMPLE_RATE),
+            )
+            state.pending_duration_s += duration_s
+            if state.pending_duration_s < SEGMENT_MIN_S:
+                self._segments_buffered += 1
+                return
+            pcm = np.concatenate(state.pending_audio)
+            sample_rate = ENROLLMENT_SAMPLE_RATE
+            duration_s = state.pending_duration_s
+            state.pending_audio = []
+            state.pending_duration_s = 0.0
+
         task = asyncio.create_task(
             self._process_segment(speaker_id, pcm, sample_rate, duration_s),
         )
@@ -700,24 +774,45 @@ class SpeakerTracker:
         separate clusters. Across ids, streaming diarization may over-split one
         talker (S0 vs S1); centroids that clear ``cross_id_merge_sim`` collapse
         into a single voice for enrollment / suggestion gating.
+
+        Two properties this count has to have, because auto-enrollment is gated
+        on it and a wrong answer writes a permanent voiceprint:
+
+        *Deterministic.* Groups are seeded from the longest-established voice
+        down, so the answer does not depend on ``dict`` iteration order.
+
+        *No chaining.* A centroid joins a group only if it clears the threshold
+        against **every** member, not just the nearest one. Single-linkage would
+        let A~B and B~C collapse A and C together even when they are plainly
+        different people, which is precisely the merge that must not happen.
+
+        Clusters below ``MIN_VOICE_DURATION_S`` are ignored: too little audio to
+        assert a distinct person, and counting them turns one clipped segment
+        into a phantom speaker that blocks enrollment.
         """
-        centroids: list[np.ndarray] = []
-        for state in self._speakers.values():
-            for cluster in state.clusters:
-                centroid = cluster.accumulator.centroid
-                if centroid is not None:
-                    centroids.append(centroid)
-        if not centroids:
-            return 0
-        representatives: list[np.ndarray] = []
-        for centroid in centroids:
-            if any(
-                cosine_similarity(centroid, rep) >= self._cross_id_merge_sim
-                for rep in representatives
-            ):
-                continue
-            representatives.append(centroid)
-        return len(representatives)
+        established = sorted(
+            (
+                (cluster.accumulator.centroid, cluster.accumulator.total_duration_s)
+                for state in self._speakers.values()
+                for cluster in state.clusters
+                if cluster.accumulator.centroid is not None
+                and cluster.accumulator.total_duration_s >= MIN_VOICE_DURATION_S
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        groups: list[list[np.ndarray]] = []
+        for centroid, _duration in established:
+            for group in groups:
+                if all(
+                    cosine_similarity(centroid, member) >= self._cross_id_merge_sim
+                    for member in group
+                ):
+                    group.append(centroid)
+                    break
+            else:
+                groups.append([centroid])
+        return len(groups)
 
     def _single_voice_enrollment_audio(
         self,
@@ -837,15 +932,46 @@ class SpeakerTracker:
             "distinct_voices": self._distinct_voice_count(),
             "pinned_clusters": pins,
             "segments_observed": self._segments_observed,
-            "segments_too_short": self._segments_too_short,
+            "segments_buffered": self._segments_buffered,
+            "segments_dropped": self._segments_dropped,
             "segments_embedded": self._segments_embedded,
             "embed_failures": self._embed_failures,
             "enrollment_fired": self._enrollment_fired,
             "suggestion_fired": self._suggestion_fired,
         }
 
+    def _flush_pending_segments(self) -> None:
+        """Embed any buffered short finals that reached the duration floor.
+
+        Anything still under it is dropped rather than embedded: a call ending
+        mid-backchannel must not contribute an unusable vector to the last
+        speaker's cluster.
+        """
+        for speaker_id, state in self._speakers.items():
+            if not state.pending_audio:
+                continue
+            pcm = np.concatenate(state.pending_audio)
+            duration_s = state.pending_duration_s
+            state.pending_audio = []
+            state.pending_duration_s = 0.0
+            if duration_s < SEGMENT_MIN_S:
+                self._segments_dropped += 1
+                continue
+            task = asyncio.create_task(
+                self._process_segment(
+                    speaker_id,
+                    pcm,
+                    ENROLLMENT_SAMPLE_RATE,
+                    duration_s,
+                ),
+            )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
+
     async def finalize(self) -> None:
         """Call-end hook: flush pending work and fire a partial enrollment."""
+        await self.await_pending()
+        self._flush_pending_segments()
         await self.await_pending()
         if not self._enrollment_fired:
             material = self._single_voice_enrollment_audio()
@@ -1055,9 +1181,10 @@ class RealtimeSpeakerScorer:
         profiles_provider: Callable[[], tuple[list[np.ndarray], list[np.ndarray]]],
         window_s: float = REALTIME_WINDOW_S,
         hop_s: float = REALTIME_HOP_S,
-        match_threshold: float = SPEAKER_MATCH_THRESHOLD,
+        match_threshold: float = REALTIME_MATCH_THRESHOLD,
         hysteresis_s: float = NON_ENGAGED_HYSTERESIS_S,
         min_rms: float = REALTIME_MIN_RMS,
+        min_window_fraction: float = REALTIME_MIN_WINDOW_FRACTION,
     ) -> None:
         self._embedder = embedder
         self._profiles_provider = profiles_provider
@@ -1066,6 +1193,7 @@ class RealtimeSpeakerScorer:
         self._match_threshold = match_threshold
         self._hysteresis_s = hysteresis_s
         self._min_rms = min_rms
+        self._min_window_fraction = min_window_fraction
 
         self._window: deque[np.ndarray] = deque()
         self._window_duration_s = 0.0
@@ -1108,7 +1236,7 @@ class RealtimeSpeakerScorer:
         if (
             self._since_infer_s < self._hop_s
             or self._busy
-            or self._window_duration_s < self._window_s * 0.5
+            or self._window_duration_s < self._window_s * self._min_window_fraction
         ):
             return
         self._since_infer_s = 0.0

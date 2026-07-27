@@ -400,10 +400,74 @@ class TestSpeakerTracker:
     async def test_short_segments_ignored(self):
         tracker = _make_tracker(enrolled={5: VOICE_A})
         clock = _Clock()
-        # Below SEGMENT_MIN_S: no embedding scheduled.
+        # Below SEGMENT_MIN_S and never topped up: buffered, then dropped at
+        # finalize rather than embedded, so it contributes no cluster.
         _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.2)
         await tracker.finalize()
         assert tracker.resolve("S0") is None
+        assert tracker.diagnostics()["segments_dropped"] == 1
+
+    async def test_short_segments_accumulate_until_they_can_be_embedded(self):
+        """Backchannels are buffered per id, not discarded.
+
+        Several sub-threshold finals from one speaker are concatenated and
+        embedded once together, so the speaker is still attributed instead of
+        the turns vanishing.
+        """
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        for _ in range(3):
+            _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.9)
+        await tracker.finalize()
+
+        resolution = tracker.resolve("S0")
+        assert resolution is not None
+        assert resolution.contact_id == 5
+        stats = tracker.diagnostics()
+        assert stats["segments_observed"] == 3
+        assert stats["segments_buffered"] == 2  # first two held, third flushed
+        assert stats["segments_embedded"] == 1  # one embedding for all three
+        assert stats["clusters"] == 1
+
+    async def test_buffered_audio_is_prepended_to_the_next_full_segment(self):
+        """A short turn followed by a long one yields a single merged segment.
+
+        The buffered audio must not be stranded: it belongs to the same voice,
+        so it is carried into the next embedding rather than dropped.
+        """
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=0.9)
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.finalize()
+
+        stats = tracker.diagnostics()
+        assert stats["segments_buffered"] == 1
+        assert stats["segments_embedded"] == 1
+        assert stats["segments_dropped"] == 0
+        assert tracker._speakers["S0"].pending_duration_s == 0.0
+        # Both turns' audio is behind the one cluster.
+        cluster = tracker._speakers["S0"].clusters[0]
+        assert cluster.accumulator.total_duration_s == pytest.approx(3.9, abs=0.05)
+
+    async def test_short_segments_buffer_per_diarization_id(self):
+        """One speaker's backchannels never top up another speaker's buffer."""
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=1.2)
+        _feed_segment(tracker, clock, "S1", amplitude=9000, seconds=1.2)
+        await tracker.await_pending()
+
+        # Neither id has reached SEGMENT_MIN_S on its own.
+        assert tracker.diagnostics()["segments_embedded"] == 0
+        assert tracker._speakers["S0"].pending_duration_s == pytest.approx(
+            1.2,
+            abs=0.05,
+        )
+        assert tracker._speakers["S1"].pending_duration_s == pytest.approx(
+            1.2,
+            abs=0.05,
+        )
 
     async def test_co_located_voices_split_into_clusters(self):
         # A single diarization id (S0) that actually carries two physically
