@@ -1086,7 +1086,15 @@ async def _(
     # setup or agent dispatch) it races the join and LiveKit kills the job with
     # "Start signal not received", producing no file. Browser meets are excluded
     # by the gateway: their audio never enters the LiveKit room.
-    await _start_session_recording(event, cm)
+    #
+    # Detached deliberately: the request is a gateway round-trip that ends in a
+    # LiveKit API call, and everything below (the outbound call_answered status,
+    # the meet interaction-state sync, guidance delivery) is call-start UX that
+    # must not wait on it. A slow or unreachable gateway would otherwise stall
+    # the answer transition for as long as the request takes to time out.
+    _recording_task = asyncio.create_task(_start_session_recording(event, cm))
+    cm._recording_start_tasks.add(_recording_task)
+    _recording_task.add_done_callback(cm._recording_start_tasks.discard)
 
     if isinstance(event, UnifyMeetStarted) and cm.call_manager.is_outbound:
         await cm.event_broker.publish(
