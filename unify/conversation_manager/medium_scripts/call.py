@@ -103,6 +103,14 @@ SPEAKER_EMBEDDER = None
 # Module-level logger created early for prewarm (before entrypoint runs).
 _log = FastBrainLogger()
 
+# Channels where many people share one audio stream with no single primary, so
+# every distinct voice needs its own "Speaker N" label even when nobody on the
+# call is enrolled. Deliberately wider than the ("google_meet", "teams_meet")
+# checks elsewhere in this module: those mean *browser* meets specifically —
+# DOM scraping and the PortAudio bridge — whereas Unify Meet is LiveKit-native
+# but just as multi-party.
+MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
+
 DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
@@ -878,10 +886,18 @@ class Assistant(Agent):
 
         async def _audio_from_bridge():
             tracker = self.speaker_tracker
+            scorer = self.realtime_scorer
             while True:
                 pcm = await self.audio_bridge.capture_q.get()
                 if tracker is not None:
                     tracker.add_audio(pcm, _RATE, 1)
+                if scorer is not None:
+                    # The LiveKit room carries no caller audio on a browser
+                    # meet, so the scorer's usual feed inside EngagedGateVAD is
+                    # silent and its verdict never leaves "unknown". This is
+                    # the only real audio on this channel; the VAD wrapper is
+                    # constructed with feed_scorer=False to keep it single-fed.
+                    scorer.add_audio(pcm, _RATE, 1)
                 samples = len(pcm) // 2
                 yield rtc.AudioFrame(
                     data=pcm,
@@ -1660,8 +1676,19 @@ async def entrypoint(ctx: agents.JobContext):
     # Pins Deepgram's per-call anonymous speaker ids to enrolled contact voice
     # profiles, accumulates an auto-enrollment on single-voice calls, and
     # suggests manual enrollment when multiple unattributable voices are heard.
+    # Dispatch metadata on the worker path; an env var on the legacy per-call
+    # subprocess path, which has no metadata to carry them.
+    _raw_profiles = (meta or {}).get("voice_profiles")
+    if not _raw_profiles:
+        try:
+            _raw_profiles = json.loads(
+                os.environ.get(speaker_id.VOICE_PROFILES_ENV, "") or "{}",
+            )
+        except json.JSONDecodeError:
+            _log.error("Malformed VOICE_PROFILES env var; speaker pinning disabled")
+            _raw_profiles = {}
     voice_profiles: dict[int, list[float]] = {}
-    for _cid, _vec in ((meta or {}).get("voice_profiles") or {}).items():
+    for _cid, _vec in (_raw_profiles or {}).items():
         try:
             voice_profiles[int(_cid)] = [float(x) for x in _vec]
         except (TypeError, ValueError):
@@ -1720,7 +1747,7 @@ async def entrypoint(ctx: agents.JobContext):
             embedder=SPEAKER_EMBEDDER,
             enrolled_profiles=voice_profiles,
             call_contact_id=contact.get("contact_id"),
-            multi_party=channel in ("google_meet", "teams_meet"),
+            multi_party=channel in MULTI_PARTY_CHANNELS,
             on_enrollment_captured=_on_enrollment_captured,
             on_enrollment_suggested=_on_enrollment_suggested,
         )
@@ -1778,7 +1805,13 @@ async def entrypoint(ctx: agents.JobContext):
                 engaged_speakers,
             ),
         )
-        session_vad = EngagedGateVAD(inner=VAD, scorer=realtime_scorer)
+        session_vad = EngagedGateVAD(
+            inner=VAD,
+            scorer=realtime_scorer,
+            # Browser meets feed the scorer from the PortAudio bridge instead
+            # (see Assistant.stt_node); one source only.
+            feed_scorer=channel not in ("google_meet", "teams_meet"),
+        )
         _log.config("Engaged-speaker floor gating active (call contact enrolled)")
 
     def _speaker_is_engaged(sid: str | None) -> bool:
@@ -3190,6 +3223,17 @@ async def entrypoint(ctx: agents.JobContext):
             meet_session_id = data.get("session_id", "")
         elif event_type == "unify_meet_roster":
             incoming = data.get("participants") or []
+            if speaker_tracker is not None:
+                # Late joiners are unpinnable otherwise: profiles are a
+                # snapshot taken at dispatch and this is the only point where
+                # the roster is known to have changed.
+                _profiles: dict[int, list[float]] = {}
+                for _cid, _vec in (data.get("voice_profiles") or {}).items():
+                    try:
+                        _profiles[int(_cid)] = [float(x) for x in _vec]
+                    except (TypeError, ValueError):
+                        continue
+                speaker_tracker.add_enrolled_profiles(_profiles)
             if isinstance(incoming, list):
                 unify_meet_roster.clear()
                 unify_meet_roster.extend(

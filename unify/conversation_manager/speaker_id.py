@@ -42,6 +42,11 @@ _log = logging.getLogger(__name__)
 # Model management
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Carries ``{contact_id: embedding}`` to the legacy per-call subprocess, which
+# has no LiveKit job metadata to ride along in. JSON-encoded, same shape as the
+# ``voice_profiles`` metadata key on the worker path.
+VOICE_PROFILES_ENV = "VOICE_PROFILES"
+
 SPEAKER_MODEL_NAME = "wespeaker_en_voxceleb_CAM++.onnx"
 SPEAKER_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
@@ -575,6 +580,37 @@ class SpeakerTracker:
             self._multi_party,
         )
 
+    def add_enrolled_profiles(self, profiles: dict[int, list[float]]) -> int:
+        """Merge in profiles that were not known when the call started.
+
+        Enrolled profiles are otherwise a snapshot taken at dispatch, so anyone
+        who joins a multi-party call later cannot be voice-pinned however good
+        their enrollment is. Returns the number newly added.
+
+        Only unknown contacts are added: an existing profile is left alone so a
+        late roster push cannot disturb pins already made on this call. Voices
+        already clustered are re-scored against the enlarged set on their next
+        segment, so a late joiner who has already spoken is picked up without
+        replaying anything.
+        """
+        added = 0
+        for contact_id, vector in (profiles or {}).items():
+            try:
+                cid = int(contact_id)
+            except (TypeError, ValueError):
+                continue
+            if cid in self._enrolled:
+                continue
+            self._enrolled[cid] = np.asarray(vector, dtype=np.float32)
+            added += 1
+        if added:
+            _log.info(
+                "SpeakerTracker: +%d enrolled profile(s) mid-call (%d total)",
+                added,
+                len(self._enrolled),
+            )
+        return added
+
     # ── audio ingestion ──────────────────────────────────────────────────
 
     def add_audio(
@@ -995,6 +1031,13 @@ class SpeakerTracker:
         processed segment joined — so when an id carries several co-located
         voices the answer names the specific one, not a blurred average.
         ``provisional`` is set whenever the id spans more than one cluster.
+
+        A provisional pin is still returned — it is the best guess available
+        for routing, and dropping it would lose attribution entirely — but it
+        is **not** reported as verified. ``verified`` is a claim that this
+        utterance's voice was positively matched, and once an id is known to
+        carry more than one voice the tracker cannot make that claim about any
+        single utterance under it.
         """
         if not speaker_id:
             return None
@@ -1006,7 +1049,7 @@ class SpeakerTracker:
         if cluster.pinned_contact_id is not None:
             return SpeakerResolution(
                 contact_id=cluster.pinned_contact_id,
-                verified=True,
+                verified=not provisional,
                 provisional=provisional,
                 source=LABEL_SOURCE_VOICE_PIN,
             )

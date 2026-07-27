@@ -43,10 +43,20 @@ class EngagedGateVAD(agents_vad.VAD):
         *,
         inner: agents_vad.VAD,
         scorer: RealtimeSpeakerScorer,
+        feed_scorer: bool = True,
     ) -> None:
+        """``feed_scorer`` selects where the scorer's audio comes from.
+
+        The scorer keeps one rolling window, so it must have exactly one audio
+        source; mixing two interleaves unrelated streams into the same window
+        and the embeddings become meaningless. On browser meets the caller
+        audio arrives over the PortAudio bridge rather than the LiveKit room,
+        so the call script feeds the scorer there and sets this False.
+        """
         super().__init__(capabilities=inner.capabilities)
         self._inner = inner
         self._scorer = scorer
+        self._feed_scorer = feed_scorer
 
     @property
     def model(self) -> str:
@@ -75,11 +85,12 @@ class EngagedGateVADStream(agents_vad.VADStream):
                 if isinstance(item, self._FlushSentinel):
                     inner.flush()
                     continue
-                scorer.add_audio(
-                    bytes(item.data),
-                    item.sample_rate,
-                    item.num_channels,
-                )
+                if self._gate._feed_scorer:
+                    scorer.add_audio(
+                        bytes(item.data),
+                        item.sample_rate,
+                        item.num_channels,
+                    )
                 inner.push_frame(item)
             inner.end_input()
 
