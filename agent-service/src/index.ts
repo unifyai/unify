@@ -876,6 +876,11 @@ const startGoogleMeetBrowser = async (
         ignoreHTTPSErrors: true,
         permissions: ['camera', 'microphone'],
       },
+      // Anti-automation hardening (magnitude-core web/stealth.ts). Google flags
+      // an un-hardened automated Chromium and forces the persistent session
+      // into a reauth challenge, degrading the signed-in join to an anonymous
+      // guest that Meet turns away. Keep it on for the Meet browser.
+      stealth: true,
     };
     if (storageStateName) {
       browser.storageStateName = storageStateName;
@@ -1142,6 +1147,23 @@ async function googleMeetJoinFlow(agent: BrowserAgent): Promise<GoogleMeetJoinRe
 
   const pageUrl = page.url?.() ?? 'unknown';
   console.log(`[googlemeet/join] Page loaded: url=${pageUrl}`);
+
+  // Signed-out / reauth guard. When the persistent storage state has expired,
+  // Google redirects to accounts.google.com (password reauth, "Verify it's
+  // you") instead of the Meet green room. Proceeding from here would silently
+  // degrade to an anonymous guest that Meet turns away, so detect it and fail
+  // fast with a distinct status the caller can act on (session renewal) rather
+  // than burning iterations and reporting a misleading lobby/blocked outcome.
+  const onAccountsDomain = /accounts\.google\.com/i.test(pageUrl);
+  const reauthSelector = "text=/verify it.?s you|enter your password|wrong password|couldn.?t sign you in/i";
+  const reauthVisible = await page.locator(reauthSelector).first().isVisible({ timeout: 1500 }).catch(() => false);
+  if (onAccountsDomain || reauthVisible) {
+    const reauthMsg = reauthVisible
+      ? await page.locator(reauthSelector).first().textContent().catch(() => 'reauth')
+      : 'accounts.google.com';
+    console.warn(`[googlemeet/join] signed-out/reauth detected: "${reauthMsg}" (url=${pageUrl})`);
+    return { status: 'error', reason: `meet_signed_out: "${reauthMsg}" (url=${pageUrl})` };
+  }
 
   // Phase 1: pre-join prep (popups, camera off). The browser joins signed in
   // via persistent storage state, so there is no name field to fill.
