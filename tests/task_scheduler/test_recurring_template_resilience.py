@@ -69,6 +69,29 @@ def test_matching_scheduled_activation_passes():
     )
 
 
+def test_equivalent_offset_scheduled_activation_passes():
+    scheduler = object.__new__(TaskScheduler)
+    scheduler._validate_task_matches_provenance(
+        task=_task("2026-07-27T13:17:00+05:00"),
+        provenance=_provenance("2026-07-27T08:17:00Z"),
+    )
+
+
+def test_normalize_activation_datetime_treats_naive_values_as_utc():
+    assert (
+        TaskScheduler._normalize_activation_datetime(
+            "2026-07-27T08:17:00",
+        )
+        == "2026-07-27T08:17:00+00:00"
+    )
+
+
+def test_normalize_activation_datetime_preserves_malformed_literal():
+    assert TaskScheduler._normalize_activation_datetime("not-a-timestamp") == (
+        "not-a-timestamp"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # ActiveTask.result finalization                                               #
 # --------------------------------------------------------------------------- #

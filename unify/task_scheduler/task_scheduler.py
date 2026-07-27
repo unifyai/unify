@@ -10,7 +10,7 @@ import os
 import random
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import (
     Any,
     Callable,
@@ -835,14 +835,18 @@ class TaskScheduler(BaseTaskScheduler):
 
     @staticmethod
     def _normalize_activation_datetime(value: Any) -> str | None:
-        """Normalize scheduler timestamps into comparable ISO strings."""
+        """Normalize scheduler timestamps into comparable UTC ISO strings."""
 
         if value is None:
             return None
+        text = str(value)
         try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
-            return str(value)
+            return text
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
 
     def _validate_task_matches_provenance(
         self,
