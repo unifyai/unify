@@ -3560,6 +3560,176 @@ class TestTriggeredTaskNotifications:
         assert "Do not mention the task unless it naturally helps" in guidance.message
 
 
+class TestProviderEventDispatchNotifications:
+    """Tests for the live provider-event dispatch call site.
+
+    This is the exact path behind the incident where a live task completed
+    correctly but the reactive brain never saw the task's own authored
+    description (only a generic dispatch string) next to the result.
+    """
+
+    @pytest.mark.asyncio
+    async def test_provider_event_dispatch_registers_task_description(
+        self,
+        mock_cm,
+    ):
+        """A successful live start must carry outcome.description through to
+        the registered handle so completed-actions rendering surfaces it.
+        """
+
+        from datetime import datetime, timezone
+
+        from unify.conversation_manager.domains.renderer import Renderer
+        from unify.conversation_manager.domains.task_execution import (
+            _handle_provider_event_dispatch_requested_event,
+        )
+        from unify.conversation_manager.events import ProviderEventDispatchRequested
+        from unify.task_scheduler.provider_event_dispatch import (
+            LiveProviderEventDispatchOutcome,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_handle = MagicMock()
+        outcome = LiveProviderEventDispatchOutcome(
+            operation_id="op-1",
+            run_id=4242,
+            run_key="run-key-1",
+            captured_task_revision=3,
+            status="started",
+            fencing_token=7,
+            adopted_only=False,
+            description=(
+                "Deliver this summary unprompted to Yusha via task "
+                "completion delivery."
+            ),
+        )
+
+        event = ProviderEventDispatchRequested(
+            operation_id="op-1",
+            run_id=4242,
+            run_key="run-key-1",
+            assistant_id="assistant-123",
+            task_id=101,
+            binding_id="binding-1",
+            receipt_id="receipt-1",
+            accepted_revision="rev-123",
+            event_context_ref="blob://binding-1/receipt-1",
+            issued_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.task_scheduler.provider_event_execution.handle_provider_event_live_dispatch",
+                new=AsyncMock(return_value=(outcome, fake_handle)),
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            should_request_llm = await _handle_provider_event_dispatch_requested_event(
+                event,
+                mock_cm,
+            )
+
+        assert should_request_llm is False
+        assert len(mock_cm.in_flight_actions) == 1
+        handle_id = next(iter(mock_cm.in_flight_actions))
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver this summary unprompted to Yusha via task completion delivery."
+        )
+
+        # Simulate the handle reaching completion and confirm the rendered
+        # <completed_actions> block carries both tags the brain relies on.
+        completed_actions = {
+            handle_id: {
+                **mock_cm.in_flight_actions[handle_id],
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Provider event completed.",
+                        "success": True,
+                        "result": "Provider event completed.",
+                    },
+                ],
+            },
+        }
+        rendered = Renderer().render_completed_actions(completed_actions)
+        assert "<original_request>" in rendered
+        assert (
+            "<task_description>Deliver this summary unprompted to Yusha via "
+            "task completion delivery.</task_description>" in rendered
+        )
+
+    @pytest.mark.asyncio
+    async def test_provider_event_dispatch_adopted_only_skips_handle_registration(
+        self,
+        mock_cm,
+    ):
+        """Adopt-only / already-terminal claims return handle=None and must
+        never reach _register_live_task_handle, regardless of description.
+        """
+
+        from datetime import datetime, timezone
+
+        from unify.conversation_manager.domains.task_execution import (
+            _handle_provider_event_dispatch_requested_event,
+        )
+        from unify.conversation_manager.events import ProviderEventDispatchRequested
+        from unify.task_scheduler.provider_event_dispatch import (
+            LiveProviderEventDispatchOutcome,
+        )
+
+        mock_cm.actor = MagicMock()
+        outcome = LiveProviderEventDispatchOutcome(
+            operation_id="op-2",
+            run_id=4243,
+            run_key="run-key-2",
+            captured_task_revision=3,
+            status="adopted",
+            fencing_token=7,
+            adopted_only=True,
+            description="Some other task's authored description.",
+        )
+
+        event = ProviderEventDispatchRequested(
+            operation_id="op-2",
+            run_id=4243,
+            run_key="run-key-2",
+            assistant_id="assistant-123",
+            task_id=102,
+            binding_id="binding-2",
+            receipt_id="receipt-2",
+            accepted_revision="rev-124",
+            event_context_ref="blob://binding-2/receipt-2",
+            issued_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        with patch(
+            "unify.task_scheduler.provider_event_execution.handle_provider_event_live_dispatch",
+            new=AsyncMock(return_value=(outcome, None)),
+        ):
+            should_request_llm = await _handle_provider_event_dispatch_requested_event(
+                event,
+                mock_cm,
+            )
+
+        assert should_request_llm is False
+        assert mock_cm.in_flight_actions == {}
+
+
 # =============================================================================
 # 11. SyncContacts Event Handler Tests
 # =============================================================================

@@ -810,7 +810,12 @@ async def _handle_provider_event_dispatch_requested_event(
             f"Provider event started task {event.task_id} "
             f"(operation {event.operation_id})."
         )
-        await _register_live_task_handle(cm, handle=handle, query=query)
+        await _register_live_task_handle(
+            cm,
+            handle=handle,
+            query=query,
+            task_description=outcome.description,
+        )
         cm.notifications_bar.push_notif("Tasks", query, event.timestamp)
     return False
 
