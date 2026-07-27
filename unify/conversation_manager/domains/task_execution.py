@@ -168,7 +168,12 @@ async def _start_live_task_due_execution(
         f"Scheduled task due now: '{_task_due_label(event, activation)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=activation.task_description,
+    )
 
 
 async def _start_live_task_trigger_execution(
@@ -183,6 +188,11 @@ async def _start_live_task_trigger_execution(
         )
 
     scheduler = ManagerRegistry.get_task_scheduler()
+    task_description: str | None = None
+    try:
+        task_description = scheduler._get_task_or_raise(event.task_id).description
+    except ValueError:
+        task_description = None
     delegate = _ConversationTaskExecutionDelegate(cm.actor)
     delegate_token = current_task_execution_delegate.set(delegate)
     try:
@@ -197,7 +207,12 @@ async def _start_live_task_trigger_execution(
         f"Task triggered via REST API: '{_task_trigger_label(event)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=task_description,
+    )
 
 
 def _current_task_assistant_id() -> str | None:
