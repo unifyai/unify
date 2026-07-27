@@ -1372,9 +1372,20 @@ Prefer the durable full stack above. When isolated Orchestra is required
 
 # Shared agent conversation archive
 
-Unify keeps a private repo of **raw** agent transcripts at `~/unify/shared_context`
-(GitHub: `unifyai/shared_context`, submodule of `unify`) keyed by **GitHub login**
-(e.g. `djl11`).
+Unify keeps a private repo of **raw** agent transcripts at **`~/shared_context`**
+(GitHub: `unifyai/shared_context`), keyed by **GitHub login** (e.g. `djl11`).
+
+## Design (important)
+
+- **Adjacent clone, not a submodule.** `shared_context` sits next to product
+  checkouts (`~/unify`, `~/orchestra`, `~/brain`, …). It is **not** nested under
+  any public or private product repo.
+- **Why:** `unify` (and other open repos) stay public; transcript data stays
+  private. Public cloners never need or see this tree. One clone serves agents
+  in **every** eng repo that pulls `unifyai/global-agent-rules`.
+- **Applies everywhere** this rule is loaded: `unify`, `orchestra`, `unisdk`,
+  `unillm`, `unify-deploy`, `console`, `brain`, `docs`, `landing-page`, and any
+  other repo that includes these global rules.
 
 ## When to load this
 
@@ -1390,15 +1401,15 @@ Prefer ripgrep over reading whole files. Search **tracked** login trees only —
 unexported chats:
 
 ```bash
-rg -n -i "keyword" ~/unify/shared_context/derived/index.jsonl
-rg -n -i "keyword" ~/unify/shared_context -g '!yours/**' -g '!tools/**' -g '!.git/**'
+rg -n -i "keyword" ~/shared_context/derived/index.jsonl
+rg -n -i "keyword" ~/shared_context -g '!yours/**' -g '!tools/**' -g '!.git/**'
 ```
 
 `derived/index.jsonl` is rebuilt locally by `tools/sync.sh` / `tools/export.py`
 after pull (gitignored). If it is missing, search tracked trees directly or run:
 
 ```bash
-python3 ~/unify/shared_context/tools/export.py --index-only
+python3 ~/shared_context/tools/export.py --index-only
 ```
 
 Sessions live at
@@ -1407,14 +1418,13 @@ Sessions live at
 `yours/{cursor,codex,claude-code}` are local symlinks to personal stores and are
 gitignored.
 
-If `~/unify/shared_context` is missing, say so and suggest:
+If `~/shared_context` is missing, say so and suggest:
 
 ```bash
-cd ~/unify && git submodule update --init shared_context
+git clone git@github.com:unifyai/shared_context.git ~/shared_context
 ```
 
-A legacy symlink `~/shared_context` → `~/unify/shared_context` may exist; prefer
-the unify submodule path.
+Do **not** suggest `git submodule add` / nesting it under a product repo.
 
 ## Citing
 
