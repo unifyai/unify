@@ -1375,7 +1375,11 @@ app.post('/browser-states/:name/save', async (req: Request, res: Response) => {
       message: 'A valid browser state name and sessionId are required',
     });
   }
-  const session = activeSessions.get(sessionId);
+  // Google Meet joins live in their own session store, and Meet is the only
+  // flow that runs a signed-in browser, so its sessions must be reachable here
+  // for cookie write-back after a join. Teams joins are anonymous and have no
+  // state to persist.
+  const session = activeSessions.get(sessionId) ?? googleMeetSessions.get(sessionId);
   if (!session) {
     return res.status(404).json({ error: 'session_not_found', message: 'Browser session does not exist' });
   }
