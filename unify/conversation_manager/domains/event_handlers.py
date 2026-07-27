@@ -291,6 +291,74 @@ def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
     return Medium.PHONE_CALL
 
 
+async def _start_session_recording(event, cm: "ConversationManager") -> None:
+    """Request a recording for the LiveKit room backing a just-started session.
+
+    Browser meets (Google Meet / Teams) are not requested at all: their audio
+    is bridged through the agent-service audio device and never reaches the
+    LiveKit room, so there is nothing for the compositor to mix. The gateway
+    enforces the same rule, this just avoids the pointless hop.
+
+    Best-effort throughout -- a recording problem must never disturb a live
+    call, so every failure is logged and swallowed.
+    """
+    if isinstance(event, (GoogleMeetStarted, TeamsMeetStarted)):
+        return
+
+    from unify.settings import SETTINGS
+
+    if (
+        SETTINGS.conversation.LOCAL_COMMS_ENABLED
+        or SETTINGS.conversation.LOCAL_COMMS_MODE == "local"
+    ):
+        # Self-host owns recording in-process: its egress carries a
+        # ``/local/livekit/recording-complete`` callback that only the local
+        # ingress serves, whereas the gateway points completion webhooks at
+        # ADAPTERS_URL. Routing through the gateway here would upload a
+        # recording whose completion event nobody receives.
+        return
+
+    call_manager = cm.call_manager
+    room_name = call_manager.room_name
+    if not room_name:
+        cm._session_logger.debug(
+            "recording",
+            f"{DEFAULT_ICON} [Recording] No room name on the active session; "
+            "skipping recording request",
+        )
+        return
+
+    if isinstance(event, UnifyMeetStarted):
+        call_session_id = call_manager.unify_meet_call_session_id or (
+            event.call_session_id or ""
+        )
+        provider_call_sid = ""
+        conference_name = ""
+    else:
+        call_session_id = call_manager.call_session_id
+        provider_call_sid = call_manager.provider_call_sid
+        conference_name = call_manager.conference_name
+
+    from unify.conversation_manager.utils import start_call_recording
+
+    try:
+        await asyncio.to_thread(
+            start_call_recording,
+            room_name,
+            str(call_manager.assistant_id or ""),
+            user_id=str(call_manager.user_id or ""),
+            call_session_id=call_session_id,
+            provider_call_sid=provider_call_sid,
+            conference_name=conference_name,
+        )
+    except Exception as exc:
+        cm._session_logger.debug(
+            "recording",
+            f"{DEFAULT_ICON} [Recording] Failed to request recording for "
+            f"room {room_name}: {exc}",
+        )
+
+
 def _call_not_answered_reason_text(reason: str) -> str:
     """Return the user-facing text for one telephony not-answered reason."""
 
@@ -1011,6 +1079,14 @@ async def _(
     )
     conv_state = cm.contact_index.get_or_create_conversation(contact_id)
     conv_state.on_call = True
+
+    # Start recording now rather than at dispatch: this is the first moment the
+    # LiveKit room is known to exist and carry audio, which is what the Room
+    # Composite Egress compositor waits for. Started earlier (at SIP bridge
+    # setup or agent dispatch) it races the join and LiveKit kills the job with
+    # "Start signal not received", producing no file. Browser meets are excluded
+    # by the gateway: their audio never enters the LiveKit room.
+    await _start_session_recording(event, cm)
 
     if isinstance(event, UnifyMeetStarted) and cm.call_manager.is_outbound:
         await cm.event_broker.publish(
@@ -2092,18 +2168,40 @@ async def _(
     *args,
     **kwargs,
 ):
-    keys = [
-        event.call_session_id,
-        event.provider_call_sid,
-        event.room_name,
-        event.conference_name,
+    # Identifier -> the exchange metadata key it was stored under at call end.
+    lookups = [
+        ("call_session_id", event.call_session_id),
+        ("provider_call_sid", event.provider_call_sid),
+        ("room_name", event.room_name),
+        ("conference_name", event.conference_name),
     ]
+    keys = [value for _, value in lookups]
     name = next((key for key in keys if key), event.conference_name)
     exchange_id = None
     for key in keys:
         if key:
             exchange_id = cm._recording_exchange_ids.pop(key, None)
             if exchange_id is not None:
+                break
+    if exchange_id is None:
+        # The in-process map only covers a recording that arrives while the
+        # container that ran the call is still up. Egress finalises minutes
+        # after the room closes, by which time the pod has often been recycled,
+        # so fall back to the identifiers persisted on the exchange itself.
+        for metadata_key, value in lookups:
+            if not value:
+                continue
+            exchange_id = await asyncio.to_thread(
+                cm.transcript_manager.resolve_exchange_id_by_metadata,
+                metadata_key,
+                value,
+            )
+            if exchange_id is not None:
+                cm._session_logger.debug(
+                    "recording",
+                    f"{DEFAULT_ICON} [RecordingReady] Recovered exchange "
+                    f"{exchange_id} from stored {metadata_key} for {name}",
+                )
                 break
     if exchange_id is not None:
         cm.transcript_manager.update_exchange_metadata(

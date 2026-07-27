@@ -68,6 +68,7 @@ from unify.gateway.common.livekit import (
     ensure_phone_dispatch_rule,
     get_livekit_api,
     make_sip_uri,
+    start_room_egress,
 )
 from unify.gateway.common.twilio import build_twilio_client
 from unify.gateway.credentials import EnvCredentialStore
@@ -171,32 +172,58 @@ def _create_conference_response(sip_uri: str) -> VoiceResponse:
 
 @auth_router.post("/dispatch-livekit-agent")
 async def dispatch_livekit_agent(request: Request):
-    """Create a LiveKit room, dispatch the agent, and start recording.
-
-    The runtime dispatch always requests ``record`` so the call is captured to
-    GCS via an audio-only Room Composite Egress. ``assistant_id``/``user_id``
-    (and, when known, the ``call_session_id``/``provider_call_sid``/
-    ``conference_name`` linkage IDs) are threaded into the egress completion
-    webhook so the recording can be attributed back to the call.
+    """Create a LiveKit room and dispatch the agent into it.
 
     ``livekit_agent_name`` is honoured as the agent worker registration name
     (distinct from ``room_name`` for org multi-assistant meet rooms that share a
     single room); it falls back to ``room_name`` for single-assistant callers.
+
+    Recording is not started here -- see ``/phone/start-recording``, which the
+    runtime calls once the session is live.
     """
     credentials = EnvCredentialStore()
     data = await _json_object_or_empty(request)
     room_name = data.get("room_name") or data.get("livekit_agent_name", "")
     agent_name = data.get("livekit_agent_name") or room_name
-    await create_room_and_dispatch_agent(
+    await create_room_and_dispatch_agent(room_name, agent_name, credentials)
+    return {"success": True}
+
+
+@auth_router.post("/start-recording")
+async def start_recording(request: Request):
+    """Start the call recording for an already-live LiveKit room.
+
+    Called from the runtime's call-started path, so the room is known to exist
+    and carry a publishing participant -- the precondition Room Composite
+    Egress needs. ``assistant_id`` is required (it owns the object prefix);
+    ``call_session_id``/``provider_call_sid``/``conference_name`` are threaded
+    into the completion webhook as linkage IDs so the finished recording can be
+    resolved back to its transcript exchange.
+
+    Idempotent: a room already being recorded is left alone, so a retried or
+    duplicated call-started event cannot double-record the room.
+    """
+    credentials = EnvCredentialStore()
+    data = await _json_object_or_empty(request)
+    room_name = data.get("room_name", "")
+    assistant_id = str(data.get("assistant_id", "") or "")
+    if not room_name or not assistant_id:
+        raise HTTPException(
+            status_code=400,
+            detail="room_name and assistant_id are required",
+        )
+    # The assistant id selects the GCS prefix the recording lands under and the
+    # Pub/Sub topic the completion event is published to, so a user-key caller
+    # must own it.
+    await require_assistant_ownership(request, assistant_id)
+    await start_room_egress(
         room_name,
-        agent_name,
+        assistant_id,
         credentials,
-        record=bool(data.get("record", True)),
-        assistant_id=data.get("assistant_id", ""),
-        user_id=data.get("user_id", ""),
-        call_session_id=data.get("call_session_id", ""),
-        provider_call_sid=data.get("provider_call_sid", ""),
-        conference_name=data.get("conference_name", ""),
+        str(data.get("user_id", "") or ""),
+        call_session_id=str(data.get("call_session_id", "") or ""),
+        provider_call_sid=str(data.get("provider_call_sid", "") or ""),
+        conference_name=str(data.get("conference_name", "") or ""),
     )
     return {"success": True}
 

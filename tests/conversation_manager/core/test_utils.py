@@ -1254,34 +1254,73 @@ class TestActionNameFormatIntegration:
 
 
 # =============================================================================
-# dispatch_livekit_agent code quality tests
+# comms control-message code quality tests
 # =============================================================================
 
 
-class TestDispatchLivekitAgentCodeQuality:
-    """Regression tests for dispatch_livekit_agent implementation.
+class TestCommsPostCodeQuality:
+    """Regression tests for the runtime's fire-and-forget calls into comms.
 
     These tests inspect the source code to prevent accidental regressions.
     """
 
     def test_uses_requests_post_not_http_post(self):
-        """dispatch_livekit_agent must use requests.post directly, not http.post.
+        """The comms POST helper must use requests.post directly, not http.post.
 
-        The http module from unisdk.utils has retry logic baked in. For this
-        fire-and-forget dispatch, we intentionally want NO retries - the timeout
-        is expected and we should move on immediately. Using http.post would
-        cause multiple retry attempts with backoff delays, defeating the purpose.
+        The http module from unisdk.utils has retry logic baked in. For these
+        fire-and-forget control messages we intentionally want NO retries - the
+        timeout is expected and we should move on immediately. Using http.post
+        would retry with backoff, which for agent dispatch means dispatching
+        several agents into one room.
+        """
+        import inspect
+        from unify.conversation_manager.utils import _post_to_comms
+
+        source = inspect.getsource(_post_to_comms)
+
+        assert "requests.post(" in source, (
+            "_post_to_comms must use requests.post() directly, not http.post(). "
+            "The http module has retry logic that would dispatch multiple "
+            "agents due to the expected timeout - we want fire-and-forget."
+        )
+        assert "http.post(" not in source
+
+    def test_public_helpers_route_through_the_shared_post(self):
+        """Both comms calls must share one transport, so retry policy is one place."""
+        import inspect
+        from unify.conversation_manager.utils import (
+            dispatch_livekit_agent,
+            start_call_recording,
+        )
+
+        for func in (dispatch_livekit_agent, start_call_recording):
+            source = inspect.getsource(func)
+            assert "_post_to_comms(" in source, (
+                f"{func.__name__} must POST via _post_to_comms so it inherits "
+                "the no-retry, failure-swallowing transport."
+            )
+            assert "requests.post(" not in source
+
+    def test_dispatch_does_not_request_recording(self):
+        """Recording must not ride on agent dispatch.
+
+        Starting egress at dispatch time races the participant join, and LiveKit
+        aborts such a job without writing a file. Recording is requested from the
+        call-started path instead.
         """
         import inspect
         from unify.conversation_manager.utils import dispatch_livekit_agent
 
         source = inspect.getsource(dispatch_livekit_agent)
+        # No record flag in the request payload, and no egress endpoint reached.
+        assert '"record"' not in source
+        assert "record=" not in source
+        assert "start-recording" not in source
+        assert "/phone/dispatch-livekit-agent" in source
 
-        # Must use requests.post directly
-        check = "requests.post(" in source and "http.post(" not in source
-        assert "requests.post(" in source, (
-            "dispatch_livekit_agent must use requests.post() directly, "
-            "not http.post(). The http module has retry logic that would "
-            "dispatch multiple agents due to the expected timeout - "
-            "we want fire-and-forget behavior."
-        )
+    def test_start_call_recording_targets_the_recording_endpoint(self):
+        import inspect
+        from unify.conversation_manager.utils import start_call_recording
+
+        source = inspect.getsource(start_call_recording)
+        assert "/phone/start-recording" in source

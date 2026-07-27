@@ -107,6 +107,7 @@ def test_auth_router_exposes_expected_paths() -> None:
         ("/hang-up-call", ["POST"]),
         ("/send-call", ["POST"]),
         ("/send-text", ["POST"]),
+        ("/start-recording", ["POST"]),
     ]
 
 
@@ -496,16 +497,12 @@ def test_dispatch_livekit_agent_falls_back_to_legacy_livekit_agent_name(
     assert args[0] == "legacy_agent_name"
 
 
-def test_dispatch_livekit_agent_forwards_record_and_linkage(
+def test_dispatch_livekit_agent_passes_distinct_agent_name(
     client: TestClient,
     _phone_credentials: None,
     _settings: None,
 ) -> None:
-    """record + assistant/user/session linkage must reach the egress helper.
-
-    Regression guard: the gateway port previously dropped ``record`` so no
-    recording was ever started for meet / dispatched calls.
-    """
+    """Org meet rooms share one room but register per-assistant worker names."""
     mock_create = AsyncMock()
     with patch(
         "unify.gateway.channels.phone.views.create_room_and_dispatch_agent",
@@ -514,23 +511,95 @@ def test_dispatch_livekit_agent_forwards_record_and_linkage(
         resp = client.post(
             "/phone/dispatch-livekit-agent",
             json={
-                "room_name": "unity_42_meet",
+                "room_name": "unity_call_CS_1",
                 "livekit_agent_name": "unity_42",
-                "record": True,
-                "assistant_id": "42",
-                "user_id": "7",
-                "call_session_id": "CS_1",
             },
         )
 
     assert resp.status_code == 200
-    args, kwargs = mock_create.await_args
-    assert args[0] == "unity_42_meet"  # room_name
+    args, _ = mock_create.await_args
+    assert args[0] == "unity_call_CS_1"  # room_name
     assert args[1] == "unity_42"  # distinct agent worker name
-    assert kwargs["record"] is True
-    assert kwargs["assistant_id"] == "42"
-    assert kwargs["user_id"] == "7"
+
+
+# ---------------------------------------------------------------------------
+# POST /phone/start-recording
+# ---------------------------------------------------------------------------
+
+
+def test_start_recording_forwards_room_and_linkage_ids(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    """Linkage IDs must reach the egress helper.
+
+    They ride the completion webhook and are the only way the finished file is
+    matched back to its transcript exchange.
+    """
+    mock_egress = AsyncMock()
+    with patch(
+        "unify.gateway.channels.phone.views.start_room_egress",
+        new=mock_egress,
+    ):
+        resp = client.post(
+            "/phone/start-recording",
+            json={
+                "room_name": "unity_call_CS_1",
+                "assistant_id": "42",
+                "user_id": "7",
+                "call_session_id": "CS_1",
+                "provider_call_sid": "CA_abc",
+                "conference_name": "Unity_conf_1",
+            },
+        )
+
+    assert resp.status_code == 200
+    args, kwargs = mock_egress.await_args
+    assert args[0] == "unity_call_CS_1"
+    assert args[1] == "42"
     assert kwargs["call_session_id"] == "CS_1"
+    assert kwargs["provider_call_sid"] == "CA_abc"
+    assert kwargs["conference_name"] == "Unity_conf_1"
+
+
+def test_start_recording_rejects_missing_assistant_id(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    """Without an assistant id the recording has no resolvable object prefix."""
+    mock_egress = AsyncMock()
+    with patch(
+        "unify.gateway.channels.phone.views.start_room_egress",
+        new=mock_egress,
+    ):
+        resp = client.post(
+            "/phone/start-recording",
+            json={"room_name": "unity_call_CS_1"},
+        )
+
+    assert resp.status_code == 400
+    mock_egress.assert_not_awaited()
+
+
+def test_start_recording_rejects_missing_room_name(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    mock_egress = AsyncMock()
+    with patch(
+        "unify.gateway.channels.phone.views.start_room_egress",
+        new=mock_egress,
+    ):
+        resp = client.post(
+            "/phone/start-recording",
+            json={"assistant_id": "42"},
+        )
+
+    assert resp.status_code == 400
+    mock_egress.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
