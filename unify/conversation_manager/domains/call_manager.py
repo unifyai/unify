@@ -113,6 +113,26 @@ MEET_JOIN_CONNECT_RETRIES = 2
 WORKER_REWARM_STALL_S = 60.0
 
 
+# Cookies Google sets on a signed-in session. A storage state missing all of
+# them is a signed-out (or challenge) context and must never overwrite the
+# durable blob the next join hydrates from.
+GOOGLE_AUTH_COOKIE_NAMES = frozenset({"SID", "__Secure-1PSID", "__Secure-3PSID"})
+
+
+def _state_has_google_auth_cookies(state: str | None) -> bool:
+    if not state:
+        return False
+    try:
+        cookies = json.loads(state).get("cookies") or []
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    return any(
+        cookie.get("name") in GOOGLE_AUTH_COOKIE_NAMES
+        and "google.com" in (cookie.get("domain") or "")
+        for cookie in cookies
+    )
+
+
 def _opener_opening_config(opener: str, *, source: str, briefing: str = "") -> dict:
     config = {
         "mode": "opener",
@@ -1188,6 +1208,102 @@ class LivekitCallManager:
         )
         return True
 
+    async def _persist_meet_browser_state(
+        self,
+        base_url: str,
+        auth_key: str,
+        storage_state_name: str,
+        session_id: str,
+    ) -> bool:
+        """Write the live meet browser's refreshed cookies back to GCS.
+
+        Google rotates session cookies on use, so the stored snapshot decays and
+        eventually lands the browser on a re-auth challenge. After a confirmed
+        signed-in join, snapshot the live context via the agent-service
+        (``POST /browser-states/<name>/save`` then ``GET``) and replace the
+        durable blob, keeping the stored session as fresh as the last join. The
+        upload is skipped unless the snapshot still carries Google auth cookies,
+        so a signed-out context can never clobber a good state. Best-effort:
+        failures log a warning and leave the existing blob untouched.
+        """
+        bucket = (os.environ.get("MEET_BROWSER_STATE_BUCKET") or "").strip()
+        if not bucket:
+            return False
+
+        blob_name = f"{storage_state_name}.json"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"authorization": f"Bearer {auth_key}"}
+                async with session.post(
+                    f"{base_url}/browser-states/{storage_state_name}/save",
+                    json={"sessionId": session_id},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15.0),
+                ) as save_resp:
+                    if save_resp.status not in (200, 204):
+                        detail = await save_resp.text()
+                        LOGGER.warning(
+                            f"{ICONS['ipc']} [LivekitCallManager] agent-service "
+                            f"could not snapshot browser state "
+                            f"{storage_state_name} (HTTP {save_resp.status}): "
+                            f"{detail}; keeping the stored session",
+                        )
+                        return False
+                async with session.get(
+                    f"{base_url}/browser-states/{storage_state_name}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15.0),
+                ) as get_resp:
+                    if get_resp.status != 200:
+                        detail = await get_resp.text()
+                        LOGGER.warning(
+                            f"{ICONS['ipc']} [LivekitCallManager] could not read "
+                            f"back browser state {storage_state_name} (HTTP "
+                            f"{get_resp.status}): {detail}; keeping the stored "
+                            "session",
+                        )
+                        return False
+                    state = (await get_resp.json()).get("state")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] failed to snapshot browser "
+                f"state {storage_state_name}: {exc!r}; keeping the stored session",
+            )
+            return False
+
+        if not _state_has_google_auth_cookies(state):
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] snapshot of "
+                f"{storage_state_name} carries no Google auth cookies; keeping "
+                "the stored session",
+            )
+            return False
+
+        def _upload() -> None:
+            from google.cloud import storage
+
+            client = storage.Client()
+            client.bucket(bucket).blob(blob_name).upload_from_string(
+                state,
+                content_type="application/json",
+            )
+
+        try:
+            await asyncio.to_thread(_upload)
+        except Exception as exc:  # best-effort: the stored blob stays valid
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] could not upload refreshed "
+                f"browser state to gs://{bucket}/{blob_name}: {exc!r}",
+            )
+            return False
+
+        LOGGER.info(
+            f"{ICONS['ipc']} [LivekitCallManager] refreshed browser state "
+            f"{storage_state_name} (gs://{bucket}/{blob_name})",
+        )
+        return True
+
     async def _start_meet(
         self,
         channel: str,
@@ -1452,6 +1568,17 @@ class LivekitCallManager:
             f"(session={self._meet_session_id}, "
             f"status={body.get('status')})",
         )
+
+        # The join proved the hydrated session is still signed in, and Google
+        # rotated its cookies in the process. Write the refreshed context back
+        # so the stored state never drifts further behind than the last call.
+        if storage_state_name and self._meet_session_id:
+            await self._persist_meet_browser_state(
+                base_url,
+                auth_key,
+                storage_state_name,
+                self._meet_session_id,
+            )
 
         if self._socket_server and self._meet_session_id:
             await self._socket_server.queue_for_clients(
