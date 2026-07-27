@@ -2599,7 +2599,12 @@ async def entrypoint(ctx: agents.JobContext):
         if speaker_tracker is not None:
             # Flush pending embeddings and fire a partial auto-enrollment for
             # single-voice calls that ended before reaching the full target.
+            # finalize() also emits the attribution summary.
             await speaker_tracker.finalize()
+            if realtime_scorer is not None:
+                # Floor gating fails open, so an inert scorer looks exactly
+                # like a working one from the outside; the tally is the tell.
+                realtime_scorer.log_summary()
             if speaker_event_tasks:
                 await asyncio.gather(
                     *list(speaker_event_tasks),
