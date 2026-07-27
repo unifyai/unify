@@ -565,10 +565,14 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                                     self._instance_id,
                                     final_status,
                                 )
-                                asyncio.create_task(self._save_final_summary(final_status))
+                                asyncio.create_task(
+                                    self._save_final_summary(final_status)
+                                )
                                 self._summary_scheduled = True  # type: ignore[attr-defined]
                             except Exception as summary_e:
-                                logger.error("Error creating summary task: %s", summary_e)
+                                logger.error(
+                                    "Error creating summary task: %s", summary_e
+                                )
             except Exception:
                 logger.exception(
                     "Task completion maintenance failed (task_id=%s, instance_id=%s)",
