@@ -4302,9 +4302,6 @@ if __name__ == "__main__":
         _log.dispatch(f"Dispatching LiveKit agent {agent_name} into room {room_name}")
         dispatch_livekit_agent(
             room_name,
-            record=True,
-            assistant_id=SESSION_DETAILS.assistant.agent_id,
-            user_id=SESSION_DETAILS.user.id,
             agent_name=agent_name,
             call_session_id=call_session_id,
         )

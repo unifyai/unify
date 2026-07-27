@@ -8,6 +8,7 @@ on.
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -294,55 +295,15 @@ async def test_create_room_and_dispatch_agent_passes_room_and_agent_through(
 
 
 @pytest.mark.asyncio
-async def test_create_room_and_dispatch_agent_starts_egress_when_record(
-    _livekit_credentials: EnvCredentialStore,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """record=True must start an audio-only egress with the linkage webhook."""
-    from unify.gateway.common.livekit import create_room_and_dispatch_agent
-
-    monkeypatch.setenv("GCP_SA_KEY", "sa-json")
-    monkeypatch.setenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
-
-    api = _fake_livekit_api()
-    api.agent_dispatch = MagicMock()
-    api.agent_dispatch.create_dispatch = AsyncMock(
-        return_value=MagicMock(id="DISPATCH_123"),
-    )
-    api.egress = MagicMock()
-    api.egress.start_room_composite_egress = AsyncMock(
-        return_value=MagicMock(egress_id="EG_1"),
-    )
-
-    with patch(
-        "unify.gateway.common.livekit.get_livekit_api",
-        return_value=api,
-    ):
-        await create_room_and_dispatch_agent(
-            "unity_42_phone",
-            "unity_42_phone",
-            _livekit_credentials,
-            record=True,
-            assistant_id="42",
-            user_id="7",
-            provider_call_sid="CA_abc",
-        )
-
-    api.agent_dispatch.create_dispatch.assert_awaited_once()
-    api.egress.start_room_composite_egress.assert_awaited_once()
-    request = api.egress.start_room_composite_egress.await_args.args[0]
-    assert request.room_name == "unity_42_phone"
-    assert request.audio_only is True
-    assert request.file_outputs[0].gcp.bucket == "unity-call-recordings"
-    assert "provider_call_sid=CA_abc" in request.webhooks[0].url
-    assert "/livekit/recording-complete" in request.webhooks[0].url
-
-
-@pytest.mark.asyncio
-async def test_create_room_and_dispatch_agent_no_egress_without_record(
+async def test_create_room_and_dispatch_agent_never_starts_egress(
     _livekit_credentials: EnvCredentialStore,
 ) -> None:
-    """record defaults False, so no egress is started for a bare dispatch."""
+    """Dispatch must not record: egress at dispatch time races the join.
+
+    Binding recording to dispatch is what produced aborted, file-less egress
+    jobs -- the compositor starts before any participant publishes. Recording is
+    started separately from the call-started path.
+    """
     from unify.gateway.common.livekit import create_room_and_dispatch_agent
 
     api = _fake_livekit_api()
@@ -364,3 +325,171 @@ async def test_create_room_and_dispatch_agent_no_egress_without_record(
         )
 
     api.egress.start_room_composite_egress.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# start_room_egress -- object layout, linkage webhook, and refusal rules
+# ---------------------------------------------------------------------------
+
+
+def _egress_api() -> MagicMock:
+    api = _fake_livekit_api()
+    api.egress = MagicMock()
+    api.egress.start_room_composite_egress = AsyncMock(
+        return_value=MagicMock(egress_id="EG_1"),
+    )
+    api.egress.list_egress = AsyncMock(return_value=MagicMock(items=[]))
+    return api
+
+
+@pytest.fixture
+def _egress_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GCP_SA_KEY", "sa-json")
+    monkeypatch.setenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
+
+
+@pytest.mark.asyncio
+async def test_start_room_egress_requests_audio_only_mp3_with_linkage_webhook(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+) -> None:
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress(
+            "unity_42_phone",
+            "42",
+            _livekit_credentials,
+            "7",
+            provider_call_sid="CA_abc",
+            conference_name="Unity_conf_1",
+        )
+
+    api.egress.start_room_composite_egress.assert_awaited_once()
+    request = api.egress.start_room_composite_egress.await_args.args[0]
+    assert request.room_name == "unity_42_phone"
+    assert request.audio_only is True
+    assert request.file_outputs[0].gcp.bucket == "unity-call-recordings"
+    # {env}/{assistant_id}/{room}_{timestamp}.mp3 -- the assistant prefix is
+    # what makes a stored recording resolvable back to its owner.
+    assert re.match(
+        r"^[a-z]+/42/unity_42_phone_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.mp3$",
+        request.file_outputs[0].filepath,
+    ), request.file_outputs[0].filepath
+    webhook_url = request.webhooks[0].url
+    assert "/livekit/recording-complete" in webhook_url
+    assert "provider_call_sid=CA_abc" in webhook_url
+    assert "conference_name=Unity_conf_1" in webhook_url
+    assert "assistant_id=42" in webhook_url
+    api.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("room_name", ["unity_42_gmeet", "unity_42_teams"])
+async def test_start_room_egress_skips_browser_meet_rooms(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+    room_name: str,
+) -> None:
+    """Browser-meet audio is bridged outside LiveKit, so egress can never work.
+
+    Requesting it anyway leaves a compositor waiting for a track that never
+    arrives until the room closes, then aborts with no file.
+    """
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress(room_name, "42", _livekit_credentials)
+
+    api.egress.start_room_composite_egress.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_room_egress_refuses_without_assistant_id(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+) -> None:
+    """An empty assistant id collapses the object prefix, stranding the file."""
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress("unity_42_phone", "  ", _livekit_credentials)
+
+    api.egress.start_room_composite_egress.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_room_egress_skips_room_already_being_recorded(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+) -> None:
+    """Two starters on one room would record it twice into two files."""
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    api.egress.list_egress = AsyncMock(
+        return_value=MagicMock(items=[MagicMock(egress_id="EG_existing")]),
+    )
+
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress("unity_42_phone", "42", _livekit_credentials)
+
+    api.egress.list_egress.assert_awaited_once()
+    api.egress.start_room_composite_egress.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_room_egress_starts_when_active_egress_lookup_fails(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+) -> None:
+    """A LiveKit hiccup on the dedupe check must not silently disable recording."""
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    api.egress.list_egress = AsyncMock(side_effect=RuntimeError("livekit down"))
+
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress("unity_42_phone", "42", _livekit_credentials)
+
+    api.egress.start_room_composite_egress.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_room_egress_swallows_livekit_errors(
+    _livekit_credentials: EnvCredentialStore,
+    _egress_env: None,
+) -> None:
+    """A recording failure must never propagate into call setup."""
+    from unify.gateway.common.livekit import start_room_egress
+
+    api = _egress_api()
+    api.egress.start_room_composite_egress = AsyncMock(
+        side_effect=RuntimeError("egress rejected"),
+    )
+
+    with patch(
+        "unify.gateway.common.livekit.get_livekit_api",
+        return_value=api,
+    ):
+        await start_room_egress("unity_42_phone", "42", _livekit_credentials)
+
+    api.aclose.assert_awaited_once()

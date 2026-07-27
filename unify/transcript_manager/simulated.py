@@ -786,13 +786,27 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
             )
         return ex
 
+    def resolve_exchange_id_by_metadata(
+        self,
+        key: str,
+        value: str,
+    ) -> int | None:
+        """Simulated metadata-keyed exchange lookup over the in-memory store."""
+        needle = str(value or "").strip()
+        if not needle:
+            return None
+        for exchange_id, exchange in self._sim_exchanges.items():
+            if str((exchange.metadata or {}).get(key, "")) == needle:
+                return int(exchange_id)
+        return None
+
     def update_exchange_metadata(
         self,
         exchange_id: int,
         metadata: Dict[str, Any],
     ) -> Exchange:
         """
-        Simulated upsert of exchange metadata in the in-memory store.
+        Simulated merge of exchange metadata into the in-memory store.
         """
         sched = maybe_tool_log_scheduled(
             "SimulatedTranscriptManager.update_exchange_metadata",
@@ -810,9 +824,11 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
                 medium="",
             )
         else:
+            merged = dict(cur.metadata or {})
+            merged.update(dict(metadata or {}))
             cur = Exchange(
                 exchange_id=cur.exchange_id,
-                metadata=dict(metadata or {}),
+                metadata=merged,
                 medium=cur.medium,
             )
         self._sim_exchanges[int(exchange_id)] = cur

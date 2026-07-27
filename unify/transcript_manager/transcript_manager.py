@@ -1529,6 +1529,37 @@ class TranscriptManager(BaseTranscriptManager):
                 f"Failed to reconstruct Exchange for exchange_id={exchange_id}.",
             ) from exc
 
+    def resolve_exchange_id_by_metadata(
+        self,
+        key: str,
+        value: str,
+    ) -> int | None:
+        """Look up an exchange by one of its metadata identifiers.
+
+        Server-side match on ``metadata.{key}`` across every readable Exchanges
+        root. Recovers the exchange for an asynchronous session artifact (e.g. a
+        recording that lands after the process that ran the call has gone) where
+        no in-process mapping survives.
+        """
+        needle = str(value or "").strip()
+        if not needle:
+            return None
+        escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
+        for context in self._read_exchange_contexts():
+            rows = unisdk.get_logs(
+                context=context,
+                filter=f'metadata.{key} == "{escaped}"',
+                limit=1,
+            )
+            if not rows:
+                continue
+            entries = getattr(rows[0], "entries", {}) or {}
+            try:
+                return int(entries.get("exchange_id"))
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def update_exchange_metadata(
         self,
         exchange_id: int,
@@ -1536,22 +1567,32 @@ class TranscriptManager(BaseTranscriptManager):
         *,
         destination: str | None = None,
     ) -> Exchange:
-        """Update or create exchange metadata in one routed root."""
+        """Merge keys into an exchange's metadata in one routed root.
+
+        Merges rather than replaces: exchange metadata accumulates across a
+        session's lifetime from independent writers. A call stores its session
+        identifiers when it ends and the recording URL arrives minutes later on
+        a separate event, so a replacing write would drop whichever keys it did
+        not carry -- including the identifiers needed to resolve the exchange in
+        the first place. Keys present in ``metadata`` win over stored values.
+        """
         try:
             context = self._exchanges_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
         # Try update first
-        row_ids = unisdk.get_logs(
+        rows = unisdk.get_logs(
             context=context,
             filter=f"exchange_id == {int(exchange_id)}",
-            return_ids_only=True,
+            limit=1,
         )
-        if row_ids:
+        if rows:
+            merged = dict(rows[0].entries.get("metadata") or {})
+            merged.update(dict(metadata or {}))
             unisdk.update_logs(
-                logs=row_ids,
+                logs=rows[0].id,
                 context=context,
-                entries={"metadata": dict(metadata or {})},
+                entries={"metadata": merged},
                 overwrite=True,
             )
         else:
