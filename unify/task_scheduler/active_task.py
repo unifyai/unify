@@ -10,6 +10,7 @@ and result retrieval.
 import functools
 import asyncio
 import textwrap
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Optional, Dict, TYPE_CHECKING, List, Any
 
@@ -23,8 +24,7 @@ from unify.common.task_execution_context import (
 )
 from unify.common._async_tool.messages import forward_handle_call
 from unify.events.task_run_lineage import (
-    push_task_run_lineage,
-    reset_task_run_lineage,
+    task_run_lineage_scope,
 )
 from .machine_state import (
     TaskRunProvenance,
@@ -166,7 +166,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         self._was_stopped: bool = False
         self._last_intent: Optional[str] = None
         self._last_intent_reason: Optional[str] = None
-        self._task_run_lineage_tokens = None
         self._definition_rearmed = False
         self._preserve_definition_status = False
 
@@ -207,7 +206,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         """
         delegate = current_task_execution_delegate.get()
         review_token = None
-        lineage_tokens = None
+        run_key: str | None = None
         # Materialize/adopt the durable Tasks/Executions row before EventBus lineage
         # so every nested event can carry the join key ``run_key``.
         materialized_task_run_reference = task_run_reference
@@ -244,10 +243,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     "Tasks/Executions (task_id=%s)",
                     task_id,
                 )
-            lineage_tokens = push_task_run_lineage(
-                task_id=int(task_id),
-                run_key=run_key,
-            )
         if task_entrypoint_review is not None:
             review_token = current_post_run_review_context.set(
                 PostRunReviewContext(
@@ -262,37 +257,43 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             )
         try:
             try:
-                if delegate is not None:
-                    actor_steerable_handle = await delegate.start_task_run(
-                        task_description=task_description,
-                        entrypoint=entrypoint,
-                        parent_chat_context=_parent_chat_context,
-                        clarification_up_q=_clarification_up_q,
-                        clarification_down_q=_clarification_down_q,
-                        guidelines=task_guidelines,
-                        entrypoint_kwargs=entrypoint_kwargs,
-                        entrypoint_repair_attempts=entrypoint_repair_attempts,
-                        entrypoint_repair_context=entrypoint_repair_context,
-                        destination=destination,
-                    )
-                else:
-                    if fallback_actor is None:
-                        raise RuntimeError(
-                            "Task execution requires an actor when no run-scoped delegate is active.",
+                lineage_scope = (
+                    task_run_lineage_scope(task_id=int(task_id), run_key=run_key)
+                    if task_id is not None and instance_id is not None
+                    else nullcontext()
+                )
+                with lineage_scope:
+                    if delegate is not None:
+                        actor_steerable_handle = await delegate.start_task_run(
+                            task_description=task_description,
+                            entrypoint=entrypoint,
+                            parent_chat_context=_parent_chat_context,
+                            clarification_up_q=_clarification_up_q,
+                            clarification_down_q=_clarification_down_q,
+                            guidelines=task_guidelines,
+                            entrypoint_kwargs=entrypoint_kwargs,
+                            entrypoint_repair_attempts=entrypoint_repair_attempts,
+                            entrypoint_repair_context=entrypoint_repair_context,
+                            destination=destination,
                         )
-                    actor_steerable_handle = await fallback_actor.act(
-                        task_description,
-                        guidelines=task_guidelines,
-                        _parent_chat_context=_parent_chat_context,
-                        _clarification_up_q=_clarification_up_q,
-                        _clarification_down_q=_clarification_down_q,
-                        entrypoint=entrypoint,
-                        entrypoint_kwargs=entrypoint_kwargs,
-                        entrypoint_repair_attempts=entrypoint_repair_attempts,
-                        entrypoint_repair_context=entrypoint_repair_context,
-                        destination=destination,
-                        persist=False,
-                    )
+                    else:
+                        if fallback_actor is None:
+                            raise RuntimeError(
+                                "Task execution requires an actor when no run-scoped delegate is active.",
+                            )
+                        actor_steerable_handle = await fallback_actor.act(
+                            task_description,
+                            guidelines=task_guidelines,
+                            _parent_chat_context=_parent_chat_context,
+                            _clarification_up_q=_clarification_up_q,
+                            _clarification_down_q=_clarification_down_q,
+                            entrypoint=entrypoint,
+                            entrypoint_kwargs=entrypoint_kwargs,
+                            entrypoint_repair_attempts=entrypoint_repair_attempts,
+                            entrypoint_repair_context=entrypoint_repair_context,
+                            destination=destination,
+                            persist=False,
+                        )
             except Exception as exc:
                 if materialized_task_run_reference is not None:
                     await asyncio.to_thread(
@@ -307,8 +308,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                             ),
                         },
                     )
-                reset_task_run_lineage(lineage_tokens)
-                lineage_tokens = None
                 raise
         finally:
             if review_token is not None:
@@ -320,7 +319,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             scheduler=scheduler,
             task_run_reference=materialized_task_run_reference,
         )
-        instance._task_run_lineage_tokens = lineage_tokens
         instance._definition_rearmed = bool(definition_rearmed)
         instance._preserve_definition_status = bool(preserve_definition_status)
         return instance
@@ -376,8 +374,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     result_summary=f"Task cancelled: {stop_reason}",
                 ),
             )
-            reset_task_run_lineage(self._task_run_lineage_tokens)
-            self._task_run_lineage_tokens = None
             return
 
         await self._actor_handle.interject(message)  # type: ignore[arg-type]
@@ -412,8 +408,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             ),
         )
         asyncio.create_task(self._save_final_summary("cancelled"))
-        reset_task_run_lineage(self._task_run_lineage_tokens)
-        self._task_run_lineage_tokens = None
 
     @functools.wraps(BaseActiveTask.pause, updated=())
     async def pause(self) -> Optional[str]:
@@ -533,51 +527,54 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
 
         finally:
             try:
-                if (
-                    final_status
-                    and not self._was_stopped
-                    and self._scheduler
-                    and self._task_id is not None
-                    and not self._preserve_definition_status
-                ):
-                    definition_status = final_status
-                    if self._definition_rearmed:
-                        # Rearm-on-start already advanced the definition to the
-                        # next open slot; restore scheduled/triggerable status
-                        # regardless of the run outcome. A failed occurrence
-                        # belongs to the run row — it must never terminalize
-                        # the recurring definition and disarm the schedule.
-                        task = self._scheduler._get_task_or_raise(self._task_id)
-                        definition_status = (
-                            "triggerable"
-                            if task.trigger is not None and task.repeat is None
-                            else "scheduled"
-                        )
-                    self._scheduler._update_task_definition_status(  # type: ignore[attr-defined]
-                        task_id=self._task_id,
-                        new_status=definition_status,
-                    )
+                if final_status and not self._was_stopped:
                     await self._persist_task_run_terminal_state(
                         state=final_status,
                         result_summary=ret,
                         error=str(error) if error is not None else None,
                     )
 
-                    if not getattr(self, "_summary_scheduled", False):
-                        try:
-                            logger.info(
-                                "--- Scheduling save_final_summary for %s.%s with status: %s ---",
-                                self._task_id,
-                                self._instance_id,
-                                final_status,
+                    if (
+                        self._scheduler
+                        and self._task_id is not None
+                        and not self._preserve_definition_status
+                    ):
+                        definition_status = final_status
+                        if self._definition_rearmed:
+                            # Rearm-on-start already advanced the definition to the
+                            # next open slot; restore scheduled/triggerable status
+                            # regardless of the run outcome. A failed occurrence
+                            # belongs to the run row — it must never terminalize
+                            # the recurring definition and disarm the schedule.
+                            task = self._scheduler._get_task_or_raise(self._task_id)
+                            definition_status = (
+                                "triggerable"
+                                if task.trigger is not None and task.repeat is None
+                                else "scheduled"
                             )
-                            asyncio.create_task(self._save_final_summary(final_status))
-                            self._summary_scheduled = True  # type: ignore[attr-defined]
-                        except Exception as summary_e:
-                            logger.error("Error creating summary task: %s", summary_e)
-            finally:
-                reset_task_run_lineage(self._task_run_lineage_tokens)
-                self._task_run_lineage_tokens = None
+                        self._scheduler._update_task_definition_status(  # type: ignore[attr-defined]
+                            task_id=self._task_id,
+                            new_status=definition_status,
+                        )
+
+                        if not getattr(self, "_summary_scheduled", False):
+                            try:
+                                logger.info(
+                                    "--- Scheduling save_final_summary for %s.%s with status: %s ---",
+                                    self._task_id,
+                                    self._instance_id,
+                                    final_status,
+                                )
+                                asyncio.create_task(self._save_final_summary(final_status))
+                                self._summary_scheduled = True  # type: ignore[attr-defined]
+                            except Exception as summary_e:
+                                logger.error("Error creating summary task: %s", summary_e)
+            except Exception:
+                logger.exception(
+                    "Task completion maintenance failed (task_id=%s, instance_id=%s)",
+                    self._task_id,
+                    self._instance_id,
+                )
 
         if error and final_status == "failed":
             raise error
