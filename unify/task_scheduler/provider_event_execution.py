@@ -8,6 +8,7 @@ through Orchestra before execution I/O.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import TYPE_CHECKING
 
 from unify.session_details import SESSION_DETAILS
@@ -45,6 +46,14 @@ def resolve_captured_task_revision(*, task_id: int) -> int:
     return int(revision)
 
 
+def _resolve_task_description(*, task_id: int) -> str | None:
+    """Return the authored task description for one live provider-event dispatch."""
+
+    scheduler = TaskScheduler()
+    task = scheduler._get_provider_event_definition(task_id=task_id)
+    return task.description
+
+
 async def handle_provider_event_live_dispatch(
     request: ProviderEventDispatchRequest,
 ) -> tuple[LiveProviderEventDispatchOutcome, SteerableToolHandle | None]:
@@ -63,8 +72,9 @@ async def handle_provider_event_live_dispatch(
     if session_assistant and session_assistant != str(request.assistant_id):
         raise ProviderEventDispatchValidationError("assistant_id_mismatch")
 
-    captured_task_revision, event_context = await asyncio.gather(
+    captured_task_revision, task_description, event_context = await asyncio.gather(
         asyncio.to_thread(resolve_captured_task_revision, task_id=request.task_id),
+        asyncio.to_thread(_resolve_task_description, task_id=request.task_id),
         asyncio.to_thread(fetch_provider_event_context, request),
     )
     await asyncio.to_thread(verify_precreated_provider_event_run, request)
@@ -88,6 +98,7 @@ async def handle_provider_event_live_dispatch(
                 adopted_only=True,
                 launch_identity=claimed.launch_identity or launch_identity,
                 terminal_reason=claimed.terminal_reason,
+                description=task_description,
             ),
             None,
         )
@@ -119,4 +130,5 @@ async def handle_provider_event_live_dispatch(
         launch_identity=launch_identity,
         captured_task_revision=captured_task_revision,
     )
+    outcome = dataclasses.replace(outcome, description=task_description)
     return outcome, handle
