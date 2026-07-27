@@ -239,7 +239,8 @@ def build_ask_prompt(
                 "The catalog and connection list are connection-gated: they only show apps with an active connection on this assistant.",
                 "If the user asks about an app with no eligible connection or no triggers listed, say that clearly, guide them to connect the integration first, then re-check — do not claim the provider lacks that trigger globally.",
                 "When config_schema requires a resource, list resources and copy a selectable item's `trigger_config` fields; do not invent provider ids.",
-                "Rows with live_ready=false, provisionable=false, or delivery_only=true cannot be enabled yet — say so clearly.",
+                "Only explicit live_ready=false, provisionable=false, or delivery_only=true blocks creation or enablement. "
+                "null means the catalog has no native lifecycle gate for that field, so it is not a blocker; still complete the normal connection, schema/resource, provisioning, and health checks.",
                 "Request full source_body only when the user explicitly asks to inspect raw event data.",
             ],
         )
@@ -445,9 +446,11 @@ def build_update_prompt(
             "Use provider-event triggers for third-party SaaS events configured in the trigger catalog.",
             "Authoring order: list catalog → list eligible connections → describe schema → "
             "resolve required resources → create with trigger_config filled → enable.",
-            "Stop before create/enable when the catalog row is not `live_ready`, "
+            "Stop before create/enable only when the catalog row explicitly has `live_ready=false`, "
             "`provisionable=false`, or `delivery_only=true` (for example Chat batch rows). "
-            "Tell the user that trigger is not available yet; do not invent a workaround.",
+            "`null` means there is no native lifecycle gate for that field, not that the trigger is unavailable; "
+            "still complete the normal connection, schema/resource, provisioning, and health checks. "
+            "Tell the user when an explicitly blocked trigger is unavailable; do not invent a workaround.",
             (
                 f"Use `{ask_fname}` for discovery tools (catalog, connections, schema, "
                 f"and resource listing) before creating the task."
