@@ -1097,6 +1097,47 @@ class TestRenderCompletedActions:
         assert "pause_" not in result
         assert "resume_" not in result
         assert "interject_" not in result
+        # No task_description was set, so the tag must not appear at all.
+        assert "<task_description>" not in result
+
+    def test_completed_action_with_task_description_renders_both_tags(
+        self,
+        renderer,
+    ):
+        """A live task handle carrying task_description renders it alongside
+        original_request, so the brain sees the task's own authored
+        instructions (e.g. delivery intent) next to the result.
+        """
+        completed_actions = {
+            0: {
+                "handle": MagicMock(),
+                "query": "Provider event started task 101 (operation op-1).",
+                "action_type": "task",
+                "task_description": (
+                    "Deliver this summary unprompted to Yusha via task "
+                    "completion delivery."
+                ),
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Done.",
+                        "success": True,
+                        "result": "Done.",
+                    },
+                ],
+            },
+        }
+
+        result = renderer.render_completed_actions(completed_actions)
+
+        assert (
+            "<original_request>Provider event started task 101 "
+            "(operation op-1).</original_request>" in result
+        )
+        assert (
+            "<task_description>Deliver this summary unprompted to Yusha via "
+            "task completion delivery.</task_description>" in result
+        )
 
     def test_multiple_completed_actions(self, renderer):
         """Multiple completed actions render correctly."""

@@ -98,6 +98,7 @@ async def _register_live_task_handle(
     *,
     handle: "SteerableToolHandle",
     query: str,
+    task_description: str | None = None,
 ) -> int:
     """Register a deterministically started task with CM steering state."""
 
@@ -118,6 +119,8 @@ async def _register_live_task_handle(
         "initial_snapshot_state": getattr(cm, "_current_snapshot_state", None),
         "context_opted_in": False,
     }
+    if task_description:
+        cm.in_flight_actions[handle_id]["task_description"] = task_description
     asyncio.create_task(
         managers_utils.actor_watch_result(
             handle_id,
