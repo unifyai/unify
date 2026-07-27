@@ -17,6 +17,7 @@ from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CM_EVENT_SOCKET_ENV,
 )
+from unify.conversation_manager.speaker_id import VOICE_PROFILES_ENV
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.helpers import (
@@ -638,8 +639,8 @@ class LivekitCallManager:
 
     def _get_voice_profiles(
         self,
-        contact: dict,
-        boss: dict,
+        contact: dict | None,
+        boss: dict | None,
         extra_contact_ids: list[int] | None = None,
     ) -> dict[str, list[float]]:
         """Fetch enrolled voice embeddings for the call participants.
@@ -924,9 +925,31 @@ class LivekitCallManager:
         self.unify_meet_participants = roster
         if self._event_broker is None:
             return
+        # Profiles otherwise only ride the initial dispatch, so anyone joining
+        # after the call started can never be voice-pinned. Off-thread: the
+        # lookup hits the backend and this runs on the event loop.
+        roster_contact_ids = [
+            int(p["contact_id"])
+            for p in roster
+            if isinstance(p, dict)
+            and p.get("contact_id") is not None
+            and p.get("kind") != "assistant"
+        ]
+        profiles = await asyncio.to_thread(
+            self._get_voice_profiles,
+            None,
+            None,
+            roster_contact_ids,
+        )
         await self._event_broker.publish(
             "app:call:status",
-            json.dumps({"type": "unify_meet_roster", "participants": roster}),
+            json.dumps(
+                {
+                    "type": "unify_meet_roster",
+                    "participants": roster,
+                    "voice_profiles": profiles,
+                },
+            ),
         )
 
     async def start_unify_meet(
@@ -1788,6 +1811,17 @@ class LivekitCallManager:
         if extra_env:
             for k, v in extra_env.items():
                 os.environ[k.upper()] = str(v)
+        # Voice profiles ride the dispatch metadata on the worker path; this
+        # path has no metadata, so without an env equivalent speaker pinning is
+        # silently off for every env-configured call. Cleared rather than left
+        # set when empty, or a previous call's profiles leak into this one.
+        # A 512-float embedding is ~10 KB of JSON, so contact + boss stays well
+        # inside the per-variable environment limit.
+        profiles = self._get_voice_profiles(contact, boss)
+        if profiles:
+            os.environ[VOICE_PROFILES_ENV] = json.dumps(profiles)
+        else:
+            os.environ.pop(VOICE_PROFILES_ENV, None)
         if socket_path:
             os.environ[CM_EVENT_SOCKET_ENV] = socket_path
             LOGGER.debug(

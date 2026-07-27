@@ -493,13 +493,15 @@ class TestSpeakerTracker:
         assert second.provisional is True
 
         # The enrolled voice returns: attribution swings back to its pinned
-        # cluster (verified), though the id stays provisional (multi-voice).
+        # cluster, so the contact is still named for routing — but the id now
+        # carries two voices, so this utterance cannot be certified as theirs
+        # and `verified` is withheld.
         _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
         await tracker.await_pending()
         third = tracker.resolve("S0")
         assert third.contact_id == 5
-        assert third.verified is True
         assert third.provisional is True
+        assert third.verified is False
 
     async def test_co_located_second_voice_blocks_enrollment_and_suggests(self):
         # Two voices under one diarization id count as two speakers: the
@@ -629,6 +631,50 @@ class TestEngagedSpeakers:
         assert engaged.is_engaged_contact(7)
         assert engaged.disengage(contact_id=7)
         assert not engaged.is_engaged_contact(7)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mid-call profile refresh (late joiners)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestMidCallProfileRefresh:
+    async def test_late_profile_pins_a_voice_already_heard(self):
+        """Someone who joined and spoke before their profile arrived is pinned.
+
+        Cluster centroids are re-scored on every segment, so the late joiner is
+        picked up on their next utterance without replaying the call.
+        """
+        tracker = _make_tracker(enrolled={})
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0") is None  # nobody enrolled yet
+
+        assert tracker.add_enrolled_profiles({9: VOICE_B}) == 1
+
+        _feed_segment(tracker, clock, "S0", amplitude=9000, seconds=3.0)
+        await tracker.await_pending()
+        resolution = tracker.resolve("S0")
+        assert resolution is not None
+        assert resolution.contact_id == 9
+
+    async def test_refresh_does_not_disturb_an_existing_profile(self):
+        """A repeated roster push must not overwrite pins already in effect."""
+        tracker = _make_tracker(enrolled={5: VOICE_A})
+        assert tracker.add_enrolled_profiles({5: VOICE_B}) == 0
+
+        clock = _Clock()
+        _feed_segment(tracker, clock, "S0", amplitude=1000, seconds=3.0)
+        await tracker.await_pending()
+        assert tracker.resolve("S0").contact_id == 5
+
+    async def test_refresh_ignores_malformed_entries(self):
+        tracker = _make_tracker(enrolled={})
+        assert tracker.add_enrolled_profiles({"not-an-id": VOICE_A}) == 0
+        assert tracker.add_enrolled_profiles({}) == 0
+        assert tracker.add_enrolled_profiles({7: VOICE_A}) == 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -816,7 +862,7 @@ def _vad_event(ev_type, *, speaking=False, speech_duration=0.0):
     )
 
 
-def _make_gate(scorer):
+def _make_gate(scorer, *, feed_scorer: bool = True):
     from livekit.agents import vad as agents_vad
 
     from unify.conversation_manager.engaged_vad import EngagedGateVAD
@@ -842,9 +888,23 @@ def _make_gate(scorer):
             return self.last_stream
 
     inner = ScriptedVAD()
-    gate = EngagedGateVAD(inner=inner, scorer=scorer)
+    gate = EngagedGateVAD(inner=inner, scorer=scorer, feed_scorer=feed_scorer)
     stream = gate.stream()
     return inner, gate, stream
+
+
+def _push_audio_frame(stream) -> None:
+    """Push one frame into the gate's input, as the AgentSession would."""
+    from livekit import rtc
+
+    stream.push_frame(
+        rtc.AudioFrame(
+            data=_tone(1000, 0.02).tobytes(),
+            sample_rate=SR,
+            num_channels=1,
+            samples_per_channel=int(0.02 * SR),
+        ),
+    )
 
 
 async def _next_event(stream, timeout: float = 1.0):
@@ -860,6 +920,35 @@ async def _expect_no_event(stream, wait: float = 0.15) -> None:
         await task
     except (asyncio.CancelledError, StopAsyncIteration):
         pass
+
+
+@pytest.mark.asyncio
+class TestEngagedGateVADScorerFeed:
+    """The scorer must have exactly one audio source.
+
+    It keeps a single rolling window, so feeding it from both the LiveKit VAD
+    stream and the browser-meet PortAudio bridge would interleave unrelated
+    audio into the same window. Browser meets feed it from the bridge and
+    construct the gate with ``feed_scorer=False``.
+    """
+
+    async def test_feeds_the_scorer_by_default(self):
+        scorer = _FakeScorer()
+        _inner, _gate, stream = _make_gate(scorer)
+        await asyncio.sleep(0)
+        _push_audio_frame(stream)
+        await asyncio.sleep(0.05)
+        assert scorer.audio_calls == 1
+        await stream.aclose()
+
+    async def test_does_not_feed_the_scorer_when_disabled(self):
+        scorer = _FakeScorer()
+        _inner, _gate, stream = _make_gate(scorer, feed_scorer=False)
+        await asyncio.sleep(0)
+        _push_audio_frame(stream)
+        await asyncio.sleep(0.05)
+        assert scorer.audio_calls == 0
+        await stream.aclose()
 
 
 @pytest.mark.asyncio
