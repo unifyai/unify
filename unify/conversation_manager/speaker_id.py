@@ -20,17 +20,23 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import tempfile
 import time
 import wave
-from collections import deque
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 import numpy as np
+
+# Plain stdlib logger: this module is imported by the LiveKit voice-agent child
+# process, where the heavyweight ``unify.logger`` import chain is best avoided.
+# Handlers are inherited from whichever process hosts it.
+_log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model management
@@ -501,6 +507,25 @@ class SpeakerTracker:
         self._suggestion_fired = False
         self._pending_tasks: set[asyncio.Task] = set()
 
+        # Attribution runs entirely off fire-and-forget tasks whose exceptions
+        # nothing retrieves, and every upstream failure (absent model, empty
+        # profile map) degrades silently — so the feature can be dead in
+        # production with no signal at all. These counters plus ``diagnostics``
+        # are that signal.
+        self._segments_observed = 0
+        self._segments_too_short = 0
+        self._segments_embedded = 0
+        self._embed_failures = 0
+
+        _log.info(
+            "SpeakerTracker: %d enrolled profile(s), call_contact=%s "
+            "(enrolled=%s), multi_party=%s",
+            len(self._enrolled),
+            self._call_contact_id,
+            self._call_contact_enrolled,
+            self._multi_party,
+        )
+
     # ── audio ingestion ──────────────────────────────────────────────────
 
     def add_audio(
@@ -531,9 +556,11 @@ class SpeakerTracker:
         self._last_final_ts = end_ts
         if not speaker_id:
             return
+        self._segments_observed += 1
         pcm, sample_rate = self._ring.slice(window_start, end_ts)
         duration_s = len(pcm) / sample_rate if sample_rate else 0.0
         if duration_s < SEGMENT_MIN_S:
+            self._segments_too_short += 1
             return
         task = asyncio.create_task(
             self._process_segment(speaker_id, pcm, sample_rate, duration_s),
@@ -548,7 +575,22 @@ class SpeakerTracker:
         sample_rate: int,
         duration_s: float,
     ) -> None:
-        embedding = await self._embedder.embed(pcm, sample_rate)
+        try:
+            embedding = await self._embedder.embed(pcm, sample_rate)
+        except Exception:
+            # Nothing awaits this task's result, so without an explicit log an
+            # unusable extractor (missing model, bad audio) silently disables
+            # attribution for the whole call.
+            self._embed_failures += 1
+            _log.exception(
+                "speaker embedding failed for %s (%.1fs @ %dHz); "
+                "attribution degraded for this segment",
+                speaker_id,
+                duration_s,
+                sample_rate,
+            )
+            return
+        self._segments_embedded += 1
         state = self._speakers.setdefault(speaker_id, _SpeakerState())
         cluster = self._assign_cluster(state, embedding, duration_s)
         self._try_pin(cluster)
@@ -729,13 +771,28 @@ class SpeakerTracker:
         task.add_done_callback(self._pending_tasks.discard)
 
     async def _emit_enrollment(self, pcm: np.ndarray, sample_rate: int) -> None:
-        embedding = await self._embedder.embed(pcm, sample_rate)
-        wav_bytes = pcm_to_wav_bytes(pcm, sample_rate)
-        fd, wav_path = tempfile.mkstemp(prefix="voice_enroll_", suffix=".wav")
-        with os.fdopen(fd, "wb") as f:
-            f.write(wav_bytes)
         duration_s = len(pcm) / sample_rate
-        self._on_enrollment_captured(embedding, wav_path, duration_s)
+        try:
+            embedding = await self._embedder.embed(pcm, sample_rate)
+            wav_bytes = pcm_to_wav_bytes(pcm, sample_rate)
+            fd, wav_path = tempfile.mkstemp(prefix="voice_enroll_", suffix=".wav")
+            with os.fdopen(fd, "wb") as f:
+                f.write(wav_bytes)
+            self._on_enrollment_captured(embedding, wav_path, duration_s)
+        except Exception:
+            # Fire-and-forget like the segment path: log or the enrollment is
+            # lost with no trace, and the contact stays silently unenrolled.
+            _log.exception(
+                "voice enrollment capture failed for contact %s (%.0fs)",
+                self._call_contact_id,
+                duration_s,
+            )
+            return
+        _log.info(
+            "voice enrollment captured for contact %s (%.0fs of speech)",
+            self._call_contact_id,
+            duration_s,
+        )
 
     def _check_suggestion(self) -> None:
         distinct = self._distinct_voice_count()
@@ -760,6 +817,33 @@ class SpeakerTracker:
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
+    def diagnostics(self) -> dict:
+        """Per-call attribution counters, for the end-of-call summary log.
+
+        Answers "did voice fingerprinting actually do anything on this call?"
+        without needing the transcript: no enrolled profiles, every segment
+        rejected as too short, or embeddings failing all present as zeros here.
+        """
+        pins = sum(
+            1
+            for state in self._speakers.values()
+            for cluster in state.clusters
+            if cluster.pinned_contact_id is not None
+        )
+        return {
+            "enrolled_profiles": len(self._enrolled),
+            "diarization_ids": len(self._speakers),
+            "clusters": sum(len(s.clusters) for s in self._speakers.values()),
+            "distinct_voices": self._distinct_voice_count(),
+            "pinned_clusters": pins,
+            "segments_observed": self._segments_observed,
+            "segments_too_short": self._segments_too_short,
+            "segments_embedded": self._segments_embedded,
+            "embed_failures": self._embed_failures,
+            "enrollment_fired": self._enrollment_fired,
+            "suggestion_fired": self._suggestion_fired,
+        }
+
     async def finalize(self) -> None:
         """Call-end hook: flush pending work and fire a partial enrollment."""
         await self.await_pending()
@@ -770,6 +854,11 @@ class SpeakerTracker:
                 if duration_s >= self._enrollment_min_s:
                     self._fire_enrollment(audio_parts, sample_rate)
         await self.await_pending()
+        stats = self.diagnostics()
+        _log.info(
+            "speaker attribution summary: %s",
+            " ".join(f"{k}={v}" for k, v in stats.items()),
+        )
 
     # ── resolution ───────────────────────────────────────────────────────
 
@@ -986,6 +1075,11 @@ class RealtimeSpeakerScorer:
 
         self.verdict: str = "unknown"
         self._non_engaged_since: float | None = None
+        # Floor gating fails open, so a scorer that never produces a confident
+        # verdict is indistinguishable from one that is working — the counts
+        # are what tell the two apart.
+        self._verdicts: Counter[str] = Counter()
+        self._infer_failures = 0
 
     def add_audio(
         self,
@@ -1054,7 +1148,15 @@ class RealtimeSpeakerScorer:
             else:
                 self.verdict = "unknown"
                 self._non_engaged_since = None
+        except Exception:
+            self._infer_failures += 1
+            self.verdict = "unknown"
+            self._non_engaged_since = None
+            # Logged once per failure rather than swallowed: a broken extractor
+            # here silently reverts the call to ungated behaviour.
+            _log.exception("realtime speaker scoring failed; floor gate open")
         finally:
+            self._verdicts[self.verdict] += 1
             self._busy = False
 
     @property
@@ -1063,4 +1165,26 @@ class RealtimeSpeakerScorer:
         return (
             self._non_engaged_since is not None
             and (time.time() - self._non_engaged_since) >= self._hysteresis_s
+        )
+
+    def diagnostics(self) -> dict:
+        """Verdict tally for the end-of-call summary.
+
+        An all-``unknown`` tally means the gate never acted: every window was
+        silence, ambiguous, or below threshold.
+        """
+        return {
+            "windows_scored": sum(self._verdicts.values()),
+            "engaged": self._verdicts["engaged"],
+            "non_engaged": self._verdicts["non_engaged"],
+            "unknown": self._verdicts["unknown"],
+            "infer_failures": self._infer_failures,
+        }
+
+    def log_summary(self) -> None:
+        """Emit the end-of-call verdict tally (call-side lifecycle hook)."""
+        stats = self.diagnostics()
+        _log.info(
+            "speaker floor gate summary: %s",
+            " ".join(f"{k}={v}" for k, v in stats.items()),
         )
