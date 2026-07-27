@@ -1969,6 +1969,9 @@ class Renderer:
                 )
                 out += f"<action id='{handle_id}' short_name='{short_name}' status='{action_status}' type='{action_type}'>\n"
                 out += f"<original_request>{query}</original_request>\n"
+                task_description = handle_data.get("task_description")
+                if task_description:
+                    out += f"<task_description>{task_description}</task_description>\n"
 
                 if terminal_event is not None:
                     if terminal_event.get("success") is False:
