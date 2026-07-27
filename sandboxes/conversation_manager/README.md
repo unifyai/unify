@@ -92,15 +92,15 @@ To keep interactive EventBus traffic sparse in Orchestra while still retaining a
 ```bash
 export EVENTBUS_PUBLISHING_ENABLED=true
 export EVENTBUS_ORCHESTRA_PERSIST_MODE=allowlist
-export EVENTBUS_ORCHESTRA_PERSIST_TOOLS=execute_code,execute_function
+export EVENTBUS_ORCHESTRA_PERSIST_TOOLS=act,execute_code,execute_function
 # optional Live Actions stream (unchanged by the allowlist):
 # export EVENTBUS_PUBSUB_STREAMING=true
 ```
 
 In ``allowlist`` mode:
 
-- **Outside** a task run: only allowlisted tools (default ``execute_code`` /
-  ``execute_function``) are written to ``Events/*``.
+- **Outside** a task run: only allowlisted action/tool names (default ``act``,
+  ``execute_code``, and ``execute_function``) are written to ``Events/*``.
 - **Inside** an ``ActiveTask`` (``CURRENT_TASK_RUN_LINEAGE`` / payload
   ``run_key`` + ``task_id``/``instance_id``): the full ManagerMethod + ToolLoop
   tree is persisted and stamped for join from ``Tasks/Executions``.
