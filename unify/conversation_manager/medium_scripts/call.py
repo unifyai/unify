@@ -1434,15 +1434,40 @@ async def entrypoint(ctx: agents.JobContext):
         if not _meet_display_name:
             _meet_display_name = SESSION_DETAILS.assistant.name or "Unity Assistant"
 
+    def _meet_participant_email(display_name: str) -> str:
+        """The meeting platform's email for a participant, by display name.
+
+        Only browser meets have one: it arrives on the roster the CM pushes,
+        sourced from the platform itself rather than anything we inferred.
+        """
+        if not display_name:
+            return ""
+        wanted = display_name.strip().lower()
+        for participant in _meet_cached_participants:
+            if str(participant.get("name") or "").strip().lower() == wanted:
+                return str(participant.get("email") or "").strip()
+        return ""
+
     def _resolve_contact_by_name(display_name: str) -> dict | None:
         """Best-effort contact resolution from a Meet display name.
 
-        Tries an exact first_name+surname match across known contacts
-        (the caller contact and the boss). Falls back to None if no match,
-        letting the caller use the original contact dict.
+        Email first where the platform gave us one: two people called "Dan" are
+        indistinguishable by name, and a display name is whatever the
+        participant typed, whereas the address is the account they are signed in
+        as. Falls back to matching first_name+surname across the known contacts
+        (the caller and the boss), then None, letting the caller keep the
+        original contact dict.
         """
         if not display_name:
             return None
+
+        email = _meet_participant_email(display_name).lower()
+        if email:
+            for candidate in (contact, boss):
+                candidate_email = str(candidate.get("email_address") or "").strip()
+                if candidate_email and candidate_email.lower() == email:
+                    return candidate
+
         dn_lower = display_name.strip().lower()
         for candidate in (contact, boss):
             full = f"{candidate.get('first_name', '')} {candidate.get('surname', '')}".strip()
