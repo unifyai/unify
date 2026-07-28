@@ -74,6 +74,15 @@ class RecallMeetProvider:
         self._relay_url = relay_url if relay_url is not None else _default_relay_url()
         self._assistant_id = str(assistant_id) if assistant_id is not None else ""
 
+    async def preflight(self) -> str | None:
+        # Nothing to wait for -- Recall is a hosted API, not a process that
+        # cold-starts alongside us. Only the local configuration can be wrong,
+        # and catching that here saves dispatching a worker into a dead room.
+        if not self._bridge_page_url:
+            LOGGER.error("[recall] MEET_BRIDGE_PAGE_URL is unset; cannot join")
+            return "bridge_page_unconfigured"
+        return None
+
     async def join(
         self,
         *,

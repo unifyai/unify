@@ -17,9 +17,12 @@ rollback are the same one-value change rather than a deploy.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
+
+LOGGER = logging.getLogger(__name__)
 
 AGENT_SERVICE_PROVIDER = "agent_service"
 RECALL_PROVIDER = "recall"
@@ -72,6 +75,15 @@ class MeetProvider(Protocol):
 
     name: str
 
+    async def preflight(self) -> str | None:
+        """Return a failure reason when this backend cannot accept a join.
+
+        Called before the fast brain is dispatched, so a backend that is known
+        to be unavailable costs nothing: dispatching a voice worker into a room
+        no browser will ever reach leaves it talking to itself until it times
+        out. Returns None when the backend is ready.
+        """
+
     async def join(
         self,
         *,
@@ -102,3 +114,41 @@ def configured_meet_provider() -> str:
     if name in (AGENT_SERVICE_PROVIDER, RECALL_PROVIDER):
         return name
     return DEFAULT_MEET_PROVIDER
+
+
+def build_meet_provider(call_manager: Any) -> MeetProvider:
+    """Construct the backend this pod is configured for.
+
+    A pod asking for ``recall`` without credentials falls back to the local
+    browser rather than refusing to join: during the transition there is still
+    something to fall back to, and a loud log line is more useful than a
+    meeting nobody attends. Once Recall is the only backend there will be
+    nothing to fall back to and this should fail instead.
+
+    Imports are function-local because both backends import this module.
+    """
+
+    # Imported here rather than at module scope: agent_service_meeting and
+    # recall.provider both import the types above, so a top-level import would
+    # be circular.
+    from unify.conversation_manager.domains.agent_service_meeting import (
+        AgentServiceMeetProvider,
+    )
+
+    if configured_meet_provider() == RECALL_PROVIDER:
+        from unify.conversation_manager.domains.recall.client import recall_configured
+
+        if recall_configured():
+            from unify.conversation_manager.domains.recall.provider import (
+                RecallMeetProvider,
+            )
+
+            LOGGER.info("browser meetings via Recall.ai")
+            return RecallMeetProvider(assistant_id=call_manager.assistant_id)
+
+        LOGGER.error(
+            "MEET_PROVIDER=recall but RECALL_API_KEY is unset; "
+            "falling back to the local browser",
+        )
+
+    return AgentServiceMeetProvider(call_manager)
