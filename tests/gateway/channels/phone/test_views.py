@@ -11,6 +11,7 @@ stays attributable.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -50,6 +51,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> None:
         ORCHESTRA_ADMIN_KEY=SimpleNamespace(
             get_secret_value=lambda: "test-admin-key",
         ),
+        DEPLOY_ENV="staging",
     )
     monkeypatch.setattr(phone_views, "SETTINGS", stub)
 
@@ -105,6 +107,7 @@ def test_auth_router_exposes_expected_paths() -> None:
         ("/end-conference", ["POST"]),
         ("/hang-up", ["POST"]),
         ("/hang-up-call", ["POST"]),
+        ("/recording-url", ["POST"]),
         ("/send-call", ["POST"]),
         ("/send-text", ["POST"]),
         ("/start-recording", ["POST"]),
@@ -600,6 +603,126 @@ def test_start_recording_rejects_missing_room_name(
 
     assert resp.status_code == 400
     mock_egress.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /phone/recording-url
+# ---------------------------------------------------------------------------
+
+_RECORDING_URI = (
+    "gs://unity-call-recordings/staging/42/unity_call_abc_2026-07-27T12-48-25.mp3"
+)
+
+
+@pytest.fixture
+def _recording_storage(monkeypatch: pytest.MonkeyPatch):
+    """Stub the GCS client so signing is exercised without real credentials."""
+    from unify.gateway.channels.phone import views as phone_views
+
+    monkeypatch.setenv(
+        "GCP_SA_KEY",
+        json.dumps({"type": "service_account", "project_id": "test"}),
+    )
+    blob = MagicMock()
+    blob.exists.return_value = True
+    blob.generate_signed_url.return_value = "https://signed.example.com/audio.mp3"
+    client = MagicMock()
+    client.bucket.return_value.blob.return_value = blob
+    monkeypatch.setattr(
+        phone_views.Credentials,
+        "from_service_account_info",
+        classmethod(lambda cls, info: MagicMock()),
+    )
+    monkeypatch.setattr(phone_views.storage, "Client", lambda credentials: client)
+    return blob
+
+
+def test_recording_url_signs_an_existing_recording(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _recording_storage: MagicMock,
+) -> None:
+    with patch(
+        "unify.gateway.channels.phone.views.require_assistant_ownership",
+        new=AsyncMock(),
+    ) as owns:
+        resp = client.post("/phone/recording-url", json={"gcs_uri": _RECORDING_URI})
+
+    assert resp.status_code == 200
+    assert resp.json()["signed_url"] == "https://signed.example.com/audio.mp3"
+    assert resp.json()["expires_in_minutes"] == 60
+    # Authorisation is keyed on the assistant segment of the object path.
+    assert owns.await_args.args[1] == "42"
+    assert _recording_storage.generate_signed_url.call_args.kwargs["method"] == "GET"
+
+
+def test_recording_url_404s_when_the_object_was_never_written(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _recording_storage: MagicMock,
+) -> None:
+    """An egress that failed before the completion gate still left a URL behind.
+
+    404 is the signal the reader turns into "Recording unavailable", so it must
+    not be collapsed into a generic error.
+    """
+    _recording_storage.exists.return_value = False
+
+    with patch(
+        "unify.gateway.channels.phone.views.require_assistant_ownership",
+        new=AsyncMock(),
+    ):
+        resp = client.post("/phone/recording-url", json={"gcs_uri": _RECORDING_URI})
+
+    assert resp.status_code == 404
+    _recording_storage.generate_signed_url.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("gcs_uri", "expected_status"),
+    [
+        # Not a gs:// URI at all.
+        ("https://storage.googleapis.com/unity-call-recordings/staging/42/a.mp3", 400),
+        # A different bucket: this endpoint must not become a general signer for
+        # the comms service account, which can read far more than recordings.
+        ("gs://assistant-message-attachments-staging/staging/42/a.mp3", 403),
+        # Another environment's recordings.
+        ("gs://unity-call-recordings/production/42/a.mp3", 403),
+        # No assistant segment — the legacy malformed shape, unattributable.
+        ("gs://unity-call-recordings/staging/unity__phone_2026.mp3", 400),
+        # Not an audio object.
+        ("gs://unity-call-recordings/staging/42/EG_abc.json", 400),
+    ],
+)
+def test_recording_url_refuses_objects_outside_this_envs_recordings(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+    _recording_storage: MagicMock,
+    gcs_uri: str,
+    expected_status: int,
+) -> None:
+    with patch(
+        "unify.gateway.channels.phone.views.require_assistant_ownership",
+        new=AsyncMock(),
+    ) as owns:
+        resp = client.post("/phone/recording-url", json={"gcs_uri": gcs_uri})
+
+    assert resp.status_code == expected_status
+    # Rejected before any authorisation or signing work happens.
+    owns.assert_not_awaited()
+    _recording_storage.generate_signed_url.assert_not_called()
+
+
+def test_recording_url_requires_a_uri(
+    client: TestClient,
+    _phone_credentials: None,
+    _settings: None,
+) -> None:
+    resp = client.post("/phone/recording-url", json={})
+    assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

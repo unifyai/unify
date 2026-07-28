@@ -21,10 +21,13 @@ gateway aggregator can mount the two routers at ``/phone`` and
 external callers (Twilio webhooks, Unity admin clients) see no
 change.
 
-The endpoint set matches the original 1:1::
+The ported endpoints preserve the original wire behaviour 1:1; the two
+recording routes are additions that have no counterpart in the original::
 
   auth_router:
     POST /dispatch-livekit-agent  -- creates LiveKit room + dispatches agent
+    POST /start-recording         -- starts egress on an already-live room
+    POST /recording-url           -- signs playback for a stored recording
     POST /send-call               -- creates outbound Twilio call -> SIP -> LiveKit
     POST /send-text               -- sends SMS via Twilio
     GET  /available-countries     -- static list of supported countries
@@ -37,16 +40,26 @@ The endpoint set matches the original 1:1::
   unauth_router:
     POST /conference-status       -- Twilio webhook for conference lifecycle events
     POST /twiml                   -- TwiML response for outbound call leg
+
+Recording lives here because the comms service is the only one holding a
+service-account key for the recordings bucket: it starts the egress that
+writes the object and signs the reads that play it back. Orchestra proxies
+user-facing playback through ``/recording-url`` rather than being granted its
+own cross-project access to that bucket.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import timedelta
 from urllib.parse import quote_plus
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+from google.cloud import storage
+from google.oauth2.service_account import Credentials
 from livekit.api import (
     CreateSIPInboundTrunkRequest,
     SIPInboundTrunkInfo,
@@ -71,7 +84,7 @@ from unify.gateway.common.livekit import (
     start_room_egress,
 )
 from unify.gateway.common.twilio import build_twilio_client
-from unify.gateway.credentials import EnvCredentialStore
+from unify.gateway.credentials import CredentialStore, EnvCredentialStore
 from unify.settings import SETTINGS
 
 logger = logging.getLogger("unify.gateway.channels.phone")
@@ -88,6 +101,89 @@ async def _json_object_or_empty(request: Request) -> dict:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be an object")
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Call-recording playback
+# ---------------------------------------------------------------------------
+
+_GS_URI_RE = re.compile(r"^gs://([^/]+)/(.+)$")
+# Recording objects are written as {deploy_env}/{assistant_id}/{room}_{ts}.mp3
+# by ``_start_room_egress``. The assistant segment is what authorises playback,
+# so a path that does not carry one cannot be served.
+_RECORDING_PATH_RE = re.compile(r"^(?P<env>[^/]+)/(?P<assistant_id>[^/]+)/[^/]+\.mp3$")
+
+RECORDING_URL_TTL = timedelta(hours=1)
+
+
+def _recordings_bucket(credentials: CredentialStore) -> str:
+    return credentials.get_optional(
+        "LIVEKIT_EGRESS_GCS_BUCKET",
+        "unity-call-recordings",
+    )
+
+
+def _parse_recording_uri(gcs_uri: str, credentials: CredentialStore) -> tuple[str, str]:
+    """Split a ``gs://`` URI, refusing anything outside this env's recordings.
+
+    Pinning both the bucket and the environment prefix keeps this endpoint from
+    being used as a general-purpose signer for the comms service account, which
+    can read considerably more than call recordings.
+    """
+    match = _GS_URI_RE.match(gcs_uri)
+    if not match:
+        raise HTTPException(status_code=400, detail="gcs_uri must be a gs:// URI")
+    bucket_name, object_path = match.group(1), match.group(2)
+
+    expected_bucket = _recordings_bucket(credentials)
+    if bucket_name != expected_bucket:
+        raise HTTPException(
+            status_code=403,
+            detail="Bucket is not the recordings bucket",
+        )
+
+    path_match = _RECORDING_PATH_RE.match(object_path)
+    if not path_match:
+        raise HTTPException(status_code=400, detail="Not a recording object path")
+    if path_match.group("env") != SETTINGS.DEPLOY_ENV:
+        raise HTTPException(
+            status_code=403,
+            detail="Recording belongs to a different environment",
+        )
+    return bucket_name, object_path
+
+
+def _assistant_id_from_recording_path(object_path: str) -> str:
+    match = _RECORDING_PATH_RE.match(object_path)
+    if not match:
+        raise HTTPException(status_code=400, detail="Not a recording object path")
+    return match.group("assistant_id")
+
+
+def _sign_recording(
+    bucket_name: str,
+    object_path: str,
+    credentials: CredentialStore,
+) -> dict:
+    """Sign a GET for one recording object, or 404 when it was never written."""
+    creds_json_raw = credentials.get_optional("GCP_SA_KEY", "")
+    if not creds_json_raw:
+        raise HTTPException(status_code=500, detail="GCP_SA_KEY not configured")
+    creds = Credentials.from_service_account_info(json.loads(creds_json_raw))
+    blob = storage.Client(credentials=creds).bucket(bucket_name).blob(object_path)
+
+    if not blob.exists():
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    signed_url = blob.generate_signed_url(
+        version="v4",
+        expiration=RECORDING_URL_TTL,
+        method="GET",
+    )
+    return {
+        "signed_url": signed_url,
+        "expires_in_minutes": int(RECORDING_URL_TTL.total_seconds() // 60),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +322,37 @@ async def start_recording(request: Request):
         conference_name=str(data.get("conference_name", "") or ""),
     )
     return {"success": True}
+
+
+@auth_router.post("/recording-url")
+async def recording_url(request: Request):
+    """Mint a short-lived playback URL for a stored call recording.
+
+    The recordings bucket lives in the comms project and this service already
+    holds a service-account key for it, so it is the only place that can both
+    read the object and sign for it. Orchestra proxies user-facing reads here
+    rather than being granted its own cross-project access.
+
+    A signed URL is returned rather than the audio itself: players seek with
+    HTTP range requests, which GCS serves natively and a proxy would have to
+    reimplement while pushing every megabyte through this service.
+
+    Responses are deliberately distinguishable -- 404 means the object is not
+    in the bucket (an egress that failed before the completion gate existed
+    still recorded a URL on its exchange), 403 means the caller may not hear
+    this assistant's calls.
+    """
+    credentials = EnvCredentialStore()
+    data = await _json_object_or_empty(request)
+    gcs_uri = str(data.get("gcs_uri", "") or "").strip()
+    if not gcs_uri:
+        raise HTTPException(status_code=400, detail="gcs_uri is required")
+
+    bucket_name, object_path = _parse_recording_uri(gcs_uri, credentials)
+    assistant_id = _assistant_id_from_recording_path(object_path)
+    await require_assistant_ownership(request, assistant_id)
+
+    return _sign_recording(bucket_name, object_path, credentials)
 
 
 def _admin_headers() -> dict:
