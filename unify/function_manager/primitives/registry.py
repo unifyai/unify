@@ -113,6 +113,56 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         examples="'Who is our contact at Acme Corp?', 'Find Alice's email', 'Contacts in Berlin?'",
     ),
     ManagerSpec(
+        manager_alias="canvas",
+        manager_registry_key="canvas",
+        primitive_class_path="unify.canvas_manager.canvas_manager.CanvasManager",
+        excluded_methods=frozenset(),
+        priority=8,
+        domain="Generative User Interfaces",
+        description=(
+            "Author real React views the user can open and interact with: "
+            "trackers, to-do lists, dashboards, any custom interface, with live "
+            "data and buttons that run work"
+        ),
+        use_when=(
+            "The user asks to see something as a view, page, dashboard, tracker "
+            "or list rather than as an answer in chat, or asks for something they "
+            "can come back to and interact with"
+        ),
+        examples=(
+            "'Build me a tracker for my open tasks', 'Show last quarter's sales "
+            "as a dashboard', 'Give me a to-do list I can tick off', 'A view of "
+            "our GitHub issues next to the HubSpot pipeline'"
+        ),
+        special_note=(
+            "A canvas is ONE TSX module rendering the whole view -- there is no "
+            "tile/layout split, React composes. Write against @unity/canvas-kit "
+            "only; react and the kit are the sole imports available at view time. "
+            "NEVER write a colour: there is no colour prop and no colour class "
+            "works, so use tone='success'|'warning'|'danger'|'muted' and chart "
+            "series indices. Nothing is stored until it lints, typechecks, "
+            "compiles, its bindings dry-run and it renders, so read "
+            "``result.build.diagnostics`` on failure and revise -- a failed "
+            "update leaves the published canvas untouched. "
+            "DATA: declare ``bindings`` for anything that is a query; they re-run "
+            "on every view so the canvas stays live, and the query never reaches "
+            "the browser. Use ``props`` only for values that needed reasoning to "
+            "produce. A canvas can ONLY display data that already lives in a "
+            "table, so data from connected apps must be STORED FIRST: call the "
+            "integration tools, write rows with ``primitives.data.ingest``, keep "
+            "it fresh with ``primitives.tasks``, then bind to that table. Binding "
+            "to a table that does not exist yet fails at creation naming the "
+            "table. This is also the only way to show two apps together, since "
+            "providers cannot be joined directly. "
+            "INTERACTIVITY: declare ``actions`` for anything the viewer should be "
+            "able to do; give an ``input_schema`` with explicit maxItems/maxLength "
+            "and set ``destructive=True`` with ``confirm`` text for anything "
+            "irreversible -- Console shows that outside the frame with the real "
+            "arguments. Prefer ``update_view`` over creating a second canvas: the "
+            "URL is stable, so anywhere it was shared keeps working."
+        ),
+    ),
+    ManagerSpec(
         manager_alias="dashboards",
         manager_registry_key="dashboards",
         primitive_class_path="unify.dashboard_manager.dashboard_manager.DashboardManager",
@@ -544,6 +594,12 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_data_reduce_example",
         "get_primitives_data_ingest_example",
         "get_primitives_data_external_sync_example",
+    ],
+    "canvas": [
+        "get_primitives_canvas_live_view_example",
+        "get_primitives_canvas_connected_apps_example",
+        "get_primitives_canvas_actions_example",
+        "get_primitives_canvas_revision_example",
     ],
     "dashboards": [
         "get_primitives_dashboards_baked_in_example",
