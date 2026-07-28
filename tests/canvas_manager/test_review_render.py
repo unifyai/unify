@@ -19,10 +19,13 @@ load-bearing in a way that is easy to get backwards:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from unify.canvas_manager.ops import review_ops
 from unify.canvas_manager.ops.build_ops import build_canvas, toolchain_available
+from unify.canvas_manager.types.view import ReviewReport
 
 WORKING = """
 import * as React from 'react';
@@ -180,3 +183,61 @@ class TestRender:
         assert result.rendered is False
         # The actor has to be able to fix it, so the failure must say what broke.
         assert result.error
+
+
+class TestCritique:
+    """The critique is advisory and must stay that way.
+
+    The gate is whether a canvas renders; whether it looks good is a note back to
+    the actor. Confusing the two would either block publication on an opinion or
+    let a genuinely broken canvas be described as fine.
+    """
+
+    def test_no_screenshots_yields_a_neutral_verdict(self):
+        # Nothing to look at is not a criticism.
+        verdict, issues = review_ops._critique([])
+
+        assert verdict == "rendered"
+        assert issues == []
+
+    def test_an_unavailable_model_does_not_block_publication(self, monkeypatch):
+        # No vision model configured, or no network. Publishing must proceed: the
+        # render already established the only thing being gated.
+        def explode(*args, **kwargs):
+            raise RuntimeError("no model configured")
+
+        monkeypatch.setattr("unify.common.reasoning.query_llm", explode)
+
+        verdict, issues = review_ops._critique(["/nonexistent/shot.png"])
+
+        assert verdict == "rendered"
+        assert issues == []
+
+    def test_a_failed_render_is_not_critiqued(self, monkeypatch):
+        """A canvas that never mounted must not come back with a visual opinion.
+
+        Critiquing it would either describe screenshots that do not exist or
+        overwrite the error that says what actually broke.
+        """
+        monkeypatch.setattr(
+            review_ops,
+            "_render",
+            lambda **kwargs: ReviewReport(rendered=False, error="threw on mount"),
+        )
+        monkeypatch.setattr(
+            review_ops,
+            "_critique",
+            lambda shots: pytest.fail("critiqued a render that failed"),
+        )
+
+        report = review_ops._render_and_critique(
+            host=Path("/unused"),
+            token="t",
+            source="",
+            props={},
+            rows={},
+            out_dir=Path("/unused"),
+        )
+
+        assert report.rendered is False
+        assert report.error == "threw on mount"
