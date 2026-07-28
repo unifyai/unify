@@ -277,6 +277,20 @@ class ContextRegistry:
         return out
 
     @classmethod
+    def declared_tables(
+        cls,
+        manager: Union[BaseStateManager, Type[BaseStateManager]],
+    ) -> frozenset[str]:
+        """Table names a manager declares in ``Config.required_contexts``.
+
+        Reads the declaration off the class, so it needs no live context and no
+        provisioning. Callers that reason about what a manager owns should ask
+        here rather than restating table names, which is how the two drift.
+        """
+        required = getattr(getattr(manager, "Config", None), "required_contexts", None)
+        return frozenset(context.name for context in required or ())
+
+    @classmethod
     def _get_managers(cls) -> List[Union[BaseStateManager, Type[BaseStateManager]]]:
         """Get the list of managers that have required contexts."""
         # TODO: Use dynamic discovery of managers, dynamic discover is slow atm
