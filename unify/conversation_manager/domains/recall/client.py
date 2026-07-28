@@ -278,6 +278,29 @@ class RecallClient:
             payload["to"] = to
         await self._request("POST", f"/bot/{bot_id}/send_chat_message", json=payload)
 
+    async def push_screenshare_frame(self, bot_id: str, jpeg_b64: str) -> None:
+        """Show one JPEG as the bot's screenshare, starting it if needed.
+
+        The screenshare surface holds the last frame pushed, so a moving view is
+        this called on a loop rather than a stream. Chosen over pointing the
+        screenshare at a webpage because the desktop we share lives on the pod's
+        own display: a webpage would have to be publicly reachable by Recall's
+        browser, which means exposing an interactive desktop to the internet.
+        Pushing frames keeps it inside our infrastructure and sends no
+        credential anywhere.
+        """
+
+        await self._request(
+            "POST",
+            f"/bot/{bot_id}/output_screenshare",
+            json={"kind": "jpeg", "b64_data": jpeg_b64},
+        )
+
+    async def stop_screenshare(self, bot_id: str) -> None:
+        """Stop screensharing, leaving the camera surface untouched."""
+
+        await self._request("DELETE", f"/bot/{bot_id}/output_screenshare")
+
     async def set_output_media(
         self,
         bot_id: str,
