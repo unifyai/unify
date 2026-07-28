@@ -2835,49 +2835,27 @@ def get_primitives_canvas_actions_example() -> str:
     return '''
 # "Give me somewhere to paste employee emails and send them an update"
 #
-# Collect the input yourself and hand it to `canvas.invoke`. The arguments are
-# re-validated server-side against `input_schema` before anything runs, because
-# the frame is untrusted -- client-side validation is only there to be helpful.
-# Bounds on every array and string are required: they are the blast radius once a
-# viewer supplies the arguments.
+# `input_schema` is the contract on both sides: ActionForm renders the whole form
+# from it, and the server re-validates against the same schema before anything
+# runs, because the frame is untrusted. Bounds on every array and string are
+# required -- they are the blast radius once a viewer supplies the arguments.
 from unify.canvas_manager.types import CanvasAction
 
 result = await primitives.canvas.create_view(
     tsx="""
-import * as React from "react";
 import {
-  Badge, Canvas, Section, Stack, Text, type CanvasViewProps,
+  Canvas, Section, ActionForm, type CanvasViewProps,
 } from "@unity/canvas-kit";
 
 export default function BulkMail({ canvas }: CanvasViewProps) {
-  const [raw, setRaw] = React.useState("");
-  const [subject, setSubject] = React.useState("");
-
-  // One invocation is tracked at a time; `canvas.invocations` is keyed by the
-  // id the parent assigns, and reports progress and the final outcome.
-  const state = Object.values(canvas.invocations)[0];
-  const recipients = raw.split(/[\\s,;]+/).filter(Boolean);
-
   return (
     <Canvas>
       <Section title="Send an update"
                description="Paste the recipients, write the message, send once.">
-        <Stack gap="md">
-          <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={5} />
-          <input value={subject} onChange={(e) => setSubject(e.target.value)} />
-          <Text tone="muted">{recipients.length} recipients</Text>
-          <button
-            disabled={!recipients.length || state?.status === "running"}
-            onClick={() => canvas.invoke("bulk_send", {
-              recipients, subject, body: "See attached update.",
-            })}
-          >
-            Send
-          </button>
-          {state ? <Badge tone={state.status === "failed" ? "danger" : "success"}>
-            {state.error ?? state.status}
-          </Badge> : null}
-        </Stack>
+        {/* Renders the fields, blocks submit until the required ones are filled,
+            and reports the outcome. Use `useCanvasAction(canvas, name)` instead
+            when the interaction needs to be bespoke. */}
+        <ActionForm canvas={canvas} action="bulk_send" />
       </Section>
     </Canvas>
   );
@@ -2894,9 +2872,13 @@ export default function BulkMail({ canvas }: CanvasViewProps) {
                 "type": "object",
                 "required": ["recipients", "subject", "body"],
                 "properties": {
+                    # `format: email` gives the recipient field address
+                    # validation and chip editing rather than a bare text box.
                     "recipients": {"type": "array", "maxItems": 200,
                                    "items": {"type": "string", "format": "email"}},
                     "subject": {"type": "string", "maxLength": 200},
+                    # Over 200 characters renders as a textarea rather than a
+                    # single line.
                     "body": {"type": "string", "maxLength": 10000},
                 },
             },

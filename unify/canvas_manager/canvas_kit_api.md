@@ -234,4 +234,89 @@ Share-of-total chart.
 - `emptyMessage?: string`
 - plus standard element attributes except children
 
-<!-- 30 components -->
+## Form controls
+
+### `<Field>`
+Label, optional hint and error around one control.
+
+- `label: React.ReactNode`
+- `hint?: React.ReactNode` — Explanatory text under the label.
+- `error?: string` — Validation message. Renders in the danger tone and replaces the hint.
+- `required?: boolean`
+- plus standard element attributes except title
+
+### `<Input>`
+- plus standard element attributes
+
+### `<Textarea>`
+- plus standard element attributes
+
+### `<NumberInput>`
+- plus standard element attributes except type
+
+### `<Select>`
+
+- `options: Array<SelectOption | string>`
+- `placeholder?: string` — Shown as a disabled first entry when no value is selected.
+- plus standard element attributes except children
+
+### `<Checkbox>`
+
+- `label?: React.ReactNode`
+- plus standard element attributes except type
+
+### `<Button>`
+
+- `variant?: ButtonVariant`
+- `size?: 'sm' | 'md'`
+- plus standard element attributes
+
+### `<TagInput>`
+
+- `value: string[]`
+- `onChange: (value: string[]) => void`
+- `placeholder?: string`
+- `max?: number` — Upper bound, normally the `maxItems` of the action's input schema.
+- `validate?: (entry: string) => string | null` — Rejects an entry and shows the returned message.
+- `disabled?: boolean`
+- `className?: string`
+
+### `<Recipients>`
+TagInput preset for email addresses.
+
+### `<Notice>`
+Short status line, for reporting outcomes next to a control.
+
+- `tone?: Tone`
+- plus standard element attributes except title
+
+## Actions
+
+### `<ActionButton>`
+Button that runs one declared action.
+
+- `canvas: CanvasRuntime`
+- `action: string`
+- `args?: Record<string, unknown>` — Arguments to submit. Omit for an action that takes none.
+- `label?: React.ReactNode` — Overrides the label the action was declared with.
+- plus standard element attributes except onClick
+
+### `<ActionResult>`
+Outcome of an action's most recent run.
+
+- `canvas: CanvasRuntime`
+- `action: string`
+- `successMessage?: React.ReactNode` — Shown on success. Defaults to a generic acknowledgement.
+- plus standard element attributes except title
+
+### `<ActionForm>`
+
+- `canvas: CanvasRuntime`
+- `action: string`
+- `submitLabel?: React.ReactNode` — Overrides the submit label the action was declared with.
+- plus standard element attributes except title
+
+### `useCanvasAction(canvas, name)`
+Look up one declared action and its latest run.
+
+<!-- 44 components -->

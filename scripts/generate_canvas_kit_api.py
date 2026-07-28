@@ -48,6 +48,8 @@ _ORDER = (
     "display/lists.d.ts",
     "display/states.d.ts",
     "charts/charts.d.ts",
+    "interaction/controls.d.ts",
+    "interaction/actions.d.ts",
 )
 
 _SECTION_TITLES = {
@@ -59,6 +61,8 @@ _SECTION_TITLES = {
     "display/lists.d.ts": "Lists",
     "display/states.d.ts": "States",
     "charts/charts.d.ts": "Charts",
+    "interaction/controls.d.ts": "Form controls",
+    "interaction/actions.d.ts": "Actions",
 }
 
 # tsc emits a predictable shape: a JSDoc block, an exported props interface, then
@@ -81,7 +85,8 @@ _CONST_COMPONENT = re.compile(
 # The optional generic clause matters: `Table` is generic over its row type, and
 # without it the component is exported but never documented.
 _FUNC_COMPONENT = re.compile(
-    r"export declare function (?P<name>\w+)(?:<[^(]*>)?\((?P<params>.*?)\):",
+    r"export declare function (?P<name>\w+)(?:<[^(]*>)?\((?P<params>.*?)\):"
+    r"(?P<returns>[^;]*);",
     re.DOTALL,
 )
 # A props annotation may itself be generic (`TableProps<Row>`); the interface is
@@ -99,6 +104,10 @@ class Component(NamedTuple):
     summary: str
     props: List[str]
     extends: str
+    # Hooks are exported alongside components and read identically in the
+    # declarations. Rendering one as `<useCanvasAction>` would teach the actor to
+    # write a hook as JSX, which fails at the typecheck it cannot see yet.
+    is_hook: bool = False
 
 
 def _clean_doc(raw: str) -> str:
@@ -201,12 +210,18 @@ def _parse(text: str) -> List[Component]:
             ),
         )
 
+    # Hooks are exported as functions too and read identically here. A component
+    # returns JSX; anything else does not, which is the only reliable signal in the
+    # declarations.
+    hooks: set = set()
     for match in _FUNC_COMPONENT.finditer(text):
         params = " ".join(match.group("params").split())
         annotation = _PARAM_TYPE.search(params)
         props_name = None
         if annotation:
             props_name = annotation.group("props") or annotation.group("bare")
+        if "JSX.Element" not in match.group("returns"):
+            hooks.add(match.group("name"))
         found.append(
             (match.group("name"), _doc_before(text, match.start()), props_name),
         )
@@ -226,6 +241,7 @@ def _parse(text: str) -> List[Component]:
                 summary=summary,
                 props=_props(interface.group("body")) if interface else [],
                 extends=_heritage(interface.group("heritage")) if interface else "",
+                is_hook=name in hooks,
             ),
         )
 
@@ -321,7 +337,10 @@ def render(kit: Path) -> str:
         out.append("")
         for component in components:
             total += 1
-            out.append(f"### `<{component.name}>`")
+            if component.is_hook:
+                out.append(f"### `{component.name}(canvas, name)`")
+            else:
+                out.append(f"### `<{component.name}>`")
             if component.summary:
                 out.append(component.summary)
             if component.props:
