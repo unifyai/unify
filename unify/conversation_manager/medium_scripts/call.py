@@ -1549,15 +1549,21 @@ async def entrypoint(ctx: agents.JobContext):
         "teams_meet": "teamsmeet",
     }
     meet_path_prefix = _MEET_PATH_PREFIX.get(channel, "")
+    # Which backend put us in the meeting, as resolved by the CM (not the
+    # operator's MEET_PROVIDER, which may have been fallen back from). It
+    # decides how meeting audio reaches this process; see ``audio_bridge``.
+    meet_backend: str = ""
     if channel in ("google_meet", "teams_meet"):
         if meta:
             meet_session_id = meta.get("meet_session_id", "")
             meet_url = meta.get("meet_url", "")
             meet_agent_service_url = meta.get("agent_service_url", "")
+            meet_backend = str(meta.get("meet_backend", "") or "")
         else:
             meet_session_id = os.environ.get("MEET_SESSION_ID", "")
             meet_url = os.environ.get("MEET_URL", "")
             meet_agent_service_url = os.environ.get("AGENT_SERVICE_URL", "")
+            meet_backend = os.environ.get("MEET_BACKEND", "")
     call_session_id = (
         str(meta.get("call_session_id", "")).strip()
         if meta
@@ -2080,6 +2086,53 @@ async def entrypoint(ctx: agents.JobContext):
         _AloneEvent = GoogleMeetAlone
         _participant_topic = "app:comms:googlemeet_participant"
 
+    # How long the bridge may be absent before the meeting is treated as over.
+    # It has to outlast a LiveKit reconnect: the page retries, and shutting down
+    # on a transient blip would drop the assistant out of a live meeting. It
+    # also has to cover the gap before the bridge first arrives, which is why
+    # the watch waits to see it once before it starts counting.
+    _RECALL_BRIDGE_ABSENT_GRACE_S = 20.0
+
+    def _recall_bridge_present() -> bool:
+        """Whether the Recall bot's bridge page is in the room."""
+        remotes = getattr(ctx.room, "remote_participants", {}) or {}
+        for participant in remotes.values():
+            identity = getattr(participant, "identity", "") or ""
+            if identity.startswith("recall-bridge-"):
+                return True
+        return False
+
+    async def _recall_end_watch() -> None:
+        """End the session once the Recall bridge leaves the room for good.
+
+        The bot's page is a real LiveKit participant, so its departure is the
+        meeting ending -- no Recall API call and no webhook needed. Ending here
+        is what ultimately publishes the channel's *Ended event: shutdown drops
+        this process's IPC client, and the CM turns that into the event.
+        """
+        seen = False
+        absent_since: float | None = None
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if _recall_bridge_present():
+                    seen = True
+                    absent_since = None
+                    continue
+                if not seen:
+                    # Still waiting for the bot to arrive; a bot that never
+                    # arrives is the CM's join timeout to report, not ours.
+                    continue
+                now = asyncio.get_event_loop().time()
+                if absent_since is None:
+                    absent_since = now
+                elif now - absent_since >= _RECALL_BRIDGE_ABSENT_GRACE_S:
+                    _log.info(f"{channel} ended (recall bridge left the room)")
+                    ctx.shutdown(reason="meet_ended")
+                    return
+        except asyncio.CancelledError:
+            pass
+
     async def _meet_poll_loop() -> None:
         """Background loop: poll agent-service for active speaker + meeting status.
 
@@ -2230,8 +2283,16 @@ async def entrypoint(ctx: agents.JobContext):
         except asyncio.CancelledError:
             pass
 
+    # agent-service only. Every source this loop reads is a DOM scrape held in
+    # that process's memory, so on the recall backend phase 1 would never match
+    # a session and it would sit in its one-second discovery retry for the whole
+    # call, logging each attempt. Roster, active speaker and screenshots come
+    # from the relay instead; the room itself reports the meeting ending.
     if channel in ("google_meet", "teams_meet"):
-        asyncio.create_task(_meet_poll_loop())
+        if meet_backend == "recall":
+            asyncio.create_task(_recall_end_watch())
+        else:
+            asyncio.create_task(_meet_poll_loop())
 
     from unify.settings import SETTINGS
 
@@ -3005,8 +3066,20 @@ async def entrypoint(ctx: agents.JobContext):
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
 
+    # Browser meets reach this process one of two ways.
+    #
+    # agent_service: the browser is a sibling process in this pod with no way
+    # into the LiveKit room, so audio is shuttled through PulseAudio null sinks
+    # and the bridge below pumps them.
+    #
+    # recall: the bot renders our bridge page, which joins the room as an
+    # ordinary participant. Audio is then plain LiveKit tracks, exactly as for
+    # phone, whatsapp_call and unify_meet -- so no bridge, and none of
+    # PortAudio's thread affinity or ring-buffer leak to work around. Opening
+    # one anyway would capture silence from an unconnected sink while the real
+    # audio sat unheard on the room's tracks.
     audio_bridge: MeetAudioBridge | None = None
-    if channel in ("google_meet", "teams_meet"):
+    if channel in ("google_meet", "teams_meet") and meet_backend != "recall":
         audio_bridge = MeetAudioBridge()
         audio_bridge.start(asyncio.get_event_loop())
 
