@@ -15,8 +15,5 @@
     "response_policy",
     "destination"
   ],
-  "runtime_fields": [
-    "completed_at",
-    "info"
-  ]
+  "runtime_fields": []
 }

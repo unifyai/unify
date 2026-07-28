@@ -1,359 +1,123 @@
+"""Run summaries belong to the run that produced them.
+
+A summary describes one execution, so it is stored on that execution's
+``Tasks/Executions`` row. Writing it to the definition meant concurrent runs
+of the same task overwrote each other's summary on a row that outlives them
+both, and the last run to finish won.
+"""
+
+from __future__ import annotations
+
 import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
 
-from tests.helpers import _handle_project
-from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.actor.simulated import SimulatedActor, SimulatedActorHandle
 from unify.task_scheduler.active_task import ActiveTask
-from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unify.task_scheduler.types.schedule import Schedule
+from unify.task_scheduler.machine_state import TaskRunReference
 
-# Define a predictable summary string for mocked LLM calls
 MOCK_SUMMARY = "Mock summary: Task completed important steps."
 
-pytestmark = pytest.mark.llm_call
+
+class _Handle:
+    def __init__(self, action_log=None):
+        # `or` would turn an explicitly empty log back into the default and
+        # send the no-log case down the summarizer path.
+        self.action_log = ["did a thing"] if action_log is None else action_log
+
+    async def result(self):
+        return "done"
 
 
-# Helper to create a scheduler with a controllable actor for tests
-def create_test_scheduler(actor):
-    return TaskScheduler(actor=actor if actor else SimulatedActor(steps=0))
+def _active_task(
+    *,
+    run_key: str = "run-1",
+    reference: TaskRunReference | None = ...,
+) -> ActiveTask:
+    """An ActiveTask wired for summary generation with no live Orchestra."""
+
+    task = object.__new__(ActiveTask)
+    task._actor_handle = _Handle()
+    task._was_stopped = False
+    task._scheduler = None
+    task._task_id = 10
+    task._instance_id = 0
+    task._summary_scheduled = False
+    task._task_run_reference = (
+        TaskRunReference(assistant_id="1406", run_key=run_key)
+        if reference is ...
+        else reference
+    )
+    return task
 
 
-@pytest.mark.asyncio
-@_handle_project
-async def test_summary_on_natural_completion(monkeypatch):
-    """
-    Verify info is populated when a task completes normally via result().
-    """
-    # steps=0 completes immediately; steps>=1 waits for tool calls that never
-    # happen in this mocked path and would hang await handle.result() forever.
-    actor = SimulatedActor(steps=0)
-    ts = create_test_scheduler(actor)
+@pytest.fixture
+def recorded_updates(monkeypatch):
+    """Capture every Tasks/Executions patch the run performs."""
+
+    updates: list[tuple[str, dict]] = []
+
+    def _record(reference, patch):
+        updates.append((reference.run_key, dict(patch)))
 
     monkeypatch.setattr(
-        SimulatedActorHandle,
-        "action_log",
-        ["Simulated action log entry"],
-        raising=False,
-    )
-    monkeypatch.setattr(
-        ActiveTask,
-        "_generate_summary_from_log",
-        AsyncMock(return_value=MOCK_SUMMARY),
-    )
-
-    # Signal when the actual write of status+info occurs (avoid racing teardown)
-    summary_saved_event = asyncio.Event()
-    original_write_entries = ts._write_log_entries
-
-    def write_entries_probe(*args, **kwargs):
-        res = original_write_entries(*args, **kwargs)
-        entries = kwargs.get("entries", {})
-        # New behavior: status and info are written in separate calls.
-        # Trigger when the summary ('info') is written, regardless of status in the same write.
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            summary_saved_event.set()
-        return res
-
-    write_entries_spy = MagicMock(side_effect=write_entries_probe)
-    monkeypatch.setattr(TaskScheduler, "_write_log_entries", write_entries_spy)
-
-    task_info = ts._create_task(
-        name="Test Complete",
-        description="Natural completion test",
-    )
-    task_id = task_info["details"]["task_id"]
-
-    handle = await ts.execute(task_id=task_id)
-    result_text = await handle.result()
-
-    await asyncio.wait_for(summary_saved_event.wait(), timeout=5.0)
-
-    # Assertions
-    assert handle.done()
-    assert "completed" in result_text.lower()
-
-    # Verify the expected write happened
-    assert write_entries_spy.call_count >= 1
-
-    # Find the specific call related to saving the summary (info-only write is expected)
-    summary_info_call = None
-    for call in write_entries_spy.call_args_list:
-        args, kwargs = call
-        entries = kwargs.get("entries", {})
-        # Info write
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            summary_info_call = call
-    assert summary_info_call is not None, (
-        "Did not find the expected call to _write_log_entries with the correct summary. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
-
-    # Verify the data in the store (definition row only; executions live separately)
-    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert final_rows, f"Could not find final row for task_id {task_id}"
-    final_row = final_rows[0]
-    assert final_row.completed_at is not None
-    assert final_row.info == MOCK_SUMMARY
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_summary_on_stop_cancel(monkeypatch):
-    """
-    Verify info is populated when a task is stopped with cancel=True.
-    """
-    # Stay live until stop(): steps=0 would auto-complete before cancel,
-    # and a positive step budget would hang waiting for simulate_step().
-    actor = SimulatedActor(steps=None, duration=None)
-    ts = create_test_scheduler(actor)
-
-    monkeypatch.setattr(
-        SimulatedActorHandle,
-        "action_log",
-        ["Simulated action log entry"],
-        raising=False,
+        "unify.task_scheduler.active_task.update_task_run_record",
+        _record,
     )
     monkeypatch.setattr(
         ActiveTask,
         "_generate_summary_from_log",
         AsyncMock(return_value=MOCK_SUMMARY),
     )
-
-    # Spy on scheduler log writes
-    original_write_entries = ts._write_log_entries
-    write_entries_spy = MagicMock(wraps=original_write_entries)
-    monkeypatch.setattr(TaskScheduler, "_write_log_entries", write_entries_spy)
-
-    # Signal when background summary save completes
-    summary_saved_event = asyncio.Event()
-    original_save_summary = ActiveTask._save_final_summary
-
-    async def patched_save_summary(self, final_status: str):
-        try:
-            await original_save_summary(self, final_status)
-        finally:
-            summary_saved_event.set()
-
-    monkeypatch.setattr(ActiveTask, "_save_final_summary", patched_save_summary)
-
-    task_info = ts._create_task(name="Test Stop Cancel", description="Stop cancel test")
-    task_id = task_info["details"]["task_id"]
-
-    handle = await ts.execute(task_id=task_id)
-    await asyncio.sleep(0.1)
-
-    # Stop the task (cancel) – triggers background summary saving
-    stop_reason = "Cancelling explicitly"
-    await handle.stop(cancel=True, reason=stop_reason)
-
-    # Wait for the handle to finish
-    while not handle.done():
-        await asyncio.sleep(0.01)
-    result_text = await handle.result()
-
-    # Assertions on handle state
-    assert handle.done()
-    # Check if result_text indicates stoppage
-    assert "stopped" in result_text.lower() or stop_reason in result_text
-
-    # Wait for the background summary task to complete
-    await asyncio.wait_for(summary_saved_event.wait(), timeout=5.0)
-
-    # Verify the expected write happened
-    assert write_entries_spy.call_count >= 1
-
-    info_summary_found = False
-    for call in write_entries_spy.call_args_list:
-        args, kwargs = call
-        entries = kwargs.get("entries", {})
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            info_summary_found = True
-
-    assert info_summary_found, (
-        "Did not find the expected call to _write_log_entries saving the summary. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
-
-    # Verify the data in the store
-    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert final_rows, f"Could not find final row for task_id {task_id}"
-    final_row = final_rows[0]
-    # Cancelling a run must not disarm the definition — only the run ends.
-    assert final_row.enabled is True
-    assert final_row.info == MOCK_SUMMARY
+    return updates
 
 
-@pytest.mark.asyncio
-@_handle_project
-async def test_summary_on_execution_error(monkeypatch):
-    """
-    Verify info is populated even if the underlying actor execution fails.
-    """
+def test_summary_lands_on_the_execution_row(recorded_updates):
+    asyncio.run(_active_task()._save_final_summary("completed"))
 
-    # Mock the actor's execution to raise an error
-    class ErrorActor(SimulatedActor):
-        async def act(self, description: str, **kwargs) -> SimulatedActorHandle:
-            # Create a handle that will raise an error when result() is awaited
-            class ErrorHandle(SimulatedActorHandle):
-                action_log = ["Simulated action log entry before error"]
+    assert recorded_updates == [("run-1", {"result_summary": MOCK_SUMMARY})]
 
-                async def result(self):
-                    await asyncio.sleep(0.01)  # Short delay
-                    raise ValueError("Simulated Actor Failure")
 
-            mock_llm = MagicMock()
-            return ErrorHandle(
-                mock_llm,
-                description,
-                steps=0,
-                duration=None,
-            )
+def test_summary_is_recorded_for_a_cancelled_run(recorded_updates):
+    asyncio.run(_active_task()._save_final_summary("cancelled"))
 
-    actor = ErrorActor()
-    ts = create_test_scheduler(actor)
+    assert recorded_updates
+    assert recorded_updates[0][1]["result_summary"] == MOCK_SUMMARY
 
+
+def test_concurrent_runs_record_to_their_own_executions(recorded_updates):
+    """The race the move fixes: two runs, two summaries, neither clobbered."""
+
+    async def _both():
+        await asyncio.gather(
+            _active_task(run_key="run-a")._save_final_summary("completed"),
+            _active_task(run_key="run-b")._save_final_summary("completed"),
+        )
+
+    asyncio.run(_both())
+
+    assert {run_key for run_key, _ in recorded_updates} == {"run-a", "run-b"}
+    assert all(patch["result_summary"] == MOCK_SUMMARY for _, patch in recorded_updates)
+
+
+def test_run_without_an_execution_row_writes_nothing(recorded_updates):
+    """Executions are assistant-owned; a session without one has no ledger."""
+
+    asyncio.run(_active_task(reference=None)._save_final_summary("completed"))
+
+    assert recorded_updates == []
+
+
+def test_summary_falls_back_when_no_action_log(monkeypatch):
+    updates: list[dict] = []
     monkeypatch.setattr(
-        ActiveTask,
-        "_generate_summary_from_log",
-        AsyncMock(return_value=MOCK_SUMMARY),
+        "unify.task_scheduler.active_task.update_task_run_record",
+        lambda reference, patch: updates.append(dict(patch)),
     )
 
-    # Signal when the write with status=failed + info occurs
-    summary_saved_event = asyncio.Event()
-    original_write_entries = ts._write_log_entries
+    task = _active_task()
+    task._actor_handle = _Handle(action_log=[])
+    asyncio.run(task._save_final_summary("failed"))
 
-    def write_entries_probe_failed(*args, **kwargs):
-        res = original_write_entries(*args, **kwargs)
-        entries = kwargs.get("entries", {})
-        # Trigger when summary info is written; status is written separately
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            summary_saved_event.set()
-        return res
-
-    write_entries_spy = MagicMock(side_effect=write_entries_probe_failed)
-    monkeypatch.setattr(TaskScheduler, "_write_log_entries", write_entries_spy)
-
-    task_info = ts._create_task(name="Test Error", description="Execution error test")
-    task_id = task_info["details"]["task_id"]
-
-    # Patch ActiveTask.result to return an error string but keep original scheduling of summary
-    original_result = ActiveTask.result
-
-    async def patched_result_for_error(self):
-        try:
-            return await original_result(self)
-        except Exception as e:
-            return f"ERROR: Task execution failed: {e}"
-
-    monkeypatch.setattr(ActiveTask, "result", patched_result_for_error)
-
-    handle = await ts.execute(task_id=task_id)
-
-    # Await result, expecting the error text returned by patched_result_for_error
-    result_text = await handle.result()
-
-    # Assertions
-    assert handle.done()
-    assert "ERROR" in result_text
-    assert "Simulated Actor Failure" in result_text
-
-    # Wait for the background summary task triggered by the exception handler
-    await asyncio.wait_for(summary_saved_event.wait(), timeout=5.0)
-
-    # Verify the expected write happened
-    assert write_entries_spy.call_count >= 1
-    info_summary_found = False
-    for call in write_entries_spy.call_args_list:
-        args, kwargs = call
-        entries = kwargs.get("entries", {})
-        if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
-            info_summary_found = True
-
-    assert info_summary_found, (
-        "Did not find the expected call to _write_log_entries saving the summary. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
-
-    # Verify the data in the store
-    final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert final_rows, f"Could not find final row for task_id {task_id}"
-    final_row = final_rows[0]
-    assert final_row.info == MOCK_SUMMARY
-
-
-@pytest.mark.asyncio
-@_handle_project
-async def test_summary_targets_definition_row_for_recurring(monkeypatch):
-    """
-    Verify recurring runs update the same task definition row's info field.
-    """
-    actor = SimulatedActor(steps=0)
-    ts = create_test_scheduler(actor)
-
-    monkeypatch.setattr(
-        SimulatedActorHandle,
-        "action_log",
-        ["Log for run 0"],
-        raising=False,
-    )
-    mock_generate_summary = AsyncMock(return_value=MOCK_SUMMARY)
-    monkeypatch.setattr(ActiveTask, "_generate_summary_from_log", mock_generate_summary)
-
-    summary_saved_event_0 = asyncio.Event()
-    summary_saved_event_1 = asyncio.Event()
-    definition_info_calls = []
-    original_update_definition_info = TaskScheduler._update_task_definition_info
-
-    def check_definition_info_write(self, *, task_id: int, info: str):
-        definition_info_calls.append({"task_id": task_id, "info": info})
-        if info == MOCK_SUMMARY:
-            summary_saved_event_0.set()
-        elif info == "Mock summary for run 1":
-            summary_saved_event_1.set()
-        return original_update_definition_info(self, task_id=task_id, info=info)
-
-    monkeypatch.setattr(
-        TaskScheduler,
-        "_update_task_definition_info",
-        check_definition_info_write,
-    )
-
-    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
-        hours=1,
-    )
-    task_create_outcome = ts._create_task(
-        name="Recurring Test Task",
-        description="A task that repeats",
-        schedule=Schedule(start_at=initial_start.isoformat()),
-        repeat=[RepeatPattern(frequency=Frequency.DAILY)],
-    )
-    task_id = task_create_outcome["details"]["task_id"]
-
-    handle_0 = await ts.execute(task_id=task_id)
-    await handle_0.result()
-    await asyncio.wait_for(summary_saved_event_0.wait(), timeout=5.0)
-
-    definition_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert len(definition_rows) == 1
-    assert definition_rows[0].info == MOCK_SUMMARY
-
-    monkeypatch.setattr(
-        SimulatedActorHandle,
-        "action_log",
-        ["Log for run 1"],
-        raising=False,
-    )
-    mock_generate_summary.return_value = "Mock summary for run 1"
-    EXPECTED_SUMMARY_1 = "Mock summary for run 1"
-
-    handle_1 = await ts.execute(task_id=task_id)
-    await handle_1.result()
-    await asyncio.wait_for(summary_saved_event_1.wait(), timeout=5.0)
-
-    definition_rows_after_second = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert len(definition_rows_after_second) == 1
-    assert definition_rows_after_second[0].info == EXPECTED_SUMMARY_1
-    assert all(call["task_id"] == task_id for call in definition_info_calls)
+    assert updates
+    assert "failed" in updates[0]["result_summary"]

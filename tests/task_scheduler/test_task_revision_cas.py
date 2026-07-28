@@ -58,15 +58,14 @@ def _provider_event_task(*, task_revision: int | None = 1) -> Task:
     )
 
 
-def test_split_provider_event_task_update_partitions_authored_and_runtime() -> None:
+def test_split_provider_event_task_update_routes_everything_to_authored() -> None:
+    """Definitions carry only authored intent, so nothing bypasses revision CAS."""
+
     authored, runtime = split_provider_event_task_update(
-        {
-            "description": "Updated scope.",
-            "info": "Last run summarized 3 issues.",
-        },
+        {"description": "Updated scope.", "enabled": False},
     )
-    assert authored == {"description": "Updated scope."}
-    assert runtime == {"info": "Last run summarized 3 issues."}
+    assert authored == {"description": "Updated scope.", "enabled": False}
+    assert runtime == {}
 
 
 def test_split_provider_event_task_update_routes_arming_to_authored() -> None:
@@ -77,11 +76,9 @@ def test_split_provider_event_task_update_routes_arming_to_authored() -> None:
     assert runtime == {}
 
 
-def test_split_provider_event_task_update_keeps_completion_on_the_log_path() -> None:
-    stamp = "2026-07-28T12:00:00+00:00"
-    authored, runtime = split_provider_event_task_update({"completed_at": stamp})
-    assert authored == {}
-    assert runtime == {"completed_at": stamp}
+def test_split_provider_event_task_update_rejects_unclassified_fields() -> None:
+    with pytest.raises(ValueError, match="Unclassified"):
+        split_provider_event_task_update({"completed_at": "2026-07-28T12:00:00Z"})
 
 
 @pytest.fixture(scope="module", autouse=True)

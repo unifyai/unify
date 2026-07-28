@@ -69,6 +69,7 @@ from .machine_state import (
     build_task_run_key,
     consume_live_task_run_provenance,
     find_running_execution_for_task,
+    find_terminal_execution_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
     remember_live_task_run_provenance,
@@ -115,9 +116,6 @@ from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
 from .types.execution import Delivery, ExecutionState, Wake
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
-from .provider_event_dispatch import (
-    PROVIDER_EVENT_OPERATION_INFO_PREFIX as _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
-)
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -1075,10 +1073,11 @@ class TaskScheduler(BaseTaskScheduler):
                 f"found {len(all_task_instances)} rows.",
             )
         task = all_task_instances[0]
-        if task.completed_at is not None:
+        finished = self._one_shot_already_ran(task)
+        if finished is not None:
             raise ValueError(
-                f"No runnable task found with id={task_id}: one-shot completed "
-                f"at {task.completed_at}.",
+                f"No runnable task found with id={task_id}: one-shot already ran "
+                f"(run_key={finished.run_key}).",
             )
 
         # Concurrent instances of the same task_id are allowed. Only block when
@@ -1170,10 +1169,10 @@ class TaskScheduler(BaseTaskScheduler):
             # Definitions carry intent only, so concurrent Executions against
             # one row are expected. A run in flight never blocks the next wake;
             # only a finished one-shot is unrunnable.
-            if task.completed_at is not None:
+            if self._one_shot_already_ran(task) is not None:
                 raise ValueError(
                     "Task definition is not runnable: "
-                    f"task_id={task.task_id} completed at {task.completed_at}.",
+                    f"task_id={task.task_id} is a one-shot that already ran.",
                 )
             if _activated_by is None:
                 if task.trigger is not None:
@@ -1397,12 +1396,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
         definitions = [
-            row
-            for row in rows
-            if self._task_has_provider_event_trigger(row)
-            and not str(row.info or "").startswith(
-                _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
-            )
+            row for row in rows if self._task_has_provider_event_trigger(row)
         ]
         if definitions:
             return sorted(definitions, key=lambda row: row.instance_id)[0]
@@ -1438,7 +1432,7 @@ class TaskScheduler(BaseTaskScheduler):
         Re-arming only moves ``schedule.start_at``. A triggerable definition is
         already armed by the presence of its trigger and needs no write at all,
         which is why arming is not a status transition any more: the definition
-        is armed whenever ``enabled`` is true and ``completed_at`` is unset.
+        is armed whenever ``enabled`` is true.
         """
 
         updates: dict[str, Any] = {}
@@ -1483,8 +1477,24 @@ class TaskScheduler(BaseTaskScheduler):
             self._write_log_entries(logs=log_objs[0].id, entries=updates)
         return True
 
+    def _one_shot_already_ran(self, task: Task) -> Any | None:
+        """The terminal execution of a finished one-shot, if it has run.
+
+        Derived rather than stored: "has this already run?" is a fact about the
+        run ledger, and keeping it there leaves the definition as pure authored
+        intent. Repeating and triggerable definitions are never "done" — their
+        next occurrence is always ahead of them.
+        """
+
+        if task.repeat is not None or task.trigger is not None:
+            return None
+        return find_terminal_execution_for_task(
+            task_id=int(task.task_id),
+            destination=task.destination,
+        )
+
     def _mark_one_shot_completed(self, task_id: int) -> None:
-        """Disarm a finished one-shot by stamping ``completed_at``.
+        """Disarm a finished one-shot.
 
         No-op for repeating and triggerable definitions: they stay armed for
         their next occurrence, and the outcome of the run that just finished
@@ -1511,10 +1521,7 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             self._write_log_entries(
                 logs=log_objs[0].id,
-                entries={
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "enabled": False,
-                },
+                entries={"enabled": False},
             )
 
     def _validate_scheduled_invariants(
@@ -1929,7 +1936,7 @@ class TaskScheduler(BaseTaskScheduler):
         missing: list[int] = []
         for task_id in requested_task_ids:
             task = self._get_task_or_raise(task_id)
-            if task.completed_at is not None:
+            if self._one_shot_already_ran(task) is not None:
                 raise ValueError(f"Cannot cancel completed task (id={task_id}).")
             with self._use_task_destination(task.destination):
                 logs = self._store.get_rows(
@@ -1972,9 +1979,9 @@ class TaskScheduler(BaseTaskScheduler):
         last_result: Dict[str, str] = {"detail": "No updates"}
         for task_id in ids:
             task = self._get_task_or_raise(task_id)
-            if enabled and task.completed_at is not None:
+            if enabled and self._one_shot_already_ran(task) is not None:
                 raise ValueError(
-                    f"Task {task_id} completed at {task.completed_at} and cannot "
+                    f"Task {task_id} is a one-shot that already ran and cannot "
                     "be re-armed; create a new task instead of re-running it.",
                 )
             with self._use_task_destination(task.destination):
@@ -2261,28 +2268,6 @@ class TaskScheduler(BaseTaskScheduler):
                 entries=runtime_entries,
             )
         return {"detail": "No-op provider-event task update."}
-
-    def _update_task_definition_info(
-        self,
-        *,
-        task_id: int,
-        info: str,
-    ) -> Dict[str, str]:
-        """Write the execution summary onto the task definition row."""
-
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id}",
-                limit=1,
-                return_ids_only=False,
-            )
-            if not log_objs:
-                raise ValueError(f"No task definition found for task_id={task_id}.")
-            return self._write_log_entries(
-                logs=log_objs[0].id,
-                entries={"info": info},
-            )
 
     def _update_task_instance(
         self,

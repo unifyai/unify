@@ -734,6 +734,40 @@ def find_running_execution_for_task(
     return _row_to_execution(rows[0])
 
 
+def find_terminal_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return a finished execution for one task, if any run has terminalized.
+
+    This is how a one-shot knows it has already run. Storing that on the
+    definition would put a run fact back on the shared row; the run ledger
+    already records it, so the definition can stay authored intent only.
+    """
+
+    terminal_states = " or ".join(
+        f"state == '{state.value}'"
+        for state in (
+            ExecutionState.completed,
+            ExecutionState.failed,
+            ExecutionState.cancelled,
+        )
+    )
+    filter_clauses = [f"task_id == {int(task_id)}", f"({terminal_states})"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
 def list_scheduled_executions(
     *,
     assistant_id: str | int | None,

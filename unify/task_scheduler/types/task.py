@@ -40,16 +40,6 @@ class TaskBase(AuthoredRow):
         description="Detailed explanation of what the task involves",
         json_schema_extra={"ui_editable": True},
     )
-    completed_at: Optional[datetime] = Field(
-        default=None,
-        description=(
-            "When a one-shot definition finished, in ISO-8601 format. Set once "
-            "the single execution terminalizes, and never set on a repeating or "
-            "triggerable definition. Distinguishes a task that is done from one "
-            "an operator paused: both are disarmed, only one may be resumed "
-            "without re-running work that already happened."
-        ),
-    )
     schedule: Optional[Schedule] = Field(
         default=None,
         description="Optional scheduling information, including ideal start time.",
@@ -143,10 +133,6 @@ class TaskBase(AuthoredRow):
             "task is re-enabled."
         ),
         json_schema_extra={"ui_editable": True},
-    )
-    info: Optional[str] = Field(
-        default=None,
-        description="A summary of what happened during the execution of the task, generated upon completion.",
     )
     custom_key: Optional[str] = Field(
         default=None,

@@ -1018,7 +1018,7 @@ async def test_execute_one_shot_completes_definition():
         current_task_execution_delegate.reset(token)
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.completed_at is not None
+    assert row.enabled is False
 
 
 @pytest.mark.asyncio
@@ -1029,13 +1029,13 @@ async def test_execute_without_delegate_or_actor_fails_before_mutation():
         "task_id"
     ]
     before = ts._get_task_or_raise(task_id)
-    initial_arming = (before.enabled, before.completed_at)
+    initial_arming = before.enabled
 
     with pytest.raises(RuntimeError, match="run-scoped actor delegate"):
         await ts.execute(task_id=task_id)
 
     row = ts._get_task_or_raise(task_id)
-    assert (row.enabled, row.completed_at) == initial_arming
+    assert row.enabled == initial_arming
 
 
 @pytest.mark.asyncio
@@ -1051,13 +1051,13 @@ async def test_execute_rejects_disabled_task():
         enabled=False,
     )["details"]["task_id"]
     before = ts._get_task_or_raise(task_id)
-    initial_arming = (before.enabled, before.completed_at)
+    initial_arming = before.enabled
 
     with pytest.raises(ValueError, match="disabled and cannot be executed"):
         await ts.execute(task_id=task_id)
 
     row = ts._get_task_or_raise(task_id)
-    assert (row.enabled, row.completed_at) == initial_arming
+    assert row.enabled == initial_arming
     assert row.enabled is False
 
     ts._update_task(task_id=task_id, enabled=True)
@@ -1119,7 +1119,7 @@ async def test_disarming_is_the_only_definition_lifecycle_change():
     rows = ts._filter_tasks(filter=f"task_id == {task_id}")
     assert len(rows) == 1
     assert rows[0].enabled is True
-    assert rows[0].completed_at is None
+    assert rows[0].enabled is True
 
     ts._set_tasks_enabled(task_ids=task_id, enabled=False)
     assert ts._filter_tasks(filter=f"task_id == {task_id}")[0].enabled is False
@@ -1141,7 +1141,7 @@ async def test_completed_one_shot_cannot_be_rearmed():
     ts._mark_one_shot_completed(task_id)
 
     row = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
-    assert row.completed_at is not None
+    assert row.enabled is False
     assert row.enabled is False
 
     with pytest.raises(ValueError, match="cannot be re-armed"):
@@ -1161,9 +1161,10 @@ async def test_tasks_table_carries_intent_not_run_state():
 
     cols = ts._list_columns()
     assert "enabled" in cols
-    assert "completed_at" in cols
     assert "status" not in cols
     assert "activated_by" not in cols
+    assert "completed_at" not in cols
+    assert "info" not in cols
 
 
 # ---------------------------------------------------------------------------

@@ -446,8 +446,13 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             return "Summary generation failed. Final Status: <UNKNOWN>"
 
     async def _save_final_summary(self, final_status: str):
-        """Generate the final summary and update the task row in the database."""
-        if self._scheduler and self._task_id is not None:
+        """Generate the run summary and store it on this run's Execution row.
+
+        The summary describes one run, so it belongs to that run. Writing it to
+        the definition meant concurrent runs overwrote each other's summary on
+        a row that outlives them both.
+        """
+        if self._task_run_reference is not None:
             summary = "No execution log was available to generate a summary."
             try:
                 if (
@@ -462,9 +467,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
 
                 summary = summary.replace("<UNKNOWN>", final_status)
 
-                self._scheduler._update_task_definition_info(  # type: ignore[attr-defined]
-                    task_id=self._task_id,
-                    info=summary,
+                await asyncio.to_thread(
+                    update_task_run_record,
+                    self._task_run_reference,
+                    {"result_summary": _truncate_task_run_text(summary)},
                 )
 
             except Exception as e:
