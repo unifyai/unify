@@ -223,6 +223,9 @@ class LivekitCallManager:
         # ``self._call_channel`` so per-channel public properties remain stable
         # while the underlying state is consolidated.
         self._meet_session_id: str | None = None
+        # Lazily built by the ``meet_provider`` property and cached for the
+        # session; see that property for why it is not rebuilt per join.
+        self._meet_provider = None
         self._meet_joining: bool = False
         self._meet_presenting: bool = False
         # True while the browser is admitted-pending: it has knocked on the
@@ -1080,6 +1083,25 @@ class LivekitCallManager:
         "teams_meet": {"path": "teamsmeet", "room": "teams"},
     }
 
+    @property
+    def meet_provider(self):
+        """The backend that joins browser meetings, per ``MEET_PROVIDER``.
+
+        Built once and cached: a provider carries a Recall client and derived
+        configuration, and rebuilding it per call would re-read the environment
+        mid-session. A pod asking for ``recall`` without credentials falls back
+        to the browser rather than refusing to join at all -- during the
+        transition there is still something to fall back to, and a loud log line
+        is more useful than a meeting nobody attends.
+        """
+        if self._meet_provider is None:
+            from unify.conversation_manager.domains.browser_meeting import (
+                build_meet_provider,
+            )
+
+            self._meet_provider = build_meet_provider(self)
+        return self._meet_provider
+
     def has_active_meet(self, channel: str | None = None) -> bool:
         """Whether a browser meeting is active.
 
@@ -1335,14 +1357,16 @@ class LivekitCallManager:
         boss: dict,
         display_name: str = "",
     ) -> bool:
-        """Join a browser meeting (Google Meet or Teams) via agent-service.
+        """Join a browser meeting (Google Meet or Teams).
 
-        1. POST /{path}/join on agent-service to launch browser + automation.
-        2. Start audio bridge (PulseAudio <-> LiveKit).
-        3. Dispatch a fast brain job into the same LiveKit room.
-        4. Kick off a background monitor that polls /{path}/state and
-           publishes the channel-specific *Ended event when the meeting
-           terminates.
+        1. Pre-create the LiveKit room the conversation lives in.
+        2. Dispatch a fast brain job into it.
+        3. Ask the configured backend (``MEET_PROVIDER``) to join the meeting.
+
+        Only step 3 differs between backends. Teardown is not polled from here:
+        the channel's *Ended event is published when the fast brain's IPC client
+        disconnects (see ``_on_ipc_client_disconnected``), which is why no
+        backend needs to report the meeting ending.
         """
         if self.has_active_call or self.has_active_meet():
             LOGGER.warning(
@@ -1351,9 +1375,7 @@ class LivekitCallManager:
             )
             return False
 
-        path_info = self._MEET_PATHS[channel]
-        meet_path = path_info["path"]
-        room_suffix = path_info["room"]
+        room_suffix = self._MEET_PATHS[channel]["room"]
 
         self._meet_joining = True
         self.meet_join_failure_reason = None
@@ -1372,17 +1394,6 @@ class LivekitCallManager:
         meet_outbound = meet_opening_config is not None
 
         display_name = display_name or self.assistant_name or "Unity Assistant"
-
-        from unify.session_details import SESSION_DETAILS
-
-        # Browser meets must run on the pod-local agent-service: the fast-brain
-        # voice worker and its MeetAudioBridge open the pod's default PulseAudio
-        # devices (meet_mic/agent_sink from device.sh), so the browser has to
-        # share that same PulseAudio server. Resolving to a managed-desktop VM
-        # here splits browser audio from the bridge and the assistant joins deaf
-        # and mute.
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
 
         room_name = make_room_name(self.assistant_id, room_suffix)
         self.room_name = room_name
@@ -1434,17 +1445,16 @@ class LivekitCallManager:
 
         self.is_outbound = meet_outbound
 
-        # Gate on the agent-service being up before we dispatch a worker or POST
-        # the join. It is (re)spawned by the CM out of band (API-key changes),
-        # so a join arriving in its cold-start window would otherwise fail with a
-        # bare ConnectionRefusedError. The poll here is the retry: it waits out
-        # the restart rather than dispatching a worker into a dead service.
-        if not await self._await_agent_service_ready(base_url):
+        # Gate on the backend being able to accept a join before dispatching a
+        # worker. The fast brain is expensive to start and, once in the room,
+        # sits talking to nobody if no browser ever arrives.
+        preflight_failure = await self.meet_provider.preflight()
+        if preflight_failure:
             LOGGER.error(
                 f"{ICONS['ipc']} [LivekitCallManager] {channel} join aborted: "
-                "agent-service never became ready",
+                f"{preflight_failure}",
             )
-            self.meet_join_failure_reason = "agent_service_unavailable"
+            self.meet_join_failure_reason = preflight_failure
             self._meet_joining = False
             self._meet_lobby_waiting = False
             await self._cleanup_meet(channel)
@@ -1492,20 +1502,180 @@ class LivekitCallManager:
                 extra_env=meet_env,
             )
 
-        # Browser join runs after dispatch — fast brain initializes in parallel.
-        # The join can be slow (headless-browser cold start + LLM-guided
-        # click-through, then a possible wait in the meeting lobby), so it runs
-        # under a generous ceiling. A timeout or transport error here must not
-        # escape into the event loop: an unhandled exception in the meet-join
-        # handler leaves ``_meet_joining`` stuck True with no teardown and shows
-        # up as "Unhandled error processing GoogleMeetReceived". Catch it, tear
-        # down, and return a clean failure the handler can retry.
-        # Signed-in browser session (Google Meet only for now): pull the twin
-        # account's saved storage state from the durable store and push it to
-        # the pod-local agent-service so the browser joins authenticated rather
-        # than as an anonymous guest — which Google turns away with "You can't
-        # join this video call" when no host is present. Best-effort: a miss
-        # falls back to an anonymous join.
+        # The join runs after dispatch so the fast brain initializes in
+        # parallel with it. It can be slow -- a browser cold start and an
+        # LLM-guided click-through, or a hosted bot working through a lobby --
+        # and the backend owns that ceiling. What matters here is that a
+        # failure comes back as a clean False rather than escaping into the
+        # event loop: an unhandled exception in the meet-join handler leaves
+        # ``_meet_joining`` stuck True with no teardown, surfacing as
+        # "Unhandled error processing GoogleMeetReceived".
+        result = await self.meet_provider.join(
+            channel=channel,
+            meeting_url=meet_url,
+            display_name=display_name,
+            room_name=room_name,
+        )
+        if not result.ok:
+            LOGGER.error(
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: "
+                f"{result.failure_reason}",
+            )
+            self.meet_join_failure_reason = result.failure_reason
+            self._meet_joining = False
+            self._meet_lobby_waiting = False
+            await self._cleanup_meet(channel)
+            return False
+
+        # Both shapes of success are recorded: in the call, or knocked and
+        # waiting for a host to admit us. Only the wording differs downstream,
+        # so the event handler can say "in the lobby" rather than "joined".
+        self._meet_session_id = result.session_id
+        self._meet_lobby_waiting = result.lobby
+        self._meet_joining = False
+        LOGGER.info(
+            f"{ICONS['ipc']} [LivekitCallManager] {channel} joined "
+            f"(session={self._meet_session_id}, lobby={result.lobby})",
+        )
+
+        if self._socket_server and self._meet_session_id:
+            await self._socket_server.queue_for_clients(
+                "app:call:status",
+                json.dumps(
+                    {"type": "meet_session_id", "session_id": self._meet_session_id},
+                ),
+            )
+
+        if meet_outbound and self._event_broker:
+            await self._event_broker.publish(
+                "app:call:status",
+                json.dumps({"type": "call_answered"}),
+            )
+
+        return True
+
+    async def _cleanup_meet(self, channel: str) -> None:
+        """Leave the browser meeting and tear down the LiveKit room."""
+        session_id = self._meet_session_id
+        room_name = self.room_name
+        self._meet_session_id = None
+        self._meet_joining = False
+        self._meet_lobby_waiting = False
+        self._meet_presenting = False
+        if channel == "google_meet":
+            self.google_meet_start_timestamp = None
+            self.google_meet_exchange_id = UNASSIGNED
+        elif channel == "teams_meet":
+            self.teams_meet_start_timestamp = None
+            self.teams_meet_exchange_id = UNASSIGNED
+
+        if session_id:
+            await self.meet_provider.leave(channel=channel, session_id=session_id)
+
+        if room_name:
+            from unify.conversation_manager.medium_scripts.common import (
+                delete_livekit_room,
+            )
+
+            await delete_livekit_room(room_name)
+
+        await self.cleanup_call_proc()
+
+    async def _start_meet_screenshare(self, channel: str) -> bool:
+        """Start presenting the assistant desktop in the active browser meeting."""
+        session_id = self._meet_session_id
+        if not session_id or self._call_channel != channel:
+            return False
+
+        from unify.session_details import SESSION_DETAILS
+
+        desktop_url = SESSION_DETAILS.assistant.desktop_url
+        if not desktop_url:
+            return False
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(desktop_url)
+        liveview_url = (
+            f"{parsed.scheme}://{parsed.netloc}/desktop/custom.html"
+            f"?password={SESSION_DETAILS.unify_key}"
+        )
+
+        if await self.meet_provider.present(
+            channel=channel,
+            session_id=session_id,
+            view_url=liveview_url,
+        ):
+            self._meet_presenting = True
+            return True
+        return False
+
+    async def _stop_meet_screenshare(self, channel: str) -> bool:
+        """Stop presenting the assistant desktop in the active browser meeting."""
+        session_id = self._meet_session_id
+        if not session_id or self._call_channel != channel:
+            return False
+
+        if await self.meet_provider.stop_present(
+            channel=channel,
+            session_id=session_id,
+        ):
+            self._meet_presenting = False
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # agent-service backend
+    #
+    # Reached only through AgentServiceMeetProvider. These stay here rather
+    # than moving into that module because the whole path is deleted once
+    # Recall is the only backend -- moving them would be moving code in order
+    # to throw it away. Browser meets must run on the pod-local agent-service:
+    # the fast-brain voice worker and its MeetAudioBridge open the pod's
+    # default PulseAudio devices (meet_mic/agent_sink from device.sh), so the
+    # browser has to share that same PulseAudio server. Resolving to a
+    # managed-desktop VM splits browser audio from the bridge and the
+    # assistant joins deaf and mute.
+    # ------------------------------------------------------------------
+
+    def _agent_service_auth(self) -> tuple[str, str]:
+        from unify.session_details import SESSION_DETAILS
+
+        return _POD_LOCAL_AGENT_SERVICE_URL, SESSION_DETAILS.unify_key
+
+    async def _agent_service_preflight(self) -> str | None:
+        """Wait out an agent-service restart before a join is attempted.
+
+        It is (re)spawned by the CM out of band (on an API-key change), so a
+        join arriving in its cold-start window would fail with a bare
+        ConnectionRefusedError. The poll is the retry.
+        """
+        base_url, _ = self._agent_service_auth()
+        if await self._await_agent_service_ready(base_url):
+            return None
+        LOGGER.error(
+            f"{ICONS['ipc']} [LivekitCallManager] agent-service never became ready",
+        )
+        return "agent_service_unavailable"
+
+    async def _agent_service_join(
+        self,
+        *,
+        channel: str,
+        meet_url: str,
+        display_name: str,
+    ):
+        from unify.conversation_manager.domains.browser_meeting import MeetJoinResult
+
+        meet_path = self._MEET_PATHS[channel]["path"]
+        base_url, auth_key = self._agent_service_auth()
+
+        # Signed-in browser session (Google Meet only): pull the twin account's
+        # saved storage state from the durable store and push it to the
+        # pod-local agent-service so the browser joins authenticated rather than
+        # as an anonymous guest -- which Google turns away with "You can't join
+        # this video call" when no host is present. Best-effort: a miss falls
+        # back to an anonymous join.
         storage_state_name: str | None = None
         if channel == "google_meet":
             storage_state_name = (
@@ -1539,20 +1709,19 @@ class LivekitCallManager:
                     body = await resp.json()
                 break
             except aiohttp.ClientConnectorError as exc:
-                # The service was up at the gate but the socket refused now —
+                # The service was up at the gate but the socket refused now --
                 # almost always an out-of-band restart. Re-await readiness and
-                # retry the connect (never the slow-join timeout below).
+                # retry the connect (never the slow-join timeout).
                 if connect_attempt >= MEET_JOIN_CONNECT_RETRIES:
                     LOGGER.error(
                         f"{ICONS['ipc']} [LivekitCallManager] {channel} join "
                         f"connect failed after {connect_attempt + 1} attempts: "
                         f"{exc!r}",
                     )
-                    self.meet_join_failure_reason = "agent_service_unavailable"
-                    self._meet_joining = False
-                    self._meet_lobby_waiting = False
-                    await self._cleanup_meet(channel)
-                    return False
+                    return MeetJoinResult(
+                        ok=False,
+                        failure_reason="agent_service_unavailable",
+                    )
                 LOGGER.warning(
                     f"{ICONS['ipc']} [LivekitCallManager] {channel} join connect "
                     f"refused (attempt {connect_attempt + 1}); re-checking "
@@ -1564,145 +1733,98 @@ class LivekitCallManager:
                     f"{ICONS['ipc']} [LivekitCallManager] {channel} join request "
                     f"failed: {exc!r}",
                 )
-                self._meet_joining = False
-                self._meet_lobby_waiting = False
-                await self._cleanup_meet(channel)
-                return False
+                return MeetJoinResult(ok=False, failure_reason="meet_join_failed")
 
         if resp.status != 200:
-            LOGGER.error(
-                f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: {body}",
+            return MeetJoinResult(
+                ok=False,
+                failure_reason=body.get("reason") or body.get("message"),
             )
-            self.meet_join_failure_reason = body.get("reason") or body.get("message")
-            self._meet_joining = False
-            self._meet_lobby_waiting = False
-            await self._cleanup_meet(channel)
-            return False
 
-        # The agent-service returns 200 for both ``active`` (already in the
-        # call) and ``lobby`` (knocked, waiting for host admission). Both are
-        # successful joins; only the wording differs downstream, so record
-        # which one so the event handler can say "in the lobby" vs "joined".
-        self._meet_session_id = body.get("sessionId")
-        self._meet_lobby_waiting = body.get("status") == "lobby"
-        self._meet_joining = False
-        LOGGER.info(
-            f"{ICONS['ipc']} [LivekitCallManager] {channel} joined "
-            f"(session={self._meet_session_id}, "
-            f"status={body.get('status')})",
-        )
+        session_id = body.get("sessionId")
 
         # The join proved the hydrated session is still signed in, and Google
         # rotated its cookies in the process. Write the refreshed context back
         # so the stored state never drifts further behind than the last call.
-        if storage_state_name and self._meet_session_id:
+        if storage_state_name and session_id:
             await self._persist_meet_browser_state(
                 base_url,
                 auth_key,
                 storage_state_name,
-                self._meet_session_id,
+                session_id,
             )
 
-        if self._socket_server and self._meet_session_id:
-            await self._socket_server.queue_for_clients(
-                "app:call:status",
-                json.dumps(
-                    {"type": "meet_session_id", "session_id": self._meet_session_id},
-                ),
-            )
-
-        if meet_outbound and self._event_broker:
-            await self._event_broker.publish(
-                "app:call:status",
-                json.dumps({"type": "call_answered"}),
-            )
-
-        return True
-
-    async def _cleanup_meet(self, channel: str) -> None:
-        """Leave the browser meeting and tear down the audio bridge."""
-        path_info = self._MEET_PATHS[channel]
-        meet_path = path_info["path"]
-
-        session_id = self._meet_session_id
-        room_name = self.room_name
-        self._meet_session_id = None
-        self._meet_joining = False
-        self._meet_lobby_waiting = False
-        self._meet_presenting = False
-        if channel == "google_meet":
-            self.google_meet_start_timestamp = None
-            self.google_meet_exchange_id = UNASSIGNED
-        elif channel == "teams_meet":
-            self.teams_meet_start_timestamp = None
-            self.teams_meet_exchange_id = UNASSIGNED
-
-        if session_id:
-            from unify.session_details import SESSION_DETAILS
-
-            base_url = _POD_LOCAL_AGENT_SERVICE_URL
-            auth_key = SESSION_DETAILS.unify_key
-            try:
-                async with aiohttp.ClientSession() as session:
-                    await session.post(
-                        f"{base_url}/{meet_path}/leave",
-                        json={"sessionId": session_id},
-                        headers={"authorization": f"Bearer {auth_key}"},
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    )
-            except Exception as exc:
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"Error leaving {channel}: {exc}",
-                )
-
-        if room_name:
-            from unify.conversation_manager.medium_scripts.common import (
-                delete_livekit_room,
-            )
-
-            await delete_livekit_room(room_name)
-
-        await self.cleanup_call_proc()
-
-    async def _start_meet_screenshare(self, channel: str) -> bool:
-        """Start presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
-        desktop_url = SESSION_DETAILS.assistant.desktop_url
-        if not desktop_url:
-            return False
-
-        from urllib.parse import urlparse
-
-        parsed = urlparse(desktop_url)
-        liveview_url = (
-            f"{parsed.scheme}://{parsed.netloc}/desktop/custom.html"
-            f"?password={SESSION_DETAILS.unify_key}"
+        return MeetJoinResult(
+            ok=True,
+            session_id=session_id,
+            lobby=body.get("status") == "lobby",
         )
 
+    async def _agent_service_leave(self, *, channel: str, session_id: str) -> None:
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
+        base_url, auth_key = self._agent_service_auth()
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(
+                    f"{base_url}/{meet_path}/leave",
+                    json={"sessionId": session_id},
+                    headers={"authorization": f"Bearer {auth_key}"},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                )
+        except Exception as exc:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] "
+                f"Error leaving {channel}: {exc}",
+            )
+
+    async def _agent_service_state(
+        self,
+        *,
+        channel: str,
+        session_id: str,
+    ) -> dict | None:
+        meet_path = self._MEET_PATHS[channel]["path"]
+        base_url, auth_key = self._agent_service_auth()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{base_url}/{meet_path}/state",
+                    params={"sessionId": session_id},
+                    headers={"authorization": f"Bearer {auth_key}"},
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    return await resp.json()
+        except Exception as exc:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] "
+                f"Error polling {channel} state: {exc}",
+            )
+            return None
+
+    async def _agent_service_present(
+        self,
+        *,
+        channel: str,
+        session_id: str,
+        view_url: str,
+    ) -> bool:
+        meet_path = self._MEET_PATHS[channel]["path"]
+        base_url, auth_key = self._agent_service_auth()
         try:
             async with aiohttp.ClientSession() as session:
                 resp = await session.post(
                     f"{base_url}/{meet_path}/present",
-                    json={"sessionId": session_id, "desktopUrl": liveview_url},
+                    json={"sessionId": session_id, "desktopUrl": view_url},
                     headers={"authorization": f"Bearer {auth_key}"},
                     timeout=aiohttp.ClientTimeout(total=120),
                 )
                 if resp.status == 200:
-                    self._meet_presenting = True
                     return True
-                body = await resp.json()
                 LOGGER.warning(
                     f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"{channel} present failed: {body}",
+                    f"{channel} present failed: {await resp.json()}",
                 )
         except Exception as exc:
             LOGGER.warning(
@@ -1711,17 +1833,14 @@ class LivekitCallManager:
             )
         return False
 
-    async def _stop_meet_screenshare(self, channel: str) -> bool:
-        """Stop presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
+    async def _agent_service_stop_present(
+        self,
+        *,
+        channel: str,
+        session_id: str,
+    ) -> bool:
         meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
+        base_url, auth_key = self._agent_service_auth()
         try:
             async with aiohttp.ClientSession() as session:
                 resp = await session.post(
@@ -1731,12 +1850,10 @@ class LivekitCallManager:
                     timeout=aiohttp.ClientTimeout(total=60),
                 )
                 if resp.status == 200:
-                    self._meet_presenting = False
                     return True
-                body = await resp.json()
                 LOGGER.warning(
                     f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"{channel} stop-present failed: {body}",
+                    f"{channel} stop-present failed: {await resp.json()}",
                 )
         except Exception as exc:
             LOGGER.warning(
