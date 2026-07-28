@@ -2265,6 +2265,7 @@ def get_example_function_map() -> dict[str, callable]:
     """
     return {
         # Canvas
+        "get_canvas_kit_reference": get_canvas_kit_reference,
         "get_primitives_canvas_live_view_example": get_primitives_canvas_live_view_example,
         "get_primitives_canvas_connected_apps_example": get_primitives_canvas_connected_apps_example,
         "get_primitives_canvas_actions_example": get_primitives_canvas_actions_example,
@@ -2657,6 +2658,26 @@ def get_examples_for_environments(
 # =============================================================================
 
 
+def get_canvas_kit_reference() -> str:
+    """The component vocabulary a canvas is authored against.
+
+    Inlined rather than left to be discovered. A canvas is typechecked before it
+    can be published, so a guessed component name is not a graceful degradation —
+    it is a failed build and another round trip. Six kilobytes of reference costs
+    far less than that loop, and only appears when canvas is in scope.
+
+    Generated from the kit's own type declarations by
+    ``scripts/generate_canvas_kit_api.py``; see that script for regeneration and
+    drift checking.
+    """
+    from pathlib import Path
+
+    digest = Path(__file__).resolve().parent.parent / "canvas_manager/canvas_kit_api.md"
+    if not digest.is_file():
+        return ""
+    return digest.read_text(encoding="utf8")
+
+
 def get_primitives_canvas_live_view_example() -> str:
     """Canvas over a manager's own table, with live bindings."""
     return '''
@@ -2668,10 +2689,16 @@ from unify.canvas_manager.types import PrimitiveBinding
 
 result = await primitives.canvas.create_view(
     tsx="""
-import { Canvas, Stack, Section, KpiRow, Table, Badge } from "@unity/canvas-kit";
+import {
+  Badge, Canvas, KpiRow, Section, Stack, Table, type CanvasViewProps,
+} from "@unity/canvas-kit";
 
-export default function Tracker({ canvas }) {
-  const tasks = canvas.data.tasks ?? [];
+type Task = { name: string; due: string; status: string };
+
+// Type the prop and the rows. The canvas is typechecked before it can be
+// published, so an untyped `canvas` fails the build under `strict`.
+export default function Tracker({ canvas }: CanvasViewProps) {
+  const tasks = (canvas.data.tasks ?? []) as Task[];
   const overdue = tasks.filter((t) => t.status === "overdue");
 
   return (
@@ -2698,6 +2725,8 @@ export default function Tracker({ canvas }) {
         </Section>
       </Stack>
     </Canvas>
+  );
+}
     """,
     title="Open tasks",
     bindings=[
@@ -2756,17 +2785,22 @@ await primitives.tasks.update(
 # 3. Build the view over the stored tables.
 result = await primitives.canvas.create_view(
     tsx="""
-import { Canvas, Grid, Card, CardHeader, CardTitle, CardContent,
-         BarChart, Table } from "@unity/canvas-kit";
+import {
+  BarChart, Canvas, Card, CardContent, CardHeader, CardTitle, Grid, Table,
+  type CanvasViewProps,
+} from "@unity/canvas-kit";
 
-export default function Delivery({ canvas }) {
+type Issue = { repo: string; count: number };
+type Deal = { dealname: string; amount: number };
+
+export default function Delivery({ canvas }: CanvasViewProps) {
   return (
     <Canvas>
       <Grid columns={2}>
         <Card>
           <CardHeader><CardTitle>Open issues by repo</CardTitle></CardHeader>
           <CardContent>
-            <BarChart data={canvas.data.issues ?? []} x="repo" y="count" />
+            <BarChart data={(canvas.data.issues ?? []) as Issue[]} x="repo" y="count" />
           </CardContent>
         </Card>
         <Card>
@@ -2775,12 +2809,14 @@ export default function Delivery({ canvas }) {
             <Table
               columns={[{ key: "dealname", header: "Deal" },
                         { key: "amount", header: "Amount", numeric: true }]}
-              rows={canvas.data.deals ?? []}
+              rows={(canvas.data.deals ?? []) as Deal[]}
             />
           </CardContent>
         </Card>
       </Grid>
     </Canvas>
+  );
+}
     """,
     title="Delivery and pipeline",
     bindings=[
@@ -2799,25 +2835,53 @@ def get_primitives_canvas_actions_example() -> str:
     return '''
 # "Give me somewhere to paste employee emails and send them an update"
 #
-# The form is rendered from `input_schema`; the arguments are re-validated
-# server-side before anything runs, because the frame is untrusted. Bounds on
-# every array and string are required -- they are the blast radius once a viewer
-# supplies the arguments.
+# Collect the input yourself and hand it to `canvas.invoke`. The arguments are
+# re-validated server-side against `input_schema` before anything runs, because
+# the frame is untrusted -- client-side validation is only there to be helpful.
+# Bounds on every array and string are required: they are the blast radius once a
+# viewer supplies the arguments.
 from unify.canvas_manager.types import CanvasAction
 
 result = await primitives.canvas.create_view(
     tsx="""
-import { Canvas, Section, ActionForm, ActionResult } from "@unity/canvas-kit";
+import * as React from "react";
+import {
+  Badge, Canvas, Section, Stack, Text, type CanvasViewProps,
+} from "@unity/canvas-kit";
 
-export default function BulkMail({ canvas }) {
+export default function BulkMail({ canvas }: CanvasViewProps) {
+  const [raw, setRaw] = React.useState("");
+  const [subject, setSubject] = React.useState("");
+
+  // One invocation is tracked at a time; `canvas.invocations` is keyed by the
+  // id the parent assigns, and reports progress and the final outcome.
+  const state = Object.values(canvas.invocations)[0];
+  const recipients = raw.split(/[\\s,;]+/).filter(Boolean);
+
   return (
     <Canvas>
       <Section title="Send an update"
                description="Paste the recipients, write the message, send once.">
-        <ActionForm action="bulk_send" canvas={canvas} />
-        <ActionResult action="bulk_send" canvas={canvas} />
+        <Stack gap="md">
+          <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={5} />
+          <input value={subject} onChange={(e) => setSubject(e.target.value)} />
+          <Text tone="muted">{recipients.length} recipients</Text>
+          <button
+            disabled={!recipients.length || state?.status === "running"}
+            onClick={() => canvas.invoke("bulk_send", {
+              recipients, subject, body: "See attached update.",
+            })}
+          >
+            Send
+          </button>
+          {state ? <Badge tone={state.status === "failed" ? "danger" : "success"}>
+            {state.error ?? state.status}
+          </Badge> : null}
+        </Stack>
       </Section>
     </Canvas>
+  );
+}
     """,
     title="Bulk update",
     actions=[

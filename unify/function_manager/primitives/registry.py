@@ -596,6 +596,9 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_data_external_sync_example",
     ],
     "canvas": [
+        # The component reference comes first: the actor needs to know what it
+        # can compose before the examples showing how to compose it.
+        "get_canvas_kit_reference",
         "get_primitives_canvas_live_view_example",
         "get_primitives_canvas_connected_apps_example",
         "get_primitives_canvas_actions_example",
