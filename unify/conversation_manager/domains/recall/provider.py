@@ -73,6 +73,10 @@ class RecallMeetProvider:
         ).strip()
         self._relay_url = relay_url if relay_url is not None else _default_relay_url()
         self._assistant_id = str(assistant_id) if assistant_id is not None else ""
+        # The tokenised bridge URL minted for the active meeting. Kept because
+        # every mid-call output-media change has to re-send the camera surface,
+        # and re-minting would hand the bot a second token for the same room.
+        self._active_bridge_url: str = ""
 
     async def preflight(self) -> str | None:
         # Nothing to wait for -- Recall is a hosted API, not a process that
@@ -97,6 +101,7 @@ class RecallMeetProvider:
 
         try:
             bridge_url = self._bridge_url(room_name, display_name)
+            self._active_bridge_url = bridge_url
         except RuntimeError as exc:
             LOGGER.error("[recall] could not mint a bridge token: %s", exc)
             return MeetJoinResult(ok=False, failure_reason="livekit_unconfigured")
@@ -135,6 +140,9 @@ class RecallMeetProvider:
 
     async def leave(self, *, channel: str, session_id: str) -> None:
         _ = channel
+        # Dropped before the leave so a later present() cannot hand a stale
+        # token, for a room that no longer exists, to a bot that has gone.
+        self._active_bridge_url = ""
         await self._client.leave_call(session_id)
 
     async def state(self, *, channel: str, session_id: str) -> MeetState | None:
@@ -147,21 +155,43 @@ class RecallMeetProvider:
         return _to_meet_state(bot)
 
     async def present(self, *, channel: str, session_id: str, view_url: str) -> bool:
-        # The bridge page is already the bot's media surface, so presenting is
-        # a mode change on that surface rather than a second stream: the page
-        # renders the desktop view and Recall promotes it to a screenshare.
-        _ = channel, view_url
+        """Share ``view_url`` as a second surface, leaving the camera alone.
+
+        Camera and screenshare are separate webpages, so the desktop view goes
+        up beside the status card rather than replacing it -- the page carrying
+        audio is never swapped out to present.
+        """
+        _ = channel
+        if not self._active_bridge_url:
+            LOGGER.warning("[recall] cannot present: no active bridge page")
+            return False
         try:
-            await self._client.start_screenshare(session_id)
+            await self._client.set_output_media(
+                session_id,
+                camera_url=self._active_bridge_url,
+                screenshare_url=view_url,
+            )
             return True
         except RecallError as exc:
             LOGGER.warning("[recall] present failed for %s: %s", session_id, exc)
             return False
 
     async def stop_present(self, *, channel: str, session_id: str) -> bool:
+        """Drop the screenshare surface, keeping the camera.
+
+        Sending the camera on its own is what clears the screenshare. If this
+        endpoint turns out to merge rather than replace, a stopped share would
+        linger -- visible and harmless, unlike the alternative of dropping the
+        camera and silencing the assistant.
+        """
         _ = channel
+        if not self._active_bridge_url:
+            return False
         try:
-            await self._client.stop_screenshare(session_id)
+            await self._client.set_output_media(
+                session_id,
+                camera_url=self._active_bridge_url,
+            )
             return True
         except RecallError as exc:
             LOGGER.warning("[recall] stop-present failed for %s: %s", session_id, exc)
