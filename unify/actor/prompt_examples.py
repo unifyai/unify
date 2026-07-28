@@ -2264,6 +2264,11 @@ def get_example_function_map() -> dict[str, callable]:
     examples for exposed managers.
     """
     return {
+        # Canvas
+        "get_primitives_canvas_live_view_example": get_primitives_canvas_live_view_example,
+        "get_primitives_canvas_connected_apps_example": get_primitives_canvas_connected_apps_example,
+        "get_primitives_canvas_actions_example": get_primitives_canvas_actions_example,
+        "get_primitives_canvas_revision_example": get_primitives_canvas_revision_example,
         # Contacts
         "get_primitives_contact_ask_example": get_primitives_contact_ask_example,
         "get_primitives_contact_update_example": get_primitives_contact_update_example,
@@ -2645,3 +2650,221 @@ def get_examples_for_environments(
         sections.append("### Mixed-Mode Examples\n" + get_mixed_examples())
 
     return "\n\n".join(sections)
+
+
+# =============================================================================
+# Canvas -- generative user interfaces
+# =============================================================================
+
+
+def get_primitives_canvas_live_view_example() -> str:
+    """Canvas over a manager's own table, with live bindings."""
+    return '''
+# "Build me a tracker for my open tasks"
+#
+# One TSX module renders the whole view. The binding re-runs on every view, so
+# the tracker is current without any refresh machinery.
+from unify.canvas_manager.types import PrimitiveBinding
+
+result = await primitives.canvas.create_view(
+    tsx="""
+import { Canvas, Stack, Section, KpiRow, Table, Badge } from "@unity/canvas-kit";
+
+export default function Tracker({ canvas }) {
+  const tasks = canvas.data.tasks ?? [];
+  const overdue = tasks.filter((t) => t.status === "overdue");
+
+  return (
+    <Canvas>
+      <Stack gap="lg">
+        <KpiRow items={[
+          { label: "Open", value: tasks.length },
+          { label: "Overdue", value: overdue.length, tone: "danger" },
+        ]} />
+        <Section title="Open tasks" description="Refreshed each time you open this.">
+          <Table
+            columns={[
+              { key: "name", header: "Task" },
+              { key: "due", header: "Due" },
+              { key: "status", header: "Status",
+                render: (row) => (
+                  <Badge tone={row.status === "overdue" ? "danger" : "default"}>
+                    {row.status}
+                  </Badge>
+                ) },
+            ]}
+            rows={tasks}
+          />
+        </Section>
+      </Stack>
+    </Canvas>
+    """,
+    title="Open tasks",
+    bindings=[
+        PrimitiveBinding(
+            alias="tasks",
+            manager="tasks",
+            table="Tasks",
+            args={"operation": "filter", "filter": "status != 'done'",
+                  "order_by": "due", "limit": 200},
+        ),
+    ],
+)
+
+if not result.build.ok:
+    # Diagnostics are the compiler's own, so they name the line to fix.
+    notify(f"Canvas build failed: {result.build.diagnostics}")
+else:
+    notify(f"Tracker ready: {result.url}")
+'''
+
+
+def get_primitives_canvas_connected_apps_example() -> str:
+    """Canvas over connected third-party apps -- store first, then bind."""
+    return '''
+# "Show me our GitHub issues next to the HubSpot pipeline"
+#
+# A canvas can only display data that already lives in a table. Connected-app
+# data therefore has to be STORED FIRST -- a provider call takes seconds, rate
+# limits are per account rather than per viewer, and a call can come back needing
+# a reconnection that a rendered surface cannot resolve. Storing it is also the
+# only way to show two apps together, since providers cannot be joined directly.
+from unify.canvas_manager.types import PrimitiveBinding
+
+# 1. Pull from each app and store it.
+issues = await primitives.integrations.github.list_issues(state="open", per_page=100)
+await primitives.data.ingest(
+    "Data/GitHubIssues",
+    rows=[{"repo": i["repository"]["name"], "title": i["title"],
+           "opened": i["created_at"]} for i in issues.get("items", [])],
+    description="Open GitHub issues, refreshed hourly.",
+    # A stable key makes the refresh an upsert rather than an append, which is
+    # what a current-state view wants. Omit it to accumulate a time series.
+    unique_keys={"title": "str"},
+)
+
+deals = await primitives.integrations.hubspot.list_deals()
+await primitives.data.ingest("Data/HubSpotDeals", rows=deals.get("results", []))
+
+# 2. Keep it fresh. Without this the canvas shows whatever was stored once.
+await primitives.tasks.update(
+    "Create a recurring task every hour that re-runs the GitHub and HubSpot "
+    "pulls above and re-ingests them into Data/GitHubIssues and "
+    "Data/HubSpotDeals.",
+)
+
+# 3. Build the view over the stored tables.
+result = await primitives.canvas.create_view(
+    tsx="""
+import { Canvas, Grid, Card, CardHeader, CardTitle, CardContent,
+         BarChart, Table } from "@unity/canvas-kit";
+
+export default function Delivery({ canvas }) {
+  return (
+    <Canvas>
+      <Grid columns={2}>
+        <Card>
+          <CardHeader><CardTitle>Open issues by repo</CardTitle></CardHeader>
+          <CardContent>
+            <BarChart data={canvas.data.issues ?? []} x="repo" y="count" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Pipeline</CardTitle></CardHeader>
+          <CardContent>
+            <Table
+              columns={[{ key: "dealname", header: "Deal" },
+                        { key: "amount", header: "Amount", numeric: true }]}
+              rows={canvas.data.deals ?? []}
+            />
+          </CardContent>
+        </Card>
+      </Grid>
+    </Canvas>
+    """,
+    title="Delivery and pipeline",
+    bindings=[
+        PrimitiveBinding(alias="issues", manager="data", table="Data/GitHubIssues",
+                         args={"operation": "filter", "limit": 200}),
+        PrimitiveBinding(alias="deals", manager="data", table="Data/HubSpotDeals",
+                         args={"operation": "filter", "order_by": "amount",
+                               "descending": True, "limit": 50}),
+    ],
+)
+'''
+
+
+def get_primitives_canvas_actions_example() -> str:
+    """Canvas the viewer can act from, with validated input."""
+    return '''
+# "Give me somewhere to paste employee emails and send them an update"
+#
+# The form is rendered from `input_schema`; the arguments are re-validated
+# server-side before anything runs, because the frame is untrusted. Bounds on
+# every array and string are required -- they are the blast radius once a viewer
+# supplies the arguments.
+from unify.canvas_manager.types import CanvasAction
+
+result = await primitives.canvas.create_view(
+    tsx="""
+import { Canvas, Section, ActionForm, ActionResult } from "@unity/canvas-kit";
+
+export default function BulkMail({ canvas }) {
+  return (
+    <Canvas>
+      <Section title="Send an update"
+               description="Paste the recipients, write the message, send once.">
+        <ActionForm action="bulk_send" canvas={canvas} />
+        <ActionResult action="bulk_send" canvas={canvas} />
+      </Section>
+    </Canvas>
+    """,
+    title="Bulk update",
+    actions=[
+        CanvasAction(
+            name="bulk_send",
+            # The viewer reads this before consenting, so it says what happens.
+            label="Send to everyone listed",
+            function_name="send_bulk_email",
+            input_schema={
+                "type": "object",
+                "required": ["recipients", "subject", "body"],
+                "properties": {
+                    "recipients": {"type": "array", "maxItems": 200,
+                                   "items": {"type": "string", "format": "email"}},
+                    "subject": {"type": "string", "maxLength": 200},
+                    "body": {"type": "string", "maxLength": 10000},
+                },
+            },
+            destructive=True,
+            confirm="This sends real email to everyone listed.",
+        ),
+    ],
+)
+'''
+
+
+def get_primitives_canvas_revision_example() -> str:
+    """Revising a canvas after the user reacts to it."""
+    return """
+# "That chart is too small" -- revise in place, never create a second canvas.
+#
+# The token and URL are stable, so anywhere the canvas was already shared keeps
+# working. Edit from the stored source rather than from memory.
+record = await primitives.canvas.get_view(token)
+
+result = await primitives.canvas.update_view(
+    token,
+    tsx=record.tsx_source.replace("height={200}", "height={420}"),
+)
+
+if not result.build.ok:
+    # The previously published canvas is untouched, so the user still has a
+    # working view while this is corrected.
+    notify(f"Revision rejected: {result.build.diagnostics}")
+
+# The review pass renders the canvas and hands back what it looked like, so a
+# visual problem is visible rather than assumed absent.
+if result.review and result.review.issues:
+    notify(f"Rendered, with notes: {result.review.issues}")
+"""
