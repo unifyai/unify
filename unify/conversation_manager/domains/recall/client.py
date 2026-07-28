@@ -278,11 +278,41 @@ class RecallClient:
             payload["to"] = to
         await self._request("POST", f"/bot/{bot_id}/send_chat_message", json=payload)
 
-    async def start_screenshare(self, bot_id: str) -> None:
-        await self._request("POST", f"/bot/{bot_id}/output_screenshare")
+    async def set_output_media(
+        self,
+        bot_id: str,
+        *,
+        camera_url: str,
+        screenshare_url: str | None = None,
+    ) -> None:
+        """Set what the bot outputs, mid-call.
 
-    async def stop_screenshare(self, bot_id: str) -> None:
-        await self._request("DELETE", f"/bot/{bot_id}/output_screenshare")
+        Camera and screenshare are independent surfaces, each rendering its own
+        webpage, so the assistant can share a desktop view without disturbing
+        the page that carries its audio.
+
+        ``camera_url`` is always sent, even when only the screenshare is
+        changing. This endpoint's merge-vs-replace behaviour is undocumented,
+        and the two failure modes are not equally bad: if it replaces, omitting
+        the camera would tear down the page bridging audio and the assistant
+        would go silent mid-meeting, whereas re-sending an unchanged camera URL
+        costs at worst a page reload. The bridge reconnects under the same
+        identity, and ``_recall_end_watch`` tolerates a short absence, so a
+        reload does not read as the meeting ending.
+
+        Not to be confused with ``POST /bot/{id}/output_screenshare``, which
+        takes a single base64 JPEG rather than a webpage.
+        """
+
+        payload: dict[str, Any] = {
+            "camera": {"kind": "webpage", "config": {"url": camera_url}},
+        }
+        if screenshare_url:
+            payload["screenshare"] = {
+                "kind": "webpage",
+                "config": {"url": screenshare_url},
+            }
+        await self._request("POST", f"/bot/{bot_id}/output_media", json=payload)
 
     async def _request(
         self,
