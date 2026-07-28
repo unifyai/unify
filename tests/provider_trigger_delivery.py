@@ -110,6 +110,59 @@ def ensure_pipedream_provider_trigger_catalog_seeded() -> None:
     ensure_provider_trigger_catalog_seeded(backends=("pipedream",))
 
 
+REQUIRE_PROVIDER_TRIGGERS_ENV = "UNIFY_REQUIRE_PROVIDER_TRIGGERS"
+
+
+def _topology_unavailable_reason(assistant_id: int) -> str | None:
+    """Why the server cannot serve provider triggers, or None when it can.
+
+    Topology is evaluated inside Orchestra, so the answer depends on the server
+    process the suite is pointed at — not on this process's environment.
+    """
+
+    response = requests.get(
+        f"{orchestra_api_base()}/v0/assistants/{int(assistant_id)}/provider-triggers",
+        headers={"Authorization": f"Bearer {orchestra_admin_key()}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    info = response.json().get("info") or {}
+    if info.get("available"):
+        return None
+    return str(info.get("unavailable_reason") or "unknown")
+
+
+def require_provider_trigger_topology(assistant_id: int = 1) -> None:
+    """Skip the calling test when the server cannot serve provider triggers.
+
+    ``tests/parallel_run.sh`` exports a stub callback URL and signing material
+    before starting its own Orchestra, so a normal CI run has topology
+    available and these tests execute for real. Pointing the suite at a running
+    self-host stack does not: ``stack.sh`` gates provider triggers behind
+    ``SELF_HOST_PROVIDER_TRIGGERS_ENABLED`` because a genuine install needs a
+    public HTTPS callback that localhost cannot provide. Failing there reports
+    an environment mismatch as a product defect.
+
+    Set ``UNIFY_REQUIRE_PROVIDER_TRIGGERS=1`` to turn the skip back into a hard
+    failure, so a misconfigured CI job cannot silently stop testing this path.
+    """
+
+    import pytest
+
+    reason = _topology_unavailable_reason(assistant_id)
+    if reason is None:
+        return
+    message = (
+        f"provider-trigger topology unavailable ({reason}). Run via "
+        "tests/parallel_run.sh, or start Orchestra with "
+        "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://orchestra.example and "
+        "TRIGGER_EVENT_WRAPPING_MASTER_KEY set."
+    )
+    if os.getenv(REQUIRE_PROVIDER_TRIGGERS_ENV, "").strip() == "1":
+        raise RuntimeError(message)
+    pytest.skip(message)
+
+
 def ensure_provider_trigger_test_prerequisites() -> None:
     """Seed catalogs and verify provider-trigger topology is usable locally."""
 
@@ -127,6 +180,7 @@ def ensure_provider_trigger_test_prerequisites() -> None:
             "restart local Orchestra with SELF_HOST=1 and "
             "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://orchestra.example",
         )
+    require_provider_trigger_topology()
 
 
 def _orchestra_db_container() -> str:

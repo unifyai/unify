@@ -2664,7 +2664,16 @@ class TaskScheduler(BaseTaskScheduler):
         event_id: str | None = None,
         events_base_context: str | None = None,
     ) -> dict[str, Any]:
-        """Return near-raw EventBus row(s) for **one** hierarchy node only."""
+        """Return near-raw EventBus row(s) for **one** hierarchy node only.
+
+        Use after ``get_run_event_children`` when a specific node needs payload
+        detail — a failed ``execute_code``, say. Descendants are not included;
+        drill with ``get_run_event_children`` instead. Pass ``event_id`` from
+        the child stub's ``event_ids`` when several rows share the node (a
+        ManagerMethod's incoming and outgoing rows, for example). Assign in
+        ``execute_code`` and inspect selectively — payloads are unsummarized
+        and do not belong in the observation.
+        """
 
         from unify.task_scheduler.task_run_events import (
             fetch_task_run_events,
