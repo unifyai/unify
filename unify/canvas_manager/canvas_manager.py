@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from unify.canvas_manager.base import DEFAULT_VISIBILITY, BaseCanvasManager
 from unify.canvas_manager.ops import binding_ops, build_ops, token_ops
+from unify.canvas_manager.ops.binding_ops import BindingError
 from unify.canvas_manager.ops.action_ops import (
     coerce_actions,
     resolve_function_id,
@@ -190,29 +191,45 @@ class CanvasManager(BaseCanvasManager):
         token: str,
         bundle: str,
         props: Dict[str, Any],
+        rows: Optional[Dict[str, Any]] = None,
     ) -> ReviewReport:
         """Render the compiled canvas and look at it.
 
         Skipped when disabled or when no browser is available. A render failure
         is a publication gate, because a canvas that compiles and then throws on
         mount is the one class of fault the compiler cannot see.
+
+        ``rows`` are the dry-run samples from binding verification, replayed in
+        place of the parent so the review exercises the shape the canvas will
+        actually receive.
         """
         if not self._settings.REVIEW_ENABLED:
             return ReviewReport(rendered=True, verdict="skipped")
 
         from unify.canvas_manager.ops import review_ops
 
-        return review_ops.render_and_review(token=token, bundle=bundle, props=props)
+        return review_ops.render_and_review(
+            token=token,
+            bundle=bundle,
+            props=props,
+            rows=rows,
+        )
 
     def _prepare_bindings(
         self,
         bindings: Optional[List[PrimitiveBinding]],
         *,
         root_context: str,
-    ) -> List[PrimitiveBinding]:
+    ) -> tuple[List[PrimitiveBinding], Dict[str, Any]]:
+        """Resolve, authorise and dry-run the bindings.
+
+        Returns the resolved bindings and the sample rows the dry-run produced,
+        which the render gate replays so the canvas is reviewed against its own
+        real column names rather than against nothing.
+        """
         coerced = binding_ops.coerce_bindings(bindings)
         if not coerced:
-            return []
+            return [], {}
 
         binding_ops.check_bindable(coerced)
         # Bindings resolve against the root the canvas itself lives under, so a
@@ -221,8 +238,26 @@ class CanvasManager(BaseCanvasManager):
             coerced,
             root_context=root_context,
         )
-        binding_ops.verify_bindings(resolved, data_manager=self._get_dm())
-        return resolved
+        samples = binding_ops.verify_bindings(resolved, data_manager=self._get_dm())
+        return resolved, samples
+
+    def _sample_stored_bindings(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-run the bindings already stored on a canvas, for their samples.
+
+        Used when revising the source without touching the bindings. A binding
+        that has since broken does not fail the revision: the gate is judging the
+        new source, and refusing to publish it because an unrelated table went
+        missing would leave the author unable to fix anything.
+        """
+        stored = binding_ops.deserialize_bindings(row.get("bindings_json"))
+        if not stored:
+            return {}
+
+        try:
+            return binding_ops.verify_bindings(stored, data_manager=self._get_dm())
+        except BindingError as error:
+            logger.warning("canvas preview data unavailable: %s", error)
+            return {}
 
     def _store_actions(
         self,
@@ -290,7 +325,7 @@ class CanvasManager(BaseCanvasManager):
         root_context = self._root_of(views_context, VIEWS_TABLE)
 
         try:
-            resolved_bindings = self._prepare_bindings(
+            resolved_bindings, samples = self._prepare_bindings(
                 bindings,
                 root_context=root_context,
             )
@@ -299,10 +334,14 @@ class CanvasManager(BaseCanvasManager):
             return CanvasResult(title=title, build=build, error=str(error))
 
         token = token_ops.generate_token()
-        bundle_uri = token_ops.upload_bundle(token, bundle, sha256=build.bundle_sha)
 
         review_report = (
-            self._review(token=token, bundle=bundle, props=props or {})
+            self._review(
+                token=token,
+                bundle=bundle,
+                props=props or {},
+                rows=samples,
+            )
             if review
             else None
         )
@@ -323,7 +362,7 @@ class CanvasManager(BaseCanvasManager):
             description=description,
             tsx_source=tsx,
             bundle_sha=build.bundle_sha,
-            bundle_uri=bundle_uri,
+            bundle_code=bundle,
             kit_version=build.kit_version,
             bindings_json=binding_ops.serialize_bindings(resolved_bindings),
             binding_contexts=binding_ops.binding_contexts(resolved_bindings),
@@ -384,6 +423,23 @@ class CanvasManager(BaseCanvasManager):
         build: Optional[BuildReport] = None
         bundle = ""
         review_report: Optional[ReviewReport] = None
+        root_context = self._root_of(context, VIEWS_TABLE)
+
+        # Bindings are resolved before the review, because the render gate
+        # replays their dry-run samples. When only the source is being revised,
+        # the stored bindings are re-run for the same reason.
+        resolved: Optional[List[PrimitiveBinding]] = None
+        samples: Dict[str, Any] = {}
+        if bindings is not None:
+            try:
+                resolved, samples = self._prepare_bindings(
+                    bindings,
+                    root_context=root_context,
+                )
+            except ValueError as error:
+                return CanvasResult(token=token, error=str(error))
+        elif tsx is not None and review:
+            samples = self._sample_stored_bindings(existing)
 
         if tsx is not None:
             build, bundle = self._build(tsx)
@@ -408,6 +464,7 @@ class CanvasManager(BaseCanvasManager):
                         if props is not None
                         else json.loads(existing.get("props_json") or "{}")
                     ),
+                    rows=samples,
                 )
                 if not review_report.rendered:
                     return CanvasResult(
@@ -429,11 +486,7 @@ class CanvasManager(BaseCanvasManager):
             updates.update(
                 tsx_source=tsx,
                 bundle_sha=build.bundle_sha,
-                bundle_uri=token_ops.upload_bundle(
-                    token,
-                    bundle,
-                    sha256=build.bundle_sha,
-                ),
+                bundle_code=bundle,
                 kit_version=build.kit_version,
                 build_json=build.model_dump_json(),
             )
@@ -449,13 +502,7 @@ class CanvasManager(BaseCanvasManager):
         if props is not None:
             updates["props_json"] = json.dumps(props)
 
-        root_context = self._root_of(context, VIEWS_TABLE)
-
-        if bindings is not None:
-            try:
-                resolved = self._prepare_bindings(bindings, root_context=root_context)
-            except ValueError as error:
-                return CanvasResult(token=token, error=str(error))
+        if resolved is not None:
             updates["bindings_json"] = binding_ops.serialize_bindings(resolved)
             updates["binding_contexts"] = binding_ops.binding_contexts(resolved)
 
@@ -470,6 +517,13 @@ class CanvasManager(BaseCanvasManager):
                 return CanvasResult(token=token, error=str(error))
 
         self._get_dm().update_rows(context, updates, filter=f"token == '{token}'")
+
+        if visibility is not None:
+            # The routing row carries visibility too, and it is the copy console
+            # actually reads when deciding whether to serve. Updating only the
+            # canvas row would leave a canvas that looks shared here and stays
+            # private to every viewer.
+            token_ops.set_token_state(token, visibility=visibility)
 
         return CanvasResult(
             token=token,
@@ -549,17 +603,18 @@ class CanvasManager(BaseCanvasManager):
         if record is None:
             return ReviewReport(rendered=False, error=f"Canvas {token!r} not found.")
 
-        bundle = token_ops.fetch_bundle(record.bundle_uri)
-        if not bundle:
+        if not record.bundle_code:
             return ReviewReport(
                 rendered=False,
-                error=f"Compiled bundle for {token!r} is unavailable at {record.bundle_uri}.",
+                error=f"Canvas {token!r} has no compiled bundle to render.",
             )
 
+        row, _ = self._find_row(VIEWS_TABLE, token)
         return self._review(
             token=token,
-            bundle=bundle,
+            bundle=record.bundle_code,
             props=json.loads(record.props_json or "{}"),
+            rows=self._sample_stored_bindings(row or {}),
         )
 
     def list_invocations(

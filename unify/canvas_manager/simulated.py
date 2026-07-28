@@ -122,7 +122,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
             description=description,
             tsx_source=tsx,
             bundle_sha=build.bundle_sha,
-            bundle_uri=f"memory://{build.bundle_sha}",
+            bundle_code=tsx,
             kit_version=build.kit_version,
             bindings_json=binding_ops.serialize_bindings(resolved_bindings),
             binding_contexts=binding_ops.binding_contexts(resolved_bindings),
@@ -185,7 +185,7 @@ class SimulatedCanvasManager(BaseCanvasManager):
             updates.update(
                 tsx_source=tsx,
                 bundle_sha=build.bundle_sha,
-                bundle_uri=f"memory://{build.bundle_sha}",
+                bundle_code=tsx,
                 kit_version=build.kit_version,
                 build_json=build.model_dump_json(),
             )

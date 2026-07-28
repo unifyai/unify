@@ -82,12 +82,20 @@ class CanvasViewRow(AuthoredRow):
     # see what the assistant actually wrote on their behalf.
     tsx_source: str = ""
 
-    # Content address of the compiled module, and where it lives. The bundle is
-    # private: console fetches it server-side and verifies this hash before
-    # handing the bytes to the frame, which is a stronger integrity guarantee
-    # than subresource integrity because we enforce it ourselves.
+    # The compiled module and its content address.
+    #
+    # The bytes live on the row rather than in object storage. React, react-dom
+    # and the kit are externals supplied by the runtime host, so a canvas
+    # compiles to single-digit kilobytes -- comparable to the authored source
+    # sitting beside it, and small enough that a bucket would add per-environment
+    # configuration, IAM and signed-URL expiry for no benefit.
+    #
+    # Console reads it server-side and verifies bundle_sha before handing the
+    # bytes to the frame. That is a stronger integrity guarantee than subresource
+    # integrity because we enforce it rather than asking the browser to, and it
+    # holds however the bytes were stored.
     bundle_sha: str = ""
-    bundle_uri: str = ""
+    bundle_code: str = ""
     # Kit the bundle was compiled against, so an old canvas keeps rendering on
     # the runtime it was reviewed against rather than silently upgrading.
     kit_version: str = ""
