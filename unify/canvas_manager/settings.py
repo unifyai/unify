@@ -29,6 +29,32 @@ class CanvasSettings(BaseSettings):
         ),
     )
 
+    KIT_VERSION: str = Field(
+        default="0.1.0",
+        description=(
+            "Version of @unity/canvas-kit canvases are compiled against. Recorded "
+            "on each canvas so an existing one keeps rendering on the runtime it "
+            "was reviewed against rather than silently upgrading."
+        ),
+    )
+
+    TOOLCHAIN_ROOT: str = Field(
+        default="",
+        description=(
+            "Node workspace holding esbuild, typescript and the vendored kit "
+            "declarations. Empty means probe the standard image locations."
+        ),
+    )
+
+    BUNDLE_BUCKET: str = Field(
+        default="",
+        description=(
+            "Private bucket holding compiled canvas bundles. Bundles are never "
+            "publicly addressable: console fetches them server-side and verifies "
+            "the recorded sha256 before handing the bytes to the frame."
+        ),
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="UNITY_CANVAS_",
         case_sensitive=True,

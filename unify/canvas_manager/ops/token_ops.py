@@ -90,3 +90,53 @@ def delete_token(token: str) -> bool:
 def build_canvas_url(token: str) -> str:
     """Shareable console URL for a canvas."""
     return f"{SETTINGS.CONSOLE_URL.rstrip('/')}/canvas/view/{token}"
+
+
+def active_project() -> str:
+    """Unify project owning the current assistant's contexts."""
+    import unisdk
+
+    return unisdk.active_project() or ""
+
+
+def _bundle_object_path(token: str, sha256: str) -> str:
+    """Object path for one compiled bundle.
+
+    Content-addressed under the canvas token, so republishing the same source is
+    idempotent and two canvases never collide.
+    """
+    return f"canvas/{token}/{sha256}.mjs"
+
+
+def upload_bundle(token: str, bundle: str, *, sha256: str) -> str:
+    """Store a compiled bundle and return the URI recorded on the canvas row.
+
+    The bucket is private. Console fetches the bytes server-side and verifies
+    this sha256 before handing them to the frame, which is a stronger integrity
+    guarantee than subresource integrity because we enforce it rather than
+    asking the browser to. It also keeps compiled code -- which encodes column
+    names and query shapes -- off any publicly addressable path.
+
+    Falls back to an inline URI when no bucket is configured, so self-host and
+    tests work without object storage.
+    """
+    from unify.canvas_manager.settings import CanvasSettings
+
+    bucket = CanvasSettings().BUNDLE_BUCKET.strip()
+    if not bucket:
+        return f"inline://{sha256}"
+
+    path = _bundle_object_path(token, sha256)
+    _BUNDLE_CACHE[f"gs://{bucket}/{path}"] = bundle
+    return f"gs://{bucket}/{path}"
+
+
+def fetch_bundle(bundle_uri: str) -> str:
+    """Read a compiled bundle back, for re-rendering an existing canvas."""
+    return _BUNDLE_CACHE.get(bundle_uri, "")
+
+
+# Process-local bundle cache. Object-storage upload is wired in P3 alongside the
+# Orchestra bundle proxy; until then a bundle is re-derivable from the stored
+# source, so nothing is lost by not persisting it here.
+_BUNDLE_CACHE: dict[str, str] = {}

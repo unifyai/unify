@@ -145,15 +145,20 @@ def _run(command: List[str], cwd: Path, timeout: int = 120) -> Tuple[int, str]:
 def _toolchain_root() -> Optional[Path]:
     """Locate the node workspace holding esbuild, typescript and the kit.
 
-    The build runs inside the assistant image, which vendors the toolchain
-    alongside the runtime host so authoring needs no network and no separate
-    build service.
+    Configured via ``UNITY_CANVAS_TOOLCHAIN_ROOT``; the fallbacks are where the
+    assistant image installs it. The toolchain is vendored into the image rather
+    than fetched, so authoring needs no network and no separate build service.
     """
-    for candidate in (
+    from unify.canvas_manager.settings import CanvasSettings
+
+    configured = CanvasSettings().TOOLCHAIN_ROOT.strip()
+    candidates = [Path(configured)] if configured else []
+    candidates += [
         Path("/opt/canvas-toolchain"),
         Path.home() / ".unity" / "canvas-toolchain",
-        Path(__file__).resolve().parents[3] / "canvas-toolchain",
-    ):
+    ]
+
+    for candidate in candidates:
         if (candidate / "node_modules").is_dir():
             return candidate
     return None
