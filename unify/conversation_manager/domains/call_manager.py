@@ -62,12 +62,6 @@ _BASE_FORWARD_CHANNELS = [
 ]
 
 DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
-# Browser meets rarely activate through the persistent worker (its single
-# prewarmed slot is usually not dispatch-ready this soon after startup), so wait
-# only briefly for the dispatch before self-healing with a subprocess instead of
-# eating the full voice-path timeout of dead air. The subprocess is the proven
-# path for meets and its model-load overlaps the browser cold-start.
-MEET_DISPATCH_ACTIVATION_TIMEOUT_S = 5.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
 # before starting an assistant-initiated outbound call. Prewarm normally
 # completes in well under this; the cap exists so a wedged worker surfaces as a
@@ -1439,6 +1433,12 @@ class LivekitCallManager:
             "meet_url": meet_url,
             "meet_display_name": display_name,
             "agent_service_url": _POD_LOCAL_AGENT_SERVICE_URL,
+            # The backend actually in use, which the fast brain needs to pick an
+            # audio transport. Deliberately not called "meet_provider": these
+            # keys are exported as upper-cased env vars, so that name would
+            # overwrite the operator's own MEET_PROVIDER in this process -- and
+            # after a fallback it would pin every later join to the fallback.
+            "meet_backend": self.meet_provider.name,
         }
         if meet_opening_config:
             meet_extra["opening_config"] = meet_opening_config
@@ -1460,17 +1460,17 @@ class LivekitCallManager:
             await self._cleanup_meet(channel)
             return False
 
-        # Fast brain into the room using the same convention as voice calls:
-        # prefer the co-located prewarmed worker (no remote comms hop), fall back
-        # to a self-contained subprocess. Browser meets rarely activate through
-        # the worker (its single prewarmed slot is usually not dispatch-ready this
-        # soon after startup), so the dispatch runs under the short
-        # ``MEET_DISPATCH_ACTIVATION_TIMEOUT_S`` — the watchdog self-heals with a
-        # subprocess into the same live room after that brief window instead of
-        # the full voice-path timeout of dead air. The subprocess connects its own
-        # IPC client and always activates; its model-load cost overlaps the
-        # browser cold-start and LLM-guided join, so it is not on the critical
-        # path.
+        # Fast brain into the room on exactly the same terms as voice calls:
+        # prefer the co-located prewarmed worker, fall back to a self-contained
+        # subprocess only if it never activates.
+        #
+        # Meets used to cut the activation wait to five seconds, because a
+        # browser join was slow enough that a subprocess's model load hid inside
+        # it and the prewarmed slot was rarely ready that early. That trade is
+        # gone: audio arrives over LiveKit like every other channel, so there is
+        # no browser cold start to hide behind, and a five-second window is
+        # short enough that the worker activates *after* the fallback has been
+        # spawned -- putting two fast brains in one room, both replying.
         meet_metadata = dict(meet_extra)
         meet_env = dict(meet_extra)
         if meet_opening_config:
@@ -1490,7 +1490,6 @@ class LivekitCallManager:
                 meet_outbound,
                 extra_metadata=meet_metadata,
                 fallback_env=meet_env,
-                activation_timeout=MEET_DISPATCH_ACTIVATION_TIMEOUT_S,
             )
         if not dispatched:
             await self._start_call_subprocess(
