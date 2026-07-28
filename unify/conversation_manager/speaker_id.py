@@ -420,14 +420,24 @@ class AudioRingBuffer:
 # one. ``anonymous`` is the only source that is a placeholder ("Speaker N")
 # rather than a real name — consumers key off it instead of "no voice match".
 LABEL_SOURCE_VOICE_PIN = "voice_pin"
+# The meeting platform's own name for a participant, reported by the meeting
+# backend rather than read off the screen. Ranked above ``meet_roster`` because
+# it is the same kind of claim from a better source, and below ``voice_pin``
+# because an enrolled-voice match additionally resolves to a contact id, which a
+# display name does not.
+LABEL_SOURCE_RECALL_PARTICIPANT = "recall_participant"
 LABEL_SOURCE_MEET_ROSTER = "meet_roster"
 LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT = "google_meet_transcript"
+# No longer produced -- both came from scraping the meeting UI in a browser we
+# no longer run. Kept because historical transcript rows carry them and the
+# ordering below is what stops a lower source overwriting a higher one.
 LABEL_SOURCE_DOM_MEET_MAP = "dom_meet_map"
 LABEL_SOURCE_DOM_ACTIVE_SPEAKER = "dom_active_speaker"
 LABEL_SOURCE_ANONYMOUS = "anonymous"
 
 LABEL_SOURCE_PRECEDENCE = (
     LABEL_SOURCE_VOICE_PIN,
+    LABEL_SOURCE_RECALL_PARTICIPANT,
     LABEL_SOURCE_MEET_ROSTER,
     LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT,
     LABEL_SOURCE_DOM_MEET_MAP,

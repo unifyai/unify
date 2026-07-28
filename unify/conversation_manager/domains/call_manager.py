@@ -60,6 +60,13 @@ _BASE_FORWARD_CHANNELS = [
 ]
 
 DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
+
+# How often to ask the meeting backend for its view of the session. Only the
+# roster and a bot that never arrived depend on this cadence -- the fast brain
+# detects a normal end itself, without waiting for a poll -- so it is set for a
+# modest request rate against Recall rather than for latency. Started after
+# dispatch and the join, so it cannot delay the assistant reaching the room.
+MEET_STATE_POLL_INTERVAL_S = 10.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
 # before starting an assistant-initiated outbound call. Prewarm normally
 # completes in well under this; the cap exists so a wedged worker surfaces as a
@@ -174,6 +181,9 @@ class LivekitCallManager:
         # Lazily built by the ``meet_provider`` property and cached for the
         # session; see that property for why it is not rebuilt per join.
         self._meet_provider = None
+        # Polls the meeting backend for lifecycle + roster; see
+        # ``_watch_meet_state``.
+        self._meet_state_task: asyncio.Task | None = None
         self._meet_joining: bool = False
         self._meet_presenting: bool = False
         # True while the browser is admitted-pending: it has knocked on the
@@ -1050,6 +1060,15 @@ class LivekitCallManager:
             self._meet_provider = build_meet_provider(self)
         return self._meet_provider
 
+    @property
+    def meet_session_id(self) -> str:
+        """Backend session id for the active browser meeting.
+
+        Doubles as the call-utterance key for browser meets, so a transcript
+        row can be traced back to the exact bot that produced it.
+        """
+        return self._meet_session_id or ""
+
     def has_active_meet(self, channel: str | None = None) -> bool:
         """Whether a browser meeting is active.
 
@@ -1300,10 +1319,104 @@ class LivekitCallManager:
                 json.dumps({"type": "call_answered"}),
             )
 
+        # Started last, after dispatch and the join, so it can never delay the
+        # fast brain reaching the room or speaking.
+        self._meet_state_task = asyncio.create_task(self._watch_meet_state(channel))
+
         return True
+
+    async def _watch_meet_state(self, channel: str) -> None:
+        """Track the meeting backend's own view of the session.
+
+        The fast brain notices the meeting ending on its own (the bot's bridge
+        page drops out of the LiveKit room), but only once the bot has *been*
+        there. A bot that never arrives -- denied entry, a bad link, or nobody
+        ever joining -- would otherwise leave the session marked active forever,
+        refusing every later call with "session already active".
+
+        Polling covers that, and pays for itself twice over: the same response
+        carries the participant roster, which is the only source of
+        platform-attributed speaker names now that nothing scrapes a DOM.
+        """
+        while True:
+            await asyncio.sleep(MEET_STATE_POLL_INTERVAL_S)
+            session_id = self._meet_session_id
+            if not session_id or self._call_channel != channel:
+                return
+
+            state = await self.meet_provider.state(
+                channel=channel,
+                session_id=session_id,
+            )
+            if state is None:
+                # A failed poll is not evidence the meeting ended.
+                continue
+
+            self._meet_lobby_waiting = state.lobby
+            await self._push_meet_roster(state.participants)
+
+            if state.ended:
+                LOGGER.info(
+                    f"{ICONS['ipc']} [LivekitCallManager] {channel} ended per "
+                    f"backend (status={state.status}, "
+                    f"reason={state.failure_reason})",
+                )
+                if state.failure_reason:
+                    self.meet_join_failure_reason = state.failure_reason
+                await self._publish_meet_ended(channel)
+                return
+
+    async def _push_meet_roster(self, participants) -> None:
+        """Hand the current roster to the fast brain.
+
+        It runs in another process and has no Recall credentials, so the roster
+        can only reach it from here. Same transport as the org-call roster.
+        """
+        if not self._socket_server:
+            return
+        await self._socket_server.queue_for_clients(
+            "app:call:status",
+            json.dumps(
+                {
+                    "type": "meet_roster",
+                    "participants": [
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "email": p.email,
+                            "is_host": p.is_host,
+                        }
+                        for p in participants
+                    ],
+                },
+            ),
+        )
+
+    async def _publish_meet_ended(self, channel: str) -> None:
+        """Publish the channel's *Ended event so the normal teardown path runs.
+
+        Idempotent by way of ``has_active_meet``: the fast brain usually gets
+        there first via its own shutdown, and a second event would put the
+        session through cleanup twice.
+        """
+        if not self.has_active_meet(channel):
+            return
+        if self._event_broker is None:
+            return
+        contact = self._disconnect_contact or {}
+        event = (
+            GoogleMeetEnded(contact=contact)
+            if channel == "google_meet"
+            else TeamsMeetEnded(contact=contact)
+        )
+        await self._event_broker.publish(event.topic, event.to_json())
 
     async def _cleanup_meet(self, channel: str) -> None:
         """Leave the browser meeting and tear down the LiveKit room."""
+        if self._meet_state_task is not None:
+            self._meet_state_task.cancel()
+            self._meet_state_task = None
+
         session_id = self._meet_session_id
         room_name = self.room_name
         self._meet_session_id = None

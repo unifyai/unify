@@ -78,6 +78,7 @@ from unify.conversation_manager.medium_scripts.meet_floor import (
     FLOOR_TOPIC,
     MeetFloor,
 )
+from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
 from unify.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
     generate_screenshot_path,
@@ -102,9 +103,9 @@ _log = FastBrainLogger()
 # Channels where many people share one audio stream with no single primary, so
 # every distinct voice needs its own "Speaker N" label even when nobody on the
 # call is enrolled. Deliberately wider than the ("google_meet", "teams_meet")
-# checks elsewhere in this module: those mean *browser* meets specifically —
-# DOM scraping and the PortAudio bridge — whereas Unify Meet is LiveKit-native
-# but just as multi-party.
+# checks elsewhere in this module: those mean a meeting on someone else's
+# platform, reached through a hosted bot, whereas Unify Meet is our own room —
+# but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
 
 DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
@@ -1417,7 +1418,7 @@ async def entrypoint(ctx: agents.JobContext):
     # Speaker identity uses two complementary signals:
     # 1. Deepgram diarization (enable_diarization=True) for precise per-utterance
     #    anonymous speaker IDs (S0, S1, ...).
-    # 2. DOM scraping (activeSpeaker) via _meet_poll_loop for display names.
+    # 2. The meeting platform's own roster and speech events, relayed in.
     # The correlation mapping table (_meet_speaker_map) links the two.
     _meet_auth_key = SESSION_DETAILS.unify_key
     _meet_cached_active_speaker: str | None = None
@@ -1427,13 +1428,6 @@ async def entrypoint(ctx: agents.JobContext):
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
     _meet_speaker_map: dict[str, dict[str, int]] = {}
-    # Alone-detection state (browser meets). "Alone" = no other participants
-    # (assistant is the only one). Debounced over consecutive polls; guarded so
-    # a solo start (assistant in before any human) never fires immediately.
-    _MEET_ALONE_DEBOUNCE_POLLS = 3
-    _meet_seen_human: bool = False
-    _meet_alone_streak: int = 0
-    _meet_alone_notified: bool = False
     if channel in ("google_meet", "teams_meet"):
         if meta:
             _meet_display_name = meta.get("meet_display_name", "")
@@ -1694,8 +1688,9 @@ async def entrypoint(ctx: agents.JobContext):
         as ``LABEL_SOURCE_PRECEDENCE``:
         1. Voice-embedding pin against enrolled contact profiles (all channels).
         2. LiveKit identity → org-call roster (Unify Meet multi-party).
-        3. Diarization speaker_id → DOM correlation mapping (browser meets).
-        4. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
+        3. Diarization speaker_id → name correlation mapping (browser meets).
+        4. Platform-reported active speaker (browser meets, relayed in near
+           real time from participant speech events).
         5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
            name from 1-4 always outranks this placeholder, so it is evaluated
            last even though it comes from the same tracker resolution as 1.
@@ -1706,7 +1701,7 @@ async def entrypoint(ctx: agents.JobContext):
         # Resolve once, then consume in documented-authority order
         # (``speaker_id.LABEL_SOURCE_PRECEDENCE``): the embedding pin is returned
         # immediately, but the anonymous "Speaker N" fallback is held to the very
-        # end so a real roster/DOM name always wins over a placeholder ordinal.
+        # end so a real roster or platform name always wins over a placeholder.
         resolution = (
             speaker_tracker.resolve(sid)
             if sid and speaker_tracker is not None
@@ -1749,9 +1744,10 @@ async def entrypoint(ctx: agents.JobContext):
                             speaker_id.LABEL_SOURCE_MEET_ROSTER,
                         )
 
-        # 3-4. Browser-meet DOM name resolution.
+        # 3-4. Browser-meet name resolution, from the meeting platform's own
+        # participant events rather than anything read off a screen.
         if channel in ("google_meet", "teams_meet"):
-            # 3. Diarization speaker_id → DOM-correlated display name.
+            # 3. Diarization speaker_id → correlated display name.
             if sid and sid in _meet_speaker_map:
                 votes = _meet_speaker_map[sid]
                 if votes:
@@ -1768,7 +1764,7 @@ async def entrypoint(ctx: agents.JobContext):
                                 sid,
                                 False,
                                 engaged,
-                                speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                                speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                             )
                         return (
                             contact,
@@ -1776,10 +1772,10 @@ async def entrypoint(ctx: agents.JobContext):
                             sid,
                             False,
                             engaged,
-                            speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
+                            speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                         )
 
-            # 4. DOM active speaker.
+            # 4. Whoever the platform says is speaking right now.
             active_name = _meet_cached_active_speaker
             if active_name:
                 resolved = _resolve_contact_by_name(active_name)
@@ -1791,7 +1787,7 @@ async def entrypoint(ctx: agents.JobContext):
                         sid,
                         False,
                         engaged,
-                        speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                        speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                     )
                 return (
                     contact,
@@ -1799,7 +1795,7 @@ async def entrypoint(ctx: agents.JobContext):
                     sid,
                     False,
                     engaged,
-                    speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                    speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                 )
 
         # 5. Anonymous "Speaker N" from the voice tracker (lowest authority, all
@@ -1820,7 +1816,7 @@ async def entrypoint(ctx: agents.JobContext):
     def _background_label_for(sid: str | None) -> tuple[str | None, str | None]:
         """Best display label for a background (non-engaged) voice.
 
-        Prefers a pinned contact name, then a confidently DOM-correlated meet
+        Prefers a pinned contact name, then a confidently correlated meet
         display name, then the tracker's session-scoped anonymous label. Returns
         ``(label, label_source)`` where ``label_source`` is a
         ``speaker_id.LABEL_SOURCE_*`` tag (None when no label resolved).
@@ -1841,7 +1837,7 @@ async def entrypoint(ctx: agents.JobContext):
             if votes:
                 top_name = max(votes, key=votes.get)
                 if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
-                    return top_name, speaker_id.LABEL_SOURCE_DOM_MEET_MAP
+                    return top_name, speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT
         if resolution.label:
             return resolution.label, speaker_id.LABEL_SOURCE_ANONYMOUS
         return None, None
@@ -1858,13 +1854,30 @@ async def entrypoint(ctx: agents.JobContext):
     if channel == "teams_meet":
         _ParticipantJoinedEvent = TeamsMeetParticipantJoined
         _ParticipantLeftEvent = TeamsMeetParticipantLeft
-        _AloneEvent = TeamsMeetAlone
         _participant_topic = "app:comms:teamsmeet_participant"
     else:
         _ParticipantJoinedEvent = GoogleMeetParticipantJoined
         _ParticipantLeftEvent = GoogleMeetParticipantLeft
-        _AloneEvent = GoogleMeetAlone
         _participant_topic = "app:comms:googlemeet_participant"
+
+    def _publish_meet_roster_changes() -> None:
+        """Emit join/leave for the difference since the last roster push."""
+        nonlocal _meet_prev_participant_names
+        current = {p["name"] for p in _meet_cached_participants if p.get("name")}
+        joined = current - _meet_prev_participant_names
+        left = _meet_prev_participant_names - current
+        _meet_prev_participant_names = current
+
+        for name, event_cls in (
+            *((n, _ParticipantJoinedEvent) for n in joined),
+            *((n, _ParticipantLeftEvent) for n in left),
+        ):
+            if name == _meet_display_name:
+                continue
+            evt = event_cls(contact=contact, participant_name=name)
+            asyncio.create_task(
+                event_broker.publish(_participant_topic, evt.to_json()),
+            )
 
     # How long the bridge may be absent before the meeting is treated as over.
     # It has to outlast a LiveKit reconnect: the page retries, and shutting down
@@ -2396,7 +2409,7 @@ async def entrypoint(ctx: agents.JobContext):
             maybe_speak_queued()
         _check_quiescence_transition()
 
-    # -- Diarization: last-speaker tracking + DOM correlation (meets) --
+    # -- Diarization: last-speaker tracking + name correlation (meets) --
     # The speaker tracker itself is fed from the STT filter (which sees every
     # final, including gated background speech); this handler only sees
     # forwarded finals, so it tracks the current *turn's* speaker.
@@ -2407,8 +2420,8 @@ async def entrypoint(ctx: agents.JobContext):
             return
         _meet_last_speaker_id = ev.speaker_id
         if channel in ("google_meet", "teams_meet"):
-            dom_speaker = _meet_cached_active_speaker
-            if dom_speaker and dom_speaker != _meet_display_name:
+            speaking_name = _meet_cached_active_speaker
+            if speaking_name and speaking_name != _meet_display_name:
                 bucket = _meet_speaker_map.setdefault(ev.speaker_id, {})
                 bucket[dom_speaker] = bucket.get(dom_speaker, 0) + 1
 
@@ -2764,6 +2777,37 @@ async def entrypoint(ctx: agents.JobContext):
             if assistant.meet_floor is not None:
                 assistant.meet_floor.handle_message(bytes(packet.data))
 
+    if channel in ("google_meet", "teams_meet"):
+        # The relay republishes the meeting platform's participant events into
+        # this room. speech_on/speech_off is the only one that needs to arrive
+        # faster than the CM's roster poll: it names whoever is talking *right
+        # now*, which is what pins a diarized voice to a person.
+        @ctx.room.on("data_received")
+        def _on_recall_event(packet) -> None:
+            nonlocal _meet_cached_active_speaker
+            if getattr(packet, "topic", "") != RECALL_EVENT_TOPIC:
+                return
+            try:
+                message = json.loads(bytes(packet.data).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return
+            if not isinstance(message, dict):
+                return
+
+            event_name = message.get("event") or ""
+            participant = (message.get("data") or {}).get("participant") or {}
+            name = str(participant.get("name") or "").strip()
+            if not name or name == _meet_display_name:
+                return
+
+            if event_name == "participant_events.speech_on":
+                _meet_cached_active_speaker = name
+            elif event_name == "participant_events.speech_off":
+                # Only clear if this speaker is still the one on record, or a
+                # trailing speech_off would blank whoever started next.
+                if _meet_cached_active_speaker == name:
+                    _meet_cached_active_speaker = None
+
     # The opener hold applies whenever an ``opener`` opening config is present,
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
     # permission-callback call), where ``outbound`` is False.
@@ -2907,6 +2951,18 @@ async def entrypoint(ctx: agents.JobContext):
                 _log.info("Hang-up gate disarmed")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
+        elif event_type == "meet_roster":
+            # Browser-meet roster, pushed by the CM because only it holds the
+            # backend credentials. Publishes join/leave so the brain knows who
+            # is in the room, and feeds _get_meet_participant_names, which is
+            # what turns a diarized voice into a person's name.
+            incoming = data.get("participants") or []
+            if isinstance(incoming, list):
+                _meet_cached_participants.clear()
+                _meet_cached_participants.extend(
+                    [p for p in incoming if isinstance(p, dict)],
+                )
+                _publish_meet_roster_changes()
         elif event_type == "unify_meet_roster":
             incoming = data.get("participants") or []
             if speaker_tracker is not None:
