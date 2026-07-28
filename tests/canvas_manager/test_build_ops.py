@@ -7,7 +7,14 @@ wrong in the other. Each case below is a way that has previously been possible
 to get colour or an unresolvable import past a naive check.
 """
 
-from unify.canvas_manager.ops.build_ops import ALLOWED_IMPORTS, lint_source
+import pytest
+
+from unify.canvas_manager.ops.build_ops import (
+    ALLOWED_IMPORTS,
+    build_canvas,
+    lint_source,
+    toolchain_available,
+)
 
 CLEAN = (
     'import * as React from "react";\n'
@@ -105,3 +112,34 @@ class TestDiagnostics:
             "const a = '#fff';\nconst b = 'rgb(0,0,0)';\nimport x from \"lodash\";\n"
         )
         assert len(lint_source(source)) == 3
+
+
+@pytest.mark.skipif(
+    not toolchain_available(),
+    reason="needs the vendored canvas build toolchain",
+)
+class TestBundleCeiling:
+    """The compiled bundle is stored on the canvas row, so its size is bounded."""
+
+    def test_an_inlined_dataset_is_rejected(self):
+        # Lints and typechecks cleanly; only the ceiling stands between this and
+        # a canvas row holding most of a megabyte. Inlining is also the wrong
+        # shape -- the data would be frozen at author time rather than live.
+        filler = ",".join(f'{{ label: "row {n}", value: {n} }}' for n in range(20_000))
+        source = (
+            "import * as React from 'react';\n"
+            "import { Canvas, Text } from '@unity/canvas-kit';\n"
+            f"const rows = [{filler}];\n"
+            "export default function View() {\n"
+            "  return <Canvas><Text>{rows.length}</Text></Canvas>;\n"
+            "}\n"
+        )
+
+        report, code = build_canvas(source)
+
+        assert not report.ok
+        assert report.failed_stage == "bundle"
+        # Nothing is returned to store, and the message points at the fix rather
+        # than just stating the limit.
+        assert code == ""
+        assert any("binding" in problem for problem in report.diagnostics)

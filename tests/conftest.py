@@ -638,6 +638,8 @@ def pytest_unconfigure(config):
         os.environ.pop("HF_HOME", None)
     if _speaker_model_set_by_us:
         os.environ.pop("UNIFY_SPEAKER_MODEL_PATH", None)
+    if _playwright_path_set_by_us:
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -664,6 +666,7 @@ _session_costs: list[tuple[str, float]] = []
 _original_home: str | None = None
 _hf_home_set_by_us: bool = False
 _speaker_model_set_by_us: bool = False
+_playwright_path_set_by_us: bool = False
 
 
 def pytest_configure(config):
@@ -721,6 +724,16 @@ def pytest_configure(config):
         if len(cached_models) == 1:
             os.environ["UNIFY_SPEAKER_MODEL_PATH"] = cached_models[0]
             _speaker_model_set_by_us = True
+
+    # Same problem again, for playwright's browser cache under
+    # ~/.cache/ms-playwright.  Without this the canvas render gate finds no
+    # chromium and every test that exercises it skips rather than runs.
+    global _playwright_path_set_by_us
+    if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and _original_home:
+        original_browsers = os.path.join(_original_home, ".cache", "ms-playwright")
+        if os.path.isdir(original_browsers):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = original_browsers
+            _playwright_path_set_by_us = True
 
     config.addinivalue_line(
         "markers",
