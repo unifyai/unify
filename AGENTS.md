@@ -6,6 +6,7 @@
     Edit the sources instead:
       .agents/repo.md              this repo's overview and always-on guidance
       .agents/rules/*.md           this repo's own rules
+      .agents/shared.txt           which shared rules this repo includes
       .agents/global-rules/rules/  rules shared across all unifyai repos
                                    (submodule: unifyai/global-agent-rules)
 -->
@@ -1264,6 +1265,46 @@ The alternative workflow creates significant noise:
 ## Exception
 If the user **explicitly asks** for a feature branch or PR workflow, follow their instructions. But **never default to this behavior** in worktree mode.
 
+# Git History for Context
+
+## Context
+This rule applies when you are trying to understand the *rationale* behind specific code blocks, the evolution of a module, or when deciding whether "weird" looking code is essential or legacy technical debt.
+
+## Rules
+
+### 1. Strategic Git Usage
+- **Use as a Second Level of Analysis**: If the code's purpose isn't clear from the current state alone (static analysis), use `git blame` or `git log` to uncover the "why".
+- **Not a Mandate**: Do not check git history for every file you touch. This creates noise. Use it selectively when you lack context.
+
+### 2. Understanding Code Evolution
+- **Identify Legacy Code**: If you suspect code is redundant or outdated, check its commit date and message. If it was added months ago for a feature that is no longer relevant, this confirms it can likely be purged.
+- **Find the "Why"**: Expressive commit messages often contain the reasoning that comments lack. Use them to understand the author's original intent before refactoring or deleting complex logic.
+
+### 3. Targeted Queries
+- **Be Surgical**: When querying git, look for the history of specific lines or changes (e.g., `git blame -L n,m filename` or `git log -p filename`) rather than dumping the entire history into the context.
+- **Synthesize**: Use the information to form a narrative about the code's lifecycle (e.g., "This was added in commit X to fix bug Y, but since we rewrote the bug Y subsystem, this is now dead code").
+
+### 4. Investigating Regressions with Git Diff
+
+When debugging test failures or regressions, git history can pinpoint exactly what changed.
+
+**When the user proactively provides context:**
+If the user says something like "the test was passing at commit `<hash>`, and the relevant changes are in `<path>`", use this optimally:
+- Run `git log --oneline <hash>..HEAD -- <path>` to see which commits touched the area
+- Run `git diff <hash>..HEAD -- <path>` to get the **aggregate diff** (not serial diffs commit-by-commit)
+- Cross-reference the diff with commit messages to understand developer intent
+- The overall diff is mathematically equivalent to composing serial diffs, but far more token-efficient and cognitively cleaner
+
+**When debugging hits a roadblock:**
+If direct code analysis and debug logging (`CURSOR_DEBUG_LOG`) aren't yielding answers, *then* ask the user:
+- "Do you know when this test was last passing? If you have a commit hash and know which files/folders are likely involved, that would help narrow down what changed."
+- Don't front-load this question—often the user doesn't know the answer. Try direct debugging first.
+
+**Avoid wasteful patterns:**
+- Don't ask the user to provide diffs—ask for the commit hash and run git commands yourself
+- Don't read diffs commit-by-commit and mentally compose them; use the aggregate diff
+- Don't dump entire file histories; scope queries to the relevant path(s)
+
 # Python Formatting & Pre-commit
 
 Every first-party Python repo (`orchestra`, `unify`, `unisdk`, `unillm`,
@@ -1367,6 +1408,46 @@ formatting is checked is CI — which then burns agent turns on mundane
 reformats. Pinning Black's target and CI Python to 3.12 removes the
 "works on my Mac, fails in Actions" class of failures.
 
+This rule standardizes how we add temporary debug logging during failing tests and how we clean it up afterwards. ALWAYS use this process in agent sessions WHENEVER A TEST FAILS. This is the ONLY permitted way to address failing tests.
+
+1) Always start with hardcoded, unconditional debug logs
+- Add logs immediately, without flags or guards. Do not gate behind environment variables or configuration.
+- Use **only** the `CURSOR_DEBUG_LOG` function. No other logging method is permitted.
+- **Finding the function**: Search for it with `rg "CURSOR_DEBUG_LOG"` to locate the utility in your project, then import and use it.
+  - **Python**: `from <module> import CURSOR_DEBUG_LOG` then `CURSOR_DEBUG_LOG("message", variable)`
+  - **JavaScript/TypeScript**: `import { CURSOR_DEBUG_LOG } from "<module>"` then `CURSOR_DEBUG_LOG("message", { variable })`
+- Behavior: Prints an entry to stderr/stdout, making it easy to correlate with test runs.
+
+2) Python-specific import discipline
+- **Self-contained imports**: Each debug snippet must include ALL its own imports inline (e.g., `import json as _json; import os as _os;`). Never rely on the file's existing imports.
+- **Prefixed names**: Use underscore-prefixed aliases (`_json`, `_os`, `_pid`) to avoid shadowing.
+- **Region markers**: Wrap in `# #region agent log` / `# #endregion` for easy identification and removal.
+- This prevents `NameError` crashes when debug snippets reference modules that aren't imported at that location.
+
+3) Investigation workflow
+- Step A: Add targeted debug calls around suspected code paths.
+- Step B: Re-run the failing test(s) and inspect the new logs.
+- Step C: If you are not 100% certain of the root cause, add more debug entries and repeat.
+- Step D: Only when you are 100% confident of the cause, implement a direct fix (with or without keeping some logs briefly for confirmation).
+- Step E: The user may repeatedly re-run tests and paste logs; continue iterating until the issue is definitively fixed.
+
+4) Cleanup policy
+- After the fix is confirmed, remove all temporary logging.
+- Grep to find every occurrence:
+  - ripgrep: `rg -n "CURSOR_DEBUG_LOG" -S`
+  - grep:    `grep -Rin "CURSOR_DEBUG_LOG" .`
+- Delete each call site (and any now-unused imports) before finalizing the fix.
+
+5) Alignment with workspace rules
+- No fast paths or heuristics: Logging should not add conditional shortcuts; it merely reports state unconditionally.
+- No exception-handling shields: Do not add defensive exception handling (try/catch, try/except) around the logs. Keep failures visible.
+- No test details in production prompts: Temporary logs must not leak test-specific information into production prompts or docstrings.
+- Rapid evolution: This logging is temporary by design; remove it once the issue is resolved—do not preserve backward compatibility.
+
+6) Intent and scope
+- This logging exists solely for interactive debugging in agent sessions.
+- The function name `CURSOR_DEBUG_LOG` is intentionally unique and grep-friendly to ensure quick cleanup on request.
+
 # Full Local Stack First
 
 This is internal agent/developer guidance. It intentionally differs from the
@@ -1424,6 +1505,89 @@ Prefer the durable full stack above. When isolated Orchestra is required
 - `local.sh stop` ends with `pkill -9 -f -- "-m orchestra"`, which kills the
   **shared** instance for every agent on the machine. Do not stop/restart
   Orchestra from one agent session while another’s tests are using it.
+
+# Local Stack Logs: Where To Look First
+
+When the user says something like *"we just did a local deployment and X happened,
+check the logs to investigate"*, the logs almost always already exist on disk. Do
+**not** re-explore the filesystem from scratch — go straight to the locations below.
+
+## 1. Central source of truth: `$UNIFY_REPO_PATH/logs/`
+
+Default `~/unify/logs/`. Stack scripts may still export the legacy alias
+`UNITY_REPO_PATH`; both refer to the same checkout. A local deployment aggregates
+**every** repo's logs here — including Orchestra, which runs as a separate process.
+The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
+`*_LOG_DIR`); confirm the live values with `stack.sh status`.
+
+| Dir | Env var | Contents |
+|---|---|---|
+| `logs/unillm/` | `UNILLM_LOG_DIR` | Raw LLM request/response, one `.txt` per call — system/user prompts, tool args, `reasoning_content`, model. This is **"what the model actually produced"**. |
+| `logs/unisdk/` | `UNISDK_LOG_DIR` | UniSDK ↔ Orchestra HTTP traces (JSON per request). |
+| `logs/orchestra/` | `ORCHESTRA_LOG_DIR` | Orchestra server-side per-request traces. |
+| `logs/unify/` | `UNITY_LOG_DIR` | Unify runtime file logs (env var name is legacy). |
+| `logs/all/` | `*_OTEL_LOG_DIR` | **Combined cross-repo OTel traces** — one `{trace_id}.jsonl` per request, with unify + unisdk + unillm (+ orchestra) spans stacked together. Use this for the end-to-end story of a single request. |
+| `logs/pytest/`, `logs/ci/` | — | Test runs / downloaded-CI logs. |
+
+Deep reference (formats, env vars, examples): `<unify>/logs/README.md` (also present
+in `unisdk/logs/README.md` and `unillm/logs/README.md`).
+
+## 2. CRITICAL: these dirs are gitignored AND cursorignored
+
+`unify/.gitignore` has `logs/*`; `unify/.cursorignore` has `logs/` and `logs/**`.
+Consequence — this is the usual reason an agent "can't find the logs":
+
+- The built-in **Read / Grep / Glob tools return nothing**, "permission denied", or
+  "filtered out by .cursorignore" for anything under `logs/`.
+- Plain `rg` / `grep` also **skip** these dirs (they respect `.gitignore`).
+
+Always inspect log dirs via the **Shell tool with ignore-bypass**, and read
+individual files through the shell (not the Read tool):
+
+```bash
+rg -uu -n "pattern" ~/unify/logs/unillm   # -uu = --no-ignore --hidden
+rg -uu -n . ~/unify/logs/all/<trace_id>.jsonl
+```
+
+## 3. Operational logs that live OUTSIDE the `logs/` tree
+
+- `~/.unity/service.log` — the self-host **stack supervisor**: startup, Orchestra
+  boot, gateway restarts, and the CM's own log path. Location is printed by
+  `stack.sh status`. (Note: may contain a one-off DB dump near a reset.)
+- `/tmp/unity-local.log` — the **ConversationManager event "story"**: notifications,
+  guide/speak decisions, tool calls — the human-readable narrative of a live
+  conversation. Best first read for "what happened in this chat/call".
+- `~/.unity/comms-bridge.log` — inbound email / SMS / WhatsApp polling.
+- `~/.unity/call-tunnel.log` — cloudflared tunnel used for local phone/WhatsApp
+  call webhooks. LiveKit media itself is in LiveKit Cloud for source-stack runs.
+
+## 4. Ground truth that is NOT a file: Orchestra `Transcripts` context
+
+What was actually **spoken / sent / received** on calls and channels lives in
+Orchestra's Postgres, not in a file log. When a file log shows the *intended* text
+but you need the *downstream reality* (e.g. the TTS rendering vs. the LLM text),
+query the `Transcripts` context (and `Contacts`, `Tasks`, …) via the UniSDK logs API
+or Console:
+
+```bash
+curl -s --get "http://127.0.0.1:8000/v0/logs" \
+  --data-urlencode "project_name=Assistants" \
+  --data-urlencode "context=<userId>/<assistantId>/Transcripts" \
+  --data-urlencode "limit=200" \
+  -H "Authorization: Bearer $KEY"
+```
+
+Local keys: the coordinator/owner API key is in `~/.unity/coordinator-runtime.json`;
+`userId` is in `~/.unity/self-host-owner.json`. `unify_meet` rows are call
+utterances (`sender_id` identifies the speaker).
+
+## Quick start
+
+1. `bash ~/unify-deploy/selfhost/stack.sh status` — running services + log paths.
+2. `rg -uu` into `~/unify/logs/{all,unillm,unisdk,orchestra,unify}` for the request.
+3. For one end-to-end request, open the matching `logs/all/{trace_id}.jsonl`.
+4. For the conversation narrative, read `/tmp/unity-local.log`.
+5. For what was truly spoken/received, query the Orchestra `Transcripts` context.
 
 # Shared agent conversation archive
 
@@ -1687,156 +1851,6 @@ When something infra-related "doesn't exist" or 404s/401s, suspect a legacy reso
 and confirm the real resource name against the `unify-deploy` README (or `gcloud`/`gh`) rather
 than trusting the code constant.
 
-# Fleet audit auth (AssistantJobs)
-
-Platform fleet audit (`AssistantJobs` / `startup_events` / Console liveview
-discovery) is authenticated as Orchestra **`__system__`** via
-`ORCHESTRA_ADMIN_KEY` against a **`Project.is_system`** project.
-
-## Hard rules
-
-- **Never** create or reuse a Workspace/Console `User` (e.g. `shared@unify.ai`,
-  personal engineer accounts) as the principal for fleet/infra audit auth.
-  `ApiKey.user_id` CASCADE-deletes with the user — a rational account purge
-  will silently break desktop connect / liveview.
-- **Never** mount `ORCHESTRA_ADMIN_KEY` on Unity assistant Job pods. Pods write
-  through ownership-scoped `/infra/assistant-jobs/*` with their own `UNIFY_KEY`.
-- **Never** reintroduce `SHARED_UNIFY_KEY` for AssistantJobs. That secret is
-  retired; scripts and Console hosted reads use `ORCHESTRA_ADMIN_KEY`.
-
-## When purging staging/prod accounts
-
-- Delete unused human users freely.
-- Do **not** delete or rotate keys that look “shared” without checking whether
-  they back a system project (they must not — if they do, migrate to
-  `__system__` first).
-- Prefer verifying AssistantJobs with
-  `deploy/scripts/dev/verify_assistant_jobs_system.py` after Orchestra or
-  secret changes.
-
-# Git History for Context
-
-## Context
-This rule applies when you are trying to understand the *rationale* behind specific code blocks, the evolution of a module, or when deciding whether "weird" looking code is essential or legacy technical debt.
-
-## Rules
-
-### 1. Strategic Git Usage
-- **Use as a Second Level of Analysis**: If the code's purpose isn't clear from the current state alone (static analysis), use `git blame` or `git log` to uncover the "why".
-- **Not a Mandate**: Do not check git history for every file you touch. This creates noise. Use it selectively when you lack context.
-
-### 2. Understanding Code Evolution
-- **Identify Legacy Code**: If you suspect code is redundant or outdated, check its commit date and message. If it was added months ago for a feature that is no longer relevant, this confirms it can likely be purged.
-- **Find the "Why"**: Expressive commit messages often contain the reasoning that comments lack. Use them to understand the author's original intent before refactoring or deleting complex logic.
-
-### 3. Targeted Queries
-- **Be Surgical**: When querying git, look for the history of specific lines or changes (e.g., `git blame -L n,m filename` or `git log -p filename`) rather than dumping the entire history into the context.
-- **Synthesize**: Use the information to form a narrative about the code's lifecycle (e.g., "This was added in commit X to fix bug Y, but since we rewrote the bug Y subsystem, this is now dead code").
-
-### 4. Investigating Regressions with Git Diff
-
-When debugging test failures or regressions, git history can pinpoint exactly what changed.
-
-**When the user proactively provides context:**
-If the user says something like "the test was passing at commit `<hash>`, and the relevant changes are in `<path>`", use this optimally:
-- Run `git log --oneline <hash>..HEAD -- <path>` to see which commits touched the area
-- Run `git diff <hash>..HEAD -- <path>` to get the **aggregate diff** (not serial diffs commit-by-commit)
-- Cross-reference the diff with commit messages to understand developer intent
-- The overall diff is mathematically equivalent to composing serial diffs, but far more token-efficient and cognitively cleaner
-
-**When debugging hits a roadblock:**
-If direct code analysis and debug logging (`CURSOR_DEBUG_LOG`) aren't yielding answers, *then* ask the user:
-- "Do you know when this test was last passing? If you have a commit hash and know which files/folders are likely involved, that would help narrow down what changed."
-- Don't front-load this question—often the user doesn't know the answer. Try direct debugging first.
-
-**Avoid wasteful patterns:**
-- Don't ask the user to provide diffs—ask for the commit hash and run git commands yourself
-- Don't read diffs commit-by-commit and mentally compose them; use the aggregate diff
-- Don't dump entire file histories; scope queries to the relevant path(s)
-
-# Local Stack Logs: Where To Look First
-
-When the user says something like *"we just did a local deployment and X happened,
-check the logs to investigate"*, the logs almost always already exist on disk. Do
-**not** re-explore the filesystem from scratch — go straight to the locations below.
-
-## 1. Central source of truth: `$UNIFY_REPO_PATH/logs/`
-
-Default `~/unify/logs/`. Stack scripts may still export the legacy alias
-`UNITY_REPO_PATH`; both refer to the same checkout. A local deployment aggregates
-**every** repo's logs here — including Orchestra, which runs as a separate process.
-The exact paths are set in `unify-deploy/selfhost/self_host_env.sh` (search
-`*_LOG_DIR`); confirm the live values with `stack.sh status`.
-
-| Dir | Env var | Contents |
-|---|---|---|
-| `logs/unillm/` | `UNILLM_LOG_DIR` | Raw LLM request/response, one `.txt` per call — system/user prompts, tool args, `reasoning_content`, model. This is **"what the model actually produced"**. |
-| `logs/unisdk/` | `UNISDK_LOG_DIR` | UniSDK ↔ Orchestra HTTP traces (JSON per request). |
-| `logs/orchestra/` | `ORCHESTRA_LOG_DIR` | Orchestra server-side per-request traces. |
-| `logs/unify/` | `UNITY_LOG_DIR` | Unify runtime file logs (env var name is legacy). |
-| `logs/all/` | `*_OTEL_LOG_DIR` | **Combined cross-repo OTel traces** — one `{trace_id}.jsonl` per request, with unify + unisdk + unillm (+ orchestra) spans stacked together. Use this for the end-to-end story of a single request. |
-| `logs/pytest/`, `logs/ci/` | — | Test runs / downloaded-CI logs. |
-
-Deep reference (formats, env vars, examples): `<unify>/logs/README.md` (also present
-in `unisdk/logs/README.md` and `unillm/logs/README.md`).
-
-## 2. CRITICAL: these dirs are gitignored AND cursorignored
-
-`unify/.gitignore` has `logs/*`; `unify/.cursorignore` has `logs/` and `logs/**`.
-Consequence — this is the usual reason an agent "can't find the logs":
-
-- The built-in **Read / Grep / Glob tools return nothing**, "permission denied", or
-  "filtered out by .cursorignore" for anything under `logs/`.
-- Plain `rg` / `grep` also **skip** these dirs (they respect `.gitignore`).
-
-Always inspect log dirs via the **Shell tool with ignore-bypass**, and read
-individual files through the shell (not the Read tool):
-
-```bash
-rg -uu -n "pattern" ~/unify/logs/unillm   # -uu = --no-ignore --hidden
-rg -uu -n . ~/unify/logs/all/<trace_id>.jsonl
-```
-
-## 3. Operational logs that live OUTSIDE the `logs/` tree
-
-- `~/.unity/service.log` — the self-host **stack supervisor**: startup, Orchestra
-  boot, gateway restarts, and the CM's own log path. Location is printed by
-  `stack.sh status`. (Note: may contain a one-off DB dump near a reset.)
-- `/tmp/unity-local.log` — the **ConversationManager event "story"**: notifications,
-  guide/speak decisions, tool calls — the human-readable narrative of a live
-  conversation. Best first read for "what happened in this chat/call".
-- `~/.unity/comms-bridge.log` — inbound email / SMS / WhatsApp polling.
-- `~/.unity/call-tunnel.log` — cloudflared tunnel used for local phone/WhatsApp
-  call webhooks. LiveKit media itself is in LiveKit Cloud for source-stack runs.
-
-## 4. Ground truth that is NOT a file: Orchestra `Transcripts` context
-
-What was actually **spoken / sent / received** on calls and channels lives in
-Orchestra's Postgres, not in a file log. When a file log shows the *intended* text
-but you need the *downstream reality* (e.g. the TTS rendering vs. the LLM text),
-query the `Transcripts` context (and `Contacts`, `Tasks`, …) via the UniSDK logs API
-or Console:
-
-```bash
-curl -s --get "http://127.0.0.1:8000/v0/logs" \
-  --data-urlencode "project_name=Assistants" \
-  --data-urlencode "context=<userId>/<assistantId>/Transcripts" \
-  --data-urlencode "limit=200" \
-  -H "Authorization: Bearer $KEY"
-```
-
-Local keys: the coordinator/owner API key is in `~/.unity/coordinator-runtime.json`;
-`userId` is in `~/.unity/self-host-owner.json`. `unify_meet` rows are call
-utterances (`sender_id` identifies the speaker).
-
-## Quick start
-
-1. `bash ~/unify-deploy/selfhost/stack.sh status` — running services + log paths.
-2. `rg -uu` into `~/unify/logs/{all,unillm,unisdk,orchestra,unify}` for the request.
-3. For one end-to-end request, open the matching `logs/all/{trace_id}.jsonl`.
-4. For the conversation narrative, read `/tmp/unity-local.log`.
-5. For what was truly spoken/received, query the Orchestra `Transcripts` context.
-
 # Orchestra Admin vs User API Access
 
 Orchestra (`api.unify.ai/v0` prod, `api.staging.internal.saas.unify.ai/v0` staging) has **two distinct auth paths** (`orchestra/web/api/dependencies.py`). Confusing them wastes hours.
@@ -1867,46 +1881,6 @@ Use the admin API to fetch the target's **own** API key, then use that key on th
    ```
 
 A cross-tenant migration = loop assistants from `/admin/assistant`, then operate per-assistant with each key (no superuser data key exists). `gcloud` Cloud SQL (`prod-ssd`, `saas-368716`) is the direct-DB fallback for bulk passes.
-
-# OAuth Scopes: Mirrored Between Communication and Orchestra
-
-## Context
-OAuth scope catalogs (Google and Microsoft provider scopes, feature bundles, and the `build_scope_string` resolver) are intentionally duplicated in two places:
-
-- **Communication**: `common/scopes.py`
-- **Orchestra**: `web/api/assistant/scopes.py`
-
-Both services need this data at runtime (Communication when initiating OAuth flows and talking to providers; Orchestra when storing assistant scope grants and serving them to Console). Because the contents are small, static, and change rarely, we deliberately avoid adding a cross-service HTTP round-trip and instead keep two copies in sync.
-
-## Critical Rules
-
-### 1. Any Scope Change Must Be Mirrored
-When modifying **any** of the following in either repo, the identical change MUST be made in the sibling file in the other repo in the same changeset:
-
-- `GOOGLE_SCOPE_BUNDLES` / `MICROSOFT_SCOPE_BUNDLES`
-- `GOOGLE_BASE_SCOPES` / `MICROSOFT_BASE_SCOPES`
-- The `build_scope_string` function signature or behavior
-- Any new provider added to `_BUNDLES` / `_BASE`
-
-This applies to additions, removals, renames, and reorderings.
-
-### 2. Do Not "Fix" the Duplication
-Do not attempt to eliminate the duplication by:
-- Having Communication fetch scopes from Orchestra over HTTP
-- Having Orchestra fetch scopes from Communication
-- Extracting the file into a shared package
-
-The duplication is a conscious trade-off. If you believe the trade-off should be revisited, raise it with the user first.
-
-### 3. Verification Workflow
-When asked to add or modify a scope in one repo:
-1. Make the change in the current repo.
-2. Locate the sibling file in the other repo (paths above).
-3. Apply the matching change there.
-4. If the other repo is not checked out locally, surface this clearly to the user and list the exact edits required so they can apply them.
-
-### 4. Keep the Cross-Reference Comment Accurate
-The docstring at the top of each `scopes.py` points at its sibling. If either file moves, update both docstrings.
 
 # TaskScheduler surgery (Tasks rows)
 
@@ -1975,43 +1949,3 @@ Executions so one next wake remains.
 
 Ops detail: brain `docs/operations/scheduled-jobs.md` (re-arm / disable /
 catch-up). Health check: `python3 -m scripts.tasks_health_check`.
-
-This rule standardizes how we add temporary debug logging during failing tests and how we clean it up afterwards. ALWAYS use this process in agent sessions WHENEVER A TEST FAILS. This is the ONLY permitted way to address failing tests.
-
-1) Always start with hardcoded, unconditional debug logs
-- Add logs immediately, without flags or guards. Do not gate behind environment variables or configuration.
-- Use **only** the `CURSOR_DEBUG_LOG` function. No other logging method is permitted.
-- **Finding the function**: Search for it with `rg "CURSOR_DEBUG_LOG"` to locate the utility in your project, then import and use it.
-  - **Python**: `from <module> import CURSOR_DEBUG_LOG` then `CURSOR_DEBUG_LOG("message", variable)`
-  - **JavaScript/TypeScript**: `import { CURSOR_DEBUG_LOG } from "<module>"` then `CURSOR_DEBUG_LOG("message", { variable })`
-- Behavior: Prints an entry to stderr/stdout, making it easy to correlate with test runs.
-
-2) Python-specific import discipline
-- **Self-contained imports**: Each debug snippet must include ALL its own imports inline (e.g., `import json as _json; import os as _os;`). Never rely on the file's existing imports.
-- **Prefixed names**: Use underscore-prefixed aliases (`_json`, `_os`, `_pid`) to avoid shadowing.
-- **Region markers**: Wrap in `# #region agent log` / `# #endregion` for easy identification and removal.
-- This prevents `NameError` crashes when debug snippets reference modules that aren't imported at that location.
-
-3) Investigation workflow
-- Step A: Add targeted debug calls around suspected code paths.
-- Step B: Re-run the failing test(s) and inspect the new logs.
-- Step C: If you are not 100% certain of the root cause, add more debug entries and repeat.
-- Step D: Only when you are 100% confident of the cause, implement a direct fix (with or without keeping some logs briefly for confirmation).
-- Step E: The user may repeatedly re-run tests and paste logs; continue iterating until the issue is definitively fixed.
-
-4) Cleanup policy
-- After the fix is confirmed, remove all temporary logging.
-- Grep to find every occurrence:
-  - ripgrep: `rg -n "CURSOR_DEBUG_LOG" -S`
-  - grep:    `grep -Rin "CURSOR_DEBUG_LOG" .`
-- Delete each call site (and any now-unused imports) before finalizing the fix.
-
-5) Alignment with workspace rules
-- No fast paths or heuristics: Logging should not add conditional shortcuts; it merely reports state unconditionally.
-- No exception-handling shields: Do not add defensive exception handling (try/catch, try/except) around the logs. Keep failures visible.
-- No test details in production prompts: Temporary logs must not leak test-specific information into production prompts or docstrings.
-- Rapid evolution: This logging is temporary by design; remove it once the issue is resolved—do not preserve backward compatibility.
-
-6) Intent and scope
-- This logging exists solely for interactive debugging in agent sessions.
-- The function name `CURSOR_DEBUG_LOG` is intentionally unique and grep-friendly to ensure quick cleanup on request.

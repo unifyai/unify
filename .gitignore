@@ -38,6 +38,7 @@ dump.rdb
 *.txt
 !requirements.txt
 !requirements-gateway.txt
+!.agents/shared.txt
 parsed_results_output/
 evals/
 magnitude/
