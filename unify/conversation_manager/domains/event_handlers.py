@@ -2218,6 +2218,7 @@ async def _(
                 key: value
                 for key, value in {
                     "recording_url": event.recording_url,
+                    "recording_started_at": event.recording_started_at,
                     "recording_call_session_id": event.call_session_id,
                     "recording_provider_call_sid": event.provider_call_sid,
                     "recording_room_name": event.room_name,

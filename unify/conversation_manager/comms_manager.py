@@ -2175,6 +2175,7 @@ class CommsManager:
                         call_session_id=event.get("call_session_id"),
                         provider_call_sid=event.get("provider_call_sid"),
                         room_name=event.get("room_name") or event.get("livekit_room"),
+                        recording_started_at=event.get("recording_started_at"),
                     ).to_json(),
                 )
                 ack_now()
