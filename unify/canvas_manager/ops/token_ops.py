@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from typing import Optional
 
 import httpx
 
@@ -48,7 +49,7 @@ def register_token(
     after every authoring gate has passed; there is no state in which the row
     exists and the canvas is not meant to be servable.
 
-    Returns ``True`` on success or when the mapping already exists.
+    Returns ``True`` on success, or when this same mapping already exists.
     """
     url = f"{SETTINGS.ORCHESTRA_URL}/canvas/tokens"
     payload = {
@@ -65,8 +66,26 @@ def register_token(
         logger.warning("Canvas token registration failed for %s: %s", token, error)
         return False
 
-    if response.status_code in (200, 201, 409):
+    if response.status_code in (200, 201):
         return True
+
+    # A conflict is normally our own retry, and treating that as success is the
+    # point of it. But the same status covers a token that genuinely belongs to
+    # another canvas, and accepting that would leave the URL resolving to
+    # somebody else's view. Vanishingly unlikely at 72 bits of entropy, and
+    # cheap to rule out, so confirm the existing row is the one we meant to write.
+    if response.status_code == 409:
+        existing = _token_context(token)
+        if existing == context_name:
+            return True
+        logger.error(
+            "Canvas token %s is already registered to %r, not %r; refusing to "
+            "treat the collision as success.",
+            token,
+            existing,
+            context_name,
+        )
+        return False
 
     logger.warning(
         "Canvas token registration failed for %s: %s %s",
@@ -75,6 +94,22 @@ def register_token(
         response.text[:200],
     )
     return False
+
+
+def _token_context(token: str) -> Optional[str]:
+    """The context a token currently resolves to, or None if unreadable.
+
+    Uses the owner-scoped read rather than the admin resolver: an assistant sees
+    its own registrations and nothing else, which is all this check needs.
+    """
+    url = f"{SETTINGS.ORCHESTRA_URL}/canvas/tokens/{token}"
+    try:
+        response = httpx.get(url, headers=_auth_headers(), timeout=30.0)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    return response.json().get("context_name")
 
 
 def set_token_state(
