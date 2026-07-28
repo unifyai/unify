@@ -1179,6 +1179,40 @@ async def _(
     )
 
 
+@EventHandler.register((GoogleMeetChatMessage, TeamsMeetChatMessage))
+async def _(
+    event: GoogleMeetChatMessage | TeamsMeetChatMessage,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Surface a meeting-chat message to the brain as conversation context.
+
+    Deliberately not written to the call-utterance store: that is the record of
+    what was *said* on the call, and a typed message logged there would read as
+    speech. It lands in the contact thread instead, where the brain sees it with
+    its provenance intact and can answer a question someone pasted rather than
+    spoke.
+    """
+    medium = (
+        Medium.GOOGLE_MEET
+        if isinstance(event, GoogleMeetChatMessage)
+        else Medium.TEAMS_MEET
+    )
+    label = f"{event.sender_name} in meeting chat: {event.content}"
+    cm.notifications_bar.push_notif("Comms", label, event.timestamp)
+
+    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=event.sender_name,
+        thread_name=medium,
+        message_content=f"<meeting chat> {event.content}",
+        role="user",
+        timestamp=event.timestamp,
+    )
+
+
 @EventHandler.register((GoogleMeetAlone, TeamsMeetAlone))
 async def _(
     event: GoogleMeetAlone | TeamsMeetAlone,

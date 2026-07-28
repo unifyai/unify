@@ -2832,6 +2832,22 @@ async def entrypoint(ctx: agents.JobContext):
                 # trailing speech_off would blank whoever started next.
                 if _meet_cached_active_speaker == name:
                     _meet_cached_active_speaker = None
+            elif event_name == "participant_events.chat_message":
+                text = str((message.get("data") or {}).get("text") or "").strip()
+                if not text:
+                    return
+                chat_cls = (
+                    TeamsMeetChatMessage
+                    if channel == "teams_meet"
+                    else GoogleMeetChatMessage
+                )
+                evt = chat_cls(
+                    contact=contact,
+                    sender_name=name,
+                    content=text,
+                    sender_email=(str(participant.get("email") or "") or None),
+                )
+                asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
 
     # The opener hold applies whenever an ``opener`` opening config is present,
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp

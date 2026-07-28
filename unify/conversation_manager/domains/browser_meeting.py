@@ -96,6 +96,21 @@ class MeetProvider(Protocol):
     async def stop_present(self, *, channel: str, session_id: str) -> bool:
         """Stop sharing."""
 
+    async def send_chat(
+        self,
+        *,
+        channel: str,
+        session_id: str,
+        text: str,
+        to: str | None = None,
+    ) -> bool:
+        """Post into the meeting chat, optionally to one participant.
+
+        Returns False rather than raising when the platform will not carry it:
+        Teams channel meetings have no bot-writable chat at all, so a refusal is
+        an ordinary outcome the assistant should be told about, not a fault.
+        """
+
 
 def build_meet_provider(call_manager: Any) -> MeetProvider:
     """Construct the backend that joins browser meetings.

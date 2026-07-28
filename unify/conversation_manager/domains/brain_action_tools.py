@@ -1111,6 +1111,31 @@ class ConversationManagerBrainActionTools:
             "message": "Failed to start screen sharing.",
         }
 
+    async def send_meet_chat(self, message: str) -> dict[str, Any]:
+        """Post a message into the meeting chat of the active call.
+
+        Use this for anything a participant will want to read rather than hear:
+        a link, an address, a spelling, a list of steps. Speech is gone the
+        moment it is said; chat stays in the meeting for people to scroll back
+        to and copy from.
+
+        Not a substitute for speaking. Say what matters out loud and put the
+        copyable detail in chat.
+        """
+        result = await self._cm.call_manager.send_meet_chat(message)
+        if result:
+            return {"status": "ok", "message": "Posted to the meeting chat."}
+        return {
+            "status": "error",
+            # Chat is genuinely unavailable in some meetings (Teams channel
+            # meetings have no bot-writable chat), so tell the brain to say it
+            # out loud rather than let it retry a send that cannot succeed.
+            "message": (
+                "Could not post to the meeting chat. This meeting may not "
+                "support it — say the information out loud instead."
+            ),
+        }
+
     async def stop_google_meet_screenshare(self) -> dict[str, Any]:
         """Stop sharing the assistant's desktop screen in Google Meet.
 
@@ -2603,6 +2628,11 @@ class ConversationManagerBrainActionTools:
                 self.disengage_speaker,
                 engagement_suffix,
             )
+        if (
+            self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        ):
+            tools["send_meet_chat"] = self.send_meet_chat
         if self._cm.call_manager.has_active_google_meet:
             if SESSION_DETAILS.assistant.desktop_url:
                 if not self._cm.call_manager.has_gmeet_presenting:
