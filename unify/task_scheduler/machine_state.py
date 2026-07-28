@@ -734,6 +734,38 @@ def find_running_execution_for_task(
     return _row_to_execution(rows[0])
 
 
+def latest_scheduled_occurrence_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> str | None:
+    """The newest ``scheduled_for`` already projected for one task, if any.
+
+    The next occurrence is derived from the last one the ledger knows about,
+    not from a field the definition mutates. Every caller reading the same
+    ledger computes the same next slot, so concurrent runs converge on one
+    ``run_key`` instead of racing a shared row.
+    """
+
+    filter_clauses = [f"task_id == {int(task_id)}", "wake == 'scheduled'"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=200,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    occurrences = [
+        _coerce_str(getattr(_row_to_execution(row), "scheduled_for", None))
+        for row in rows
+    ]
+    known = [value for value in occurrences if value]
+    if not known:
+        return None
+    return max(known, key=_normalize_datetime_string)
+
+
 def find_terminal_execution_for_task(
     *,
     task_id: int,

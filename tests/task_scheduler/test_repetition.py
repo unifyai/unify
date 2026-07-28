@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from types import SimpleNamespace
 
 from tests.helpers import _handle_project
 from unify.actor.simulated import SimulatedActor
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import (
+    deterministic_jitter_seconds,
     Frequency,
     RepeatPattern,
     Weekday,
@@ -193,8 +195,32 @@ def test_normalize_repeat_patterns_collapses_full_day_half_hour_slots():
     assert normalized == [RepeatPattern(frequency=Frequency.MINUTELY, interval=30)]
 
 
+def _capture_projected_occurrences(monkeypatch) -> list[str]:
+    """Record the scheduled_for of every occurrence projected into the ledger."""
+
+    projected: list[str] = []
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.create_or_adopt_live_task_run",
+        lambda provenance: projected.append(provenance.scheduled_for),
+    )
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.latest_scheduled_occurrence_for_task",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.SESSION_DETAILS",
+        SimpleNamespace(
+            assistant=SimpleNamespace(agent_id="1406"),
+            assistant_context="1406",
+        ),
+    )
+    return projected
+
+
 @_handle_project
-def test_rearm_task_definition_rearms_recurring_scheduled_task():
+def test_next_occurrence_is_projected_without_touching_the_anchor(monkeypatch):
+    """schedule.start_at is the series anchor and is never rewritten."""
+
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -206,15 +232,14 @@ def test_rearm_task_definition_rearms_recurring_scheduled_task():
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
 
-    current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    projected = _capture_projected_occurrences(monkeypatch)
+    scheduler._project_next_occurrence(scheduler._get_task_or_raise(0))
 
-    task_rows = scheduler._filter_tasks(filter="task_id == 0")
-    assert len(task_rows) == 1
-    row = task_rows[0]
+    assert projected == [(initial_start + timedelta(days=1)).isoformat()]
+
+    row = scheduler._get_task_or_raise(0)
+    assert row.schedule_start_at == initial_start, "the anchor must not move"
     assert row.enabled is True
-    assert row.schedule_start_at == initial_start + timedelta(days=1)
-    assert row.entrypoint is None
 
 
 def test_max_jitter_seconds_reads_patterns_and_dicts():
@@ -231,30 +256,60 @@ def test_max_jitter_seconds_reads_patterns_and_dicts():
 
 
 @_handle_project
-def test_rearm_task_definition_applies_jitter_without_drift():
+def test_projected_slots_are_canonical_and_do_not_drift(monkeypatch):
+    """The ledger records canonical slots, so a series never accumulates jitter.
+
+    Jitter is a dispatch-time offset. Baking it into the recorded occurrence
+    would make it unrecoverable — the offset is seeded on the slot it applies
+    to — so every later step would measure from a jittered value.
+    """
+
     scheduler = TaskScheduler()
-    initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
-        hours=1,
-    )
+    anchor = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=1)
     scheduler._create_task(
         name="Daily jittered scrape",
         description="Scrape the feed with dispatch jitter.",
-        schedule=Schedule(start_at=initial_start.isoformat()),
+        schedule=Schedule(start_at=anchor.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800)],
     )
 
-    scheduler._rearm_task_definition(scheduler._get_task_or_raise(0))
-    row1 = scheduler._get_task_or_raise(0)
-    canonical_1 = initial_start + timedelta(days=1)
-    applied_1 = row1.schedule.jitter_applied_seconds
-    assert applied_1 is not None and 0.0 <= applied_1 <= 1800.0
-    assert row1.schedule_start_at == canonical_1 + timedelta(seconds=applied_1)
+    projected = _capture_projected_occurrences(monkeypatch)
+    task = scheduler._get_task_or_raise(0)
+    scheduler._project_next_occurrence(task)
+    scheduler._project_next_occurrence(task)
 
-    scheduler._rearm_task_definition(row1)
-    row2 = scheduler._get_task_or_raise(0)
-    applied_2 = row2.schedule.jitter_applied_seconds or 0.0
-    canonical_2 = row2.schedule_start_at - timedelta(seconds=applied_2)
-    assert canonical_2 == initial_start + timedelta(days=2)
+    assert len(projected) == 2
+    assert projected[0] == projected[1], "same slot must yield the same timestamp"
+    assert datetime.fromisoformat(projected[0]) == anchor + timedelta(days=1)
+
+    first_slot = projected[0]
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.latest_scheduled_occurrence_for_task",
+        lambda **kwargs: first_slot,
+    )
+    projected.clear()
+    scheduler._project_next_occurrence(task)
+    assert datetime.fromisoformat(projected[0]) == anchor + timedelta(days=2)
+
+
+def test_dispatch_jitter_is_stable_per_slot():
+    """Every caller computing the offset for one slot must agree on it."""
+
+    patterns = [RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800)]
+    slot = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+
+    first = deterministic_jitter_seconds(task_id=7, slot=slot, patterns=patterns)
+    second = deterministic_jitter_seconds(task_id=7, slot=slot, patterns=patterns)
+    other_slot = deterministic_jitter_seconds(
+        task_id=7,
+        slot=slot + timedelta(days=1),
+        patterns=patterns,
+    )
+
+    assert first == second
+    assert 0.0 <= first <= 1800.0
+    assert first != other_slot
+    assert deterministic_jitter_seconds(task_id=7, slot=slot, patterns=None) == 0.0
 
 
 @_handle_project
@@ -271,7 +326,7 @@ def test_entrypoint_review_records_symbolic_candidate_without_offline_promotion(
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
     result = scheduler._attach_entrypoint_to_definition(
         task_id=0,
         function_id=321,
@@ -300,7 +355,7 @@ def test_offline_promotion_requires_passing_certification():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
     scheduler._attach_entrypoint_to_definition(
         task_id=0,
         function_id=321,
@@ -338,7 +393,7 @@ def test_offline_promotion_rejects_failed_certification_attestation():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
     scheduler._attach_entrypoint_to_definition(
         task_id=0,
         function_id=321,
@@ -380,7 +435,7 @@ def test_offline_promotion_rejects_ad_hoc_primitive_replacements():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
     scheduler._attach_entrypoint_to_definition(
         task_id=0,
         function_id=321,
@@ -419,7 +474,7 @@ def test_passing_certification_promotes_candidate_future_instances_offline():
     )
 
     current = scheduler._get_task_or_raise(0)
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
     scheduler._attach_entrypoint_to_definition(
         task_id=0,
         function_id=321,
@@ -445,7 +500,7 @@ def test_passing_certification_promotes_candidate_future_instances_offline():
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_recurring_execution_rearms_before_entrypoint_review_patch():
+async def test_entrypoint_patch_survives_occurrence_projection():
     scheduler = TaskScheduler(actor=SimulatedActor(steps=0))
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -462,7 +517,8 @@ async def test_recurring_execution_rearms_before_entrypoint_review_patch():
 
     row_after_run = scheduler._get_task_or_raise(0)
     assert row_after_run.entrypoint is None
-    assert row_after_run.schedule_start_at == initial_start + timedelta(days=1)
+    # A run projects its successor onto the ledger; the anchor stays put.
+    assert row_after_run.schedule_start_at == initial_start
 
     result = scheduler._attach_entrypoint_to_definition(
         task_id=0,
@@ -475,15 +531,15 @@ async def test_recurring_execution_rearms_before_entrypoint_review_patch():
     assert patched.entrypoint == 321
     assert patched.offline is False
 
-    scheduler._rearm_task_definition(patched)
+    scheduler._project_next_occurrence(patched)
     rearmed = scheduler._get_task_or_raise(0)
     assert rearmed.entrypoint == 321
     assert rearmed.offline is False
-    assert rearmed.schedule_start_at == initial_start + timedelta(days=2)
+    assert rearmed.schedule_start_at == initial_start
 
 
 @_handle_project
-def test_rearm_task_definition_stops_when_repeat_count_is_exhausted():
+def test_projection_stops_when_repeat_count_is_exhausted():
     scheduler = TaskScheduler()
     initial_start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(
         hours=1,
@@ -497,7 +553,7 @@ def test_rearm_task_definition_stops_when_repeat_count_is_exhausted():
 
     current = scheduler._get_task_or_raise(0)
     before = current.schedule_start_at
-    scheduler._rearm_task_definition(current)
+    scheduler._project_next_occurrence(current)
 
     task_rows = scheduler._filter_tasks(filter="task_id == 0")
     assert len(task_rows) == 1

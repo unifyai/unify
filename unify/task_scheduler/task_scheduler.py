@@ -7,10 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import functools
 import logging
 import os
-import random
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import (
     Any,
     Callable,
@@ -68,8 +67,10 @@ from .machine_state import (
     TaskRunReference,
     build_task_run_key,
     consume_live_task_run_provenance,
+    create_or_adopt_live_task_run,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
+    latest_scheduled_occurrence_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
     remember_live_task_run_provenance,
@@ -106,7 +107,6 @@ from .types.repetition import (
     Frequency,
     RepeatPattern,
     Weekday,
-    max_jitter_seconds,
     next_repeated_start_at,
     normalize_repeat_patterns,
 )
@@ -1207,11 +1207,7 @@ class TaskScheduler(BaseTaskScheduler):
                 state=ExecutionState.running.value,
             )
 
-        definition_rearmed = False
-        if task.trigger is not None or (
-            task.repeat is not None and task.schedule_start_at is not None
-        ):
-            definition_rearmed = self._rearm_task_definition(task)
+        self._project_next_occurrence(task)
 
         handle = await ActiveTask.create(
             fallback_actor,
@@ -1243,7 +1239,6 @@ class TaskScheduler(BaseTaskScheduler):
                 reason=reason,
             ),
             task_guidelines=build_task_run_guidelines(task, reason),
-            definition_rearmed=definition_rearmed,
         )
 
         return handle
@@ -1422,59 +1417,95 @@ class TaskScheduler(BaseTaskScheduler):
             destination=destination,
         )
 
-    def _rearm_task_definition(self, task: Task) -> bool:
-        """Advance the definition so the next open Execution can be projected.
+    def _project_next_occurrence(self, task: Task) -> bool:
+        """Create the Execution row for this task's next occurrence.
 
-        Returns True when the definition was re-armed to another open slot.
-        Returns False when recurrence is exhausted or the task neither repeats
-        nor triggers.
+        ``schedule.start_at`` is the series anchor and is never rewritten. The
+        next slot is derived from the newest occurrence the run ledger already
+        knows about, so every concurrent run computes the same timestamp; that
+        timestamp is baked into ``run_key``, and create-or-adopt turns the
+        second writer into an adopter instead of a racer. Nothing is written to
+        the definition, which is why a definition now carries authored intent
+        only.
 
-        Re-arming only moves ``schedule.start_at``. A triggerable definition is
-        already armed by the presence of its trigger and needs no write at all,
-        which is why arming is not a status transition any more: the definition
-        is armed whenever ``enabled`` is true.
+        Returns True when a next occurrence exists (or the task is armed by a
+        trigger and needs none), False when recurrence is exhausted.
         """
 
-        updates: dict[str, Any] = {}
-        if task.repeat is not None and task.schedule_start_at is not None:
-            applied_prev = 0.0
-            if task.schedule is not None:
-                applied_prev = task.schedule.jitter_applied_seconds or 0.0
-            canonical_prev = task.schedule_start_at - timedelta(seconds=applied_prev)
-            # Advance exactly one slot from the occurrence that is starting.
-            # Wall-clock catch-up belongs to projection/due selection, not re-arm.
-            next_start_at = next_repeated_start_at(
-                previous_start=canonical_prev,
-                patterns=task.repeat,
-                current_occurrence_index=0,
-                now=canonical_prev,
-            )
-            if next_start_at is None:
-                return False
-            schedule: dict[str, Any] = {"start_at": next_start_at.isoformat()}
-            jitter = max_jitter_seconds(task.repeat)
-            if jitter > 0:
-                applied = random.uniform(0.0, float(jitter))
-                jittered = next_start_at + timedelta(seconds=applied)
-                schedule["start_at"] = jittered.isoformat()
-                schedule["jitter_applied_seconds"] = applied
-            updates["schedule"] = schedule
-        elif task.trigger is not None:
-            # Already armed by its trigger; nothing to advance.
+        if task.trigger is not None:
             return True
-        else:
+        if task.repeat is None or task.schedule_start_at is None:
             return False
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task.task_id}",
-                limit=1,
-                return_ids_only=False,
+
+        latest = latest_scheduled_occurrence_for_task(
+            task_id=int(task.task_id),
+            destination=task.destination,
+        )
+        previous_start = task.schedule_start_at
+        if latest:
+            try:
+                parsed = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed > previous_start:
+                    previous_start = parsed
+        next_start_at = next_repeated_start_at(
+            previous_start=previous_start,
+            patterns=task.repeat,
+            current_occurrence_index=0,
+            now=previous_start,
+        )
+        if next_start_at is None:
+            return False
+        # The ledger records the *canonical* slot. Jitter spreads dispatch, it
+        # does not redefine the occurrence: baking it into scheduled_for makes
+        # the recorded time unrecoverable (the offset is seeded on the slot it
+        # is applied to), so each step would measure from a jittered value and
+        # the series would drift. Dispatch applies the offset instead.
+        scheduled_for = next_start_at.isoformat()
+
+        assistant_id = str(
+            SESSION_DETAILS.assistant.agent_id
+            or SESSION_DETAILS.assistant_context
+            or "",
+        ).strip()
+        if not assistant_id:
+            # Executions are assistant-owned; without one there is no ledger to
+            # project the next occurrence into.
+            return False
+        try:
+            create_or_adopt_live_task_run(
+                TaskRunProvenance(
+                    assistant_id=assistant_id,
+                    task_id=int(task.task_id),
+                    wake=Wake.scheduled,
+                    delivery=Delivery.offline if task.offline else Delivery.live,
+                    source_task_log_id=self._source_task_log_id(int(task.task_id)),
+                    revision=(
+                        str(task.task_revision)
+                        if task.task_revision is not None
+                        else None
+                    ),
+                    destination=task.destination,
+                    scheduled_for=scheduled_for,
+                    task_name=task.name,
+                    task_description=task.description,
+                ),
             )
-            if not log_objs:
-                raise ValueError(
-                    f"No task definition found for task_id={task.task_id}.",
-                )
-            self._write_log_entries(logs=log_objs[0].id, entries=updates)
+        except Exception:
+            # A run already in flight must not fail because the *next*
+            # occurrence could not be projected. Loud, because a series that
+            # stops projecting silently stops recurring.
+            logger.exception(
+                "Failed to project next occurrence (task_id=%s, scheduled_for=%s); "
+                "the series will not advance until this succeeds.",
+                task.task_id,
+                scheduled_for,
+            )
+            return False
         return True
 
     def _one_shot_already_ran(self, task: Task) -> Any | None:
