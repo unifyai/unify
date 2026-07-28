@@ -1930,8 +1930,6 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             except TaskRevisionConflictError as exc:
                 return task_revision_conflict_outcome(exc)
-            if log_ids:
-                self._store.delete(logs=log_ids)
         else:
             self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
