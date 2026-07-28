@@ -1,3 +1,37 @@
+# ---------------------------------------------------------------------------
+# Canvas toolchain and runtime host
+# ---------------------------------------------------------------------------
+# Built in a separate stage so the branding monorepo's node_modules — around a
+# gigabyte, most of it irrelevant here — never reaches the runtime image. Only
+# two directories are copied forward.
+#
+# CanvasManager needs both: the toolchain to lint/typecheck/bundle authored TSX,
+# and the runtime host to render the result headlessly before publishing. The
+# host assets are the same bytes the canvas origin serves, so what the assistant
+# reviews is what a viewer sees.
+FROM node:22-slim AS canvas
+ARG GITHUB_TOKEN
+ARG BRANCH=main
+ARG CANVAS_BRANDING_SHA=unknown
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/install-canvas-toolchain.sh /tmp/install-canvas-toolchain.sh
+
+# CANVAS_BRANDING_SHA busts this layer when branding moves; without it a stale
+# kit would be baked in indefinitely. Branch logic mirrors the dependency clones
+# below: main→main, everything else→staging.
+RUN echo "canvas_branding_sha=${CANVAS_BRANDING_SHA}" && \
+    git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && \
+    chmod +x /tmp/install-canvas-toolchain.sh && \
+    /tmp/install-canvas-toolchain.sh \
+        --branch "$([ "$BRANCH" = "main" ] && echo main || echo staging)" \
+        --toolchain /opt/canvas-toolchain \
+        --host /opt/canvas-host && \
+    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
+
+
 # Use Python 3.12 slim image as base
 FROM python:3.12-slim
 
@@ -97,6 +131,14 @@ RUN HF_HOME=/opt/hf-cache python unify/conversation_manager/medium_scripts/call.
 # same path, so no duplicate copy is needed. Chromium is the only browser used.
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/unity/.cache/ms-playwright
 RUN mkdir -p /home/unity/.cache/ms-playwright && playwright install chromium
+
+# Canvas authoring artifacts from the builder stage. The render gate drives the
+# chromium installed just above, which is why this follows it: without a browser
+# CanvasManager would compile a canvas and then decline to publish it.
+COPY --from=canvas /opt/canvas-toolchain /opt/canvas-toolchain
+COPY --from=canvas /opt/canvas-host /opt/canvas-host
+ENV UNITY_CANVAS_TOOLCHAIN_ROOT=/opt/canvas-toolchain
+ENV UNITY_CANVAS_HOST_ROOT=/opt/canvas-host
 
 # Install Patchright Chromium (same as deploy/desktop/Dockerfile) for non-headless
 # browser sessions (e.g., Google Meet join via local browser with virtual display).
