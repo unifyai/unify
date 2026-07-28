@@ -2927,8 +2927,16 @@ if not result.build.ok:
     # working view while this is corrected.
     notify(f"Revision rejected: {result.build.diagnostics}")
 
-# The review pass renders the canvas and hands back what it looked like, so a
-# visual problem is visible rather than assumed absent.
-if result.review and result.review.issues:
-    notify(f"Rendered, with notes: {result.review.issues}")
+# The review pass renders the canvas in both themes and reports what a look at it
+# turned up. `screenshots` are file paths -- `display` them to see the canvas
+# yourself rather than trusting that it came out right.
+if result.review:
+    from PIL import Image
+
+    for shot in result.review.screenshots:
+        display(Image.open(shot))
+
+    if result.review.issues:
+        # Advisory, not a gate: decide whether they are worth another revision.
+        notify(f"Rendered, with notes: {result.review.issues}")
 """

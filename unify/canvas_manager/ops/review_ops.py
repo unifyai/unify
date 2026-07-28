@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, Field
+
 from unify.canvas_manager.types.view import ReviewReport
 
 logger = logging.getLogger(__name__)
@@ -226,7 +228,7 @@ def _parent_html(
 <iframe id="f" src="{host_origin}/{_HOST_DOCUMENT}" sandbox="allow-scripts"
         style="width:1024px;height:768px;border:0" allow="" referrerpolicy="no-referrer"></iframe>
 <script>
-  window.__log = {{ ready: null, errors: [], aliases: [] }};
+  window.__log = {{ ready: null, errors: [], aliases: [], height: 0 }};
   const frame = document.getElementById('f');
   const channel = new MessageChannel();
   const rows = {_js(rows)};
@@ -234,6 +236,7 @@ def _parent_html(
   channel.port1.onmessage = (event) => {{
     const msg = event.data;
     if (msg.type === 'canvas/ready') window.__log.ready = msg;
+    if (msg.type === 'canvas/resize') window.__log.height = msg.height;
     if (msg.type === 'canvas/error') window.__log.errors.push(msg);
     if (msg.type === 'canvas/data/request') {{
       window.__log.aliases.push(msg.alias);
@@ -260,6 +263,15 @@ def _parent_html(
   }});
 
   window.__setTheme = (theme) => channel.port1.postMessage({{ type: 'canvas/theme', theme }});
+
+  // Size the frame to the content the way console does. Screenshotting a fixed
+  // viewport instead would capture unpainted space below a short canvas, and the
+  // critique would report that as a broken background on every single review.
+  window.__fit = () => {{
+    const height = Math.max(120, Math.min(window.__log.height || 0, 4000));
+    frame.style.height = height + 'px';
+    return height;
+  }};
 </script></body>"""
 
 
@@ -341,6 +353,11 @@ def _render(
                     timeout=_RENDER_TIMEOUT_MS,
                 )
 
+                # Match the frame to its content before capturing, so the
+                # screenshot shows what a viewer sees rather than the harness's
+                # arbitrary viewport.
+                page.evaluate("window.__fit()")
+
                 for theme in ("light", "dark"):
                     page.evaluate("theme => window.__setTheme(theme)", theme)
                     # Waiting on the class the child actually applied keeps this
@@ -414,10 +431,11 @@ def render_and_review(
 
     # Playwright's sync API refuses to run on a thread with a live asyncio loop,
     # and this is reached from both plain sync code and `asyncio.to_thread`. A
-    # dedicated thread makes the caller's context irrelevant.
+    # dedicated thread makes the caller's context irrelevant. The critique runs on
+    # the same thread for the same reason.
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="canvas-review") as pool:
         return pool.submit(
-            _render,
+            _render_and_critique,
             host=host,
             token=token,
             source=bundle,
@@ -425,3 +443,75 @@ def render_and_review(
             rows=rows or {},
             out_dir=target,
         ).result()
+
+
+class _Critique(BaseModel):
+    """What a look at the rendered canvas turned up."""
+
+    verdict: str = Field(description="One sentence on whether this reads well.")
+    issues: List[str] = Field(
+        default_factory=list,
+        description="Specific, actionable visual problems. Empty when there are none.",
+    )
+
+
+_CRITIQUE_PROMPT = """You are reviewing a rendered view an assistant just built \
+for a user, captured in light and dark theme.
+
+Report only problems a viewer would actually notice: text that is unreadable or \
+clipped, elements overlapping or overflowing, a chart or table that is empty when \
+it should have content, wildly unbalanced spacing, or something legible in one \
+theme and not the other.
+
+Do not comment on the sample data itself, on colour choices (the palette is fixed \
+and not the author's to change), or on features you think are missing. If it reads \
+well, say so and return no issues."""
+
+
+def _critique(shots: List[str]) -> Tuple[str, List[str]]:
+    """Look at the screenshots and report what a viewer would notice.
+
+    Advisory by construction. A critique that cannot run -- no vision model
+    configured, no network -- must never block publication, because the thing
+    being gated is whether the canvas *renders*, and that has already been
+    established by this point.
+    """
+    if not shots:
+        return "rendered", []
+
+    import asyncio
+
+    from unify.common.reasoning import query_llm
+
+    try:
+        # Safe on this thread by construction: the pool worker has no running
+        # loop, which is the same reason playwright's sync API works here.
+        result = asyncio.run(
+            query_llm(
+                _CRITIQUE_PROMPT,
+                images=list(shots),
+                response_format=_Critique,
+                origin="CanvasManager.review",
+            ),
+        )
+    except Exception as error:  # noqa: BLE001 - advisory; never blocks publish
+        logger.warning("canvas critique unavailable: %s", error)
+        return "rendered", []
+
+    if isinstance(result, _Critique):
+        return result.verdict, result.issues
+    return "rendered", []
+
+
+def _render_and_critique(**kwargs: Any) -> ReviewReport:
+    """Render, then look at the result.
+
+    Kept separate from ``_render`` so the mechanical half stays testable without a
+    model, and so a critique failure cannot be confused with a render failure.
+    """
+    report = _render(**kwargs)
+    if not report.rendered:
+        return report
+
+    verdict, issues = _critique(report.screenshots)
+    return report.model_copy(update={"verdict": verdict, "issues": issues})
