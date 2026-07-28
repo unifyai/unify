@@ -159,6 +159,12 @@ def _missing_certification_value(value: Any) -> bool:
     return value in (None, "", [], {})
 
 
+def _now_iso() -> str:
+    """Return the current UTC timestamp in ISO-8601 format."""
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 _UNSET = _UnsetSentinel()
 
 
@@ -1297,6 +1303,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "source_task_log_id": int(source_task_log_id),
                 "revision": request.accepted_revision,
                 "captured_task_revision": captured_task_revision,
+                "started_at": _now_iso(),
             },
         )
 
