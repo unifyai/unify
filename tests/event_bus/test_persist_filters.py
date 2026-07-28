@@ -10,13 +10,25 @@ from unify.events.types.tool_loop import ToolLoopKind
 
 
 def test_parse_persist_tools_default_when_empty():
-    assert parse_persist_tools("") == frozenset({"execute_code", "execute_function"})
-    assert parse_persist_tools(None) == frozenset({"execute_code", "execute_function"})
+    expected = frozenset({"act", "execute_code", "execute_function"})
+    assert parse_persist_tools("") == expected
+    assert parse_persist_tools(None) == expected
 
 
 def test_parse_persist_tools_custom():
-    assert parse_persist_tools("execute_code, other_tool ") == frozenset(
+    custom_tools = parse_persist_tools("execute_code, other_tool ")
+    assert custom_tools == frozenset(
         {"execute_code", "other_tool"},
+    )
+    assert "act" not in custom_tools
+
+
+def test_custom_allowlist_can_exclude_codeact_root():
+    assert not should_persist_to_orchestra(
+        "ManagerMethod",
+        {"method": "act", "manager": "CodeActActor"},
+        mode="allowlist",
+        tools=parse_persist_tools("execute_code,execute_function"),
     )
 
 
@@ -35,8 +47,14 @@ def test_mode_all_persists_everything():
     )
 
 
-def test_allowlist_manager_method_execute_tools_only():
-    tools = frozenset({"execute_code", "execute_function"})
+def test_allowlist_manager_method_selected_methods_only():
+    tools = frozenset({"act", "execute_code", "execute_function"})
+    assert should_persist_to_orchestra(
+        "ManagerMethod",
+        {"method": "act", "manager": "CodeActActor"},
+        mode="allowlist",
+        tools=tools,
+    )
     assert should_persist_to_orchestra(
         "ManagerMethod",
         {"method": "execute_code", "manager": "CodeActActor"},
@@ -52,12 +70,6 @@ def test_allowlist_manager_method_execute_tools_only():
     assert not should_persist_to_orchestra(
         "ManagerMethod",
         {"method": "ask", "manager": "ContactManager"},
-        mode="allowlist",
-        tools=tools,
-    )
-    assert not should_persist_to_orchestra(
-        "ManagerMethod",
-        {"method": "act", "manager": "CodeActActor"},
         mode="allowlist",
         tools=tools,
     )

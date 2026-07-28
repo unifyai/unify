@@ -416,6 +416,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # the exchange without a database filter query.
         self._recording_exchange_ids: dict[str, int] = {}
 
+        # Detached recording-start requests. Recording must never gate call
+        # setup, so the call-started handler fires the request without awaiting
+        # it; the set holds a strong reference so the task is not garbage
+        # collected mid-flight.
+        self._recording_start_tasks: set[asyncio.Task] = set()
+
         # Groups messages into conversation-thread exchanges (SMS / WhatsApp /
         # Discord / MS Teams bot / Slack DMs and channels, and email). Maps a
         # per-conversation key to its exchange_id. 1:1 DMs reuse a single

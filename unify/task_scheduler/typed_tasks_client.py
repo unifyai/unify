@@ -242,7 +242,12 @@ def get_trigger_health(*, task_id: int) -> dict[str, Any]:
     return _info(response)
 
 
-def get_trigger_catalog() -> dict[str, Any]:
+def get_trigger_catalog(
+    *,
+    canonical_app_slug: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> dict[str, Any]:
     """List staged provider triggers for this assistant's connected apps."""
 
     from unify.session_details import SESSION_DETAILS
@@ -250,9 +255,19 @@ def get_trigger_catalog() -> dict[str, Any]:
     agent_id = SESSION_DETAILS.assistant.agent_id
     if agent_id is None:
         raise ValueError("assistant agent_id is required to list provider triggers")
+    params = {
+        key: value
+        for key, value in (
+            ("canonical_app_slug", canonical_app_slug),
+            ("limit", limit),
+            ("offset", offset),
+        )
+        if value is not None
+    }
     response = _request(
         "get",
         f"/assistants/{int(agent_id)}/provider-triggers",
+        params=params,
     )
     return _info(response)
 

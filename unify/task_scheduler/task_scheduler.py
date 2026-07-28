@@ -10,7 +10,7 @@ import os
 import random
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import (
     Any,
     Callable,
@@ -157,6 +157,12 @@ def _missing_certification_value(value: Any) -> bool:
     """Return whether a certification evidence field is materially empty."""
 
     return value in (None, "", [], {})
+
+
+def _now_iso() -> str:
+    """Return the current UTC timestamp in ISO-8601 format."""
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 _UNSET = _UnsetSentinel()
@@ -835,14 +841,18 @@ class TaskScheduler(BaseTaskScheduler):
 
     @staticmethod
     def _normalize_activation_datetime(value: Any) -> str | None:
-        """Normalize scheduler timestamps into comparable ISO strings."""
+        """Normalize scheduler timestamps into comparable UTC ISO strings."""
 
         if value is None:
             return None
+        text = str(value)
         try:
-            return datetime.fromisoformat(str(value).replace("Z", "+00:00")).isoformat()
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
-            return str(value)
+            return text
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc).isoformat()
 
     def _validate_task_matches_provenance(
         self,
@@ -1293,6 +1303,7 @@ class TaskScheduler(BaseTaskScheduler):
                 "source_task_log_id": int(source_task_log_id),
                 "revision": request.accepted_revision,
                 "captured_task_revision": captured_task_revision,
+                "started_at": _now_iso(),
             },
         )
 
@@ -1919,8 +1930,6 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             except TaskRevisionConflictError as exc:
                 return task_revision_conflict_outcome(exc)
-            if log_ids:
-                self._store.delete(logs=log_ids)
         else:
             self._store.delete(logs=log_ids)
         removed_count = len(log_ids)
@@ -2455,7 +2464,13 @@ class TaskScheduler(BaseTaskScheduler):
             entries=entries,
         )
 
-    def _list_provider_trigger_catalog(self) -> ToolOutcome:
+    def _list_provider_trigger_catalog(
+        self,
+        *,
+        canonical_app_slug: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> ToolOutcome:
         """List staged provider triggers visible for this assistant's connected apps.
 
         Returns catalog metadata plus trigger slugs/config schemas for apps the
@@ -2463,9 +2478,18 @@ class TaskScheduler(BaseTaskScheduler):
         trigger list usually means no matching connection yet, not that the
         provider lacks the trigger globally. Prefer connecting the app first,
         then re-list the catalog before enabling a provider-event task.
+
+        The unfiltered catalog can be large. Once
+        ``list_provider_trigger_connections`` shows which app/backend is
+        connected, pass that app's ``canonical_app_slug`` here to narrow the
+        response, and use ``limit``/``offset`` to page through the rest.
         """
 
-        catalog = typed_tasks_client.get_trigger_catalog()
+        catalog = typed_tasks_client.get_trigger_catalog(
+            canonical_app_slug=canonical_app_slug,
+            limit=limit,
+            offset=offset,
+        )
         return {
             "outcome": "provider trigger catalog listed",
             "details": annotate_provider_trigger_catalog(

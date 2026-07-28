@@ -17,7 +17,7 @@ from typing import Any, Mapping
 from .types.tool_loop import ToolLoopKind
 
 _DEFAULT_ALLOWLIST_TOOLS: frozenset[str] = frozenset(
-    {"execute_code", "execute_function"},
+    {"act", "execute_code", "execute_function"},
 )
 _TOOL_LOOP_MATCH_KINDS: frozenset[str] = frozenset(
     {
