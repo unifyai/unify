@@ -165,7 +165,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         self._was_stopped: bool = False
         self._last_intent: Optional[str] = None
         self._last_intent_reason: Optional[str] = None
-        self._definition_rearmed = False
         self._preserve_definition_status = False
 
         # Register the underlying actor handle for standardized wrapper discovery
@@ -192,7 +191,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         entrypoint_repair_attempts: int = 0,
         entrypoint_repair_context: Optional[dict[str, Any]] = None,
         destination: Optional[str] = None,
-        definition_rearmed: bool = False,
         preserve_definition_status: bool = False,
     ) -> "ActiveTask":
         """
@@ -318,7 +316,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             scheduler=scheduler,
             task_run_reference=materialized_task_run_reference,
         )
-        instance._definition_rearmed = bool(definition_rearmed)
         instance._preserve_definition_status = bool(preserve_definition_status)
         return instance
 
