@@ -1503,13 +1503,40 @@ class TaskScheduler(BaseTaskScheduler):
             self._write_log_entries(logs=log_objs[0].id, entries=updates)
         return True
 
+    def _rearmable_status(self, task: Task) -> Status | None:
+        """The armed status a repeating definition returns to, if it repeats.
+
+        ``None`` for one-shot definitions, which are allowed to terminalize.
+        """
+
+        if task.repeat is not None:
+            return Status.scheduled
+        if task.trigger is not None:
+            return Status.triggerable
+        return None
+
     def _update_task_definition_status(
         self,
         *,
         task_id: int,
         new_status: str | Status,
     ) -> Dict[str, str]:
-        """Update the lifecycle status for one task definition row."""
+        """Update the lifecycle status for one task definition row.
+
+        Terminal statuses are refused for repeating and triggerable
+        definitions. One occurrence must never disarm a standing schedule: the
+        outcome of a run belongs on its ``Tasks/Executions`` row, and a
+        definition that terminalizes here is unreachable forever after, because
+        every later activation fails the runnable check and re-writes the same
+        terminal status.
+
+        Enforcing that here rather than at each caller is deliberate. Callers
+        reach this from several directions — normal completion, crash and
+        SIGTERM handling, stale-activation supersession — and each previously
+        carried its own version of the guard keyed on how the run ended. The
+        invariant does not depend on how the run ended, only on whether the
+        definition repeats, so it belongs at the single write boundary.
+        """
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
@@ -1531,6 +1558,18 @@ class TaskScheduler(BaseTaskScheduler):
                 if isinstance(new_status, Status)
                 else Status(str(new_status))
             )
+            if new_status_enum in self._TERMINAL_STATUSES:
+                rearmable = self._rearmable_status(task)
+                if rearmable is not None:
+                    logger.warning(
+                        "Refusing to terminalize repeating task definition "
+                        "%s with status=%s; restoring %s. The run outcome "
+                        "belongs on the Tasks/Executions row.",
+                        task_id,
+                        new_status_enum.value,
+                        rearmable.value,
+                    )
+                    new_status_enum = rearmable
             entries: Dict[str, Any] = {"status": new_status_enum}
             return self._write_log_entries(
                 logs=log_objs[0].id,
