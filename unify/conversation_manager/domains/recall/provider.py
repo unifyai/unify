@@ -200,6 +200,7 @@ class RecallMeetProvider:
     async def send_chat(
         self,
         *,
+        channel: str = "",
         session_id: str,
         text: str,
         to: str | None = None,

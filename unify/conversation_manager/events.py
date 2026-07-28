@@ -463,6 +463,23 @@ class GoogleMeetParticipantLeft(Event):
 
 
 @dataclass
+class GoogleMeetChatMessage(Event):
+    """A participant posted in the Google Meet chat.
+
+    Kept distinct from an utterance because it is typed, not spoken: routing it
+    through the utterance path would record it in the call transcript as
+    something the participant said out loud.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
+
+
+@dataclass
 class GoogleMeetAlone(Event):
     """The assistant is the only remaining participant in the Google Meet.
 
@@ -554,6 +571,22 @@ class TeamsMeetParticipantLeft(Event):
 
     contact: dict
     participant_name: str
+
+
+@dataclass
+class TeamsMeetChatMessage(Event):
+    """A participant posted in the Teams meeting chat.
+
+    Unavailable in channel meetings, where the platform exposes no bot-readable
+    chat at all.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
 
 
 @dataclass

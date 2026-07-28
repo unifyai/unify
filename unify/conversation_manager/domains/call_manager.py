@@ -1325,6 +1325,26 @@ class LivekitCallManager:
 
         return True
 
+    async def send_meet_chat(self, text: str, to: str | None = None) -> bool:
+        """Post into the active browser meeting's chat.
+
+        Unlike speech, chat survives the call: a link or a spelling stays
+        readable after the moment it was said, which is the point of offering it
+        alongside the voice channel.
+        """
+        session_id = self._meet_session_id
+        channel = self._call_channel or ""
+        if not session_id or channel not in self._MEET_ROOM_SUFFIX:
+            return False
+        if not (text or "").strip():
+            return False
+        return await self.meet_provider.send_chat(
+            channel=channel,
+            session_id=session_id,
+            text=text,
+            to=to,
+        )
+
     async def _watch_meet_state(self, channel: str) -> None:
         """Track the meeting backend's own view of the session.
 
