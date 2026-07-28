@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 from tests.helpers import _handle_project
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.actor.simulated import SimulatedActor, SimulatedActorHandle
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.active_task import ActiveTask
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
@@ -81,22 +80,14 @@ async def test_summary_on_natural_completion(monkeypatch):
 
     # Find the specific call related to saving the summary (info-only write is expected)
     summary_info_call = None
-    status_completed_call = None
     for call in write_entries_spy.call_args_list:
         args, kwargs = call
         entries = kwargs.get("entries", {})
         # Info write
         if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
             summary_info_call = call
-        # Status write (may be in a separate call)
-        if isinstance(entries, dict) and entries.get("status") == Status.completed:
-            status_completed_call = call
     assert summary_info_call is not None, (
         "Did not find the expected call to _write_log_entries with the correct summary. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
-    assert status_completed_call is not None, (
-        "Did not find the expected call to _write_log_entries setting status='completed'. "
         f"Calls: {write_entries_spy.call_args_list}"
     )
 
@@ -104,7 +95,7 @@ async def test_summary_on_natural_completion(monkeypatch):
     final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
     assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
-    assert final_row.status == Status.completed.value
+    assert final_row.completed_at is not None
     assert final_row.info == MOCK_SUMMARY
 
 
@@ -174,21 +165,13 @@ async def test_summary_on_stop_cancel(monkeypatch):
     # Verify the expected write happened
     assert write_entries_spy.call_count >= 1
 
-    # Expect separate writes: one for status=cancelled, one for info=<summary>
-    status_cancelled_found = False
     info_summary_found = False
     for call in write_entries_spy.call_args_list:
         args, kwargs = call
         entries = kwargs.get("entries", {})
-        if isinstance(entries, dict) and entries.get("status") == Status.cancelled:
-            status_cancelled_found = True
         if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
             info_summary_found = True
 
-    assert status_cancelled_found, (
-        "Did not find the expected call to _write_log_entries setting status='cancelled'. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
     assert info_summary_found, (
         "Did not find the expected call to _write_log_entries saving the summary. "
         f"Calls: {write_entries_spy.call_args_list}"
@@ -198,8 +181,8 @@ async def test_summary_on_stop_cancel(monkeypatch):
     final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
     assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
-    # In the cancel=True case, the final status *should* be 'cancelled'
-    assert final_row.status == Status.cancelled.value
+    # Cancelling a run must not disarm the definition — only the run ends.
+    assert final_row.enabled is True
     assert final_row.info == MOCK_SUMMARY
 
 
@@ -282,22 +265,13 @@ async def test_summary_on_execution_error(monkeypatch):
 
     # Verify the expected write happened
     assert write_entries_spy.call_count >= 1
-
-    # Expect separate writes: one with status failed, one with info summary
-    status_failed_found = False
     info_summary_found = False
     for call in write_entries_spy.call_args_list:
         args, kwargs = call
         entries = kwargs.get("entries", {})
-        if isinstance(entries, dict) and entries.get("status") == Status.failed:
-            status_failed_found = True
         if isinstance(entries, dict) and entries.get("info") == MOCK_SUMMARY:
             info_summary_found = True
 
-    assert status_failed_found, (
-        "Did not find the expected call to _write_log_entries setting status='failed'. "
-        f"Calls: {write_entries_spy.call_args_list}"
-    )
     assert info_summary_found, (
         "Did not find the expected call to _write_log_entries saving the summary. "
         f"Calls: {write_entries_spy.call_args_list}"
@@ -307,8 +281,6 @@ async def test_summary_on_execution_error(monkeypatch):
     final_rows = ts._filter_tasks(filter=f"task_id == {task_id}")
     assert final_rows, f"Could not find final row for task_id {task_id}"
     final_row = final_rows[0]
-    # The final status should be 'failed'
-    assert final_row.status == Status.failed.value
     assert final_row.info == MOCK_SUMMARY
 
 
@@ -355,7 +327,6 @@ async def test_summary_targets_definition_row_for_recurring(monkeypatch):
     task_create_outcome = ts._create_task(
         name="Recurring Test Task",
         description="A task that repeats",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )

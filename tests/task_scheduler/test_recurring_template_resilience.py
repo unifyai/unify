@@ -35,7 +35,6 @@ def _task(start_at: str) -> Task:
         task_id=10,
         name="tick",
         description="recurring tick",
-        status="scheduled",
         priority="normal",
         schedule={"start_at": start_at},
     )
@@ -108,18 +107,24 @@ class _SuccessfulHandle:
 
 
 class _FakeScheduler:
-    def __init__(self):
-        self.status_updates: list[tuple[int, str]] = []
+    """Records the only definition write a finished run may perform."""
+
+    def __init__(self, task: Task | None = None):
+        self.one_shot_completions: list[int] = []
+        self._task = task or _task("2026-07-14T15:10:00+00:00")
 
     def _get_task_or_raise(self, task_id):
-        return _task("2026-07-14T15:10:00+00:00")
+        return self._task
 
-    def _update_task_definition_status(self, *, task_id, new_status):
-        self.status_updates.append((task_id, str(new_status)))
-        return {}
+    def _mark_one_shot_completed(self, task_id):
+        # Mirrors the real helper: repeating and triggerable definitions are
+        # never disarmed by a run finishing.
+        if self._task.repeat is not None or self._task.trigger is not None:
+            return
+        self.one_shot_completions.append(task_id)
 
 
-def _active_task(scheduler: _FakeScheduler, *, rearmed: bool) -> ActiveTask:
+def _active_task(scheduler: _FakeScheduler) -> ActiveTask:
     task = object.__new__(ActiveTask)
     task._actor_handle = _FailingHandle()
     task._was_stopped = False
@@ -127,7 +132,6 @@ def _active_task(scheduler: _FakeScheduler, *, rearmed: bool) -> ActiveTask:
     task._task_id = 10
     task._instance_id = 0
     task._preserve_definition_status = False
-    task._definition_rearmed = rearmed
     task._summary_scheduled = True
 
     async def _noop_persist(**kwargs):
@@ -137,25 +141,38 @@ def _active_task(scheduler: _FakeScheduler, *, rearmed: bool) -> ActiveTask:
     return task
 
 
-def test_failed_run_restores_rearmed_definition_to_scheduled():
-    scheduler = _FakeScheduler()
-    task = _active_task(scheduler, rearmed=True)
-    with pytest.raises(RuntimeError, match="occurrence blew up"):
-        asyncio.run(task.result())
-    assert scheduler.status_updates == [(10, "scheduled")]
+def _repeating_task() -> Task:
+    return Task(
+        task_id=10,
+        name="tick",
+        description="recurring tick",
+        priority="normal",
+        schedule={"start_at": "2026-07-14T15:10:00+00:00"},
+        repeat=[{"frequency": "minutely", "interval": 10}],
+    )
 
 
-def test_failed_run_terminalizes_non_rearmed_definition():
-    scheduler = _FakeScheduler()
-    task = _active_task(scheduler, rearmed=False)
+def test_failed_run_never_disarms_a_repeating_definition():
+    """The regression that froze the SmartLead campaign runtime for 51 hours."""
+
+    scheduler = _FakeScheduler(_repeating_task())
+    task = _active_task(scheduler)
     with pytest.raises(RuntimeError, match="occurrence blew up"):
         asyncio.run(task.result())
-    assert scheduler.status_updates == [(10, "failed")]
+    assert scheduler.one_shot_completions == []
+
+
+def test_failed_one_shot_run_disarms_its_definition():
+    scheduler = _FakeScheduler()
+    task = _active_task(scheduler)
+    with pytest.raises(RuntimeError, match="occurrence blew up"):
+        asyncio.run(task.result())
+    assert scheduler.one_shot_completions == [10]
 
 
 def test_successful_result_survives_terminal_persistence_failure():
     scheduler = _FakeScheduler()
-    task = _active_task(scheduler, rearmed=False)
+    task = _active_task(scheduler)
     task._actor_handle = _SuccessfulHandle()
 
     async def _failing_persist(**kwargs):
@@ -229,30 +246,23 @@ def _run_mark_failed(entries: dict) -> _FakeStoreScheduler:
     return fake
 
 
-def test_crash_restores_recurring_definition_to_scheduled():
-    fake = _run_mark_failed(
-        {"status": "active", "repeat": ["every 10 minutes"], "trigger": None},
-    )
-    assert fake.writes and fake.writes[0]["status"] == "scheduled"
-
-
-def test_crash_restores_triggerable_definition():
-    fake = _run_mark_failed(
-        {"status": "active", "repeat": None, "trigger": {"event": "x"}},
-    )
-    assert fake.writes and fake.writes[0]["status"] == "triggerable"
-
-
-def test_crash_terminalizes_one_shot_definition():
-    fake = _run_mark_failed({"status": "active", "repeat": None, "trigger": None})
-    assert fake.writes and fake.writes[0]["status"] == "failed"
-
-
-def test_crash_leaves_non_active_definition_untouched():
-    fake = _run_mark_failed(
-        {"status": "scheduled", "repeat": ["every 10 minutes"], "trigger": None},
-    )
+def test_crash_leaves_a_recurring_definition_untouched():
+    fake = _run_mark_failed({"repeat": ["every 10 minutes"], "trigger": None})
     assert fake.writes == []
+
+
+def test_crash_leaves_a_triggerable_definition_untouched():
+    fake = _run_mark_failed({"repeat": None, "trigger": {"event": "x"}})
+    assert fake.writes == []
+
+
+def test_crash_disarms_a_one_shot_definition():
+    fake = _run_mark_failed({"repeat": None, "trigger": None})
+    assert fake.writes
+    written = fake.writes[0]
+    assert written["enabled"] is False
+    assert written["completed_at"]
+    assert "boom" in written["info"]
 
 
 # --------------------------------------------------------------------------- #

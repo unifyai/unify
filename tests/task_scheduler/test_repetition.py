@@ -14,7 +14,6 @@ from unify.task_scheduler.types.repetition import (
     next_repeated_start_at,
 )
 from unify.task_scheduler.types.schedule import Schedule
-from unify.task_scheduler.types.status import Status
 
 
 def _passing_certification_metadata():
@@ -203,7 +202,6 @@ def test_rearm_task_definition_rearms_recurring_scheduled_task():
     scheduler._create_task(
         name="Daily summary",
         description="Send the daily summary email.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -214,7 +212,7 @@ def test_rearm_task_definition_rearms_recurring_scheduled_task():
     task_rows = scheduler._filter_tasks(filter="task_id == 0")
     assert len(task_rows) == 1
     row = task_rows[0]
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.schedule_start_at == initial_start + timedelta(days=1)
     assert row.entrypoint is None
 
@@ -241,7 +239,6 @@ def test_rearm_task_definition_applies_jitter_without_drift():
     scheduler._create_task(
         name="Daily jittered scrape",
         description="Scrape the feed with dispatch jitter.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY, jitter_seconds=1800)],
     )
@@ -269,7 +266,6 @@ def test_entrypoint_review_records_symbolic_candidate_without_offline_promotion(
     scheduler._create_task(
         name="Daily description-driven summary",
         description="Summarize updates every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -299,7 +295,6 @@ def test_offline_promotion_requires_passing_certification():
     scheduler._create_task(
         name="Daily certified summary",
         description="Summarize updates every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -338,7 +333,6 @@ def test_offline_promotion_rejects_failed_certification_attestation():
     scheduler._create_task(
         name="Daily certified summary",
         description="Summarize updates every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -381,7 +375,6 @@ def test_offline_promotion_rejects_ad_hoc_primitive_replacements():
     scheduler._create_task(
         name="Daily certified summary",
         description="Summarize updates every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -421,7 +414,6 @@ def test_passing_certification_promotes_candidate_future_instances_offline():
     scheduler._create_task(
         name="Daily certified summary",
         description="Summarize updates every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -461,7 +453,6 @@ async def test_recurring_execution_rearms_before_entrypoint_review_patch():
     scheduler._create_task(
         name="Daily report",
         description="Run the daily report from the task description.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -500,7 +491,6 @@ def test_rearm_task_definition_stops_when_repeat_count_is_exhausted():
     scheduler._create_task(
         name="One repeat only",
         description="Run once and do not re-arm.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY, count=1)],
     )

@@ -43,7 +43,6 @@ from unify.task_scheduler.machine_state import (
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.execution import Wake
 from unify.task_scheduler.types.schedule import Schedule
-from unify.task_scheduler.types.status import Status
 
 # Topic the LocalActivationScheduler publishes a live TaskDue on at fire time;
 # the hosted Cloud Tasks ingress path uses the same topic.
@@ -106,7 +105,6 @@ class CoordinatorTaskEnv:
         outcome = self.scheduler._create_task(
             name=name,
             description=description,
-            status=Status.scheduled,
             schedule=Schedule(start_at=start_at.isoformat()),
             offline=offline,
         )

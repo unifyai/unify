@@ -18,7 +18,6 @@ import pytest
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from unify.common.llm_helpers import _dumps
 from unify.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed
@@ -31,10 +30,10 @@ def _answer_semantic(ts: TaskScheduler, question: str) -> str:
     tasks = ts._filter_tasks()
 
     if "how many scheduled" in q:
-        return str(sum(1 for t in tasks if t.status == Status.scheduled))
+        return str(sum(1 for t in tasks if t.enabled is True))
 
     if "cancelled" in q and "how many" in q:
-        return str(sum(1 for t in tasks if t.status == Status.cancelled))
+        return str(sum(1 for t in tasks if t.enabled is False))
 
     return "N/A"
 

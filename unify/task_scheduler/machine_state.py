@@ -703,6 +703,37 @@ def get_open_task_execution(
     return _row_to_execution(rows[0])
 
 
+def find_running_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return an open execution for one task, whatever assistant owns it.
+
+    ``get_open_task_execution`` is assistant-scoped and returns ``None`` when
+    the session has no assistant context. "Is a run in flight for this task?"
+    must not depend on who is asking, so this queries by ``task_id`` alone —
+    the definition it guards is a single row shared by every assistant that
+    can execute it.
+    """
+
+    filter_clauses = [
+        f"task_id == {int(task_id)}",
+        _open_execution_state_filter(),
+    ]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
 def list_scheduled_executions(
     *,
     assistant_id: str | int | None,

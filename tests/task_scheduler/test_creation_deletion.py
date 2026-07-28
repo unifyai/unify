@@ -14,7 +14,6 @@ from unify.task_scheduler import typed_tasks_client
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
-from unify.task_scheduler.types.status import Status
 
 
 @_handle_project
@@ -34,7 +33,7 @@ def test_create_task():
         row.description
         == "Send an email to Jeff Smith, kindly congratulating him and explaining that he has been promoted from sales rep to sales manager."
     )
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.trigger is None
     assert row.schedule is None
     assert row.deadline is None
@@ -45,7 +44,6 @@ def test_create_task():
     assert row.response_policy is None
     assert row.entrypoint == 101
     assert row.enabled is True
-    assert row.activated_by is None
 
 
 @_handle_project
@@ -182,7 +180,6 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         out = ts._create_task(
             name="Daily shared alert",
             description="Check KPI thresholds for the patch team.",
-            status=Status.scheduled,
             schedule=Schedule(start_at=initial_start.isoformat()),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
             destination=f"team:{team_id}",
@@ -255,7 +252,7 @@ def test_create_tasks_batch_returns_ordered_ids():
     assert out["details"]["task_ids"] == [0, 1, 2]
     rows = sorted(ts._filter_tasks(), key=lambda task: task.task_id)
     assert [row.name for row in rows] == ["A", "B", "C"]
-    assert all(row.status == Status.scheduled for row in rows)
+    assert all(row.enabled for row in rows)
 
 
 @_handle_project
@@ -273,7 +270,7 @@ def test_create_tasks_preserves_offline_delivery_flag():
     rows = sorted(ts._filter_tasks(), key=lambda task: task.task_id)
     assert [row.offline for row in rows] == [True, True]
     assert [row.entrypoint for row in rows] == [None, None]
-    assert rows[0].status == Status.scheduled
+    assert rows[0].enabled is True
 
 
 @_handle_project

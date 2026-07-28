@@ -20,7 +20,6 @@ def _provider_task(*, destination: str | None = None) -> Task:
         instance_id=1,
         name="Summarize issue",
         description="Summarize the GitHub issue for the boss.",
-        status="triggerable",
         priority="normal",
         destination=destination,
         trigger=parse_task_trigger(

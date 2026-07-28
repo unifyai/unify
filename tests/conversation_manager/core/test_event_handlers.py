@@ -2716,7 +2716,6 @@ class TestTaskDueEventHandlers:
         from unify.task_scheduler.task_scheduler import TaskScheduler
         from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
         from unify.task_scheduler.types.schedule import Schedule
-        from unify.task_scheduler.types.status import Status
 
         calls: list[dict] = []
         actor = SimulatedActor(steps=0)
@@ -2731,7 +2730,6 @@ class TestTaskDueEventHandlers:
         task_id = scheduler._create_task(
             name="Scheduled integration report",
             description="Prepare the scheduled report.",
-            status=Status.scheduled,
             schedule=Schedule(start_at="2026-04-10T09:00:00+00:00"),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         )["details"]["task_id"]

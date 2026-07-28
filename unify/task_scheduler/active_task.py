@@ -33,7 +33,6 @@ from .machine_state import (
     create_or_adopt_live_task_run,
     update_task_run_record,
 )
-from .types.status import Status
 from ..common.llm_client import new_llm_client
 import logging
 from ..common.handle_wrappers import HandleWrapperMixin
@@ -366,8 +365,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                     ),
                 )
             self._was_stopped = True
-            if not self._preserve_definition_status:
-                self._mirror_status(Status.cancelled)
             asyncio.create_task(
                 self._persist_task_run_terminal_state(
                     state="cancelled",
@@ -399,8 +396,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             fallback_positional_keys=("reason",),
         )
         self._was_stopped = True
-        if not self._preserve_definition_status:
-            self._mirror_status(Status.cancelled)
         asyncio.create_task(
             self._persist_task_run_terminal_state(
                 state="cancelled",
@@ -539,22 +534,12 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         and self._task_id is not None
                         and not self._preserve_definition_status
                     ):
-                        definition_status = final_status
-                        if self._definition_rearmed:
-                            # Rearm-on-start already advanced the definition to the
-                            # next open slot; restore scheduled/triggerable status
-                            # regardless of the run outcome. A failed occurrence
-                            # belongs to the run row — it must never terminalize
-                            # the recurring definition and disarm the schedule.
-                            task = self._scheduler._get_task_or_raise(self._task_id)
-                            definition_status = (
-                                "triggerable"
-                                if task.trigger is not None and task.repeat is None
-                                else "scheduled"
-                            )
-                        self._scheduler._update_task_definition_status(  # type: ignore[attr-defined]
-                            task_id=self._task_id,
-                            new_status=definition_status,
+                        # The run outcome is already on the Execution row. The
+                        # definition only changes when a one-shot finishes and
+                        # must not fire again; a repeating or triggerable
+                        # definition stays armed whatever this occurrence did.
+                        self._scheduler._mark_one_shot_completed(  # type: ignore[attr-defined]
+                            self._task_id,
                         )
 
                         if not getattr(self, "_summary_scheduled", False):
@@ -566,12 +551,13 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                                     final_status,
                                 )
                                 asyncio.create_task(
-                                    self._save_final_summary(final_status)
+                                    self._save_final_summary(final_status),
                                 )
                                 self._summary_scheduled = True  # type: ignore[attr-defined]
                             except Exception as summary_e:
                                 logger.error(
-                                    "Error creating summary task: %s", summary_e
+                                    "Error creating summary task: %s",
+                                    summary_e,
                                 )
             except Exception:
                 logger.exception(
@@ -616,13 +602,3 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
     # ------------------------------------------------------------------ #
     # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
-
-    def _mirror_status(self, new_status: Status) -> None:
-        """Update the task-row status if we were instantiated by a scheduler."""
-        if self._preserve_definition_status:
-            return
-        if self._scheduler and self._task_id is not None:
-            self._scheduler._update_task_definition_status(  # type: ignore[attr-defined]
-                task_id=self._task_id,
-                new_status=new_status,
-            )

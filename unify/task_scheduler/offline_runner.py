@@ -312,13 +312,12 @@ def _update_task_run(
 
 
 def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
-    """Terminalize the source task row when scheduler finalization did not run.
+    """Disarm a one-shot definition whose runner crashed before finalizing.
 
-    One-shot definitions are marked ``failed``. Recurring/triggerable
-    definitions are restored to their open slot (``scheduled`` /
-    ``triggerable``) instead — a single crashed, killed, or timed-out
-    occurrence must never disarm the schedule (the failure itself is
-    recorded on the Tasks/Executions run row).
+    Recurring and triggerable definitions are left completely untouched: a
+    crashed, killed, or timed-out occurrence says nothing about the series.
+    The failure itself is recorded on the Tasks/Executions row by the caller,
+    which is the only place a run outcome belongs.
     """
 
     if config.mode == "function" or config.source_task_log_id <= 0:
@@ -334,20 +333,13 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
             return
         row = rows[0]
         entries = dict(row.entries or {})
-        if str(entries.get("status") or "") != "active":
+        if entries.get("repeat") is not None or entries.get("trigger") is not None:
             return
-        is_recurring = entries.get("repeat") is not None
-        is_triggerable = entries.get("trigger") is not None and not is_recurring
-        if is_recurring:
-            new_status = "scheduled"
-        elif is_triggerable:
-            new_status = "triggerable"
-        else:
-            new_status = "failed"
         scheduler._write_log_entries(  # type: ignore[attr-defined]
             logs=config.source_task_log_id,
             entries={
-                "status": new_status,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "enabled": False,
                 "info": _truncate_text(
                     "Offline task runner failed before task lifecycle finalization "
                     f"completed: {error_text}",
