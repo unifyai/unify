@@ -11,8 +11,8 @@ from unify.canvas_manager.types.action import (
 )
 from unify.canvas_manager.types.binding import (
     ALIAS_PATTERN,
-    CANVAS_MAX_BINDINGS,
-    CANVAS_MAX_ROWS,
+    MAX_BINDINGS_PER_CANVAS,
+    MAX_ROWS_PER_BINDING,
     BindingArgs,
     FilterArgs,
     JoinArgs,
@@ -33,8 +33,8 @@ from unify.canvas_manager.types.view import (
 __all__ = [
     "ACTION_NAME_PATTERN",
     "ALIAS_PATTERN",
-    "CANVAS_MAX_BINDINGS",
-    "CANVAS_MAX_ROWS",
+    "MAX_BINDINGS_PER_CANVAS",
+    "MAX_ROWS_PER_BINDING",
     "ActionKind",
     "BindingArgs",
     "BuildReport",

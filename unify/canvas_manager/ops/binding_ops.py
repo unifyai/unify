@@ -17,7 +17,7 @@ import json
 from typing import Dict, List, Sequence
 
 from unify.canvas_manager.types.binding import (
-    CANVAS_MAX_BINDINGS,
+    MAX_BINDINGS_PER_CANVAS,
     PrimitiveBinding,
 )
 
@@ -42,9 +42,9 @@ def coerce_bindings(bindings: Sequence[object] | None) -> List[PrimitiveBinding]
                 f"Binding must be a PrimitiveBinding or dict, got {type(entry).__name__}.",
             )
 
-    if len(coerced) > CANVAS_MAX_BINDINGS:
+    if len(coerced) > MAX_BINDINGS_PER_CANVAS:
         raise BindingError(
-            f"A canvas may declare at most {CANVAS_MAX_BINDINGS} bindings; got {len(coerced)}. "
+            f"A canvas may declare at most {MAX_BINDINGS_PER_CANVAS} bindings; got {len(coerced)}. "
             f"Consider a join instead of several separate reads.",
         )
 
@@ -60,29 +60,18 @@ def coerce_bindings(bindings: Sequence[object] | None) -> List[PrimitiveBinding]
 
 
 def check_bindable(bindings: Sequence[PrimitiveBinding]) -> None:
-    """Reject any binding naming a manager or table not declared bindable.
+    """Reject any binding a canvas is not allowed to display.
 
-    The allowlist lives on each manager's registry spec, so a manager opts its
-    tables in rather than everything being reachable by default.
+    The policy lives in ``canvas_manager.policy`` because it is about what may
+    be projected onto a shareable surface, not about what a manager owns; the
+    table names themselves come from each manager's own context declaration.
     """
-    from unify.function_manager.primitives.registry import get_registry
+    from unify.canvas_manager.policy import check_readable
 
-    registry = get_registry()
     for binding in bindings:
-        allowed = registry.bindable_tables(binding.manager)
-        if not allowed:
-            raise BindingError(
-                f"Manager {binding.manager!r} exposes no bindable tables, so a canvas "
-                f"cannot read from it.",
-            )
-        if binding.table not in allowed:
-            # Dynamic sub-tables (``Data/Sales``) are allowed when their root is.
-            root = binding.table.split("/", 1)[0]
-            if root not in allowed:
-                raise BindingError(
-                    f"Table {binding.table!r} is not bindable on manager {binding.manager!r}. "
-                    f"Available: {', '.join(sorted(allowed))}.",
-                )
+        problem = check_readable(binding.manager, binding.table)
+        if problem:
+            raise BindingError(f"Binding {binding.alias!r}: {problem}")
 
 
 def resolve_binding_contexts(
@@ -166,11 +155,17 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
                 )
         except Exception as error:  # noqa: BLE001 - surfaced verbatim to the author
             raise BindingError(
-                f"Binding {binding.alias!r} ({operation} on {context}) failed to execute: {error}",
+                f"Binding {binding.alias!r} ({operation} on {context}) failed to execute: "
+                f"{error}\n"
+                f"If this table does not exist yet, materialise it before binding to it. "
+                f"Data from connected apps in particular has to be fetched and stored "
+                f"first -- call the integration tools, write the rows with "
+                f"`primitives.data.ingest` or `primitives.data.insert_rows`, schedule the "
+                f"refresh with `primitives.tasks`, then bind the canvas to that table.",
             ) from error
 
 
-def serialize_bindings(bindings: Sequence[PrimitiveBinding]) -> str:
+def serialize_bindings(bindings: Sequence[object]) -> str:
     """Serialise resolved bindings for storage on the canvas record."""
     return json.dumps(
         [binding.model_dump(exclude_none=True) for binding in bindings],
@@ -185,11 +180,20 @@ def deserialize_bindings(payload: str | None) -> List[PrimitiveBinding]:
     return [PrimitiveBinding.model_validate(entry) for entry in json.loads(payload)]
 
 
-def binding_contexts(bindings: Sequence[PrimitiveBinding]) -> str:
-    """Comma-joined resolved contexts, for auditing what a canvas can read."""
+def binding_contexts(bindings: Sequence[object]) -> str:
+    """Comma-joined resolved contexts, for auditing what a canvas can read.
+
+    Accepts both binding kinds. An integration binding resolves to the single
+    canvas-owned context its sync fills, and has no join tables, so the lookups
+    below are tolerant rather than assuming one shape.
+    """
     seen: Dict[str, None] = {}
     for binding in bindings:
-        for path in [binding.resolved_context, *(binding.resolved_tables or [])]:
+        paths = [
+            getattr(binding, "resolved_context", None),
+            *(getattr(binding, "resolved_tables", None) or []),
+        ]
+        for path in paths:
             if path:
                 seen.setdefault(path, None)
     return ",".join(seen)

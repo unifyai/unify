@@ -53,16 +53,35 @@ class BaseCanvasManager:
     Data: bindings versus props
     ---------------------------
     Use a **binding** whenever the answer is a query -- rows, counts,
-    aggregates, joins -- over data a manager keeps. Bindings re-run on every
-    view, so the canvas is always current, and the query itself never travels to
-    the browser.
+    aggregates, joins -- over a table. Bindings re-run on every view, so the
+    canvas is always current, and the query itself never travels to the browser.
 
     Use **props** for values that took reasoning to produce: a summary of a
     conversation, an answer distilled from a document, anything that needed a
-    language model. Those cannot re-run per view -- they would be slow and
-    expensive on every page load -- so compute them once, pass them as props,
-    and refresh them on a schedule with ``refresh_props`` if they need to stay
-    current.
+    language model. Those cannot re-run per view, so compute them once, pass
+    them as props, and refresh them on a schedule with ``refresh_props``.
+
+    Data from connected apps
+    ------------------------
+    A canvas cannot call a connected app while someone is looking at it. A
+    provider call takes seconds rather than milliseconds, rate limits are per
+    account rather than per viewer, and a call can come back needing a
+    reconnection that a rendered surface has no way to resolve.
+
+    So app data is **stored first, displayed second**. Fetch it with the
+    integration tools, write it to a table, keep it fresh with a scheduled task,
+    and bind the canvas to that table like any other data::
+
+        rows = await primitives.integrations.github.list_issues(state="open")
+        await primitives.data.ingest(rows, "Data/GitHubIssues")
+        # ...schedule a task to repeat that, then bind the canvas to the table.
+
+    This is also the only way to show two apps together. Providers cannot be
+    joined against each other directly; once both are stored, joining them is an
+    ordinary query.
+
+    Binding to a table that has not been stored yet fails when the canvas is
+    created, naming the table, rather than producing a view that renders empty.
 
     Interactivity
     -------------
@@ -164,8 +183,12 @@ class BaseCanvasManager:
 
         bindings : list[PrimitiveBinding] | None, default ``None``
             Live queries, each with an ``alias`` the canvas reads by. Every
-            binding is dry-run before the canvas is stored, so a bad filter or
-            an unknown column fails here rather than in front of the user.
+            binding is dry-run before the canvas is stored, so a bad filter, an
+            unknown column, or a table that does not exist yet fails here rather
+            than in front of the user.
+
+            A canvas can only display data that lives in a table. For connected
+            apps that means storing it first — see "Data from connected apps".
 
         props : dict | None, default ``None``
             Static values, JSON-serialisable. Use for anything that needed
@@ -252,6 +275,63 @@ class BaseCanvasManager:
                 ],
             )
 
+        A dashboard over two connected apps. Each app's data is stored first,
+        which is what lets the canvas read both -- and what would let a single
+        query join them::
+
+            # Store, on a schedule, well before the canvas is built.
+            issues = await primitives.integrations.github.list_issues(state="open")
+            await primitives.data.ingest(issues, "Data/GitHubIssues")
+            deals = await primitives.integrations.hubspot.list_deals()
+            await primitives.data.ingest(deals, "Data/HubSpotDeals")
+
+            result = primitives.canvas.create_view(
+                tsx='''
+                import { Canvas, Grid, Card, CardHeader, CardTitle,
+                         CardContent, BarChart, Table } from "@unity/canvas-kit";
+
+                export default function Delivery({ canvas }) {
+                  return (
+                    <Canvas>
+                      <Grid columns={2}>
+                        <Card>
+                          <CardHeader><CardTitle>Open issues</CardTitle></CardHeader>
+                          <CardContent>
+                            <BarChart data={canvas.data.issues ?? []}
+                                      x="repo" y="count" />
+                          </CardContent>
+                        </Card>
+                        <Card>
+                          <CardHeader><CardTitle>Pipeline</CardTitle></CardHeader>
+                          <CardContent>
+                            <Table
+                              columns={[
+                                { key: "name", header: "Deal" },
+                                { key: "amount", header: "Amount", numeric: true },
+                              ]}
+                              rows={canvas.data.deals ?? []}
+                            />
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    </Canvas>
+                  );
+                }
+                ''',
+                title="Delivery and pipeline",
+                bindings=[
+                    PrimitiveBinding(
+                        alias="issues", manager="data", table="Data/GitHubIssues",
+                        args={"operation": "filter", "limit": 200},
+                    ),
+                    PrimitiveBinding(
+                        alias="deals", manager="data", table="Data/HubSpotDeals",
+                        args={"operation": "filter", "order_by": "amount",
+                              "descending": True, "limit": 50},
+                    ),
+                ],
+            )
+
         A canvas that does something. The form is rendered from the schema, and
         the arguments are checked server-side before the function runs::
 
@@ -306,6 +386,12 @@ class BaseCanvasManager:
           themes even if they were not.
         - **Do not put a language-model call behind a binding.** Bindings are
           queries. Compute the answer once and pass it in ``props``.
+        - **Do not call a connected app from the canvas source.** There is no
+          network in the frame, so it cannot work. Store the data in a table
+          first and bind to that.
+        - **Do not paste app data into ``props``.** That is a snapshot with no
+          refresh path, and it cannot be joined against a second app. Store it
+          in a table and schedule the refresh.
         - **Do not describe an action vaguely.** ``label`` is what the viewer
           reads before consenting, so "Send to everyone listed" beats "Submit".
         - **Do not skip ``review``** to save time. It is the only check that
