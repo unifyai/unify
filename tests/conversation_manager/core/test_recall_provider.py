@@ -1,4 +1,4 @@
-"""Contract tests for the meet provider seam and the Recall provider."""
+"""Contract tests for the Recall meeting backend."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -6,11 +6,6 @@ from urllib.parse import parse_qs, urlparse
 import jwt
 import pytest
 
-from unify.conversation_manager.domains.browser_meeting import (
-    AGENT_SERVICE_PROVIDER,
-    RECALL_PROVIDER,
-    configured_meet_provider,
-)
 from unify.conversation_manager.domains.recall.client import (
     RecallBotState,
     RecallError,
@@ -45,30 +40,6 @@ def _provider(**kwargs) -> RecallMeetProvider:
     kwargs.setdefault("relay_url", "")
     provider = RecallMeetProvider(client=client, **kwargs)
     return provider
-
-
-# ---------------------------------------------------------------------------
-# Provider selection
-# ---------------------------------------------------------------------------
-
-
-def test_provider_defaults_to_the_existing_browser() -> None:
-    """An unset value must not move customer meetings onto a new backend."""
-    with patch.dict("os.environ", {"MEET_PROVIDER": ""}, clear=False):
-        assert configured_meet_provider() == AGENT_SERVICE_PROVIDER
-
-
-def test_unrecognised_provider_falls_back_rather_than_guessing() -> None:
-    """A typo is a misconfiguration, not an instruction to switch backends."""
-    with patch.dict("os.environ", {"MEET_PROVIDER": "recal"}, clear=False):
-        assert configured_meet_provider() == AGENT_SERVICE_PROVIDER
-
-
-def test_recall_provider_is_selectable() -> None:
-    with patch.dict("os.environ", {"MEET_PROVIDER": "recall"}, clear=False):
-        assert configured_meet_provider() == RECALL_PROVIDER
-    with patch.dict("os.environ", {"MEET_PROVIDER": " RECALL "}, clear=False):
-        assert configured_meet_provider() == RECALL_PROVIDER
 
 
 # ---------------------------------------------------------------------------

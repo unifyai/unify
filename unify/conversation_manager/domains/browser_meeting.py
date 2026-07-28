@@ -1,35 +1,25 @@
 """The seam between the call manager and whatever joins a browser meeting.
 
-Two backends satisfy this contract:
+One backend satisfies this contract today: a hosted Recall.ai bot rendering our
+bridge page, which reaches the fast brain over LiveKit like every other voice
+channel. The seam is kept rather than inlined because Recall's own roadmap
+(Meeting Direct Connect, once Google's Meet Media API leaves preview) is a
+second implementation of exactly these operations.
 
-* ``agent_service`` -- the pod-local Playwright browser, driven through
-  agent-service, with a PulseAudio bridge to the fast brain.
-* ``recall`` -- a hosted Recall.ai bot rendering our bridge page, which
-  reaches the fast brain over LiveKit like every other voice channel.
-
-Only meeting-backend operations live behind the seam. Room creation, fast-brain
-dispatch, IPC notification and speaker bookkeeping are identical either way and
+Only meeting-backend operations live behind it. Room creation, fast-brain
+dispatch, IPC notification and speaker bookkeeping are backend-independent and
 stay in the call manager.
-
-The provider is chosen per pod by ``MEET_PROVIDER``, so a cutover and a
-rollback are the same one-value change rather than a deploy.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 LOGGER = logging.getLogger(__name__)
 
-AGENT_SERVICE_PROVIDER = "agent_service"
 RECALL_PROVIDER = "recall"
-
-# Absent or unrecognised means the browser we already run. A typo must not
-# silently move customer meetings onto a different backend.
-DEFAULT_MEET_PROVIDER = AGENT_SERVICE_PROVIDER
 
 
 @dataclass(frozen=True)
@@ -107,48 +97,18 @@ class MeetProvider(Protocol):
         """Stop sharing."""
 
 
-def configured_meet_provider() -> str:
-    """The provider name this pod is configured to use."""
-
-    name = (os.environ.get("MEET_PROVIDER") or "").strip().lower()
-    if name in (AGENT_SERVICE_PROVIDER, RECALL_PROVIDER):
-        return name
-    return DEFAULT_MEET_PROVIDER
-
-
 def build_meet_provider(call_manager: Any) -> MeetProvider:
-    """Construct the backend this pod is configured for.
+    """Construct the backend that joins browser meetings.
 
-    A pod asking for ``recall`` without credentials falls back to the local
-    browser rather than refusing to join: during the transition there is still
-    something to fall back to, and a loud log line is more useful than a
-    meeting nobody attends. Once Recall is the only backend there will be
-    nothing to fall back to and this should fail instead.
+    Recall is the only backend. There is deliberately no fallback: the local
+    Playwright path it replaced is gone, so an unconfigured pod cannot join a
+    meeting by any route and should say so at construction rather than fail
+    somewhere less legible mid-join.
 
-    Imports are function-local because both backends import this module.
+    The import is function-local because ``recall.provider`` imports the types
+    above, so a module-scope import would be circular.
     """
 
-    # Imported here rather than at module scope: agent_service_meeting and
-    # recall.provider both import the types above, so a top-level import would
-    # be circular.
-    from unify.conversation_manager.domains.agent_service_meeting import (
-        AgentServiceMeetProvider,
-    )
+    from unify.conversation_manager.domains.recall.provider import RecallMeetProvider
 
-    if configured_meet_provider() == RECALL_PROVIDER:
-        from unify.conversation_manager.domains.recall.client import recall_configured
-
-        if recall_configured():
-            from unify.conversation_manager.domains.recall.provider import (
-                RecallMeetProvider,
-            )
-
-            LOGGER.info("browser meetings via Recall.ai")
-            return RecallMeetProvider(assistant_id=call_manager.assistant_id)
-
-        LOGGER.error(
-            "MEET_PROVIDER=recall but RECALL_API_KEY is unset; "
-            "falling back to the local browser",
-        )
-
-    return AgentServiceMeetProvider(call_manager)
+    return RecallMeetProvider(assistant_id=call_manager.assistant_id)
