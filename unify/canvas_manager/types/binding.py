@@ -20,14 +20,14 @@ from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-# Row ceiling for a single binding. Matches the dashboard bridge: enough for a
-# chart or a table page, small enough that one canvas cannot pull a whole table
-# into a browser.
-CANVAS_MAX_ROWS = 1000
+# Rows one binding may return. Enough for a chart or a page of a table, small
+# enough that a single view cannot pull a whole table into a browser. This is a
+# per-query ceiling, not a limit on how much a canvas may contain.
+MAX_ROWS_PER_BINDING = 1000
 
-# Ceiling on bindings per canvas. A canvas needing more than this is almost
-# always better served by one join than by a dozen round trips.
-CANVAS_MAX_BINDINGS = 12
+# Distinct queries one canvas may declare. A view needing more than this is
+# almost always better served by one join than by a dozen round trips.
+MAX_BINDINGS_PER_CANVAS = 12
 
 ALIAS_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
 
@@ -41,7 +41,7 @@ class FilterArgs(BaseModel):
     exclude_columns: Optional[List[str]] = None
     order_by: Optional[str] = None
     descending: bool = False
-    limit: int = Field(default=100, ge=1, le=CANVAS_MAX_ROWS)
+    limit: int = Field(default=100, ge=1, le=MAX_ROWS_PER_BINDING)
     offset: Optional[int] = None
     group_by: Optional[List[str]] = None
 
@@ -67,7 +67,7 @@ class JoinArgs(BaseModel):
     left_where: Optional[str] = None
     right_where: Optional[str] = None
     result_where: Optional[str] = None
-    result_limit: int = Field(default=100, ge=1, le=CANVAS_MAX_ROWS)
+    result_limit: int = Field(default=100, ge=1, le=MAX_ROWS_PER_BINDING)
     result_offset: Optional[int] = None
 
 

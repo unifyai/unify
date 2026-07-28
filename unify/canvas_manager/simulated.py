@@ -77,8 +77,10 @@ class SimulatedCanvasManager(BaseCanvasManager):
         bindings: Optional[List[PrimitiveBinding]],
         actions: Optional[List[CanvasAction]],
     ) -> tuple[List[PrimitiveBinding], List[CanvasAction]]:
+        coerced = binding_ops.coerce_bindings(bindings)
+        binding_ops.check_bindable(coerced)
         resolved = binding_ops.resolve_binding_contexts(
-            binding_ops.coerce_bindings(bindings),
+            coerced,
             root_context="Simulated",
         )
         return resolved, validate_actions(coerce_actions(actions))
