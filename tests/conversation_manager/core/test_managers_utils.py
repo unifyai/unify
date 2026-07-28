@@ -724,3 +724,106 @@ async def test_log_message_slack_channel_without_ids_creates_fresh_exchange():
         assert (
             _exchange_id_of_last_message(cm) != first_exchange
         ), "Slack channel messages without ids must not group under a blank key"
+
+
+# ---------------------------------------------------------------------------
+# Call-utterance offsets
+# ---------------------------------------------------------------------------
+
+
+class TestCallUtteranceStamp:
+    """The ``MM.SS`` offset written onto each call utterance's metadata."""
+
+    def test_measures_from_the_utterance_not_the_logging_clock(self):
+        """Regression: the stamp used to read the clock at write time.
+
+        ``log_message`` runs on the transcript worker, so a stamp read there
+        charges the utterance for however long its write queued behind exchange
+        creation and context provisioning. In staging that inflated a Unify
+        Meet's first utterance by 18s while later ones were accurate, stretching
+        early offsets past their position in the audio.
+        """
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        call_start = datetime(2026, 7, 27, 12, 48, 23)
+        spoken_at = call_start + timedelta(seconds=5)
+
+        # Even if the write lands 18s later, the stamp reflects when it was said.
+        assert call_utterance_stamp(call_start, spoken_at) == "00.05"
+
+    def test_is_monotonic_in_speech_order(self):
+        """No TTS fudge, so ordering by stamp matches ordering by speech.
+
+        A +2s allowance used to be added to assistant turns, which inverted
+        adjacent utterances: a reply could be stamped before the question.
+        """
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        call_start = datetime(2026, 7, 27, 12, 48, 23)
+        stamps = [
+            call_utterance_stamp(call_start, call_start + timedelta(seconds=offset))
+            for offset in (5, 9, 15, 20)
+        ]
+        assert stamps == ["00.05", "00.09", "00.15", "00.20"]
+        assert stamps == sorted(stamps)
+
+    def test_minutes_are_not_truncated_past_an_hour(self):
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        call_start = datetime(2026, 7, 27, 12, 0, 0)
+        assert (
+            call_utterance_stamp(call_start, call_start + timedelta(seconds=4325))
+            == "72.05"
+        )
+
+    def test_blank_outside_a_call(self):
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        assert call_utterance_stamp(None, datetime(2026, 7, 27)) == ""
+
+    def test_clamps_an_utterance_stamped_before_the_call_start(self):
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        call_start = datetime(2026, 7, 27, 12, 48, 23)
+        assert (
+            call_utterance_stamp(call_start, call_start - timedelta(seconds=9))
+            == "00.00"
+        )
+
+
+class TestCallStartForMedium:
+    def test_each_voice_medium_reads_its_own_session_clock(self):
+        from unify.conversation_manager.domains.managers_utils import (
+            call_start_for_medium,
+        )
+        from unify.conversation_manager.cm_types import Medium
+
+        call_manager = MagicMock()
+        call_manager.call_start_timestamp = "phone"
+        call_manager.unify_meet_start_timestamp = "meet"
+        call_manager.google_meet_start_timestamp = "gmeet"
+        call_manager.teams_meet_start_timestamp = "teams"
+
+        assert call_start_for_medium(call_manager, Medium.PHONE_CALL) == "phone"
+        assert call_start_for_medium(call_manager, Medium.WHATSAPP_CALL) == "phone"
+        assert call_start_for_medium(call_manager, Medium.UNIFY_MEET) == "meet"
+        assert call_start_for_medium(call_manager, Medium.GOOGLE_MEET) == "gmeet"
+        assert call_start_for_medium(call_manager, Medium.TEAMS_MEET) == "teams"
+
+    def test_text_mediums_have_no_session_clock(self):
+        from unify.conversation_manager.domains.managers_utils import (
+            call_start_for_medium,
+        )
+        from unify.conversation_manager.cm_types import Medium
+
+        assert call_start_for_medium(MagicMock(), Medium.EMAIL) is None

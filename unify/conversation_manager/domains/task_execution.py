@@ -98,6 +98,7 @@ async def _register_live_task_handle(
     *,
     handle: "SteerableToolHandle",
     query: str,
+    task_description: str | None = None,
 ) -> int:
     """Register a deterministically started task with CM steering state."""
 
@@ -118,6 +119,8 @@ async def _register_live_task_handle(
         "initial_snapshot_state": getattr(cm, "_current_snapshot_state", None),
         "context_opted_in": False,
     }
+    if task_description:
+        cm.in_flight_actions[handle_id]["task_description"] = task_description
     asyncio.create_task(
         managers_utils.actor_watch_result(
             handle_id,
@@ -165,7 +168,12 @@ async def _start_live_task_due_execution(
         f"Scheduled task due now: '{_task_due_label(event, activation)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=activation.task_description,
+    )
 
 
 async def _start_live_task_trigger_execution(
@@ -180,6 +188,11 @@ async def _start_live_task_trigger_execution(
         )
 
     scheduler = ManagerRegistry.get_task_scheduler()
+    task_description: str | None = None
+    try:
+        task_description = scheduler._get_task_or_raise(event.task_id).description
+    except ValueError:
+        task_description = None
     delegate = _ConversationTaskExecutionDelegate(cm.actor)
     delegate_token = current_task_execution_delegate.set(delegate)
     try:
@@ -194,7 +207,12 @@ async def _start_live_task_trigger_execution(
         f"Task triggered via REST API: '{_task_trigger_label(event)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=task_description,
+    )
 
 
 def _current_task_assistant_id() -> str | None:
@@ -792,7 +810,12 @@ async def _handle_provider_event_dispatch_requested_event(
             f"Provider event started task {event.task_id} "
             f"(operation {event.operation_id})."
         )
-        await _register_live_task_handle(cm, handle=handle, query=query)
+        await _register_live_task_handle(
+            cm,
+            handle=handle,
+            query=query,
+            task_description=outcome.description,
+        )
         cm.notifications_bar.push_notif("Tasks", query, event.timestamp)
     return False
 

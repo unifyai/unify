@@ -1,4 +1,3 @@
-from datetime import timedelta
 import asyncio
 import os
 from time import perf_counter
@@ -23,7 +22,6 @@ from unify.conversation_manager.domains.comms_utils import (
 )
 from unify.conversation_manager.event_broker import get_event_broker
 from unify.conversation_manager.events import *
-from unify.common.prompt_helpers import now as prompt_now
 from unify.events.event_bus import EVENT_BUS
 from unify.manager_registry import ManagerRegistry
 from unify.function_manager.primitives import default_runtime_scope
@@ -1142,6 +1140,40 @@ def _derive_conversation_key(
     return None
 
 
+def call_start_for_medium(call_manager, medium: "Medium"):
+    """The session-start instant this medium measures utterance offsets from."""
+    if medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL):
+        return call_manager.call_start_timestamp
+    if medium == Medium.UNIFY_MEET:
+        return call_manager.unify_meet_start_timestamp
+    if medium == Medium.GOOGLE_MEET:
+        return call_manager.google_meet_start_timestamp
+    if medium == Medium.TEAMS_MEET:
+        return call_manager.teams_meet_start_timestamp
+    return None
+
+
+def call_utterance_stamp(call_start, spoken_at) -> str:
+    """``MM.SS`` from session start to this utterance, or "" outside a call.
+
+    Measured from the utterance's own timestamp rather than the clock at logging
+    time. This runs on the transcript worker, so reading the clock here charges
+    every utterance for however long its write queued behind exchange creation
+    and context provisioning -- worst on a call's first utterance (18s observed
+    in staging), decaying as the pipeline warms. That pushed early offsets well
+    past their position in the audio.
+
+    Still only an approximation of a position in the recording: the session-start
+    event precedes the egress compositor by a few seconds. Consumers that need
+    an exact position use the ``recording_started_at`` anchor on the exchange.
+    """
+    if not call_start or spoken_at is None:
+        return ""
+    elapsed = int((spoken_at - call_start).total_seconds())
+    minutes, seconds = divmod(max(0, elapsed), 60)
+    return f"{minutes:02d}.{seconds:02d}"
+
+
 def _conversation_exchange_metadata(
     event: "Event",
     medium: "Medium",
@@ -1457,30 +1489,10 @@ async def log_message(
                 if recovered is not None:
                     exchange_id = recovered
 
-    call_utterance_timestamp = ""
-    call_start = (
-        cm.call_manager.call_start_timestamp
-        if medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL)
-        else (
-            cm.call_manager.unify_meet_start_timestamp
-            if medium == Medium.UNIFY_MEET
-            else (
-                cm.call_manager.google_meet_start_timestamp
-                if medium == Medium.GOOGLE_MEET
-                else (
-                    cm.call_manager.teams_meet_start_timestamp
-                    if medium == Medium.TEAMS_MEET
-                    else None
-                )
-            )
-        )
+    call_utterance_timestamp = call_utterance_stamp(
+        call_start_for_medium(cm.call_manager, medium),
+        event.timestamp,
     )
-    if call_start:
-        delta = prompt_now(as_string=False) - call_start
-        if role == "Assistant":
-            delta += timedelta(seconds=2)
-        minutes, seconds = divmod(int(delta.total_seconds()), 60)
-        call_utterance_timestamp = f"{minutes:02d}.{seconds:02d}"
 
     # publish transcript on a separate thread
     def _publish_transcript() -> int:

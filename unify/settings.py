@@ -144,8 +144,8 @@ class ProductionSettings(BaseSettings):
 
     # Comma-separated tool/method names when EVENTBUS_ORCHESTRA_PERSIST_MODE
     # is ``allowlist`` and the event is **not** under a execution lineage
-    # (default: CodeAct execution boundaries + tool results).
-    EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "execute_code,execute_function"
+    # (default: CodeAct action boundary + execution boundaries + tool results).
+    EVENTBUS_ORCHESTRA_PERSIST_TOOLS: str = "act,execute_code,execute_function"
 
     # ─────────────────────────────────────────────────────────────────────────
     # EventBus Pub/Sub Streaming (Live Actions)

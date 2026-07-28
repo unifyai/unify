@@ -97,6 +97,7 @@ async def test_provider_event_start_leaves_definition_unarmed():
         assert updates["captured_task_revision"] == 5
         assert updates["revision"] == "rev-accepted-1"
         assert updates["state"] == "running"
+        assert datetime.fromisoformat(updates["started_at"])
 
     await handle.stop(reason="test cleanup")
 

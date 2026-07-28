@@ -17,6 +17,7 @@ from unify.conversation_manager.domains.ipc_socket import (
     CallEventSocketServer,
     CM_EVENT_SOCKET_ENV,
 )
+from unify.conversation_manager.speaker_id import VOICE_PROFILES_ENV
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import DEFAULT_ICON, ICONS
 from unify.helpers import (
@@ -111,6 +112,26 @@ MEET_JOIN_CONNECT_RETRIES = 2
 # wedged forever. Keep this aligned with ``initialize_process_timeout`` in
 # ``medium_scripts/worker.py``.
 WORKER_REWARM_STALL_S = 60.0
+
+
+# Cookies Google sets on a signed-in session. A storage state missing all of
+# them is a signed-out (or challenge) context and must never overwrite the
+# durable blob the next join hydrates from.
+GOOGLE_AUTH_COOKIE_NAMES = frozenset({"SID", "__Secure-1PSID", "__Secure-3PSID"})
+
+
+def _state_has_google_auth_cookies(state: str | None) -> bool:
+    if not state:
+        return False
+    try:
+        cookies = json.loads(state).get("cookies") or []
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    return any(
+        cookie.get("name") in GOOGLE_AUTH_COOKIE_NAMES
+        and "google.com" in (cookie.get("domain") or "")
+        for cookie in cookies
+    )
 
 
 def _opener_opening_config(opener: str, *, source: str, briefing: str = "") -> dict:
@@ -618,8 +639,8 @@ class LivekitCallManager:
 
     def _get_voice_profiles(
         self,
-        contact: dict,
-        boss: dict,
+        contact: dict | None,
+        boss: dict | None,
         extra_contact_ids: list[int] | None = None,
     ) -> dict[str, list[float]]:
         """Fetch enrolled voice embeddings for the call participants.
@@ -904,9 +925,31 @@ class LivekitCallManager:
         self.unify_meet_participants = roster
         if self._event_broker is None:
             return
+        # Profiles otherwise only ride the initial dispatch, so anyone joining
+        # after the call started can never be voice-pinned. Off-thread: the
+        # lookup hits the backend and this runs on the event loop.
+        roster_contact_ids = [
+            int(p["contact_id"])
+            for p in roster
+            if isinstance(p, dict)
+            and p.get("contact_id") is not None
+            and p.get("kind") != "assistant"
+        ]
+        profiles = await asyncio.to_thread(
+            self._get_voice_profiles,
+            None,
+            None,
+            roster_contact_ids,
+        )
         await self._event_broker.publish(
             "app:call:status",
-            json.dumps({"type": "unify_meet_roster", "participants": roster}),
+            json.dumps(
+                {
+                    "type": "unify_meet_roster",
+                    "participants": roster,
+                    "voice_profiles": profiles,
+                },
+            ),
         )
 
     async def start_unify_meet(
@@ -1188,6 +1231,102 @@ class LivekitCallManager:
         )
         return True
 
+    async def _persist_meet_browser_state(
+        self,
+        base_url: str,
+        auth_key: str,
+        storage_state_name: str,
+        session_id: str,
+    ) -> bool:
+        """Write the live meet browser's refreshed cookies back to GCS.
+
+        Google rotates session cookies on use, so the stored snapshot decays and
+        eventually lands the browser on a re-auth challenge. After a confirmed
+        signed-in join, snapshot the live context via the agent-service
+        (``POST /browser-states/<name>/save`` then ``GET``) and replace the
+        durable blob, keeping the stored session as fresh as the last join. The
+        upload is skipped unless the snapshot still carries Google auth cookies,
+        so a signed-out context can never clobber a good state. Best-effort:
+        failures log a warning and leave the existing blob untouched.
+        """
+        bucket = (os.environ.get("MEET_BROWSER_STATE_BUCKET") or "").strip()
+        if not bucket:
+            return False
+
+        blob_name = f"{storage_state_name}.json"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"authorization": f"Bearer {auth_key}"}
+                async with session.post(
+                    f"{base_url}/browser-states/{storage_state_name}/save",
+                    json={"sessionId": session_id},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15.0),
+                ) as save_resp:
+                    if save_resp.status not in (200, 204):
+                        detail = await save_resp.text()
+                        LOGGER.warning(
+                            f"{ICONS['ipc']} [LivekitCallManager] agent-service "
+                            f"could not snapshot browser state "
+                            f"{storage_state_name} (HTTP {save_resp.status}): "
+                            f"{detail}; keeping the stored session",
+                        )
+                        return False
+                async with session.get(
+                    f"{base_url}/browser-states/{storage_state_name}",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15.0),
+                ) as get_resp:
+                    if get_resp.status != 200:
+                        detail = await get_resp.text()
+                        LOGGER.warning(
+                            f"{ICONS['ipc']} [LivekitCallManager] could not read "
+                            f"back browser state {storage_state_name} (HTTP "
+                            f"{get_resp.status}): {detail}; keeping the stored "
+                            "session",
+                        )
+                        return False
+                    state = (await get_resp.json()).get("state")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] failed to snapshot browser "
+                f"state {storage_state_name}: {exc!r}; keeping the stored session",
+            )
+            return False
+
+        if not _state_has_google_auth_cookies(state):
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] snapshot of "
+                f"{storage_state_name} carries no Google auth cookies; keeping "
+                "the stored session",
+            )
+            return False
+
+        def _upload() -> None:
+            from google.cloud import storage
+
+            client = storage.Client()
+            client.bucket(bucket).blob(blob_name).upload_from_string(
+                state,
+                content_type="application/json",
+            )
+
+        try:
+            await asyncio.to_thread(_upload)
+        except Exception as exc:  # best-effort: the stored blob stays valid
+            LOGGER.warning(
+                f"{ICONS['ipc']} [LivekitCallManager] could not upload refreshed "
+                f"browser state to gs://{bucket}/{blob_name}: {exc!r}",
+            )
+            return False
+
+        LOGGER.info(
+            f"{ICONS['ipc']} [LivekitCallManager] refreshed browser state "
+            f"{storage_state_name} (gs://{bucket}/{blob_name})",
+        )
+        return True
+
     async def _start_meet(
         self,
         channel: str,
@@ -1453,6 +1592,17 @@ class LivekitCallManager:
             f"status={body.get('status')})",
         )
 
+        # The join proved the hydrated session is still signed in, and Google
+        # rotated its cookies in the process. Write the refreshed context back
+        # so the stored state never drifts further behind than the last call.
+        if storage_state_name and self._meet_session_id:
+            await self._persist_meet_browser_state(
+                base_url,
+                auth_key,
+                storage_state_name,
+                self._meet_session_id,
+            )
+
         if self._socket_server and self._meet_session_id:
             await self._socket_server.queue_for_clients(
                 "app:call:status",
@@ -1661,6 +1811,17 @@ class LivekitCallManager:
         if extra_env:
             for k, v in extra_env.items():
                 os.environ[k.upper()] = str(v)
+        # Voice profiles ride the dispatch metadata on the worker path; this
+        # path has no metadata, so without an env equivalent speaker pinning is
+        # silently off for every env-configured call. Cleared rather than left
+        # set when empty, or a previous call's profiles leak into this one.
+        # A 512-float embedding is ~10 KB of JSON, so contact + boss stays well
+        # inside the per-variable environment limit.
+        profiles = self._get_voice_profiles(contact, boss)
+        if profiles:
+            os.environ[VOICE_PROFILES_ENV] = json.dumps(profiles)
+        else:
+            os.environ.pop(VOICE_PROFILES_ENV, None)
         if socket_path:
             os.environ[CM_EVENT_SOCKET_ENV] = socket_path
             LOGGER.debug(

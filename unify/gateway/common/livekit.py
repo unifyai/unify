@@ -7,10 +7,8 @@ communication-side helpers; only the credential resolution path
 changes (env reads -> ``CredentialStore.get``) so the channels stay
 decoupled from any deployment-specific config layer.
 
-Scope today
-===========
-
-This module ships the four helpers Phase B.2 (``phone/``) needs:
+Helpers
+=======
 
 * ``get_livekit_api`` -- LiveKit ``LiveKitAPI`` client factory.
 * ``make_sip_uri`` -- builds the SIP URI used to bridge a Twilio
@@ -20,14 +18,19 @@ This module ships the four helpers Phase B.2 (``phone/``) needs:
   correct ``unity_{id}_{medium}`` room.
 * ``create_room_and_dispatch_agent`` -- creates a LiveKit room and
   dispatches the LiveKit agent that owns the call session.
+* ``start_room_egress`` -- starts the audio-only Room Composite
+  Egress that captures a live call to GCS.
 
-The other helpers from the communication-side module
-(``make_room_name``, ``start_room_egress``, ``verify_livekit_webhook``)
-are also already present in
-``unify.conversation_manager.local_providers.livekit`` for the
-self-hosted single-process path. When the next channel migration
-needs them outside that path, port them here and deprecate the
-local_providers copy in a focused commit.
+Recording is deliberately *not* wired into agent dispatch. Egress must
+be started once the room has a publishing participant, so it is driven
+from the call-started path (``/phone/start-recording``) rather than from
+room creation. Starting it at dispatch time races the SIP bridge and the
+agent join, and LiveKit fails such a job with "Start signal not
+received" after producing no file at all.
+
+``unify.conversation_manager.local_providers.livekit`` carries a
+parallel copy of the same helpers for the self-hosted single-process
+path.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from livekit.api import (
     SIPDispatchRuleInfo,
     WebhookConfig,
 )
+from livekit.protocol.egress import ListEgressRequest
 from livekit.protocol.sip import (
     DeleteSIPDispatchRuleRequest,
     ListSIPDispatchRuleRequest,
@@ -60,6 +64,44 @@ from unify.gateway.credentials import CredentialNotFoundError, CredentialStore
 from unify.settings import SETTINGS
 
 _log = logging.getLogger("unify.gateway.common.livekit")
+
+# Room suffixes whose audio never reaches the LiveKit room. Browser meets
+# (Google Meet / Teams) bridge caller audio through the agent-service
+# PortAudio device, so the LiveKit room carries no remote track for the
+# compositor to mix -- see ``Assistant.stt_node`` in
+# ``conversation_manager/medium_scripts/call.py``. Room Composite Egress on
+# these rooms cannot produce a file: it stays alive for as long as the room
+# does and then fails with "Start signal not received". Recording these
+# channels needs a capture point on the bridge, not LiveKit egress.
+UNRECORDABLE_ROOM_SUFFIXES = ("_gmeet", "_teams")
+
+
+def room_supports_egress(room_name: str) -> bool:
+    """Whether a Room Composite Egress can ever capture audio for this room."""
+    return not room_name.endswith(UNRECORDABLE_ROOM_SUFFIXES)
+
+
+async def has_active_egress(livekit_api: LiveKitAPI, room_name: str) -> bool:
+    """Whether an egress job is already running for *room_name*.
+
+    Several call paths can converge on one room (SIP bridge setup, agent
+    dispatch, a watchdog respawn). Without this check each one starts its own
+    Room Composite Egress, so the room is recorded twice into two separate
+    files and billed twice. Treated as "no active egress" when the lookup
+    itself fails, so a LiveKit hiccup cannot silently disable recording.
+    """
+    try:
+        listed = await livekit_api.egress.list_egress(
+            ListEgressRequest(room_name=room_name, active=True),
+        )
+    except Exception as exc:
+        _log.warning(
+            "could not list active egress for room %r, starting anyway: %s",
+            room_name,
+            exc,
+        )
+        return False
+    return bool(listed.items)
 
 
 def get_livekit_api(credentials: CredentialStore) -> LiveKitAPI:
@@ -302,7 +344,34 @@ async def _start_room_egress(
     event so the assistant runtime can attach it to the transcript exchange.
     The linkage query params are threaded through the webhook URL so the
     completion handler can resolve the correct session / exchange.
+
+    No-ops when the room cannot be captured, when the caller has no assistant
+    to attribute the file to, or when a job is already recording the room.
     """
+    if not room_supports_egress(room_name):
+        _log.info(
+            "skipping egress for room %r: channel audio does not reach the "
+            "LiveKit room",
+            room_name,
+        )
+        return
+    if not str(assistant_id).strip():
+        # The object path is {env}/{assistant_id}/{room}.mp3, so an empty id
+        # collapses the per-assistant prefix and strands the file where no
+        # lookup by assistant will find it.
+        _log.error(
+            "refusing egress for room %r: assistant_id is required to build "
+            "the recording path",
+            room_name,
+        )
+        return
+    if await has_active_egress(livekit_api, room_name):
+        _log.info(
+            "skipping egress for room %r: a job is already recording it",
+            room_name,
+        )
+        return
+
     gcs_credentials = credentials.get_optional("GCP_SA_KEY", "")
     gcs_bucket = credentials.get_optional(
         "LIVEKIT_EGRESS_GCS_BUCKET",
@@ -389,20 +458,12 @@ async def create_room_and_dispatch_agent(
     agent_name: str,
     credentials: CredentialStore,
     metadata: dict | None = None,
-    *,
-    record: bool = False,
-    assistant_id: str | int = "",
-    user_id: str | int = "",
-    call_session_id: str = "",
-    provider_call_sid: str = "",
-    conference_name: str = "",
 ) -> Any:
     """Create a LiveKit room and dispatch an agent into it.
 
-    When ``record`` is set, an audio-only Room Composite Egress is also started
-    for the room so the call is captured to GCS. Egress is best-effort: a
-    recording failure is logged but never fails the agent dispatch (which is
-    the critical path for the call to connect).
+    Dispatch only. Recording is started separately once the room is live (see
+    ``start_room_egress``); binding it to dispatch starts the compositor before
+    any participant publishes, which LiveKit fails with no file produced.
 
     Returns the LiveKit dispatch object. Re-raises dispatch failures after
     logging so the caller's error handler sees the exception.
@@ -423,24 +484,6 @@ async def create_room_and_dispatch_agent(
             agent_name,
             getattr(dispatch, "id", "?"),
         )
-        if record:
-            try:
-                await _start_room_egress(
-                    livekit_api,
-                    room_name,
-                    str(assistant_id),
-                    str(user_id),
-                    credentials,
-                    call_session_id=call_session_id,
-                    provider_call_sid=provider_call_sid,
-                    conference_name=conference_name,
-                )
-            except Exception as exc:
-                _log.error(
-                    "agent dispatched but failed to start egress for room %r: %s",
-                    room_name,
-                    exc,
-                )
         return dispatch
     except Exception as exc:
         _log.error(
@@ -454,12 +497,15 @@ async def create_room_and_dispatch_agent(
 
 
 __all__ = [
+    "UNRECORDABLE_ROOM_SUFFIXES",
     "create_room_and_dispatch_agent",
     "delete_sip_dispatch_rule",
     "ensure_call_scoped_dispatch_rule",
     "ensure_phone_dispatch_rule",
     "get_livekit_api",
+    "has_active_egress",
     "make_call_scoped_sip_uri",
     "make_sip_uri",
+    "room_supports_egress",
     "start_room_egress",
 ]

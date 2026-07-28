@@ -166,3 +166,197 @@ async def test_recording_ready_prefers_call_session_then_room_then_conference(
     assert metadata["recording_url"].endswith("/call.mp3")
     assert metadata["recording_call_session_id"] == "CA111"
     assert metadata["recording_room_name"] == "unity_wa_room_123_CA111"
+
+
+@pytest.mark.asyncio
+async def test_recording_ready_recovers_exchange_from_stored_metadata():
+    """A recycled container has no in-memory map, so fall back to the store.
+
+    Egress finalises minutes after the room closes, by which time the pod that
+    ran the call is usually gone. Without this the file exists in GCS but is
+    never linked to its transcript.
+    """
+    transcript_manager = MagicMock()
+    transcript_manager.resolve_exchange_id_by_metadata = MagicMock(
+        side_effect=lambda key, value: 77 if key == "provider_call_sid" else None,
+    )
+    cm = MagicMock()
+    cm._recording_exchange_ids = {}
+    cm.transcript_manager = transcript_manager
+    cm._session_logger = MagicMock()
+
+    await EventHandler.handle_event(
+        RecordingReady(
+            conference_name="legacy_conf",
+            recording_url="https://storage.googleapis.com/bucket/call.mp3",
+            call_session_id="",
+            provider_call_sid="CA111",
+            room_name="unity_wa_room_123_CA111",
+        ),
+        cm,
+    )
+
+    transcript_manager.update_exchange_metadata.assert_called_once()
+    exchange_id, metadata = transcript_manager.update_exchange_metadata.call_args.args
+    assert exchange_id == 77
+    assert metadata["recording_url"].endswith("/call.mp3")
+
+
+@pytest.mark.asyncio
+async def test_recording_ready_gives_up_when_no_identifier_resolves():
+    transcript_manager = MagicMock()
+    transcript_manager.resolve_exchange_id_by_metadata = MagicMock(return_value=None)
+    cm = MagicMock()
+    cm._recording_exchange_ids = {}
+    cm.transcript_manager = transcript_manager
+    cm._session_logger = MagicMock()
+
+    await EventHandler.handle_event(
+        RecordingReady(
+            conference_name="unknown_conf",
+            recording_url="https://storage.googleapis.com/bucket/call.mp3",
+        ),
+        cm,
+    )
+
+    transcript_manager.update_exchange_metadata.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _start_session_recording -- recording is requested at call start
+# ---------------------------------------------------------------------------
+
+
+def _recording_cm(**call_manager_attrs) -> MagicMock:
+    cm = MagicMock()
+    cm._session_logger = MagicMock()
+    defaults = {
+        "room_name": "unity_42_phone",
+        "assistant_id": "42",
+        "user_id": "7",
+        "call_session_id": "",
+        "provider_call_sid": "CA111",
+        "conference_name": "Unity_conf_1",
+        "unify_meet_call_session_id": "",
+    }
+    defaults.update(call_manager_attrs)
+    for key, value in defaults.items():
+        setattr(cm.call_manager, key, value)
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_phone_call_started_requests_recording_with_linkage_ids(monkeypatch):
+    """The call-started path is where the room is first known to carry audio."""
+    from unify.conversation_manager.domains import event_handlers
+    from unify.conversation_manager import utils as cm_utils
+    from unify.conversation_manager.events import PhoneCallStarted
+
+    start = MagicMock(return_value=True)
+    monkeypatch.setattr(cm_utils, "start_call_recording", start)
+
+    cm = _recording_cm()
+    await event_handlers._start_session_recording(
+        PhoneCallStarted(contact={"contact_id": 2}),
+        cm,
+    )
+
+    start.assert_called_once()
+    args, kwargs = start.call_args
+    assert args[0] == "unity_42_phone"
+    assert args[1] == "42"
+    assert kwargs["provider_call_sid"] == "CA111"
+    assert kwargs["conference_name"] == "Unity_conf_1"
+
+
+@pytest.mark.asyncio
+async def test_unify_meet_started_requests_recording_with_session_id(monkeypatch):
+    from unify.conversation_manager.domains import event_handlers
+    from unify.conversation_manager import utils as cm_utils
+    from unify.conversation_manager.events import UnifyMeetStarted
+
+    start = MagicMock(return_value=True)
+    monkeypatch.setattr(cm_utils, "start_call_recording", start)
+
+    cm = _recording_cm(
+        room_name="unity_call_CS_9",
+        unify_meet_call_session_id="CS_9",
+        provider_call_sid="",
+        conference_name="",
+    )
+    await event_handlers._start_session_recording(
+        UnifyMeetStarted(contact={"contact_id": 1}, call_session_id="CS_9"),
+        cm,
+    )
+
+    start.assert_called_once()
+    args, kwargs = start.call_args
+    assert args[0] == "unity_call_CS_9"
+    assert kwargs["call_session_id"] == "CS_9"
+    # A meet has no telephony leg, so these stay empty rather than leaking
+    # phone-call state from a previous session on the same call manager.
+    assert kwargs["provider_call_sid"] == ""
+    assert kwargs["conference_name"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_name", ["GoogleMeetStarted", "TeamsMeetStarted"])
+async def test_browser_meets_never_request_recording(monkeypatch, event_name):
+    """Browser-meet audio never reaches the LiveKit room, so egress cannot work.
+
+    Requesting it anyway is what left compositors waiting on rooms for up to an
+    hour before aborting with no file.
+    """
+    from unify.conversation_manager.domains import event_handlers
+    from unify.conversation_manager import utils as cm_utils
+    from unify.conversation_manager import events
+
+    start = MagicMock(return_value=True)
+    monkeypatch.setattr(cm_utils, "start_call_recording", start)
+
+    event_cls = getattr(events, event_name)
+    cm = _recording_cm(room_name="unity_42_gmeet")
+    await event_handlers._start_session_recording(
+        event_cls(contact={"contact_id": 2}),
+        cm,
+    )
+
+    start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_recording_skipped_without_a_room(monkeypatch):
+    from unify.conversation_manager.domains import event_handlers
+    from unify.conversation_manager import utils as cm_utils
+    from unify.conversation_manager.events import PhoneCallStarted
+
+    start = MagicMock(return_value=True)
+    monkeypatch.setattr(cm_utils, "start_call_recording", start)
+
+    cm = _recording_cm(room_name="")
+    await event_handlers._start_session_recording(
+        PhoneCallStarted(contact={"contact_id": 2}),
+        cm,
+    )
+
+    start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_recording_failure_never_escapes(monkeypatch):
+    """A recording problem must not disturb a live call."""
+    from unify.conversation_manager.domains import event_handlers
+    from unify.conversation_manager import utils as cm_utils
+    from unify.conversation_manager.events import PhoneCallStarted
+
+    monkeypatch.setattr(
+        cm_utils,
+        "start_call_recording",
+        MagicMock(side_effect=RuntimeError("comms down")),
+    )
+
+    cm = _recording_cm()
+    await event_handlers._start_session_recording(
+        PhoneCallStarted(contact={"contact_id": 2}),
+        cm,
+    )

@@ -636,6 +636,8 @@ def pytest_unconfigure(config):
         os.environ["HOME"] = _original_home
     if _hf_home_set_by_us:
         os.environ.pop("HF_HOME", None)
+    if _speaker_model_set_by_us:
+        os.environ.pop("UNIFY_SPEAKER_MODEL_PATH", None)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -661,6 +663,7 @@ _session_costs: list[tuple[str, float]] = []
 
 _original_home: str | None = None
 _hf_home_set_by_us: bool = False
+_speaker_model_set_by_us: bool = False
 
 
 def pytest_configure(config):
@@ -702,6 +705,22 @@ def pytest_configure(config):
         if os.path.isdir(original_hf):
             os.environ["HF_HOME"] = original_hf
             _hf_home_set_by_us = True
+
+    # Same problem, same fix, for the speaker-embedding model: it is cached
+    # under ~/.cache/unify/speaker_id/ and the HOME override hides it, so
+    # every real-model speaker-identification test silently skips instead of
+    # running. Globbing (rather than importing speaker_id for the filename)
+    # keeps pytest_configure free of heavy imports.
+    global _speaker_model_set_by_us
+    if "UNIFY_SPEAKER_MODEL_PATH" not in os.environ and _original_home:
+        import glob as _glob
+
+        cached_models = _glob.glob(
+            os.path.join(_original_home, ".cache", "unify", "speaker_id", "*.onnx"),
+        )
+        if len(cached_models) == 1:
+            os.environ["UNIFY_SPEAKER_MODEL_PATH"] = cached_models[0]
+            _speaker_model_set_by_us = True
 
     config.addinivalue_line(
         "markers",

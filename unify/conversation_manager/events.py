@@ -582,6 +582,10 @@ class RecordingReady(Event):
     call_session_id: str | None = None
     provider_call_sid: str | None = None
     room_name: str | None = None
+    # ISO8601 instant the egress compositor began writing, i.e. t=0 of the audio
+    # file. Consumers time-align transcript utterances against this rather than
+    # against the call-started event, which precedes it by a few seconds.
+    recording_started_at: str | None = None
 
 
 @dataclass

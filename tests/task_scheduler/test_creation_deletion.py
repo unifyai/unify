@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from tests.helpers import _handle_project
+from tests.task_scheduler.test_task_revision_cas import _provider_event_task
 import pytest
 import unisdk
 
@@ -8,6 +10,7 @@ from unify.common.context_registry import ContextRegistry
 from unify.common.tool_outcome import ToolErrorException
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler import typed_tasks_client
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
@@ -61,6 +64,46 @@ def test_delete_task():
     task_scheduler._delete_task(task_id=0)
     task_list = task_scheduler._filter_tasks()
     assert task_list == []
+
+
+def test_delete_task_provider_event_skips_redundant_log_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider-event branch of ``_delete_task`` must delete the task's
+    row exactly once, via the typed API's revision-CAS delete, and must not
+    attempt a second, redundant ``self._store.delete(logs=...)`` over the
+    same row (that path 404s under the collapsed task-identity data model).
+
+    Built via ``__new__`` (bypassing ``__init__``) so this exercises the
+    real ``_delete_task`` control flow without provisioning a live backend.
+    """
+    scheduler = TaskScheduler.__new__(TaskScheduler)
+    scheduler._num_tasks_cached = None
+    task = _provider_event_task(task_revision=5)
+
+    store_delete_calls: list[list[int]] = []
+    scheduler._store = SimpleNamespace(
+        get_rows=lambda *, filter, return_ids_only: [999],
+        delete=lambda *, logs: store_delete_calls.append(logs),
+    )
+    monkeypatch.setattr(scheduler, "_ensure_not_active_task", lambda task_ids: None)
+    monkeypatch.setattr(scheduler, "_resolve_task_for_mutation", lambda task_id: task)
+
+    typed_delete_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        typed_tasks_client,
+        "delete_task",
+        lambda *, task_id, expected_task_revision: typed_delete_calls.append(
+            (task_id, expected_task_revision),
+        ),
+    )
+
+    result = scheduler._delete_task(task_id=task.task_id, _root_applied=True)
+
+    assert typed_delete_calls == [(task.task_id, 5)]
+    assert store_delete_calls == []
+    assert result["outcome"] == "task deleted"
+    assert result["details"]["task_id"] == task.task_id
 
 
 @_handle_project

@@ -229,6 +229,14 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         """Look up a transcript message_id by provider_message_sid metadata."""
         raise NotImplementedError
 
+    def resolve_exchange_id_by_metadata(
+        self,
+        key: str,
+        value: str,
+    ) -> int | None:
+        """Return the exchange whose ``metadata[key]`` equals ``value``, if any."""
+        raise NotImplementedError
+
     def update_exchange_metadata(
         self,
         exchange_id: int,
@@ -237,7 +245,10 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         destination: Optional[str] = None,
     ) -> Exchange:
         """
-        Update (or create) metadata for the specified exchange and return the updated Exchange.
+        Merge ``metadata`` into the specified exchange and return the updated Exchange.
+
+        Keys absent from ``metadata`` retain their stored values; the exchange
+        accumulates metadata from independent writers across a session.
         """
         raise NotImplementedError
 

@@ -56,3 +56,41 @@ async def test_registered_provider_event_handle_preserves_definition_status():
     definition_row = rows[0]
     assert definition_row.instance_id == 0
     assert definition_row.status == Status.triggerable
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_provider_event_completion_terminalizes_run_without_definition_write():
+    """Provider-event completion updates its run row while preserving its definition."""
+
+    actor = SimulatedActor(steps=0)
+    scheduler = TaskScheduler(actor=actor)
+    task_id = _seed_provider_event_definition(scheduler, task_revision=3)
+    run_updates: list[dict] = []
+
+    def _record_run_update(_reference, update):
+        run_updates.append(dict(update))
+
+    with (
+        patch(
+            "unify.task_scheduler.task_scheduler.update_task_run_record",
+            side_effect=_record_run_update,
+        ),
+        patch(
+            "unify.task_scheduler.active_task.update_task_run_record",
+            side_effect=_record_run_update,
+        ),
+    ):
+        handle = await scheduler.start_provider_event_instance(
+            request=_request(task_id=task_id, operation_id="op-terminal-1"),
+            captured_task_revision=3,
+            provider_event_context={
+                "kind": "provider_event_context",
+                "trust": "untrusted_data",
+            },
+        )
+        await asyncio.wait_for(handle.result(), timeout=5.0)
+
+    assert any(update["state"] == "completed" for update in run_updates)
+    definition_row = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
+    assert definition_row.status == Status.triggerable
