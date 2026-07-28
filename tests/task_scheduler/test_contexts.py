@@ -143,7 +143,7 @@ async def test_update_uses_parent_context():
     ).result()
 
     row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
-    assert row.completed_at is not None, assertion_failed(
+    assert row.enabled is False, assertion_failed(
         "Task status 'completed'",
         json.dumps(row, indent=2),
         "Parent-context nickname not respected by update()",

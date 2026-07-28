@@ -337,14 +337,7 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
             return
         scheduler._write_log_entries(  # type: ignore[attr-defined]
             logs=config.source_task_log_id,
-            entries={
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "enabled": False,
-                "info": _truncate_text(
-                    "Offline task runner failed before task lifecycle finalization "
-                    f"completed: {error_text}",
-                ),
-            },
+            entries={"enabled": False},
         )
     except Exception:
         LOGGER.exception(

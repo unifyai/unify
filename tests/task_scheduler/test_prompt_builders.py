@@ -79,7 +79,6 @@ def test_build_task_execution_request_omits_history_and_info():
         name="Daily briefing",
         description="Prepare the briefing from current sources.",
         priority=Priority.normal,
-        info="Previous run found cached facts and notified the user.",
         schedule=Schedule(start_at=datetime(2026, 5, 18, 12, 0, tzinfo=timezone.utc)),
     )
 

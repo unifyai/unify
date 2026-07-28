@@ -260,9 +260,7 @@ def test_crash_disarms_a_one_shot_definition():
     fake = _run_mark_failed({"repeat": None, "trigger": None})
     assert fake.writes
     written = fake.writes[0]
-    assert written["enabled"] is False
-    assert written["completed_at"]
-    assert "boom" in written["info"]
+    assert written == {"enabled": False}
 
 
 # --------------------------------------------------------------------------- #

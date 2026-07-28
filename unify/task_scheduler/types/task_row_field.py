@@ -41,14 +41,11 @@ class AuthoredTaskField(StrEnum):
 class RuntimeTaskField(StrEnum):
     """Task JSONB keys that may change without bumping task_revision.
 
-    Run outcome lives on ``Tasks/Executions``, so what the runtime may still
-    write to a definition is narrow: the one-shot completion stamp and the
-    human-readable summary. ``enabled`` is deliberately authored — arming is an
-    operator decision and must take the revision CAS path.
+    Deliberately empty. Every field on a definition is now authored: run
+    outcome lives on ``Tasks/Executions``, and ``enabled`` is an operator
+    decision that must take the revision CAS path. A new member here means
+    something run-derived has crept back onto the shared row.
     """
-
-    completed_at = "completed_at"
-    info = "info"
 
     @classmethod
     def values(cls) -> frozenset[str]:
