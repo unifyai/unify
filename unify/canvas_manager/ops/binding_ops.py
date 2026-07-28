@@ -14,7 +14,7 @@ validated against.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence
 
 from unify.canvas_manager.types.binding import (
     MAX_BINDINGS_PER_CANVAS,
@@ -99,12 +99,23 @@ def resolve_binding_contexts(
     return resolved
 
 
-def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> None:
+def verify_bindings(
+    bindings: Sequence[PrimitiveBinding],
+    *,
+    data_manager,
+) -> Dict[str, List[Any]]:
     """Dry-run every binding, raising on the first that fails.
 
     Runs with a tiny row limit: the point is to prove the query is well formed
     against the real schema, not to fetch anything.
+
+    Returns the sample rows per alias. They are worth keeping rather than
+    discarding, because the author-time render gate replays them in place of the
+    parent: rendering against real column names catches a canvas that reads a
+    field its query never returns, which rendering against no data cannot.
     """
+    samples: Dict[str, List[Any]] = {}
+
     for binding in bindings:
         args = binding.args
         operation = getattr(args, "operation", "")
@@ -112,7 +123,7 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
 
         try:
             if operation == "filter":
-                data_manager.filter(
+                rows = data_manager.filter(
                     context,
                     filter=args.filter,
                     columns=args.columns,
@@ -122,7 +133,7 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
                     limit=5,
                 )
             elif operation == "reduce":
-                data_manager.reduce(
+                rows = data_manager.reduce(
                     context,
                     metric=args.metric,
                     columns=args.columns,
@@ -130,7 +141,7 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
                     group_by=args.group_by,
                 )
             elif operation == "join":
-                data_manager.filter_join(
+                rows = data_manager.filter_join(
                     tables=binding.resolved_tables or args.tables,
                     join_expr=args.join_expr,
                     select=args.select,
@@ -141,7 +152,7 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
                     result_limit=5,
                 )
             elif operation == "join_reduce":
-                data_manager.reduce_join(
+                rows = data_manager.reduce_join(
                     tables=binding.resolved_tables or args.tables,
                     join_expr=args.join_expr,
                     select=args.select,
@@ -163,6 +174,27 @@ def verify_bindings(bindings: Sequence[PrimitiveBinding], *, data_manager) -> No
                 f"`primitives.data.ingest` or `primitives.data.insert_rows`, schedule the "
                 f"refresh with `primitives.tasks`, then bind the canvas to that table.",
             ) from error
+
+        samples[binding.alias] = _as_rows(rows)
+
+    return samples
+
+
+def _as_rows(result: Any) -> List[Any]:
+    """Normalise a dry-run result into the row list the frame is handed.
+
+    Reductions come back as a scalar or a grouped mapping rather than rows, and
+    the runtime gives every alias to the canvas as an array. Normalising here
+    keeps that one shape, so an authored canvas never has to branch on which
+    operation produced its alias.
+    """
+    if result is None:
+        return []
+    if isinstance(result, list):
+        return result
+    if isinstance(result, dict):
+        return [result]
+    return [{"value": result}]
 
 
 def serialize_bindings(bindings: Sequence[object]) -> str:

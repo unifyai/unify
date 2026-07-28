@@ -21,8 +21,6 @@ from unify.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
-CANVAS_ENTITY_TYPE = "canvas"
-
 
 def generate_token() -> str:
     """Generate a cryptographically secure 12-character URL-safe token."""
@@ -42,18 +40,23 @@ def register_token(
     context_name: str,
     project_name: str,
     visibility: str = "private",
+    status: str = "published",
 ) -> bool:
     """Map a canvas token to the context and owner that can serve it.
+
+    ``status`` defaults to published because a canvas only reaches this point
+    after every authoring gate has passed; there is no state in which the row
+    exists and the canvas is not meant to be servable.
 
     Returns ``True`` on success or when the mapping already exists.
     """
     url = f"{SETTINGS.ORCHESTRA_URL}/canvas/tokens"
     payload = {
         "token": token,
-        "entity_type": CANVAS_ENTITY_TYPE,
         "context_name": context_name,
         "project_name": project_name,
         "visibility": visibility,
+        "status": status,
     }
 
     try:
@@ -67,6 +70,50 @@ def register_token(
 
     logger.warning(
         "Canvas token registration failed for %s: %s %s",
+        token,
+        response.status_code,
+        response.text[:200],
+    )
+    return False
+
+
+def set_token_state(
+    token: str,
+    *,
+    visibility: str | None = None,
+    status: str | None = None,
+) -> bool:
+    """Change a canvas's visibility or lifecycle status in place.
+
+    Separate from registration because both are operational: quarantining a
+    canvas already in front of viewers has to work on the live token rather than
+    by reissuing it.
+    """
+    url = f"{SETTINGS.ORCHESTRA_URL}/canvas/tokens/{token}"
+    payload = {
+        key: value
+        for key, value in (("visibility", visibility), ("status", status))
+        if value is not None
+    }
+    if not payload:
+        return True
+
+    try:
+        response = httpx.patch(
+            url,
+            json=payload,
+            headers=_auth_headers(),
+            timeout=30.0,
+        )
+    except httpx.HTTPError as error:
+        logger.warning("Canvas token update failed for %s: %s", token, error)
+        return False
+
+    if response.status_code == 200:
+        return True
+
+    logger.warning(
+        "Canvas token update failed for %s: %s %s",
         token,
         response.status_code,
         response.text[:200],
@@ -97,46 +144,3 @@ def active_project() -> str:
     import unisdk
 
     return unisdk.active_project() or ""
-
-
-def _bundle_object_path(token: str, sha256: str) -> str:
-    """Object path for one compiled bundle.
-
-    Content-addressed under the canvas token, so republishing the same source is
-    idempotent and two canvases never collide.
-    """
-    return f"canvas/{token}/{sha256}.mjs"
-
-
-def upload_bundle(token: str, bundle: str, *, sha256: str) -> str:
-    """Store a compiled bundle and return the URI recorded on the canvas row.
-
-    The bucket is private. Console fetches the bytes server-side and verifies
-    this sha256 before handing them to the frame, which is a stronger integrity
-    guarantee than subresource integrity because we enforce it rather than
-    asking the browser to. It also keeps compiled code -- which encodes column
-    names and query shapes -- off any publicly addressable path.
-
-    Falls back to an inline URI when no bucket is configured, so self-host and
-    tests work without object storage.
-    """
-    from unify.canvas_manager.settings import CanvasSettings
-
-    bucket = CanvasSettings().BUNDLE_BUCKET.strip()
-    if not bucket:
-        return f"inline://{sha256}"
-
-    path = _bundle_object_path(token, sha256)
-    _BUNDLE_CACHE[f"gs://{bucket}/{path}"] = bundle
-    return f"gs://{bucket}/{path}"
-
-
-def fetch_bundle(bundle_uri: str) -> str:
-    """Read a compiled bundle back, for re-rendering an existing canvas."""
-    return _BUNDLE_CACHE.get(bundle_uri, "")
-
-
-# Process-local bundle cache. Object-storage upload is wired in P3 alongside the
-# Orchestra bundle proxy; until then a bundle is re-derivable from the stored
-# source, so nothing is lost by not persisting it here.
-_BUNDLE_CACHE: dict[str, str] = {}
