@@ -296,6 +296,7 @@ class ContextRegistry:
         # TODO: Use dynamic discovery of managers, dynamic discover is slow atm
         # which defeats the purpose of having a context handler
 
+        from unify.canvas_manager.canvas_manager import CanvasManager
         from unify.contact_manager.contact_manager import ContactManager
         from unify.dashboard_manager.dashboard_manager import DashboardManager
         from unify.knowledge_manager.knowledge_manager import KnowledgeManager
@@ -311,6 +312,7 @@ class ContextRegistry:
         from unify.file_manager.managers.file_manager import FileManager
 
         managers = [
+            CanvasManager,
             ContactManager,
             DashboardManager,
             KnowledgeManager,
