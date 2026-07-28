@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from unify.canvas_manager.settings import CanvasSettings
 from unify.canvas_manager.types.view import BuildReport
 
 # Specifiers a canvas may import. Everything else is absent at view time: the
@@ -149,8 +150,6 @@ def _toolchain_root() -> Optional[Path]:
     assistant image installs it. The toolchain is vendored into the image rather
     than fetched, so authoring needs no network and no separate build service.
     """
-    from unify.canvas_manager.settings import CanvasSettings
-
     configured = CanvasSettings().TOOLCHAIN_ROOT.strip()
     candidates = [Path(configured)] if configured else []
     candidates += [
@@ -200,7 +199,14 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
             "",
         )
 
-    with tempfile.TemporaryDirectory(prefix="canvas-build-") as tmp:
+    # Built inside the toolchain so ordinary node resolution walks up into its
+    # node_modules. Path mapping would also work but silently resolves nothing
+    # when the toolchain layout changes, which surfaces as a confusing
+    # "cannot find module 'react'" rather than a missing toolchain.
+    builds = root / ".builds"
+    builds.mkdir(exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="canvas-", dir=str(builds)) as tmp:
         work = Path(tmp)
         entry = work / "canvas.tsx"
         entry.write_text(tsx, encoding="utf8")
@@ -210,7 +216,7 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
         tsconfig = {
             "compilerOptions": {
                 "target": "ES2020",
-                "lib": ["ES2020", "DOM"],
+                "lib": ["ES2020", "DOM", "DOM.Iterable"],
                 "module": "ESNext",
                 "moduleResolution": "bundler",
                 "jsx": "react-jsx",
@@ -218,17 +224,23 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
                 "skipLibCheck": True,
                 "noEmit": True,
                 "esModuleInterop": True,
+                # Nothing is auto-included as a global; the canvas gets exactly
+                # the types it imports.
                 "types": [],
-                "baseUrl": str(root),
-                "paths": {"*": ["node_modules/*"]},
             },
             "include": [str(entry)],
         }
         (work / "tsconfig.json").write_text(json.dumps(tsconfig), encoding="utf8")
 
+        # Both tools run with the build directory as cwd. esbuild writes the
+        # entry's cwd-relative path into the output as a comment, so running from
+        # anywhere else would put the temp directory name in the bundle and give
+        # identical source a different sha on every build. It also keeps tsc
+        # diagnostics reading `canvas.tsx(5,3)` rather than a temp path the
+        # author cannot act on.
         tsc = root / "node_modules" / ".bin" / "tsc"
         if tsc.exists():
-            code, output = _run([str(tsc), "-p", str(work / "tsconfig.json")], cwd=root)
+            code, output = _run([str(tsc), "-p", str(work / "tsconfig.json")], cwd=work)
             if code != 0:
                 return (
                     BuildReport(
@@ -258,17 +270,17 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
         out = work / "canvas.mjs"
         command = [
             str(esbuild),
-            str(entry),
+            entry.name,
             "--bundle",
             "--format=esm",
             "--target=es2020",
             "--jsx=automatic",
             "--platform=browser",
-            f"--outfile={out}",
+            f"--outfile={out.name}",
         ]
         command += [f"--external:{name}" for name in sorted(ALLOWED_IMPORTS)]
 
-        code, output = _run(command, cwd=root)
+        code, output = _run(command, cwd=work)
         if code != 0:
             return (
                 BuildReport(
@@ -285,12 +297,33 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
 
         code_text = out.read_text(encoding="utf8")
 
+    encoded = code_text.encode("utf8")
+    ceiling = CanvasSettings().MAX_BUNDLE_BYTES
+    if len(encoded) > ceiling:
+        # The bundle is stored on the canvas row, so this bounds row size. A
+        # canvas this large is almost always inlining a dataset that belongs in
+        # a binding, which is also why the remedy is named rather than implied.
+        return (
+            BuildReport(
+                ok=False,
+                failed_stage="bundle",
+                kit_version=kit_version,
+                diagnostics=[
+                    f"Compiled canvas is {len(encoded)} bytes, over the "
+                    f"{ceiling}-byte limit. Move inlined data into a binding "
+                    f"rather than embedding it in the source.",
+                ],
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ),
+            "",
+        )
+
     return (
         BuildReport(
             ok=True,
             kit_version=kit_version,
-            bundle_sha=hashlib.sha256(code_text.encode("utf8")).hexdigest(),
-            bytes=len(code_text.encode("utf8")),
+            bundle_sha=hashlib.sha256(encoded).hexdigest(),
+            bytes=len(encoded),
             duration_ms=int((time.monotonic() - started) * 1000),
         ),
         code_text,

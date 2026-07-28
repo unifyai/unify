@@ -46,12 +46,24 @@ class CanvasSettings(BaseSettings):
         ),
     )
 
-    BUNDLE_BUCKET: str = Field(
+    HOST_ROOT: str = Field(
         default="",
         description=(
-            "Private bucket holding compiled canvas bundles. Bundles are never "
-            "publicly addressable: console fetches them server-side and verifies "
-            "the recorded sha256 before handing the bytes to the frame."
+            "Vendored runtime host used by the author-time render gate. The "
+            "assets are byte-identical to what the canvas origin serves, so a "
+            "preview shows what a viewer will see. Empty means probe the "
+            "standard image locations."
+        ),
+    )
+
+    MAX_BUNDLE_BYTES: int = Field(
+        default=512_000,
+        description=(
+            "Ceiling on a compiled bundle. The bytes live on the canvas row, so "
+            "this bounds row size. React and the kit are externals supplied by "
+            "the runtime host, which puts a realistic canvas in single-digit "
+            "kilobytes; anything near this limit is inlining data that belongs "
+            "in a binding."
         ),
     )
 
