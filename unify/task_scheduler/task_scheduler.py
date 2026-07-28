@@ -2464,7 +2464,13 @@ class TaskScheduler(BaseTaskScheduler):
             entries=entries,
         )
 
-    def _list_provider_trigger_catalog(self) -> ToolOutcome:
+    def _list_provider_trigger_catalog(
+        self,
+        *,
+        canonical_app_slug: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> ToolOutcome:
         """List staged provider triggers visible for this assistant's connected apps.
 
         Returns catalog metadata plus trigger slugs/config schemas for apps the
@@ -2472,9 +2478,18 @@ class TaskScheduler(BaseTaskScheduler):
         trigger list usually means no matching connection yet, not that the
         provider lacks the trigger globally. Prefer connecting the app first,
         then re-list the catalog before enabling a provider-event task.
+
+        The unfiltered catalog can be large. Once
+        ``list_provider_trigger_connections`` shows which app/backend is
+        connected, pass that app's ``canonical_app_slug`` here to narrow the
+        response, and use ``limit``/``offset`` to page through the rest.
         """
 
-        catalog = typed_tasks_client.get_trigger_catalog()
+        catalog = typed_tasks_client.get_trigger_catalog(
+            canonical_app_slug=canonical_app_slug,
+            limit=limit,
+            offset=offset,
+        )
         return {
             "outcome": "provider trigger catalog listed",
             "details": annotate_provider_trigger_catalog(
