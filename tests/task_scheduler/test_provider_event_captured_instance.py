@@ -16,7 +16,6 @@ from unify.task_scheduler.provider_event_dispatch import (
     ProviderEventDispatchValidationError,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "task_trigger_contract"
@@ -44,7 +43,6 @@ def _seed_provider_event_definition(
         "instance_id": 0,
         "name": "GitHub issue triage",
         "description": "Triage new GitHub issues.",
-        "status": Status.triggerable.value,
         "trigger": _provider_event_trigger(),
         "enabled": enabled,
         "task_revision": task_revision,
@@ -81,7 +79,7 @@ async def test_provider_event_start_leaves_definition_unarmed():
     task_id = _seed_provider_event_definition(scheduler, task_revision=5)
     definition_before = scheduler._get_task_or_raise(task_id)
     assert definition_before.instance_id == 0
-    assert definition_before.status == Status.triggerable
+    assert definition_before.trigger is not None
 
     untrusted = {"kind": "provider_event_context", "trust": "untrusted_data"}
     with patch(
@@ -105,8 +103,7 @@ async def test_provider_event_start_leaves_definition_unarmed():
     assert len(rows) == 1
     definition_after = rows[0]
     assert definition_after.instance_id == 0
-    assert definition_after.status == Status.triggerable
-    assert definition_after.activated_by is None
+    assert definition_after.trigger is not None
 
 
 @pytest.mark.asyncio

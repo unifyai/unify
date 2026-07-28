@@ -27,7 +27,6 @@ from unify.actor.simulated import SimulatedActorHandle
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.execution import Delivery, Wake
 from unify.task_scheduler.types.trigger import Trigger
 from unify.conversation_manager.cm_types import Medium
@@ -178,7 +177,6 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
     task_id = scheduler._create_task(
         name="Scheduled report",
         description="Send the scheduled report.",
-        status=Status.scheduled,
         schedule=Schedule(
             start_at=(
                 datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
@@ -243,7 +241,7 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
     assert run_updates[-1][1]["completed_at"]
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.schedule_start_at > datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
     )
@@ -259,7 +257,6 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
     task_id = scheduler._create_task(
         name="Delegate live report",
         description="Send the live delegated report.",
-        status=Status.scheduled,
         schedule=Schedule(
             start_at=(
                 datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
@@ -336,7 +333,7 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
     assert run_updates[-1][1]["state"] == "completed"
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.schedule_start_at > datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
     )
@@ -354,7 +351,6 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     task_id = scheduler._create_task(
         name="Offline report",
         description="Send the offline delegated report.",
-        status=Status.scheduled,
         schedule=Schedule(
             start_at=(
                 datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
@@ -467,7 +463,7 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
     assert '"result": "sent"' in run_updates[-1][1]["result_summary"]
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.schedule_start_at > datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
     )
@@ -489,7 +485,6 @@ async def test_offline_recurring_execution_rearms_definition_between_runs(
     task_id = scheduler._create_task(
         name=f"Offline recurring {'symbolic' if entrypoint else 'agentic'}",
         description="Run the offline recurring definition.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         entrypoint=entrypoint,
@@ -560,7 +555,7 @@ async def test_offline_recurring_execution_rearms_definition_between_runs(
             await delegate.close()
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.schedule_start_at == initial_start + timedelta(days=3)
     assert len(captured) == 3
     for call in captured:
@@ -589,16 +584,11 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_runs(
     task_id = scheduler._create_task(
         name="Offline concurrent same-task runs",
         description="Run the current scheduled definition.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         offline=True,
     )["details"]["task_id"]
     source_log_id = _source_log_id(scheduler, task_id)
-    scheduler._update_task_definition_status(
-        task_id=task_id,
-        new_status=Status.active,
-    )
 
     class _Handle:
         async def result(self):
@@ -673,7 +663,7 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_runs(
         await delegate.close()
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.scheduled
+    assert row.enabled is True
 
 
 @pytest.mark.asyncio
@@ -688,7 +678,6 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
     task_id = scheduler._create_task(
         name="Triggered offline report",
         description="Send the triggered offline delegated report.",
-        status=Status.triggerable,
         trigger=Trigger(medium=Medium.SMS_MESSAGE),
         entrypoint=777,
         offline=True,
@@ -1029,7 +1018,7 @@ async def test_execute_one_shot_completes_definition():
         current_task_execution_delegate.reset(token)
 
     row = scheduler._get_task_or_raise(task_id)
-    assert row.status == Status.completed
+    assert row.completed_at is not None
 
 
 @pytest.mark.asyncio
@@ -1039,13 +1028,14 @@ async def test_execute_without_delegate_or_actor_fails_before_mutation():
     task_id = ts._create_task(name="Needs actor", description="Needs actor")["details"][
         "task_id"
     ]
-    initial_status = ts._get_task_or_raise(task_id).status
+    before = ts._get_task_or_raise(task_id)
+    initial_arming = (before.enabled, before.completed_at)
 
     with pytest.raises(RuntimeError, match="run-scoped actor delegate"):
         await ts.execute(task_id=task_id)
 
     row = ts._get_task_or_raise(task_id)
-    assert row.status == initial_status
+    assert (row.enabled, row.completed_at) == initial_arming
 
 
 @pytest.mark.asyncio
@@ -1060,13 +1050,14 @@ async def test_execute_rejects_disabled_task():
         description="Disabled execute",
         enabled=False,
     )["details"]["task_id"]
-    initial_status = ts._get_task_or_raise(task_id).status
+    before = ts._get_task_or_raise(task_id)
+    initial_arming = (before.enabled, before.completed_at)
 
     with pytest.raises(ValueError, match="disabled and cannot be executed"):
         await ts.execute(task_id=task_id)
 
     row = ts._get_task_or_raise(task_id)
-    assert row.status == initial_status
+    assert (row.enabled, row.completed_at) == initial_arming
     assert row.enabled is False
 
     ts._update_task(task_id=task_id, enabled=True)
@@ -1096,7 +1087,6 @@ async def test_direct_description_driven_recurring_execution_passes_entrypoint_r
     task_id = ts._create_task(
         name="Recurring no-entrypoint task",
         description="Run from the natural-language description every day.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=datetime.now(timezone.utc)),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
@@ -1117,50 +1107,63 @@ async def test_direct_description_driven_recurring_execution_passes_entrypoint_r
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_update_status_cannot_force_active():
-    """Direct status updates cannot set 'active' and should not set 'activated_by'."""
+async def test_disarming_is_the_only_definition_lifecycle_change():
+    """Arming is a boolean; there is no run state to set on a definition."""
 
     actor = SimulatedActor(steps=None, duration=None)
     ts = TaskScheduler(actor=actor)
 
-    label = "Cannot force active"
+    label = "Arming only"
     task_id = ts._create_task(name=label, description=label)["details"]["task_id"]
 
-    # Attempt to force 'active' via status update should fail
-    with pytest.raises(ValueError):
-        ts._update_task(task_id=task_id, status="active")
-
-    # Ensure no activation metadata exists prior to activation
     rows = ts._filter_tasks(filter=f"task_id == {task_id}")
     assert len(rows) == 1
-    assert rows[0].activated_by is None
+    assert rows[0].enabled is True
+    assert rows[0].completed_at is None
 
-    # Change a non-active status and ensure activated_by remains unset
-    ts._update_task(task_id=task_id, status="cancelled")
-    rows2 = ts._filter_tasks(filter=f"task_id == {task_id}")
-    assert rows2[0].status == Status.cancelled
-    assert rows2[0].activated_by is None
+    ts._set_tasks_enabled(task_ids=task_id, enabled=False)
+    assert ts._filter_tasks(filter=f"task_id == {task_id}")[0].enabled is False
+
+    ts._set_tasks_enabled(task_ids=task_id, enabled=True)
+    assert ts._filter_tasks(filter=f"task_id == {task_id}")[0].enabled is True
 
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_tasks_table_has_activated_by_column():
-    """The Tasks context should include the activated_by column based on the Task model."""
+async def test_completed_one_shot_cannot_be_rearmed():
+    """A finished one-shot stays disarmed; re-running it needs a new task."""
 
     actor = SimulatedActor(steps=None, duration=None)
     ts = TaskScheduler(actor=actor)
 
-    # Create any task to ensure context exists
+    label = "One shot"
+    task_id = ts._create_task(name=label, description=label)["details"]["task_id"]
+    ts._mark_one_shot_completed(task_id)
+
+    row = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
+    assert row.completed_at is not None
+    assert row.enabled is False
+
+    with pytest.raises(ValueError, match="cannot be re-armed"):
+        ts._set_tasks_enabled(task_ids=task_id, enabled=True)
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_tasks_table_carries_intent_not_run_state():
+    """Definitions expose arming intent; run state lives on Tasks/Executions."""
+
+    actor = SimulatedActor(steps=None, duration=None)
+    ts = TaskScheduler(actor=actor)
+
     title = "Column presence check"
     _ = ts._create_task(name=title, description=title)
 
     cols = ts._list_columns()
-    if isinstance(cols, dict):
-        assert "activated_by" in cols
-        assert "enabled" in cols
-    else:
-        assert "activated_by" in cols
-        assert "enabled" in cols
+    assert "enabled" in cols
+    assert "completed_at" in cols
+    assert "status" not in cols
+    assert "activated_by" not in cols
 
 
 # ---------------------------------------------------------------------------
@@ -1174,8 +1177,8 @@ async def test_tasks_table_has_activated_by_column():
 async def test_execute_allows_second_task_while_first_live_handle_active():
     """A second distinct task starts freely while another task's live handle is held.
 
-    This test drives two separate tasks through the real execute() path and asserts
-    both land in Status.active with independent handles.
+    This test drives two separate tasks through the real execute() path and
+    asserts each has a run in flight with independent handles.
     """
     actor = SimulatedActor(steps=None, duration=None)
     ts = TaskScheduler(actor=actor)
@@ -1193,10 +1196,8 @@ async def test_execute_allows_second_task_while_first_live_handle_active():
         # Must not raise – task A is active but is a different task.
         handle_b = await ts.execute(task_id=task_id_b)
 
-        rows = ts._filter_tasks(filter=f"task_id in [{task_id_a}, {task_id_b}]")
-        active_ids = {r.task_id for r in rows if r.status == Status.active}
-        assert task_id_a in active_ids, "Task A should still be active"
-        assert task_id_b in active_ids, "Task B should also be active"
+        assert handle_b is not None, "Task B should start while task A holds a handle"
+        assert handle_b is not handle_a, "Each task must get an independent handle"
     finally:
         await handle_a.stop(cancel=False)
         await handle_a.result()
@@ -1219,7 +1220,6 @@ async def test_execute_allows_concurrent_instances_of_same_task():
     task_id = ts._create_task(
         name="Overlapping recurring task",
         description="Overlapping recurring task",
-        status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.HOURLY)],
     )["details"]["task_id"]
@@ -1227,8 +1227,6 @@ async def test_execute_allows_concurrent_instances_of_same_task():
     handle_0 = await ts.execute(task_id=task_id)
     handle_1 = None
     try:
-        assert ts._get_task_or_raise(task_id).status == Status.active
-
         handle_1 = await ts.execute(task_id=task_id)
 
         assert handle_1 is not None
@@ -1257,20 +1255,14 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
     task_id_a = scheduler._create_task(
         name="Concurrent in-flight task",
         description="Task A (simulated in-flight).",
-        status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
-    scheduler._update_task_definition_status(
-        task_id=task_id_a,
-        new_status=Status.active,
-    )
 
     # Task B: offline scheduled task to execute while task A is active.
     task_id_b = scheduler._create_task(
         name="Offline concurrent task",
         description="Task B (offline execution).",
-        status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         offline=True,
@@ -1347,22 +1339,21 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
 
     rows_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")
     assert any(
-        r.status == Status.scheduled for r in rows_b
+        r.enabled is True for r in rows_b
     ), "Task B should re-arm to scheduled after offline execution"
 
     rows_a = scheduler._filter_tasks(filter=f"task_id == {task_id_a}")
-    assert any(
-        r.status == Status.active for r in rows_a
-    ), "Task A's active row must remain; executing task B must not touch it"
+    assert len(rows_a) == 1, "Executing task B must not fork task A's definition"
+    assert rows_a[0].enabled is True, "Task A must stay armed"
 
 
 @pytest.mark.asyncio
 @_handle_project
 async def test_execute_allows_restart_while_definition_active(monkeypatch):
-    """Definition-only Tasks: an active definition does not block another Execution.
+    """A run in flight does not block another Execution.
 
-    Concurrency / idempotency is keyed by Execution ``run_key``, not by the
-    single definition row's ``active`` status.
+    Concurrency / idempotency is keyed by Execution ``run_key``. Definitions
+    carry arming intent only, so they cannot block anything.
     """
 
     monkeypatch.setattr(task_scheduler_module.SESSION_DETAILS.assistant, "agent_id", 42)
@@ -1374,15 +1365,10 @@ async def test_execute_allows_restart_while_definition_active(monkeypatch):
     task_id = scheduler._create_task(
         name="Definition active restart ok",
         description="Definition active restart ok",
-        status=Status.scheduled,
         schedule=Schedule(start_at=past),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )["details"]["task_id"]
     source_log_id = _source_log_id(scheduler, task_id)
-    scheduler._update_task_definition_status(
-        task_id=task_id,
-        new_status=Status.active,
-    )
     remember_live_task_run_provenance(
         TaskRunProvenance(
             assistant_id="42",
@@ -1415,4 +1401,4 @@ async def test_execute_allows_restart_while_definition_active(monkeypatch):
     finally:
         current_task_execution_delegate.reset(token)
 
-    assert scheduler._get_task_or_raise(task_id).status == Status.scheduled
+    assert scheduler._get_task_or_raise(task_id).enabled is True

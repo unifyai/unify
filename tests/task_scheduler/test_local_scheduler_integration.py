@@ -35,7 +35,6 @@ from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.execution import Wake
-from unify.task_scheduler.types.status import Status
 
 
 def _local_orchestra_authenticated() -> bool:
@@ -111,7 +110,6 @@ async def _run_scheduler_integration() -> None:
     create_result = scheduler._create_task(
         name="Local scheduler integration probe",
         description="A scheduled probe used by the integration test.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=start_at.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -182,7 +180,6 @@ async def _run_recurring_integration() -> None:
     create_result = scheduler._create_task(
         name="Local scheduler recurring probe",
         description="Recurring probe used by the integration test.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )

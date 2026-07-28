@@ -4,7 +4,6 @@ pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 from tests.helpers import _handle_project
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.priority import Priority
 
 
@@ -26,11 +25,8 @@ async def test_update_create_task_via_text():
     task = tasks[0]
     assert task.name == "Promote Jeff Smith"
     assert task.description.startswith("Send an email to Jeff Smith")
-    assert task.status in (
-        Status.scheduled,
-        Status.triggerable,
-        Status.active,
-    )
+    assert task.enabled is True
+    assert task.completed_at is None
     assert task.priority == Priority.normal
 
 

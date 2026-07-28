@@ -19,7 +19,6 @@ _TYPED_CREATE_KEYS = frozenset(
         "description",
         "trigger",
         "schedule",
-        "status",
         "enabled",
         "offline",
         "priority",

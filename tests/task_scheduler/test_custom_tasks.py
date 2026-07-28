@@ -11,10 +11,8 @@ from unify.task_scheduler.custom_tasks import (
     collect_custom_tasks,
     collect_tasks_from_directories,
     compute_custom_tasks_hash,
-    derive_initial_task_status,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from tests.helpers import _handle_project
 
 _EXAMPLE_TASK_LINES = [
@@ -92,30 +90,6 @@ def test_collect_custom_tasks_preserves_destination(custom_tasks_dir):
     tasks = collect_custom_tasks(path=custom_tasks_dir)
     assert tasks["ops/on-event"]["destination"] == "team:42"
     assert tasks["ops/daily-check"]["destination"] == "personal"
-
-
-def test_derive_initial_task_status():
-    assert (
-        derive_initial_task_status(
-            schedule=None,
-            trigger={"medium": "email"},
-        )
-        == Status.triggerable
-    )
-    assert (
-        derive_initial_task_status(
-            schedule={"start_at": "2026-01-01T09:00:00Z"},
-            trigger=None,
-        )
-        == Status.scheduled
-    )
-    assert (
-        derive_initial_task_status(
-            schedule=None,
-            trigger=None,
-        )
-        == Status.scheduled
-    )
 
 
 def test_compute_custom_tasks_hash_is_deterministic(custom_tasks_dir):
@@ -207,7 +181,7 @@ async def test_sync_custom_tasks_sets_triggerable_status(
         limit=1,
     )
     assert len(rows) == 1
-    assert rows[0].status == Status.triggerable
+    assert rows[0].trigger is not None
 
 
 @_handle_project

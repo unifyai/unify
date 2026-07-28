@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
-from .types.status import Status
 from .types.trigger import Trigger
 
 logger = logging.getLogger(__name__)
@@ -65,19 +64,6 @@ def _stable_json(value: Any) -> str:
     if value is None:
         return ""
     return json.dumps(value, sort_keys=True, default=str)
-
-
-def derive_initial_task_status(
-    *,
-    schedule: Optional[Dict[str, Any]],
-    trigger: Optional[Dict[str, Any]],
-) -> Status:
-    """Return the initial status for a newly inserted source-defined task."""
-    if trigger is not None:
-        return Status.triggerable
-    if schedule is not None and schedule.get("start_at") is not None:
-        return Status.scheduled
-    return Status.scheduled
 
 
 def _compute_task_hash(

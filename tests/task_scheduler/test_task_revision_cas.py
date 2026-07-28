@@ -20,10 +20,8 @@ from tests.provider_trigger_delivery import (
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.trigger import ProviderEventTrigger, parse_task_trigger
 from unify.task_scheduler.types.priority import Priority
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.task import Task
 from unify.task_scheduler.types.task_row_field import (
-    RuntimeTaskStatus,
     split_provider_event_task_update,
 )
 from unify.task_scheduler.typed_tasks_client import format_task_etag
@@ -54,7 +52,6 @@ def _provider_event_task(*, task_revision: int | None = 1) -> Task:
         instance_id=0,
         name="GitHub issue triage",
         description="Triage new GitHub issues.",
-        status=Status.triggerable,
         trigger=trigger,
         priority=Priority.normal,
         task_revision=task_revision,
@@ -65,26 +62,26 @@ def test_split_provider_event_task_update_partitions_authored_and_runtime() -> N
     authored, runtime = split_provider_event_task_update(
         {
             "description": "Updated scope.",
-            "status": Status.active.value,
+            "info": "Last run summarized 3 issues.",
         },
     )
     assert authored == {"description": "Updated scope."}
-    assert runtime == {"status": Status.active.value}
+    assert runtime == {"info": "Last run summarized 3 issues."}
 
 
-def test_split_provider_event_task_update_routes_lifecycle_status_to_authored() -> None:
-    authored, runtime = split_provider_event_task_update(
-        {"status": Status.triggerable.value},
-    )
-    assert authored == {"status": Status.triggerable.value}
+def test_split_provider_event_task_update_routes_arming_to_authored() -> None:
+    """Arming is an operator decision, so it takes the revision CAS path."""
+
+    authored, runtime = split_provider_event_task_update({"enabled": False})
+    assert authored == {"enabled": False}
     assert runtime == {}
 
 
-def test_split_provider_event_task_update_keeps_runtime_statuses_on_log_path() -> None:
-    for status in RuntimeTaskStatus:
-        authored, runtime = split_provider_event_task_update({"status": status.value})
-        assert authored == {}
-        assert runtime == {"status": status.value}
+def test_split_provider_event_task_update_keeps_completion_on_the_log_path() -> None:
+    stamp = "2026-07-28T12:00:00+00:00"
+    authored, runtime = split_provider_event_task_update({"completed_at": stamp})
+    assert authored == {}
+    assert runtime == {"completed_at": stamp}
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -1,7 +1,6 @@
 from tests.helpers import _handle_project
 from unify.task_scheduler.task_scheduler import TaskScheduler
 import pytest
-from unify.task_scheduler.types.status import Status
 
 
 @_handle_project
@@ -20,7 +19,7 @@ def test_cancel_single_task():
 
     # Verify the task was cancelled
     tasks = ts._filter_tasks()
-    assert tasks[0].status == Status.cancelled
+    assert tasks[0].enabled is False
 
 
 @_handle_project
@@ -43,9 +42,9 @@ def test_cancel_multiple_tasks():
 
     # Verify both tasks were cancelled
     tasks = ts._filter_tasks()
-    status_by_id = {t.task_id: t.status for t in tasks}
-    assert status_by_id[0] == Status.cancelled
-    assert status_by_id[1] == Status.cancelled
+    armed_by_id = {t.task_id: t.enabled for t in tasks}
+    assert armed_by_id[0] is False
+    assert armed_by_id[1] is False
 
 
 @_handle_project
@@ -53,13 +52,12 @@ def test_cancel_completed_task_raises():
     """Attempting to cancel a task that is already completed should raise a ValueError."""
     ts = TaskScheduler()
 
-    # Create a task that is already completed
-    ts._create_task(
+    task_id = ts._create_task(
         name="Ship version 1.0",
         description="Publish release notes and push tags.",
-        status="completed",
-    )
+    )["details"]["task_id"]
+    ts._mark_one_shot_completed(task_id)
 
     # Expect a ValueError when trying to cancel it
     with pytest.raises(ValueError):
-        ts._cancel_tasks([0])
+        ts._cancel_tasks([task_id])
