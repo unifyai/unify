@@ -294,17 +294,14 @@ def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
 async def _start_session_recording(event, cm: "ConversationManager") -> None:
     """Request a recording for the LiveKit room backing a just-started session.
 
-    Browser meets (Google Meet / Teams) are not requested at all: their audio
-    is bridged through the agent-service audio device and never reaches the
-    LiveKit room, so there is nothing for the compositor to mix. The gateway
-    enforces the same rule, this just avoids the pointless hop.
+    Browser meets are included. They were excluded while their audio was
+    bridged through a pod-local audio device and never entered the LiveKit
+    room, leaving the compositor nothing to mix; the meeting now arrives as an
+    ordinary published track, so a room composite captures both sides.
 
     Best-effort throughout -- a recording problem must never disturb a live
     call, so every failure is logged and swallowed.
     """
-    if isinstance(event, (GoogleMeetStarted, TeamsMeetStarted)):
-        return
-
     from unify.settings import SETTINGS
 
     if (
@@ -332,6 +329,13 @@ async def _start_session_recording(event, cm: "ConversationManager") -> None:
         call_session_id = call_manager.unify_meet_call_session_id or (
             event.call_session_id or ""
         )
+        provider_call_sid = ""
+        conference_name = ""
+    elif isinstance(event, (GoogleMeetStarted, TeamsMeetStarted)):
+        # Same key the utterances are written under, so the finished recording
+        # resolves to the transcript of the meeting it came from. Browser meets
+        # have no telephony identifiers.
+        call_session_id = call_manager.meet_session_id
         provider_call_sid = ""
         conference_name = ""
     else:
@@ -1084,8 +1088,7 @@ async def _(
     # LiveKit room is known to exist and carry audio, which is what the Room
     # Composite Egress compositor waits for. Started earlier (at SIP bridge
     # setup or agent dispatch) it races the join and LiveKit kills the job with
-    # "Start signal not received", producing no file. Browser meets are excluded
-    # by the gateway: their audio never enters the LiveKit room.
+    # "Start signal not received", producing no file.
     #
     # Detached deliberately: the request is a gateway round-trip that ends in a
     # LiveKit API call, and everything below (the outbound call_answered status,
@@ -1619,15 +1622,25 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         local_message_id=message_id,
     )
 
-    # Unify Meet transcripts are first-class: Console reads them from
-    # Orchestra's call-utterance store, so every utterance is appended there
-    # in addition to the Transcripts mirror above. Every meet has a call
-    # session; its id is the only utterance key.
-    if is_unify_meet:
-        call_key = cm.call_manager.unify_meet_call_session_id
+    # Meet transcripts are first-class: Console reads them from Orchestra's
+    # call-utterance store, so every utterance is appended there in addition to
+    # the Transcripts mirror above.
+    #
+    # Browser meets are included now that their speaker names come from the
+    # meeting platform rather than a screen scrape -- before, the only names
+    # available were voice-cluster placeholders, and writing those into the
+    # permanent record would have been worse than writing nothing. Their key is
+    # the bot id: ``call_utterance.call_id`` is an opaque string, and readers
+    # group by it rather than joining a session row.
+    if is_unify_meet or is_google_meet or is_teams_meet:
+        call_key = (
+            cm.call_manager.unify_meet_call_session_id
+            if is_unify_meet
+            else cm.call_manager.meet_session_id
+        )
         if not call_key:
             LOGGER.error(
-                "Unify Meet utterance dropped from the call store: no call "
+                f"{medium.value} utterance dropped from the call store: no "
                 "session id on the active meet",
             )
         if call_key:

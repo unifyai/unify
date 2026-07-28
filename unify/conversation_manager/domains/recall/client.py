@@ -33,6 +33,25 @@ DEFAULT_RECALL_REGION = "us-west-2"
 # caller's own join flow.
 _REQUEST_TIMEOUT_S = 30.0
 
+# Seconds the bot waits after the last other participant leaves before it exits.
+# Recall's default is 2s; 5 rides out someone dropping and rejoining without
+# leaving the bot sitting in an empty meeting on the clock. The assistant does
+# not speak a closing line, so nothing needs protecting beyond that.
+EVERYONE_LEFT_TIMEOUT_S = 5
+
+# Seconds the bot waits in an empty meeting for anyone at all to arrive. Recall
+# defaults to 1200, which bills twenty minutes of bot time for a meeting nobody
+# attends; five minutes is long enough for a late host.
+NOONE_JOINED_TIMEOUT_S = 300
+
+# LiveKit data topic the relay republishes participant events on.
+#
+# MIRRORED: the publisher is ``RECALL_EVENT_TOPIC`` in unity-deploy's
+# ``communication/meet_events.py``. Two repos, one string, and a mismatch is
+# silent -- the fast brain simply never sees a participant event and speaker
+# attribution quietly falls back to voice embeddings. Change both together.
+RECALL_EVENT_TOPIC = "recall_meeting_events"
+
 # Recall's own lifecycle vocabulary, kept verbatim so log lines and stored
 # failure reasons match what their dashboard shows an operator.
 STATUS_JOINING = "joining_call"
@@ -188,6 +207,14 @@ class RecallClient:
             # transcribe locally off the LiveKit track and never read their
             # recording, so nothing should be stored at all.
             "recording_config": {"retention": None},
+            # Let Recall own the departure. The bot leaving is what the fast
+            # brain detects (its bridge page drops out of the LiveKit room), so
+            # these timeouts are the actual end-of-meeting policy rather than a
+            # backstop behind one of ours.
+            "automatic_leave": {
+                "everyone_left_timeout": EVERYONE_LEFT_TIMEOUT_S,
+                "noone_joined_timeout": NOONE_JOINED_TIMEOUT_S,
+            },
         }
         if metadata:
             payload["metadata"] = dict(metadata)

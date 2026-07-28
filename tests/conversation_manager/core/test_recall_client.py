@@ -133,6 +133,30 @@ async def test_create_bot_always_pins_zero_retention() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_bot_sets_its_own_leave_timeouts() -> None:
+    """Recall's defaults are wrong for us at both ends.
+
+    ``everyone_left_timeout`` defaults to 2s, which is tight enough that a
+    participant dropping and rejoining can end the meeting under them.
+    ``noone_joined_timeout`` defaults to 1200s, which bills twenty minutes of
+    bot time for a meeting nobody attends.
+    """
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+        )
+
+    leave = _create_payload(session)["automatic_leave"]
+    assert leave["everyone_left_timeout"] == recall.EVERYONE_LEFT_TIMEOUT_S
+    assert leave["noone_joined_timeout"] == recall.NOONE_JOINED_TIMEOUT_S
+    assert leave["everyone_left_timeout"] > 2
+    assert leave["noone_joined_timeout"] < 1200
+
+
+@pytest.mark.asyncio
 async def test_create_bot_renders_the_bridge_as_camera_by_default() -> None:
     session = _mock_session(body={"id": "bot_1"})
     with patch("aiohttp.ClientSession", return_value=session):
