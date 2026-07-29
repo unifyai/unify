@@ -56,6 +56,20 @@ def stub_canvas(monkeypatch):
     return install
 
 
+@pytest.fixture()
+def published(monkeypatch):
+    """Capture what the handler reports back, instead of publishing it."""
+    from unify.conversation_manager.domains import comms_utils
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        comms_utils,
+        "publish_canvas_invocation",
+        lambda **kwargs: captured.append(kwargs),
+    )
+    return captured
+
+
 class TestEventParsing:
     def test_both_identifiers_are_required(self):
         # A run cannot be addressed by either alone: invocation ids are sequential
@@ -110,9 +124,61 @@ class TestRouting:
         assert CanvasInvocationRequested in EventHandler._registry
 
 
+class TestReporting:
+    """How a run ends has to reach the canvas that started it.
+
+    The parent resolves the action's promise as soon as Orchestra accepts it,
+    because the work outlives the request. The terminal status published here is
+    therefore the only thing that ever moves the control out of its working state
+    — without it a button says "working" until the tab closes, whether the action
+    sent the email or failed outright.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_finished_run_is_reported(self, stub_canvas, published):
+        stub_canvas(_Canvas(_Record(status="succeeded")))
+        event = CanvasInvocationRequested(canvas_token="abc123", invocation_id=0)
+
+        await handle_canvas_invocation_requested(event, cm=None)
+
+        assert len(published) == 1
+        # Id 0 is the first run of a canvas, and it must survive the round trip.
+        assert published[0]["invocation_id"] == 0
+        assert published[0]["token"] == "abc123"
+        assert published[0]["status"] == "succeeded"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_reports_its_reason(self, stub_canvas, published):
+        stub_canvas(_Canvas(_Record(status="failed", error="SMTP refused")))
+        event = CanvasInvocationRequested(canvas_token="abc123", invocation_id=2)
+
+        await handle_canvas_invocation_requested(event, cm=None)
+
+        assert published[0]["status"] == "failed"
+        assert published[0]["error"] == "SMTP refused"
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_cannot_start_is_still_reported(
+        self,
+        stub_canvas,
+        published,
+    ):
+        # The most important of the three. `run_invocation` records its own
+        # failures, so an exception escaping it means nothing was written and
+        # nothing will be — leaving this unreported is the one path that hangs a
+        # control forever.
+        stub_canvas(_Canvas(raises=ValueError("Canvas 'abc123' has no invocation 9")))
+        event = CanvasInvocationRequested(canvas_token="abc123", invocation_id=9)
+
+        await handle_canvas_invocation_requested(event, cm=None)
+
+        assert len(published) == 1
+        assert published[0]["status"] == "failed"
+
+
 class TestHandler:
     @pytest.mark.asyncio
-    async def test_it_runs_the_addressed_invocation(self, stub_canvas):
+    async def test_it_runs_the_addressed_invocation(self, stub_canvas, published):
         canvas = stub_canvas(_Canvas())
         event = CanvasInvocationRequested(canvas_token="abc123", invocation_id=0)
 
@@ -124,7 +190,7 @@ class TestHandler:
         assert woke is False
 
     @pytest.mark.asyncio
-    async def test_a_failed_run_does_not_raise(self, stub_canvas):
+    async def test_a_failed_run_does_not_raise(self, stub_canvas, published):
         # The row already records the failure. Raising here would surface as an
         # unhandled event-loop error and tell the viewer nothing extra.
         stub_canvas(_Canvas(_Record(status="failed", error="SMTP refused")))
@@ -133,7 +199,7 @@ class TestHandler:
         assert await handle_canvas_invocation_requested(event, cm=None) is False
 
     @pytest.mark.asyncio
-    async def test_an_unrunnable_invocation_is_contained(self, stub_canvas):
+    async def test_an_unrunnable_invocation_is_contained(self, stub_canvas, published):
         """A run that cannot even start must not take the event loop down.
 
         `run_invocation` records its own failures, so an exception escaping it
