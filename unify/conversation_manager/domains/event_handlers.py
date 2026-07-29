@@ -1691,8 +1691,23 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     and SESSION_DETAILS.assistant.agent_id is not None
                     else None
                 ),
+                # `spoken_at` stays the commit instant: it orders the store
+                # and predates this change. The audible start rides alongside
+                # it, so a reader can place the line in the recording without
+                # the meaning of an existing column shifting underneath it.
                 "spoken_at": event.timestamp.isoformat(),
-                "metadata": {"contact_id": contact_id},
+                "metadata": {
+                    key: value
+                    for key, value in {
+                        "contact_id": contact_id,
+                        "speech_started_at": getattr(
+                            event,
+                            "speech_started_at",
+                            None,
+                        ),
+                    }.items()
+                    if value is not None
+                },
             }
             asyncio.create_task(
                 asyncio.to_thread(

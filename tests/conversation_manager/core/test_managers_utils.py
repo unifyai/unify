@@ -827,3 +827,39 @@ class TestCallStartForMedium:
         from unify.conversation_manager.cm_types import Medium
 
         assert call_start_for_medium(MagicMock(), Medium.EMAIL) is None
+
+
+class TestSpeechStartParsing:
+    """``_parse_iso`` guards the wire value before it reaches arithmetic."""
+
+    def test_parses_an_iso_instant_from_the_wire(self):
+        from unify.conversation_manager.domains.managers_utils import _parse_iso
+
+        parsed = _parse_iso("2026-07-29T10:00:00+00:00")
+        assert parsed is not None
+        assert parsed.year == 2026 and parsed.minute == 0
+
+    def test_returns_none_for_absent_or_malformed_values(self):
+        from unify.conversation_manager.domains.managers_utils import _parse_iso
+
+        # A malformed start must fall back to the commit timestamp rather than
+        # taking down the transcript write for the whole utterance.
+        for value in (None, "", "not-a-date", 12345):
+            assert _parse_iso(value) is None
+
+    def test_a_start_produces_an_earlier_offset_than_the_commit(self):
+        """The point of the field: the stamp marks when speaking began.
+
+        A line committed 3s after it started should read 3s earlier than it
+        would from the commit timestamp alone.
+        """
+        from unify.conversation_manager.domains.managers_utils import (
+            call_utterance_stamp,
+        )
+
+        call_start = datetime(2026, 7, 29, 10, 0, 0)
+        speech_start = call_start + timedelta(seconds=5)
+        committed = speech_start + timedelta(seconds=3)
+
+        assert call_utterance_stamp(call_start, speech_start) == "00.05"
+        assert call_utterance_stamp(call_start, committed) == "00.08"

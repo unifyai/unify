@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -624,3 +625,72 @@ async def test_outbound_email_transcript_includes_all_recipients(cm_with_eventbu
         f"Bob (cc recipient, id={bob_id}) should be in receiver_ids, "
         f"got {receiver_ids_int}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Speech-start serialisation
+# ---------------------------------------------------------------------------
+
+
+class TestCallUtteranceSpeechStart:
+    """``speech_started_at`` must survive the voice-agent IPC hop intact.
+
+    Utterance events are published as JSON by the voice agent and rebuilt by the
+    ConversationManager. ``Event.from_dict`` decodes only ``timestamp`` back into
+    a datetime, so the speech start is deliberately typed as a string; were it a
+    datetime it would ISO-encode on the way out and arrive as a string anyway,
+    silently, with the mismatch surfacing only when something did arithmetic on
+    it.
+    """
+
+    ISO = "2026-07-29T10:00:00+00:00"
+
+    def test_survives_a_json_round_trip_as_a_string(self):
+        from unify.conversation_manager.events import Event, InboundPhoneUtterance
+
+        original = InboundPhoneUtterance(
+            contact={"contact_id": 2},
+            content="Hello, can you hear me?",
+            speech_started_at=self.ISO,
+        )
+        restored = Event.from_json(original.to_json())
+
+        assert restored.speech_started_at == self.ISO
+        assert isinstance(restored.speech_started_at, str)
+        # The commit timestamp keeps its own decoding.
+        assert isinstance(restored.timestamp, datetime)
+
+    def test_defaults_to_none_when_the_agent_observed_no_start(self):
+        from unify.conversation_manager.events import Event, OutboundUnifyMeetUtterance
+
+        restored = Event.from_json(
+            OutboundUnifyMeetUtterance(contact={}, content="hi").to_json(),
+        )
+        assert restored.speech_started_at is None
+
+    def test_every_spoken_utterance_type_carries_the_field(self):
+        """A channel missing the field would silently lose alignment."""
+        from unify.conversation_manager import events as events_module
+        from unify.conversation_manager.events import CallUtteranceEvent
+
+        spoken = [
+            f"{direction}{channel}Utterance"
+            for direction in ("Inbound", "Outbound")
+            for channel in (
+                "Phone",
+                "UnifyMeet",
+                "WhatsAppCall",
+                "GoogleMeet",
+                "TeamsMeet",
+            )
+        ]
+        for name in spoken:
+            cls = getattr(events_module, name)
+            assert issubclass(cls, CallUtteranceEvent), name
+
+    def test_contact_stays_positional(self):
+        """call.py builds inbound utterances with a positional contact."""
+        from unify.conversation_manager.events import InboundPhoneUtterance
+
+        event = InboundPhoneUtterance({"contact_id": 3}, content="y")
+        assert event.contact == {"contact_id": 3}

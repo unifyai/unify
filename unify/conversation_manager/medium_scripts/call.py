@@ -41,6 +41,7 @@ from typing import AsyncIterable, Callable
 load_dotenv()
 
 from unify.conversation_manager.events import *
+from unify.common.prompt_helpers import now as prompt_now
 from unify.conversation_manager import speaker_id
 from unify.conversation_manager.utils import dispatch_livekit_agent
 from unify.conversation_manager.prompt_builders import (
@@ -2022,6 +2023,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
+    # When each side's current line became audible, so an utterance can be
+    # placed in the recording by its start rather than by the commit that
+    # follows it. Consumed when the utterance is published: a turn that
+    # finalises into several items must not reuse one span's start for all of
+    # them, which would place the later ones far too early.
+    user_speech_started_at = None
+    agent_speech_started_at = None
     _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
     _recorded_opening_preloaded: dict[str, _PreloadedAudio] = {}
@@ -2251,6 +2259,22 @@ async def entrypoint(ctx: agents.JobContext):
         user_utterance_event = InboundUnifyMeetUtterance
         assistant_utterance_event = OutboundUnifyMeetUtterance
 
+    def _consume_speech_start(*, assistant_side: bool) -> str | None:
+        """The captured start for this side's current line, cleared on read.
+
+        Clearing matters: one speaking span can finalise into several items, and
+        reusing the span's start for each would place the later ones at the
+        moment the whole turn began. Whatever is left unmatched falls back to the
+        commit timestamp, which is the pre-existing behaviour.
+        """
+        nonlocal user_speech_started_at, agent_speech_started_at
+        started = agent_speech_started_at if assistant_side else user_speech_started_at
+        if assistant_side:
+            agent_speech_started_at = None
+        else:
+            user_speech_started_at = None
+        return started.isoformat() if started else None
+
     async def _publish_assistant_utterance(text: str) -> None:
         if channel == "google_meet":
             event = OutboundGoogleMeetUtterance(
@@ -2274,6 +2298,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
         else:
             event = assistant_utterance_event(contact, content=text)
+        event.speech_started_at = _consume_speech_start(assistant_side=True)
         await event_broker.publish(
             f"app:comms:{channel}_utterance",
             event.to_json(),
@@ -2333,6 +2358,7 @@ async def entrypoint(ctx: agents.JobContext):
                 speaker_label_source=label_source,
                 engaged=False,
             )
+        event.speech_started_at = _consume_speech_start(assistant_side=False)
         await event_broker.publish(
             f"app:comms:{channel}_utterance",
             event.to_json(),
@@ -2407,10 +2433,13 @@ async def entrypoint(ctx: agents.JobContext):
 
     @session.on("user_state_changed")
     def _on_user_state_changed(ev):
-        nonlocal user_is_speaking, user_state_seq
+        nonlocal user_is_speaking, user_state_seq, user_speech_started_at
         user_state_seq += 1
         state_id = f"usrstate-{user_state_seq:06d}"
         user_is_speaking = ev.new_state == "speaking"
+        if user_is_speaking:
+            # VAD onset: the moment their line became audible in the room.
+            user_speech_started_at = prompt_now(as_string=False)
         if not user_is_speaking:
             # The user just freed the floor: a queued slow-brain line should play
             # at the next silent moment, not wait for the next agent-state cycle.
@@ -2430,6 +2459,11 @@ async def entrypoint(ctx: agents.JobContext):
         Triggering here guarantees the full thinking → speaking → listening cycle
         has completed before queued notification speech plays.
         """
+        nonlocal agent_speech_started_at
+        if ev.new_state == "speaking":
+            # Playback start, not `speech_created` -- that fires when the reply
+            # is scheduled, which can precede audio by a noticeable margin.
+            agent_speech_started_at = prompt_now(as_string=False)
         if ev.new_state in ("listening", "idle"):
             maybe_speak_queued()
         _check_quiescence_transition()
@@ -2708,6 +2742,7 @@ async def entrypoint(ctx: agents.JobContext):
                         speaker_label_source=speaker_label_source,
                         engaged=speaker_engaged,
                     )
+                event.speech_started_at = _consume_speech_start(assistant_side=False)
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
                     event.to_json(),
