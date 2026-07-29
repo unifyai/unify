@@ -395,6 +395,8 @@ class CanvasManager(BaseCanvasManager):
             visibility=visibility,
         )
 
+        self._announce(token, title, "published")
+
         return CanvasResult(
             token=token,
             url=token_ops.build_canvas_url(token),
@@ -526,11 +528,15 @@ class CanvasManager(BaseCanvasManager):
             # private to every viewer.
             token_ops.set_token_state(token, visibility=visibility)
 
+        title = updates.get("title", existing.get("title", ""))
+        status = existing.get("status", "published")
+        self._announce(token, title, status)
+
         return CanvasResult(
             token=token,
             url=token_ops.build_canvas_url(token),
-            title=updates.get("title", existing.get("title", "")),
-            status=existing.get("status", "published"),
+            title=title,
+            status=status,
             build=build,
             review=review_report,
         )
@@ -545,12 +551,37 @@ class CanvasManager(BaseCanvasManager):
             {"props_json": json.dumps(props), "updated_at": _now()},
             filter=f"token == '{token}'",
         )
+
+        title = existing.get("title", "")
+        status = existing.get("status", "published")
+        # Materialised props are the values a canvas over LLM-shaped or expensive
+        # reads displays, so a refresh changes what a viewer sees just as much as a
+        # code revision does.
+        self._announce(token, title, status)
+
         return CanvasResult(
             token=token,
             url=token_ops.build_canvas_url(token),
-            title=existing.get("title", ""),
-            status=existing.get("status", "published"),
+            title=title,
+            status=status,
         )
+
+    def _announce(self, token: str, title: str, status: str) -> None:
+        """Tell open frames a canvas changed.
+
+        A canvas is typically left open in a tab, so a revision that only landed on
+        reload would leave a viewer reading a superseded view with nothing to
+        indicate it. Imported here rather than at module scope because the publisher
+        lives in the conversation manager, which imports managers in turn.
+
+        Carries no bundle. Surfaces re-read the record, so the integrity check stays
+        on the one path that performs it.
+        """
+        from unify.conversation_manager.domains.comms_utils import (
+            publish_canvas_updated,
+        )
+
+        publish_canvas_updated(token=token, title=title, status=status)
 
     # ── retrieval ─────────────────────────────────────────────────────────
 
@@ -595,6 +626,10 @@ class CanvasManager(BaseCanvasManager):
                 dm.delete_rows(related, filter=f"canvas_token == '{token}'")
 
         token_ops.delete_token(token)
+
+        # Announced as `deleted` so a surface can drop the canvas instead of
+        # re-reading a token that will now never resolve.
+        self._announce(token, row.get("title", ""), "deleted")
         return True
 
     # ── inspection ────────────────────────────────────────────────────────
