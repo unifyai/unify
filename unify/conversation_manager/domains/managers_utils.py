@@ -1153,6 +1153,23 @@ def call_start_for_medium(call_manager, medium: "Medium"):
     return None
 
 
+def _parse_iso(value):
+    """An ISO instant from the wire, or None when absent or malformed.
+
+    Utterance events carry the speech start as a string because only
+    ``Event.timestamp`` is decoded back to a datetime on the far side of the
+    voice-agent IPC hop.
+    """
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def call_utterance_stamp(call_start, spoken_at) -> str:
     """``MM.SS`` from session start to this utterance, or "" outside a call.
 
@@ -1489,9 +1506,15 @@ async def log_message(
                 if recovered is not None:
                     exchange_id = recovered
 
+    # A spoken line's audible start, when the voice agent observed one. The
+    # event's own timestamp marks the commit that follows the line, so using it
+    # places the utterance at the moment the speaker *finished* -- past its
+    # position in any recording by the length of the line.
+    speech_started_at = getattr(event, "speech_started_at", None)
+    spoken_at = _parse_iso(speech_started_at) or event.timestamp
     call_utterance_timestamp = call_utterance_stamp(
         call_start_for_medium(cm.call_manager, medium),
-        event.timestamp,
+        spoken_at,
     )
 
     # publish transcript on a separate thread
@@ -1593,6 +1616,13 @@ async def log_message(
             if call_utterance_timestamp:
                 metadata = metadata or {}
                 metadata["call_utterance_timestamp"] = call_utterance_timestamp
+
+            if speech_started_at:
+                # Kept raw as well as in the MM.SS stamp: readers that align a
+                # transcript to audio need the instant, not a truncated offset
+                # from a call-start that predates the recording.
+                metadata = metadata or {}
+                metadata["speech_started_at"] = speech_started_at
 
             onboarding_metadata = {
                 key: value
