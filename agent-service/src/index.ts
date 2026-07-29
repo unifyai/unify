@@ -8,6 +8,7 @@ import { startBrowserAgent, BrowserAgent, BrowserConnector, AgentError, BrowserO
 import { z, ZodTypeAny, ZodAny, ZodType } from 'zod';
 import { partitionHtml, serializeToMarkdown, PartitionOptions, MarkdownSerializerOptions } from 'magnitude-extract';
 import dotenv from 'dotenv';
+import { EgressPolicyError, parseEgressPolicy, resolveEgress, type ResolvedEgress } from './egressPolicy';
 dotenv.config();
 import os from 'os';
 import path from 'path';
@@ -707,6 +708,7 @@ const getLaunchOptions = (
   tracesDir: string | null = null,
   storageStateName: string | null = null,
   stealth: boolean = false,
+  egress: ResolvedEgress | null = null,
 ) => {
   // ``storageStateName`` is forwarded to magnitude-core's BrowserProvider,
   // which loads ~/.magnitude/browser_states/<safeName>.json (cookies +
@@ -736,7 +738,25 @@ const getLaunchOptions = (
   if (stealth) {
     opts.stealth = true;
   }
+  applyEgress(opts, egress);
   return opts;
+};
+
+/**
+ * Fold a resolved egress policy into magnitude's browser options.
+ *
+ * Proxy, WebRTC containment args and the region-derived context all come from
+ * one resolution so they cannot drift apart: a proxied session still reporting
+ * the host's timezone is a worse signal than an unproxied one.
+ */
+const applyEgress = (opts: any, egress: ResolvedEgress | null | undefined) => {
+  if (!egress || !egress.proxy) return;
+  opts.launchOptions = opts.launchOptions || {};
+  opts.launchOptions.proxy = egress.proxy;
+  opts.launchOptions.args = [...(opts.launchOptions.args || []), ...egress.args];
+  if (Object.keys(egress.contextOptions).length > 0) {
+    opts.contextOptions = { ...(opts.contextOptions || {}), ...egress.contextOptions };
+  }
 };
 
 const startDesktop = async (): Promise<BrowserAgent> => {
@@ -771,6 +791,7 @@ const startBrowser = async (
   storageStateName?: string,
   sessionMeta?: { sessionId?: string; sessionLabel?: string },
   stealth: boolean = false,
+  egress: ResolvedEgress | null = null,
 ): Promise<BrowserAgent> => {
   try {
     const agent = await startBrowserAgent({
@@ -781,6 +802,7 @@ const startBrowser = async (
         defaultBrowserPaths.tracesDir,
         storageStateName ?? null,
         stealth,
+        egress,
       ),
       narrate: true,
       urlMappings,
@@ -800,11 +822,10 @@ const startBrowser = async (
 const startBrowserOnVm = async (
   urlMappings?: Record<string, string>,
   sessionMeta?: { sessionId?: string; sessionLabel?: string },
+  egress: ResolvedEgress | null = null,
 ): Promise<BrowserAgent> => {
   try {
-    const agent = await startBrowserAgent({
-      url: "https://www.google.com/",
-      browser: {
+    const vmBrowserOptions: any = {
         launchOptions: {
           headless: false,
           args: [
@@ -816,7 +837,11 @@ const startBrowserOnVm = async (
           tracesDir: defaultBrowserPaths.tracesDir || undefined,
         },
         contextOptions: { viewport: null, ignoreHTTPSErrors: true },
-      },
+    };
+    applyEgress(vmBrowserOptions, egress);
+    const agent = await startBrowserAgent({
+      url: "https://www.google.com/",
+      browser: vmBrowserOptions,
       narrate: true,
       urlMappings,
       sessionId: sessionMeta?.sessionId,
@@ -840,7 +865,7 @@ app.post('/start', async (req: Request, res: Response) => {
   // (cookies + localStorage + sessionStorage) before any page renders so
   // the new session boots already-authenticated. Currently only honoured
   // for ``mode === 'web'``.
-  const { headless, mode, label, urlMappings, storageStateName, stealth } = req.body;
+  const { headless, mode, label, urlMappings, storageStateName, stealth, egress } = req.body;
   if (!mode || !['desktop', 'web', 'web-vm'].includes(mode)) {
     return res.status(400).json({
       error: 'bad_request',
@@ -872,6 +897,26 @@ app.post('/start', async (req: Request, res: Response) => {
   }
 
   const sessionId = randomUUID();
+
+  // Resolve the egress policy before anything is launched. A policy that
+  // cannot be honoured must fail the request rather than silently egress from
+  // the host: a caller that asked for a specific exit and got the host's own
+  // address is worse off than one that got an error, because it cannot tell.
+  let resolvedEgress: ResolvedEgress | null = null;
+  try {
+    const policy = parseEgressPolicy(egress);
+    resolvedEgress = policy ? resolveEgress({ sessionKey: sessionId, ...policy }) : null;
+  } catch (err) {
+    if (err instanceof EgressPolicyError) {
+      console.error(`[start] egress policy rejected: ${err.message}`);
+      return res.status(400).json({ error: 'invalid_egress_policy', message: err.message });
+    }
+    throw err;
+  }
+  if (resolvedEgress) {
+    console.log(`[start] egress=${resolvedEgress.description}`);
+  }
+
   const t0 = Date.now();
   console.log(`[start] BEGIN mode=${mode} sessionId=${sessionId}`);
   try {
@@ -883,7 +928,7 @@ app.post('/start', async (req: Request, res: Response) => {
     if (mode === "desktop") {
       agent = await startDesktop();
     } else if (mode === "web-vm") {
-      agent = await startBrowserOnVm(mappings, { sessionId, sessionLabel: label });
+      agent = await startBrowserOnVm(mappings, { sessionId, sessionLabel: label }, resolvedEgress);
     } else {
       agent = await startBrowser(
         headless ?? false,
@@ -891,6 +936,7 @@ app.post('/start', async (req: Request, res: Response) => {
         typeof storageStateName === 'string' && storageStateName ? storageStateName : undefined,
         { sessionId, sessionLabel: label },
         stealth === true,
+        resolvedEgress,
       );
     }
     console.log(`[start] agent_created=${Date.now() - t0}ms mode=${mode}`);

@@ -59,7 +59,47 @@ This Node.js service acts as an HTTP wrapper for the Magnitude `BrowserAgent`, a
     # copy the API key from the account dashboard.  When unset, the
     # /captcha/solve handler returns 503 anticaptcha_key_missing.
     ANTICAPTCHA_KEY="..."
+    # Optional - managed egress. Lets a session choose which country its
+    # traffic leaves from (see "Egress policy" below). Unset, only
+    # egress.mode "direct" and "byo" are available; "region" is refused
+    # rather than silently egressing from the host.
+    UNITY_EGRESS_PROXY_SERVER="http://gate.provider.example:7777"
+    # {region} and {session} are substituted; residential providers encode
+    # geography and sticky-session handles in the username.
+    UNITY_EGRESS_PROXY_USERNAME="account-country-{region}-session-{session}"
+    UNITY_EGRESS_PROXY_PASSWORD="..."
     ```
+
+## Egress policy
+
+By default a browser session leaves from wherever the host sits, which for
+hosted assistants is `us-central1`. That is a correctness problem before it is
+anything else: an assistant researching prices or availability for a user in
+Germany sees what a machine in Iowa sees.
+
+`POST /start` accepts an optional `egress` object:
+
+```jsonc
+{ "mode": "direct" }                                  // unchanged; the default
+{ "mode": "region", "region": "gb" }                  // managed provider
+{ "mode": "byo", "proxy": { "server": "...", "username": "...", "password": "..." },
+  "region": "gb" }                                    // caller-supplied exit
+```
+
+Three things move together, which is why this is a policy rather than a proxy
+field: the exit itself, the **timezone / locale / `Accept-Language`** derived
+from the region, and **WebRTC containment**. A proxied session still reporting
+the host's timezone is a worse signal than an unproxied one, and Chromium
+reveals the host address over STUN regardless of the HTTP proxy — so neither is
+separately settable.
+
+Resolution **fails closed**: a policy that cannot be honoured returns
+`400 invalid_egress_policy` rather than falling back to direct egress, because
+a caller that asked for a specific exit and silently got the host's own address
+cannot tell that it happened.
+
+`region` accepts an ISO 3166-1 alpha-2 code; the supported set is returned in
+the error message when an unknown one is supplied.
 
 ## Running the Service
 
