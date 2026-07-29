@@ -2835,7 +2835,6 @@ class TaskScheduler(BaseTaskScheduler):
             "provider_event_binding_id",
             "name",
             "description",
-            "status",
             "trigger",
             "schedule",
             "enabled",
@@ -2915,7 +2914,6 @@ class TaskScheduler(BaseTaskScheduler):
             "task_id",
             "name",
             "description",
-            "status",
             "priority",
             "schedule",
             "deadline",
@@ -2940,9 +2938,12 @@ class TaskScheduler(BaseTaskScheduler):
         """Filter tasks using a boolean expression over task fields.
 
         Returns all task rows that match the given filter expression.
-        The expression uses field names from the task schema (e.g.
-        ``status == 'scheduled'``, ``task_id == 42``).  Returns an empty
-        list when no rows match.
+        The expression uses field names from the task schema and Python
+        literals (e.g. ``task_id == 42``, ``priority == 'high'``).  Boolean
+        fields such as ``enabled`` compare against ``True``/``False``
+        capitalized — ``enabled == true`` is not a boolean literal here and
+        matches no rows rather than raising.  Returns an empty list when no
+        rows match.
         """
 
         normalized_filter = normalize_filter_expr(filter)
@@ -3053,7 +3054,9 @@ class TaskScheduler(BaseTaskScheduler):
         """Compute aggregate metrics over the current task list.
 
         Supports count, sum, mean, min, max, and other standard reductions
-        grouped by one or more task fields (e.g. ``status``, ``priority``).
+        grouped by one or more task fields (e.g. ``priority``, ``enabled``).
+        Any ``filter`` follows the same expression rules as the task filter
+        tool, including capitalized ``True``/``False`` for boolean fields.
         Returns a dictionary of group keys to metric values.
         """
 
