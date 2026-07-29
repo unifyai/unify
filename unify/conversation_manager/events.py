@@ -1975,6 +1975,7 @@ class CanvasInvocationRequested(Event):
         )
 
 
+@dataclass
 class ProviderEventDispatchRequested(Event):
     """Orchestra asked Unity to adopt one live provider-event dispatch.
 
