@@ -395,3 +395,63 @@ async def test_leave_call_swallows_failures() -> None:
     session = _mock_session(status=404, text='{"detail":"not found"}')
     with patch("aiohttp.ClientSession", return_value=session):
         await _client(session).leave_call("bot_1")
+
+
+@pytest.mark.asyncio
+async def test_participant_video_is_off_by_default() -> None:
+    """It streams for the whole call, so a bot with no use for vision skips it."""
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            realtime_events_url="wss://comms/meet/events?room=r&token=t",
+        )
+
+    payload = _create_payload(session)
+    assert "video_mixed_layout" not in payload["recording_config"]
+    events = payload["realtime_endpoints"][0]["events"]
+    assert not any(e.startswith("video_") for e in events)
+
+
+@pytest.mark.asyncio
+async def test_participant_video_needs_gallery_layout() -> None:
+    """Separate per-participant video only arrives in gallery layout.
+
+    Without it the platform sends one composited stream and there is no
+    screenshare track to pick out -- the subscription would be silently useless.
+    """
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            realtime_events_url="wss://comms/meet/events?room=r&token=t",
+            capture_participant_video=True,
+        )
+
+    payload = _create_payload(session)
+    assert payload["recording_config"]["video_mixed_layout"] == "gallery_view_v2"
+    # Retention must survive being edited alongside it.
+    assert payload["recording_config"]["retention"] is None
+    assert "video_separate_png.data" in payload["realtime_endpoints"][0]["events"]
+
+
+@pytest.mark.asyncio
+async def test_participant_video_stays_png() -> None:
+    """H264 would cost a decoder and the web_4_core variant for ~1000px."""
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            realtime_events_url="wss://comms/meet/events?room=r&token=t",
+            capture_participant_video=True,
+        )
+
+    events = _create_payload(session)["realtime_endpoints"][0]["events"]
+    assert "video_separate_h264.data" not in events
+    assert "variant" not in _create_payload(session)

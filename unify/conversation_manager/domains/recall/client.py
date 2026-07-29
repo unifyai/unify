@@ -182,6 +182,7 @@ class RecallClient:
         realtime_events_url: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         as_screenshare: bool = False,
+        capture_participant_video: bool = False,
     ) -> RecallBotState:
         """Dispatch a bot to one meeting and return its initial state.
 
@@ -216,6 +217,11 @@ class RecallClient:
                 "noone_joined_timeout": NOONE_JOINED_TIMEOUT_S,
             },
         }
+        if capture_participant_video:
+            # Separate per-participant video only arrives in gallery layout;
+            # without this the platform sends one composited stream and there is
+            # no screenshare track to pick out.
+            payload["recording_config"]["video_mixed_layout"] = "gallery_view_v2"
         if metadata:
             payload["metadata"] = dict(metadata)
         if realtime_events_url:
@@ -236,6 +242,14 @@ class RecallClient:
                     ],
                 },
             ]
+            if capture_participant_video:
+                # PNG rather than H264: 360p at 2fps needs no decoder and no
+                # web_4_core variant (+$0.10/hr), and H264 only reaches
+                # 200-1000px anyway -- too little extra to read a shared screen
+                # that PNG cannot, for materially more cost and complexity.
+                payload["realtime_endpoints"][0]["events"].append(
+                    "video_separate_png.data",
+                )
 
         body = await self._request("POST", "/bot", json=payload)
         return _parse_bot_state(body)
