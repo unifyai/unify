@@ -62,6 +62,7 @@ _EXECUTION_QUERY_FIELDS = [
     "task_name",
     "task_description",
     "scheduled_for",
+    "dispatch_offset_seconds",
     "trigger_medium",
     "trigger_from_contact_ids",
     "trigger_omit_contact_ids",
@@ -114,6 +115,7 @@ class TaskExecutionSnapshot:
     task_name: str | None = None
     task_description: str | None = None
     scheduled_for: str | None = None
+    dispatch_offset_seconds: float | None = None
     trigger_medium: str | None = None
     trigger_from_contact_ids: list[int] = field(default_factory=list)
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
@@ -145,6 +147,7 @@ class TaskRunProvenance:
     task_name: str | None = None
     task_description: str | None = None
     attempt_token: str | None = None
+    dispatch_offset_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -449,6 +452,7 @@ def create_or_adopt_live_task_run(
                 "revision": provenance.revision,
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
+                "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
                 "source_medium": provenance.source_medium,
                 "source_ref": provenance.source_ref,
                 "source_contact_id": provenance.source_contact_id,

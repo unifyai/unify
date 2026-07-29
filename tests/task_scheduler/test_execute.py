@@ -14,6 +14,7 @@ from typing import Dict
 from datetime import datetime, timezone, timedelta
 
 import pytest
+from types import SimpleNamespace
 
 from unify.task_scheduler import task_scheduler as task_scheduler_module
 from unify.task_scheduler.machine_state import (
@@ -171,7 +172,7 @@ async def test_execute_materializes_live_run_after_actor_start(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
+async def test_scheduled_execution_consumes_provenance(monkeypatch):
     actor = SimulatedActor(steps=0)
     scheduler = TaskScheduler(actor=actor)
     task_id = scheduler._create_task(
@@ -242,15 +243,15 @@ async def test_scheduled_execution_consumes_provenance_and_rearms(monkeypatch):
 
     row = scheduler._get_task_or_raise(task_id)
     assert row.enabled is True
-    assert row.schedule_start_at > datetime.fromisoformat(
+    assert row.schedule_start_at == datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
-    )
+    ), "the anchor is immutable; occurrences live on Tasks/Executions"
 
 
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
+async def test_scheduled_execution_live_delegate_materializes_run(
     monkeypatch,
 ):
     scheduler = TaskScheduler()
@@ -334,15 +335,15 @@ async def test_scheduled_execution_live_delegate_materializes_run_and_rearms(
 
     row = scheduler._get_task_or_raise(task_id)
     assert row.enabled is True
-    assert row.schedule_start_at > datetime.fromisoformat(
+    assert row.schedule_start_at == datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
-    )
+    ), "the anchor is immutable; occurrences live on Tasks/Executions"
 
 
 @pytest.mark.asyncio
 @pytest.mark.llm_call
 @_handle_project
-async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
+async def test_scheduled_execution_offline_delegate_materializes_run(
     monkeypatch,
 ):
     from unify.task_scheduler import offline_runner
@@ -464,15 +465,15 @@ async def test_scheduled_execution_offline_delegate_materializes_run_and_rearms(
 
     row = scheduler._get_task_or_raise(task_id)
     assert row.enabled is True
-    assert row.schedule_start_at > datetime.fromisoformat(
+    assert row.schedule_start_at == datetime.fromisoformat(
         scheduled_for.replace("Z", "+00:00"),
-    )
+    ), "the anchor is immutable; occurrences live on Tasks/Executions"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", [None, 777])
 @_handle_project
-async def test_offline_recurring_execution_rearms_definition_between_runs(
+async def test_offline_recurring_execution_projects_successors_between_runs(
     monkeypatch,
     entrypoint,
 ):
@@ -556,7 +557,7 @@ async def test_offline_recurring_execution_rearms_definition_between_runs(
 
     row = scheduler._get_task_or_raise(task_id)
     assert row.enabled is True
-    assert row.schedule_start_at == initial_start + timedelta(days=3)
+    assert row.schedule_start_at == initial_start, "the anchor is immutable"
     assert len(captured) == 3
     for call in captured:
         kwargs = call["kwargs"]
@@ -1130,8 +1131,12 @@ async def test_disarming_is_the_only_definition_lifecycle_change():
 
 @pytest.mark.asyncio
 @_handle_project
-async def test_completed_one_shot_cannot_be_rearmed():
-    """A finished one-shot stays disarmed; re-running it needs a new task."""
+async def test_completed_one_shot_cannot_be_rearmed(monkeypatch):
+    """A finished one-shot stays disarmed; re-running it needs a new task.
+
+    "Already ran" is derived from a terminal Tasks/Executions row, so the
+    ledger is stubbed — a session without an assistant has none of its own.
+    """
 
     actor = SimulatedActor(steps=None, duration=None)
     ts = TaskScheduler(actor=actor)
@@ -1142,8 +1147,11 @@ async def test_completed_one_shot_cannot_be_rearmed():
 
     row = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
     assert row.enabled is False
-    assert row.enabled is False
 
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.find_terminal_execution_for_task",
+        lambda **kwargs: SimpleNamespace(run_key="run-done", state="completed"),
+    )
     with pytest.raises(ValueError, match="cannot be re-armed"):
         ts._set_tasks_enabled(task_ids=task_id, enabled=True)
 
