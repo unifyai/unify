@@ -301,9 +301,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         execution requires an explicitly configured actor; otherwise execution
         fails loudly instead of silently using a simulated fallback.
 
-        Symbolic entrypoints receive opt-in kwargs such as ``task_id``,
-        ``instance_id``, and ``task_execution_context`` so they can apply their
-        own concurrency or skip logic when desired.
+        Symbolic entrypoints receive opt-in kwargs such as ``task_id`` and
+        ``task_execution_context`` so they can apply their own concurrency or
+        skip logic when desired.
 
         Returns
         -------

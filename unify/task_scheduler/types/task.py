@@ -198,11 +198,3 @@ class TaskBase(AuthoredRow):
 
 class Task(TaskBase):
     task_id: int = Field(description="Unique identifier for the task")
-    instance_id: int = Field(
-        default=0,
-        description=(
-            "Legacy occurrence counter retained for migration reads. "
-            "Task identity is ``task_id`` only; executions live in "
-            "``Tasks/Executions``."
-        ),
-    )

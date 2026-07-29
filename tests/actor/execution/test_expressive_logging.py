@@ -106,7 +106,6 @@ def test_task_execute_doc_has_logging_antipatterns():
 def test_build_task_run_guidelines_point_at_logged_functions():
     task = Task(
         task_id=3,
-        instance_id=1,
         name="Invoice follow-up",
         description="Draft an invoice reply.",
         priority=Priority.normal,

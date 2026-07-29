@@ -49,7 +49,6 @@ def _provider_event_task(*, task_revision: int | None = 1) -> Task:
     assert isinstance(trigger, ProviderEventTrigger)
     return Task(
         task_id=42,
-        instance_id=0,
         name="GitHub issue triage",
         description="Triage new GitHub issues.",
         trigger=trigger,
