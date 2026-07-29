@@ -39,38 +39,17 @@ class AuthoredTaskField(StrEnum):
 
 
 class RuntimeTaskField(StrEnum):
-    """Task JSONB keys that may change without bumping task_revision."""
+    """Task JSONB keys that may change without bumping task_revision.
 
-    status = "status"
-    activated_by = "activated_by"
-    instance_id = "instance_id"
-
-    @classmethod
-    def values(cls) -> frozenset[str]:
-        return frozenset(member.value for member in cls)
-
-
-class RuntimeTaskStatus(StrEnum):
-    """Runtime status values allowed on provider-event rows without revision bump."""
-
-    active = "active"
-    completed = "completed"
-    cancelled = "cancelled"
-    failed = "failed"
+    Deliberately empty. Every field on a definition is now authored: run
+    outcome lives on ``Tasks/Executions``, and ``enabled`` is an operator
+    decision that must take the revision CAS path. A new member here means
+    something run-derived has crept back onto the shared row.
+    """
 
     @classmethod
     def values(cls) -> frozenset[str]:
         return frozenset(member.value for member in cls)
-
-    @classmethod
-    def allows(cls, value: object) -> bool:
-        if value is None:
-            return False
-        try:
-            cls(str(value))
-        except ValueError:
-            return False
-        return True
 
 
 def split_provider_event_task_update(
@@ -91,10 +70,5 @@ def split_provider_event_task_update(
         if key in AuthoredTaskField.values():
             authored[key] = value
         elif key in RuntimeTaskField.values():
-            if key == RuntimeTaskField.status.value and not RuntimeTaskStatus.allows(
-                value,
-            ):
-                authored[key] = value
-            else:
-                runtime[key] = value
+            runtime[key] = value
     return authored, runtime

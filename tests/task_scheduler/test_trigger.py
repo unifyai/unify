@@ -10,7 +10,6 @@ import pytest
 from tests.helpers import _handle_project
 from unify.actor.simulated import SimulatedActor
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.trigger import Trigger, Medium
 
@@ -36,7 +35,7 @@ def test_create_triggerable_task():
     )["details"]["task_id"]
 
     row = ts._filter_tasks(filter=f"task_id == {task_id}", limit=1)[0]
-    assert row.status == Status.triggerable
+    assert row.trigger is not None
     assert row.schedule is None
     assert row.trigger is not None
     assert row.trigger.medium == Medium.EMAIL
@@ -88,12 +87,12 @@ def test_update_trigger_on_scheduled_task_raises():
 
 
 # --------------------------------------------------------------------------- #
-# 4.  Removing the trigger ⇢ status falls back to *scheduled*                 #
+# 4.  Removing the trigger leaves the definition armed on its schedule       #
 # --------------------------------------------------------------------------- #
 
 
 @_handle_project
-def test_clear_trigger_transitions_status():
+def test_clear_trigger_leaves_definition_armed():
     ts = TaskScheduler()
     trig = Trigger(medium=Medium.PHONE_CALL)
 
@@ -107,7 +106,7 @@ def test_clear_trigger_transitions_status():
 
     row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
     assert row.trigger is None
-    assert row.status == Status.scheduled
+    assert row.enabled is True
 
 
 # --------------------------------------------------------------------------- #
@@ -161,9 +160,6 @@ async def test_triggerable_start_rearms_definition():
     assert len(rows_before) == 1
 
     handle = await ts.execute(task_id=tid)
-
-    row_after = ts._get_task_or_raise(tid)
-    assert row_after.status == Status.active
 
     result = ts._attach_entrypoint_to_definition(
         task_id=tid,

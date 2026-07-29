@@ -18,7 +18,6 @@ from unify.conversation_manager.domains.task_execution import (
     _register_live_task_handle,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 
 
 @pytest.mark.asyncio
@@ -55,7 +54,7 @@ async def test_registered_provider_event_handle_preserves_definition_status():
     rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
     definition_row = rows[0]
     assert definition_row.instance_id == 0
-    assert definition_row.status == Status.triggerable
+    assert definition_row.trigger is not None
 
 
 @pytest.mark.asyncio
@@ -93,4 +92,4 @@ async def test_provider_event_completion_terminalizes_run_without_definition_wri
 
     assert any(update["state"] == "completed" for update in run_updates)
     definition_row = scheduler._filter_tasks(filter=f"task_id == {task_id}")[0]
-    assert definition_row.status == Status.triggerable
+    assert definition_row.trigger is not None

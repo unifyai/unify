@@ -35,7 +35,6 @@ from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
 from unify.task_scheduler.types.execution import Wake
-from unify.task_scheduler.types.status import Status
 
 
 def _local_orchestra_authenticated() -> bool:
@@ -111,7 +110,6 @@ async def _run_scheduler_integration() -> None:
     create_result = scheduler._create_task(
         name="Local scheduler integration probe",
         description="A scheduled probe used by the integration test.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=start_at.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -158,12 +156,13 @@ async def _run_scheduler_integration() -> None:
 @_REQUIRES_LIVE_ORCHESTRA
 @_handle_project
 def test_recurring_task_rearm_visible_to_local_scheduler():
-    """A recurring task's next instance is also visible to the local scheduler.
+    """A recurring task's next occurrence is also visible to the local scheduler.
 
-    Recurring re-arm: when a scheduled definition executes, the scheduler
-    advances ``schedule.start_at`` via ``_rearm_task_definition``. Orchestra
-    re-projects the next open Execution and the local scheduler should see the
-    updated revision on its next reconcile.
+    When a scheduled definition executes, the scheduler projects the next
+    occurrence onto ``Tasks/Executions`` and leaves ``schedule.start_at`` alone
+    — it is the immutable series anchor. Orchestra re-projects the open
+    Execution and the local scheduler should see the updated revision on its
+    next reconcile.
     """
 
     SESSION_DETAILS.assistant.agent_id = 0
@@ -182,7 +181,6 @@ async def _run_recurring_integration() -> None:
     create_result = scheduler._create_task(
         name="Local scheduler recurring probe",
         description="Recurring probe used by the integration test.",
-        status=Status.scheduled,
         schedule=Schedule(start_at=initial_start.isoformat()),
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
     )
@@ -206,9 +204,9 @@ async def _run_recurring_integration() -> None:
         initial_handle = local_scheduler._timers[initial_snap.run_key]
         initial_revision = local_scheduler._known_revisions[initial_snap.run_key]
 
-        # Simulate the recurring re-arm: clone the current instance forward.
+        # Project the next occurrence, as a completing recurring run would.
         current_task = scheduler._get_task_or_raise(task_id)
-        scheduler._rearm_task_definition(current_task)
+        scheduler._project_next_occurrence(current_task)
 
         # Reconcile picks up the new instance's activation (or the existing
         # activation now points at the new instance with a fresh revision).
@@ -216,7 +214,7 @@ async def _run_recurring_integration() -> None:
 
         after_activations = list_scheduled_executions(assistant_id=assistant_id)
         # The activation row for this task should still exist (its head pointer
-        # follows _rearm_task_definition forward).
+        # follows the projected occurrence forward).
         new_snap = next(
             (a for a in after_activations if a.task_id == task_id),
             None,

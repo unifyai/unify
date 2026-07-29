@@ -43,14 +43,12 @@ def test_parse_task_trigger_accepts_json_string_payload() -> None:
 
 def test_task_model_hydrates_trigger_from_json_string() -> None:
     from unify.task_scheduler.types.task import TaskBase
-    from unify.task_scheduler.types.status import Status
     from unify.task_scheduler.types.priority import Priority
 
     payload = _load_fixture("task_trigger.communication.v1.json")
     task = TaskBase(
         name="Invoice follow-up",
         description="Draft a reply when an invoice email arrives.",
-        status=Status.triggerable,
         priority=Priority.normal,
         trigger=json.dumps(payload),
     )

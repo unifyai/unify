@@ -390,15 +390,19 @@ async def test_start_room_egress_requests_audio_only_mp3_with_linkage_webhook(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("room_name", ["unity_42_gmeet", "unity_42_teams"])
-async def test_start_room_egress_skips_browser_meet_rooms(
+async def test_start_room_egress_records_browser_meet_rooms(
     _livekit_credentials: EnvCredentialStore,
     _egress_env: None,
     room_name: str,
 ) -> None:
-    """Browser-meet audio is bridged outside LiveKit, so egress can never work.
+    """Browser meets record like any other call.
 
-    Requesting it anyway leaves a compositor waiting for a track that never
-    arrives until the room closes, then aborts with no file.
+    They were refused while their audio was bridged through a pod-local device
+    and never entered the LiveKit room, leaving a compositor waiting for a track
+    that never arrived. The Recall bridge page joins the room and publishes the
+    meeting as an ordinary track, so the refusal is gone -- and must stay gone:
+    reinstating it silently drops every meeting recording, since the runtime
+    still asks for one.
     """
     from unify.gateway.common.livekit import start_room_egress
 
@@ -409,7 +413,10 @@ async def test_start_room_egress_skips_browser_meet_rooms(
     ):
         await start_room_egress(room_name, "42", _livekit_credentials)
 
-    api.egress.start_room_composite_egress.assert_not_awaited()
+    api.egress.start_room_composite_egress.assert_awaited_once()
+    request = api.egress.start_room_composite_egress.await_args.args[0]
+    assert request.room_name == room_name
+    assert request.audio_only is True
 
 
 @pytest.mark.asyncio

@@ -1070,6 +1070,31 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Google Meet at {meet_url}"}
 
+    async def send_meet_chat(self, message: str) -> dict[str, Any]:
+        """Post a message into the meeting chat of the active call.
+
+        Use this for anything a participant will want to read rather than hear:
+        a link, an address, a spelling, a list of steps. Speech is gone the
+        moment it is said; chat stays in the meeting for people to scroll back
+        to and copy from.
+
+        Not a substitute for speaking. Say what matters out loud and put the
+        copyable detail in chat.
+        """
+        result = await self._cm.call_manager.send_meet_chat(message)
+        if result:
+            return {"status": "ok", "message": "Posted to the meeting chat."}
+        return {
+            "status": "error",
+            # Chat is genuinely unavailable in some meetings (Teams channel
+            # meetings have no bot-writable chat), so tell the brain to say it
+            # out loud rather than let it retry a send that cannot succeed.
+            "message": (
+                "Could not post to the meeting chat. This meeting may not "
+                "support it -- say the information out loud instead."
+            ),
+        }
+
     async def _leave_google_meet(self) -> dict[str, Any]:
         """Disconnect the assistant from the active Google Meet session.
 
@@ -1084,49 +1109,12 @@ class ConversationManagerBrainActionTools:
 
         # Stop the browser agent immediately so the assistant disappears
         # from the Meet before the event handler's full cleanup pipeline.
-        await self._notify_browser_meet_leave("googlemeet")
-
         from unify.conversation_manager.events import GoogleMeetEnded
 
         contact = self._cm.call_manager._disconnect_contact or {}
         event = GoogleMeetEnded(contact=contact)
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Google Meet"}
-
-    async def start_google_meet_screenshare(self) -> dict[str, Any]:
-        """Share the assistant's desktop screen in the active Google Meet call.
-
-        Opens a live view of the assistant's desktop and presents it to all
-        meeting participants. Use this when participants need to see what the
-        assistant is doing on its computer.
-        """
-        result = await self._cm.call_manager.start_gmeet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Now presenting desktop in Google Meet.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to start screen sharing.",
-        }
-
-    async def stop_google_meet_screenshare(self) -> dict[str, Any]:
-        """Stop sharing the assistant's desktop screen in Google Meet.
-
-        Ends the current screen presentation. Meeting participants will no
-        longer see the assistant's desktop.
-        """
-        result = await self._cm.call_manager.stop_gmeet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Stopped presenting in Google Meet.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to stop screen sharing.",
-        }
 
     async def join_teams_meet(
         self,
@@ -1193,8 +1181,6 @@ class ConversationManagerBrainActionTools:
                 "status": "error",
                 "message": "No active Teams meeting session to leave.",
             }
-
-        await self._notify_browser_meet_leave("teamsmeet")
 
         from unify.conversation_manager.events import TeamsMeetEnded
 
@@ -1392,72 +1378,6 @@ class ConversationManagerBrainActionTools:
             "ready_for_outbound_call": ready,
         }
 
-    async def start_teams_meet_screenshare(self) -> dict[str, Any]:
-        """Share the assistant's desktop screen in the active Teams meeting.
-
-        Opens a live view of the assistant's desktop and presents it to all
-        meeting participants. Use this when participants need to see what the
-        assistant is doing on its computer.
-        """
-        result = await self._cm.call_manager.start_teams_meet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Now presenting desktop in Teams meeting.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to start screen sharing.",
-        }
-
-    async def stop_teams_meet_screenshare(self) -> dict[str, Any]:
-        """Stop sharing the assistant's desktop screen in Teams meeting.
-
-        Ends the current screen presentation. Meeting participants will no
-        longer see the assistant's desktop.
-        """
-        result = await self._cm.call_manager.stop_teams_meet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Stopped presenting in Teams meeting.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to stop screen sharing.",
-        }
-
-    async def _notify_browser_meet_leave(self, path_prefix: str) -> None:
-        """Best-effort notify the agent-service to leave the active browser meet.
-
-        ``path_prefix`` is the agent-service URL prefix (``"googlemeet"`` or
-        ``"teamsmeet"``).  Failures are silently ignored — the event handler's
-        cleanup pipeline still tears down the session even if this call fails.
-        """
-        session_id = self._cm.call_manager._meet_session_id
-        if not session_id:
-            return
-
-        import aiohttp
-
-        from unify.conversation_manager.medium_scripts.common import (
-            _resolve_agent_service_url,
-        )
-        from unify.session_details import SESSION_DETAILS
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"{_resolve_agent_service_url()}/{path_prefix}/leave",
-                    json={"sessionId": session_id},
-                    headers={
-                        "authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-        except Exception:
-            pass
-
     async def act(
         self,
         *,
@@ -1486,11 +1406,8 @@ class ConversationManagerBrainActionTools:
         **Excluded:** Do not use ``act`` for Google Meet or Microsoft Teams
         meeting operations — use the dedicated tools instead:
         ``join_google_meet`` / ``join_teams_meet`` to join, ``hang_up`` to leave
-        the current meeting or call,
-        ``start_google_meet_screenshare`` / ``start_teams_meet_screenshare`` to
-        present the assistant's desktop, and
-        ``stop_google_meet_screenshare`` / ``stop_teams_meet_screenshare`` to
-        stop presenting.
+        the current meeting or call, and ``send_meet_chat`` to post in the
+        meeting chat.
 
         **When uncertain, call ``act``**: If you need information you don't have (like
         a contact's email address), call ``act`` to search for it. If ``act`` can't find
@@ -2603,26 +2520,11 @@ class ConversationManagerBrainActionTools:
                 self.disengage_speaker,
                 engagement_suffix,
             )
-        if self._cm.call_manager.has_active_google_meet:
-            if SESSION_DETAILS.assistant.desktop_url:
-                if not self._cm.call_manager.has_gmeet_presenting:
-                    tools["start_google_meet_screenshare"] = (
-                        self.start_google_meet_screenshare
-                    )
-                else:
-                    tools["stop_google_meet_screenshare"] = (
-                        self.stop_google_meet_screenshare
-                    )
-        if self._cm.call_manager.has_active_teams_meet:
-            if SESSION_DETAILS.assistant.desktop_url:
-                if not self._cm.call_manager.has_teams_presenting:
-                    tools["start_teams_meet_screenshare"] = (
-                        self.start_teams_meet_screenshare
-                    )
-                else:
-                    tools["stop_teams_meet_screenshare"] = (
-                        self.stop_teams_meet_screenshare
-                    )
+        if (
+            self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        ):
+            tools["send_meet_chat"] = self.send_meet_chat
         if self._cm.assistant_number:
             tools["send_sms"] = (
                 self.send_sms_to_boss if is_coordinator else self.send_sms

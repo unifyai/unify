@@ -6,9 +6,10 @@ from JSON for storage and transport.
 from __future__ import annotations
 
 import calendar
+import hashlib
 from enum import Enum
 from typing import List, Optional
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -383,3 +384,32 @@ def _normalize_until(until: datetime, reference: datetime) -> datetime:
     if until.tzinfo is not None and reference.tzinfo is None:
         return until.replace(tzinfo=None)
     return until
+
+
+def deterministic_jitter_seconds(
+    *,
+    task_id: int,
+    slot: datetime,
+    patterns: list[RepeatPattern] | None,
+) -> float:
+    """Jitter for one occurrence, identical for every caller that computes it.
+
+    Jitter spreads *dispatch*; it does not redefine the occurrence. The ledger
+    records the canonical slot, and this offset is applied when that slot is
+    dispatched, so the recorded time stays the anchor for computing the next
+    one and the series cannot drift.
+
+    It must also not be random per writer: concurrent runs derive the same
+    occurrence independently, and seeding on ``(task_id, slot)`` makes every
+    caller agree on the offset for a given slot.
+    """
+
+    budget = max_jitter_seconds(patterns)
+    if budget <= 0:
+        return 0.0
+    digest = hashlib.sha256(
+        f"{int(task_id)}:{slot.astimezone(timezone.utc).isoformat()}".encode("utf-8"),
+    ).digest()
+    # 53 bits keeps the ratio exactly representable as a float.
+    fraction = int.from_bytes(digest[:7], "big") / float(1 << 56)
+    return round(fraction * float(budget), 6)

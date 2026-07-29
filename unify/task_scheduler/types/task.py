@@ -7,11 +7,9 @@ from typing import Optional, List
 from unify.common.authorship import AuthoredRow
 
 from .priority import Priority
-from .status import Status
 from .schedule import Schedule
 from .trigger import TaskTrigger
 from .repetition import RepeatPattern
-from .activated_by import ActivatedBy
 from datetime import datetime
 
 
@@ -41,12 +39,6 @@ class TaskBase(AuthoredRow):
     description: str = Field(
         description="Detailed explanation of what the task involves",
         json_schema_extra={"ui_editable": True},
-    )
-    status: Status = Field(
-        description=(
-            "Current state of the task. "
-            "Valid values: scheduled, triggerable, active, completed, cancelled, failed."
-        ),
     )
     schedule: Optional[Schedule] = Field(
         default=None,
@@ -141,17 +133,6 @@ class TaskBase(AuthoredRow):
             "task is re-enabled."
         ),
         json_schema_extra={"ui_editable": True},
-    )
-    activated_by: Optional[ActivatedBy] = Field(
-        default=None,
-        description=(
-            "Reason the task instance transitioned to the active state.\n"
-            "This is set automatically at activation time and is never directly editable."
-        ),
-    )
-    info: Optional[str] = Field(
-        default=None,
-        description="A summary of what happened during the execution of the task, generated upon completion.",
     )
     custom_key: Optional[str] = Field(
         default=None,
