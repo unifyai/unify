@@ -184,6 +184,16 @@ run("parse normalises region case and passes through a well-formed policy", () =
   assert.equal(parseEgressPolicy(undefined), null);
 });
 
+run("the region placeholder is filled in either case", () => {
+  // Providers differ on case and the failure is silent: one that wants cc-GB
+  // and receives cc-gb may ignore the geo-targeting rather than reject it.
+  const resolved = resolveEgress(
+    { mode: "region", region: "gb", sessionKey: "s1" },
+    { ...MANAGED_ENV, UNITY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}" },
+  );
+  assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-s1");
+});
+
 run("only contracted regions are advertised", () => {
   // Advertising a country we have no egress for turns a clear refusal at
   // configuration time into a session that starts and then behaves wrongly.
