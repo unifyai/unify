@@ -26,11 +26,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import unisdk
+from unisdk.utils.http import RequestError
 
 from tests.helpers import _handle_project
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.local_scheduler import LocalActivationScheduler
-from unify.task_scheduler.machine_state import list_scheduled_executions
+from unify.task_scheduler.machine_state import (
+    list_scheduled_executions,
+)
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
@@ -40,15 +43,21 @@ from unify.task_scheduler.types.execution import Wake
 def _local_orchestra_authenticated() -> bool:
     """Probe whether local Orchestra accepts the current UNIFY_KEY.
 
-    A 401 from any read here means the test environment doesn't have a
-    working key — skip the integration tests rather than fail noisily on
-    an unrelated auth problem.
+    A 401 or a refused connection means the test environment has no working
+    Orchestra — skip rather than fail noisily on an unrelated setup problem.
+
+    Only *transport and auth* failures skip. A broken probe must not: this
+    guard originally called ``unisdk.get_projects``, which has never existed
+    (the SDK exposes ``list_projects``), and a bare ``except Exception``
+    turned that ``AttributeError`` into ``False``. Every test in this file
+    silently skipped for two months, in CI included, which is why none of them
+    caught the projection and run-key defects they were written to catch.
     """
 
     try:
-        unisdk.get_projects()
+        unisdk.list_projects()
         return True
-    except Exception:
+    except (RequestError, ConnectionError, OSError):
         return False
 
 
@@ -58,6 +67,30 @@ _REQUIRES_LIVE_ORCHESTRA = pytest.mark.skipif(
         "Local Orchestra is not authenticated for this test environment "
         "(no valid UNIFY_KEY). Integration tests skipped — see "
         "test_local_scheduler.py for the equivalent unit coverage."
+    ),
+)
+
+# Orchestra projects executions only for a task *surface*: the ``Assistants``
+# project, at ``{user}/{assistant}/Tasks`` or ``Teams/{id}/Tasks``. The
+# test-project fixture nests definitions under the test name in ``UnityTests``,
+# which satisfies neither, so a definition written through it is never
+# projected and the reads below return nothing.
+#
+# These tests were written on 2026-05-26 against the assumption that it was,
+# and never executed once: their skip guard called ``unisdk.get_projects``,
+# which has never existed, and a bare ``except Exception`` turned that
+# ``AttributeError`` into a skip. Fixing the guard revealed the premise.
+#
+# The occurrence-walk coverage they were meant to provide now lives in
+# orchestra's ``test_task_machine_projection.py``, where the fixtures build a
+# real surface against a real database. Re-enabling these needs a fixture that
+# provisions an assistant-scoped Tasks table here.
+_REQUIRES_TASK_SURFACE = pytest.mark.skip(
+    reason=(
+        "Needs an assistant-scoped Tasks surface; the test-project fixture's "
+        "nested UnityTests context is not one, so Orchestra never projects. "
+        "Occurrence-walk coverage lives in orchestra "
+        "test_task_machine_projection.py."
     ),
 )
 
@@ -72,6 +105,7 @@ class _RecordingBroker:
         self.published.append((topic, payload))
 
 
+@_REQUIRES_TASK_SURFACE
 @_REQUIRES_LIVE_ORCHESTRA
 @_handle_project
 def test_local_scheduler_picks_up_real_orchestra_activation():
@@ -153,6 +187,7 @@ async def _run_scheduler_integration() -> None:
         await local_scheduler.stop()
 
 
+@_REQUIRES_TASK_SURFACE
 @_REQUIRES_LIVE_ORCHESTRA
 @_handle_project
 def test_recurring_task_rearm_visible_to_local_scheduler():
