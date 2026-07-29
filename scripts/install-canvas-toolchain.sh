@@ -66,7 +66,12 @@ cleanup() {
     if [[ -n "$CLONED_DIR" && "$KEEP_SOURCES" -eq 0 ]]; then
         rm -rf "$CLONED_DIR"
     fi
+    cleanup_build
 }
+
+# Defined early so the EXIT trap can call it before the host build assigns it.
+BUILD_DIR=""
+cleanup_build() { :; }
 trap cleanup EXIT
 
 if [[ -z "$BRANDING_PATH" ]]; then
@@ -89,19 +94,55 @@ KIT_VERSION="$(node -p "require('$KIT_SRC/package.json').version")"
 # --------------------------------------------------------------------------
 # Runtime host
 # --------------------------------------------------------------------------
-# `--ignore-scripts` skips native postinstall builds in unrelated workspace
-# packages (potrace, fontkit), which are not needed to build the host and do not
-# compile in a slim image. Matches how magnitude is installed.
+# Built in a copy, never in the checkout we were pointed at. Installing in place
+# leaves a `node_modules` behind, and when the checkout is console's `branding`
+# submodule that tree carries React 19 types which shadow console's React 18 and
+# break `tsc` across the whole console repo. It is gitignored, so it looks clean
+# while doing it.
+#
+# The copy is only the four workspaces the host needs — a few megabytes out of a
+# half-gigabyte checkout — so this is also faster than installing the full
+# workspace set. `--ignore-scripts` skips native postinstall builds (potrace,
+# fontkit) that the host does not need and that do not compile in a slim image.
+BUILD_DIR=""
+cleanup_build() {
+    if [[ -n "$BUILD_DIR" && "$KEEP_SOURCES" -eq 0 ]]; then
+        rm -rf "$BUILD_DIR"
+    fi
+}
+
 echo ">> building the canvas runtime host"
-if [[ ! -d "$HOST_SRC/dist/host/v1" || -n "$CLONED_DIR" ]]; then
-    (cd "$BRANDING_PATH" && npm install --ignore-scripts --no-audit --no-fund)
-    (cd "$BRANDING_PATH" && npm run build --workspace @unity/canvas-host)
-fi
+BUILD_DIR="$(mktemp -d)/branding-build"
+mkdir -p "$BUILD_DIR/packages" "$BUILD_DIR/apps"
+cp "$BRANDING_PATH/package.json" "$BUILD_DIR/package.json"
+for workspace in packages/iso packages/brand packages/canvas-kit apps/canvas-host; do
+    if [[ ! -d "$BRANDING_PATH/$workspace" ]]; then
+        echo "missing workspace $workspace in $BRANDING_PATH" >&2
+        cleanup_build
+        exit 1
+    fi
+    # Excludes rather than a bare copy so a stale dist or an unrelated
+    # node_modules in the source cannot leak into the build.
+    tar -C "$BRANDING_PATH" \
+        --exclude=node_modules --exclude=dist --exclude=.turbo \
+        -cf - "$workspace" | tar -C "$BUILD_DIR" -xf -
+done
+
+(cd "$BUILD_DIR" && npm install --ignore-scripts --no-audit --no-fund) || {
+    cleanup_build
+    exit 1
+}
+(cd "$BUILD_DIR" && npm run build --workspace @unity/canvas-host) || {
+    cleanup_build
+    exit 1
+}
 
 rm -rf "$HOST_ROOT"
 mkdir -p "$HOST_ROOT/scripts"
-cp -R "$HOST_SRC/dist/host" "$HOST_ROOT/host"
-cp "$HOST_SRC/scripts/headers.mjs" "$HOST_ROOT/scripts/headers.mjs"
+cp -R "$BUILD_DIR/apps/canvas-host/dist/host" "$HOST_ROOT/host"
+cp "$BUILD_DIR/apps/canvas-host/scripts/headers.mjs" "$HOST_ROOT/scripts/headers.mjs"
+cleanup_build
+BUILD_DIR=""
 
 # --------------------------------------------------------------------------
 # Build toolchain
