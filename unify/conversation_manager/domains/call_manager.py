@@ -185,7 +185,6 @@ class LivekitCallManager:
         # ``_watch_meet_state``.
         self._meet_state_task: asyncio.Task | None = None
         self._meet_joining: bool = False
-        self._meet_presenting: bool = False
         # True while the browser is admitted-pending: it has knocked on the
         # meeting (clicked "Ask to join") and is sitting in the waiting room
         # for the host to let it in. This is a *successful* join in progress,
@@ -1101,18 +1100,6 @@ class LivekitCallManager:
         """
         return self._meet_lobby_waiting
 
-    @property
-    def has_meet_presenting(self) -> bool:
-        return self._meet_presenting
-
-    @property
-    def has_gmeet_presenting(self) -> bool:
-        return self._meet_presenting and self._call_channel == "google_meet"
-
-    @property
-    def has_teams_presenting(self) -> bool:
-        return self._meet_presenting and self._call_channel == "teams_meet"
-
     async def _start_meet(
         self,
         channel: str,
@@ -1442,7 +1429,6 @@ class LivekitCallManager:
         self._meet_session_id = None
         self._meet_joining = False
         self._meet_lobby_waiting = False
-        self._meet_presenting = False
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED
@@ -1461,49 +1447,6 @@ class LivekitCallManager:
             await delete_livekit_room(room_name)
 
         await self.cleanup_call_proc()
-
-    async def _start_meet_screenshare(self, channel: str) -> bool:
-        """Start presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
-        desktop_url = SESSION_DETAILS.assistant.desktop_url
-        if not desktop_url:
-            return False
-
-        from urllib.parse import urlparse
-
-        parsed = urlparse(desktop_url)
-        liveview_url = (
-            f"{parsed.scheme}://{parsed.netloc}/desktop/custom.html"
-            f"?password={SESSION_DETAILS.unify_key}"
-        )
-
-        if await self.meet_provider.present(
-            channel=channel,
-            session_id=session_id,
-            view_url=liveview_url,
-        ):
-            self._meet_presenting = True
-            return True
-        return False
-
-    async def _stop_meet_screenshare(self, channel: str) -> bool:
-        """Stop presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        if await self.meet_provider.stop_present(
-            channel=channel,
-            session_id=session_id,
-        ):
-            self._meet_presenting = False
-            return True
-        return False
 
     # Channel-specific public wrappers (kept for call-site stability).
 
@@ -1525,12 +1468,6 @@ class LivekitCallManager:
     async def cleanup_google_meet(self) -> None:
         await self._cleanup_meet("google_meet")
 
-    async def start_gmeet_screenshare(self) -> bool:
-        return await self._start_meet_screenshare("google_meet")
-
-    async def stop_gmeet_screenshare(self) -> bool:
-        return await self._stop_meet_screenshare("google_meet")
-
     async def start_teams_meet(
         self,
         meet_url: str,
@@ -1548,12 +1485,6 @@ class LivekitCallManager:
 
     async def cleanup_teams_meet(self) -> None:
         await self._cleanup_meet("teams_meet")
-
-    async def start_teams_meet_screenshare(self) -> bool:
-        return await self._start_meet_screenshare("teams_meet")
-
-    async def stop_teams_meet_screenshare(self) -> bool:
-        return await self._stop_meet_screenshare("teams_meet")
 
     async def _start_call_subprocess(
         self,

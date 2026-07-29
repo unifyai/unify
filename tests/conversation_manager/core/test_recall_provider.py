@@ -33,7 +33,6 @@ def _provider(**kwargs) -> RecallMeetProvider:
     )
     client.get_bot = AsyncMock()
     client.leave_call = AsyncMock()
-    client.set_output_media = AsyncMock()
     client.send_chat_message = AsyncMock()
     kwargs.setdefault("bridge_page_url", BRIDGE)
     kwargs.setdefault("relay_url", "")
@@ -282,76 +281,3 @@ async def test_state_returns_none_on_api_failure() -> None:
     provider = _provider()
     provider._client.get_bot = AsyncMock(side_effect=RecallError("nope"))
     assert await provider.state(channel="google_meet", session_id="bot_1") is None
-
-
-# ---------------------------------------------------------------------------
-# Presenting
-# ---------------------------------------------------------------------------
-
-
-async def _joined_provider() -> RecallMeetProvider:
-    """A provider that has joined, so it holds a live bridge URL."""
-    provider = _provider()
-    with patch.dict("os.environ", LIVEKIT_ENV, clear=False):
-        await provider.join(
-            channel="google_meet",
-            meeting_url="https://meet.google.com/abc",
-            display_name="Unify",
-            room_name="unity_25_gmeet",
-        )
-    return provider
-
-
-@pytest.mark.asyncio
-async def test_present_adds_a_screenshare_without_touching_the_camera() -> None:
-    """The camera page carries audio, so presenting must not replace it.
-
-    Camera and screenshare are independent surfaces; the desktop view goes up
-    beside the status card rather than swapping out the page bridging audio.
-    """
-    provider = await _joined_provider()
-    assert await provider.present(
-        channel="google_meet",
-        session_id="bot_1",
-        view_url="https://desk/desktop/custom.html?password=x",
-    )
-
-    kwargs = provider._client.set_output_media.await_args.kwargs
-    assert kwargs["screenshare_url"] == "https://desk/desktop/custom.html?password=x"
-    # Same URL the bot already renders -- not a freshly minted second token.
-    assert kwargs["camera_url"] == provider._active_bridge_url
-
-
-@pytest.mark.asyncio
-async def test_stop_present_keeps_the_camera() -> None:
-    """Clearing the share must never clear the audio surface with it."""
-    provider = await _joined_provider()
-    assert await provider.stop_present(channel="google_meet", session_id="bot_1")
-
-    kwargs = provider._client.set_output_media.await_args.kwargs
-    assert kwargs["camera_url"] == provider._active_bridge_url
-    assert kwargs.get("screenshare_url") is None
-
-
-@pytest.mark.asyncio
-async def test_present_refuses_without_a_live_bridge() -> None:
-    """Re-minting a token here would give the bot a second identity.
-
-    Without a join there is no room to present into, so refuse rather than
-    invent one.
-    """
-    provider = _provider()
-    assert not await provider.present(
-        channel="google_meet",
-        session_id="bot_1",
-        view_url="https://desk/view",
-    )
-    provider._client.set_output_media.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_leaving_forgets_the_bridge_url() -> None:
-    """A stale token for a dead room must not survive into the next meeting."""
-    provider = await _joined_provider()
-    await provider.leave(channel="google_meet", session_id="bot_1")
-    assert provider._active_bridge_url == ""
