@@ -1070,6 +1070,31 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Google Meet at {meet_url}"}
 
+    async def send_meet_chat(self, message: str) -> dict[str, Any]:
+        """Post a message into the meeting chat of the active call.
+
+        Use this for anything a participant will want to read rather than hear:
+        a link, an address, a spelling, a list of steps. Speech is gone the
+        moment it is said; chat stays in the meeting for people to scroll back
+        to and copy from.
+
+        Not a substitute for speaking. Say what matters out loud and put the
+        copyable detail in chat.
+        """
+        result = await self._cm.call_manager.send_meet_chat(message)
+        if result:
+            return {"status": "ok", "message": "Posted to the meeting chat."}
+        return {
+            "status": "error",
+            # Chat is genuinely unavailable in some meetings (Teams channel
+            # meetings have no bot-writable chat), so tell the brain to say it
+            # out loud rather than let it retry a send that cannot succeed.
+            "message": (
+                "Could not post to the meeting chat. This meeting may not "
+                "support it -- say the information out loud instead."
+            ),
+        }
+
     async def _leave_google_meet(self) -> dict[str, Any]:
         """Disconnect the assistant from the active Google Meet session.
 
