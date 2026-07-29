@@ -121,9 +121,18 @@ export function acceptLanguage(locale: string): string {
   return base === 'en' ? `${locale},en;q=0.9` : `${locale},${base};q=0.9,en;q=0.8`;
 }
 
+/**
+ * Fill the provider's username template.
+ *
+ * Both cases of the region placeholder are supported because providers differ
+ * and the failure is silent: a provider that wants ``cc-GB`` and receives
+ * ``cc-gb`` may ignore the geo-targeting rather than reject it, so traffic
+ * exits from somewhere other than the region asked for and nothing errors.
+ */
 function renderUsername(template: string, region: string, sessionKey: string): string {
   return template
     .replace(/\{region\}/g, region)
+    .replace(/\{REGION\}/g, region.toUpperCase())
     .replace(/\{session\}/g, sessionKey);
 }
 
