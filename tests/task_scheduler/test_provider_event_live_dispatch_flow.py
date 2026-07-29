@@ -90,7 +90,6 @@ def test_provider_event_context_is_marked_untrusted_data() -> None:
 
     task = Task(
         task_id=1,
-        instance_id=0,
         name="Triage",
         description="Triage issues",
         priority=Priority.normal,

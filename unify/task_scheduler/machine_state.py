@@ -315,8 +315,17 @@ def consume_live_task_run_provenance(
     source_task_log_id: int | None = None,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
+    offline: bool | None = None,
 ) -> TaskRunProvenance | None:
-    """Claim the pending live-run provenance for one task, or build a fallback."""
+    """Claim the pending live-run provenance for one task, or build a fallback.
+
+    ``offline`` should be the target task definition's own ``offline`` field,
+    when known to the caller. It is used only for the fallback provenance
+    built below (no pending provenance was registered for this task/wake/
+    destination) -- a pending provenance already carries its own correct
+    ``delivery`` from whoever registered it. Without ``offline``, the
+    fallback defaults to live delivery, matching prior behavior.
+    """
 
     wake = _normalize_wake(wake)
     normalized_assistant_id = _coerce_str(assistant_id)
@@ -343,7 +352,7 @@ def consume_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
         wake=wake,
-        delivery=Delivery.live,
+        delivery=Delivery.offline if offline else Delivery.live,
         source_task_log_id=source_task_log_id
         or (execution.source_task_log_id if execution is not None else None),
         revision=(execution.revision if execution is not None else None),
@@ -437,6 +446,32 @@ def create_or_adopt_live_task_run(
 ) -> TaskRunReference | None:
     """Create or adopt one live execution row at the moment execution begins."""
 
+    return _create_or_adopt_task_run(
+        provenance,
+        state=ExecutionState.running,
+        started_at=started_at or _now_iso(),
+    )
+
+
+def project_task_occurrence(provenance: TaskRunProvenance) -> TaskRunReference | None:
+    """Create or adopt the pending execution row for one future occurrence.
+
+    A projected occurrence has not started: it is ``scheduled`` with no
+    ``started_at``, so overlap guards ignore it and dispatch owns the moment it
+    actually begins. Projecting it as a running row made every successor look
+    like a live concurrent run the instant its predecessor started, and the
+    predecessor and successor then overlap-skipped each other forever.
+    """
+
+    return _create_or_adopt_task_run(provenance, state=ExecutionState.scheduled)
+
+
+def _create_or_adopt_task_run(
+    provenance: TaskRunProvenance,
+    *,
+    state: ExecutionState,
+    started_at: str | None = None,
+) -> TaskRunReference | None:
     run_key = build_task_run_key(provenance)
     response_body = _orchestra_admin_post(
         _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
@@ -449,7 +484,11 @@ def create_or_adopt_live_task_run(
                 "source_task_log_id": provenance.source_task_log_id,
                 "wake": provenance.wake.value,
                 "delivery": provenance.delivery.value,
-                "revision": provenance.revision,
+                # The digest inside run_key hashed str(revision or ""), so the
+                # row must carry the same value the dispatcher will rebuild the
+                # key from at fire time. Dropping a None here would leave the
+                # dispatcher hashing a value the row never stored.
+                "revision": str(provenance.revision or ""),
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
                 "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
@@ -459,8 +498,8 @@ def create_or_adopt_live_task_run(
                 "source_contact_display_name": provenance.source_contact_display_name,
                 "task_name": provenance.task_name,
                 "task_description": provenance.task_description,
-                "started_at": started_at or _now_iso(),
-                "state": ExecutionState.running.value,
+                "started_at": started_at,
+                "state": state.value,
             },
         ),
     )

@@ -2830,7 +2830,6 @@ class TestTaskDueEventHandlers:
 
         rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
-        assert rows[0].instance_id == 0
         assert rows[0].status == Status.active
 
     @pytest.mark.asyncio

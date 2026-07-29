@@ -53,7 +53,6 @@ async def test_registered_provider_event_handle_preserves_definition_status():
 
     rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
     definition_row = rows[0]
-    assert definition_row.instance_id == 0
     assert definition_row.trigger is not None
 
 

@@ -40,7 +40,6 @@ def _seed_provider_event_definition(
     next_task_id = int(scheduler._store.get_metric_max(key="task_id") or 0) + 1
     payload = {
         "task_id": next_task_id,
-        "instance_id": 0,
         "name": "GitHub issue triage",
         "description": "Triage new GitHub issues.",
         "trigger": _provider_event_trigger(),
@@ -78,7 +77,6 @@ async def test_provider_event_start_leaves_definition_unarmed():
     scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
     task_id = _seed_provider_event_definition(scheduler, task_revision=5)
     definition_before = scheduler._get_task_or_raise(task_id)
-    assert definition_before.instance_id == 0
     assert definition_before.trigger is not None
 
     untrusted = {"kind": "provider_event_context", "trust": "untrusted_data"}
@@ -102,7 +100,6 @@ async def test_provider_event_start_leaves_definition_unarmed():
     rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
     assert len(rows) == 1
     definition_after = rows[0]
-    assert definition_after.instance_id == 0
     assert definition_after.trigger is not None
 
 
