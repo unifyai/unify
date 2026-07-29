@@ -28,6 +28,12 @@ room creation. Starting it at dispatch time races the SIP bridge and the
 agent join, and LiveKit fails such a job with "Start signal not
 received" after producing no file at all.
 
+Every channel routed here is recordable. Browser meets were once not:
+their audio was bridged through a pod-local audio device and never
+entered the LiveKit room, so a room composite had nothing to mix and
+aborted. The Recall bridge page now joins the room and publishes the
+meeting as an ordinary track, so they record like any other call.
+
 ``unify.conversation_manager.local_providers.livekit`` carries a
 parallel copy of the same helpers for the self-hosted single-process
 path.
@@ -64,21 +70,6 @@ from unify.gateway.credentials import CredentialNotFoundError, CredentialStore
 from unify.settings import SETTINGS
 
 _log = logging.getLogger("unify.gateway.common.livekit")
-
-# Room suffixes whose audio never reaches the LiveKit room. Browser meets
-# (Google Meet / Teams) bridge caller audio through the agent-service
-# PortAudio device, so the LiveKit room carries no remote track for the
-# compositor to mix -- see ``Assistant.stt_node`` in
-# ``conversation_manager/medium_scripts/call.py``. Room Composite Egress on
-# these rooms cannot produce a file: it stays alive for as long as the room
-# does and then fails with "Start signal not received". Recording these
-# channels needs a capture point on the bridge, not LiveKit egress.
-UNRECORDABLE_ROOM_SUFFIXES = ("_gmeet", "_teams")
-
-
-def room_supports_egress(room_name: str) -> bool:
-    """Whether a Room Composite Egress can ever capture audio for this room."""
-    return not room_name.endswith(UNRECORDABLE_ROOM_SUFFIXES)
 
 
 async def has_active_egress(livekit_api: LiveKitAPI, room_name: str) -> bool:
@@ -345,16 +336,12 @@ async def _start_room_egress(
     The linkage query params are threaded through the webhook URL so the
     completion handler can resolve the correct session / exchange.
 
-    No-ops when the room cannot be captured, when the caller has no assistant
-    to attribute the file to, or when a job is already recording the room.
+    No-ops when the caller has no assistant to attribute the file to, or when a
+    job is already recording the room. Every channel that reaches this point is
+    recordable: browser meets relay the meeting into the room as a published
+    track via the Recall bridge page, so a room composite captures them like
+    any other call.
     """
-    if not room_supports_egress(room_name):
-        _log.info(
-            "skipping egress for room %r: channel audio does not reach the "
-            "LiveKit room",
-            room_name,
-        )
-        return
     if not str(assistant_id).strip():
         # The object path is {env}/{assistant_id}/{room}.mp3, so an empty id
         # collapses the per-assistant prefix and strands the file where no
@@ -497,7 +484,6 @@ async def create_room_and_dispatch_agent(
 
 
 __all__ = [
-    "UNRECORDABLE_ROOM_SUFFIXES",
     "create_room_and_dispatch_agent",
     "delete_sip_dispatch_rule",
     "ensure_call_scoped_dispatch_rule",
@@ -506,6 +492,5 @@ __all__ = [
     "has_active_egress",
     "make_call_scoped_sip_uri",
     "make_sip_uri",
-    "room_supports_egress",
     "start_room_egress",
 ]
