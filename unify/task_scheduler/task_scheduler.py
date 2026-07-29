@@ -50,7 +50,10 @@ from ..common.model_to_fields import model_to_fields
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.search_utils import table_search_top_k
 from ..common.sentinels import _UnsetSentinel
-from ..common.task_execution_context import current_task_execution_delegate
+from ..common.task_execution_context import (
+    current_task_execution_ancestors,
+    current_task_execution_delegate,
+)
 from ..common.tool_outcome import ToolOutcome, ToolErrorException
 from ..common.tool_spec import ToolSpec, read_only
 from ..events.manager_event_logging import log_manager_call
@@ -180,6 +183,18 @@ class StaleActivationSuperseded(Exception):
 # Columns definitions carried before run state moved to Tasks/Executions.
 # Dropped on read so rows written before the migration still load.
 _LEGACY_DEFINITION_FIELDS = frozenset({"status", "activated_by", "instance_id"})
+
+
+class TaskSelfInvocationError(RuntimeError):
+    """A task attempted to execute itself while already active in its own run.
+
+    Raised when ``TaskScheduler.execute(task_id=N)`` is called (directly, or
+    via the ``primitives.tasks.execute`` tool) while ``N`` is already an
+    ancestor of the current execution -- i.e. the same task invoking itself,
+    rather than a genuinely separate concurrent instance or a distinct child
+    task. Do the work directly instead of re-invoking this task, or target a
+    different ``task_id`` if a distinct child task is intended.
+    """
 
 
 class TaskScheduler(BaseTaskScheduler):
@@ -1081,6 +1096,19 @@ class TaskScheduler(BaseTaskScheduler):
                 f"(run_key={finished.run_key}).",
             )
 
+        # Reject reentrancy: a task invoking its own task_id again (directly,
+        # or transitively via a nested primitives.tasks.execute call) while it
+        # is already active in this same execution chain. This is narrower
+        # than "any instance of task_id is active anywhere" -- see the
+        # concurrent-instance note below, which remains intentionally allowed.
+        if task_id in current_task_execution_ancestors.get():
+            raise TaskSelfInvocationError(
+                f"Task {task_id} cannot invoke itself via primitives.tasks.execute "
+                f"while it is already active in its own execution chain. Perform "
+                f"the work directly instead of re-invoking this task, or target a "
+                f"different task_id if a distinct child task is intended.",
+            )
+
         # Concurrent instances of the same task_id are allowed. Only block when
         # execution provenance targets a row that is already active.
         task_run_wake = (
@@ -1210,37 +1238,49 @@ class TaskScheduler(BaseTaskScheduler):
 
         self._project_next_occurrence(task)
 
-        handle = await ActiveTask.create(
-            fallback_actor,
-            task_description=build_task_execution_request(task),
-            _parent_chat_context=_parent_chat_context,
-            _clarification_up_q=_clarification_up_q,
-            _clarification_down_q=_clarification_down_q,
-            task_id=task_id,
-            instance_id=task.instance_id,
-            scheduler=self,
-            entrypoint=task.entrypoint,
-            entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
-            entrypoint_repair_context=(
-                {
-                    "task_run_context": entrypoint_kwargs.get(
-                        "task_execution_context",
-                        {},
-                    ),
-                    "task_request": build_task_execution_request(task),
-                }
-                if entrypoint_kwargs is not None
-                else None
-            ),
-            destination=task.destination,
-            task_run_provenance=task_run_provenance,
-            task_entrypoint_review=self._build_task_entrypoint_review(
-                task=task,
-                reason=reason,
-            ),
-            task_guidelines=build_task_run_guidelines(task, reason),
+        # Extend the ancestor chain for the duration of starting the child run,
+        # so a spawned run that calls back into TaskScheduler.execute with this
+        # same task_id (directly or via nested primitives.tasks.execute) is
+        # caught by the reentrancy check above. The spawned run's own asyncio
+        # task captures a copy of this context at creation time, so resetting
+        # it here afterward does not affect the already-running child.
+        ancestor_token = current_task_execution_ancestors.set(
+            current_task_execution_ancestors.get() | {task_id},
         )
+        try:
+            handle = await ActiveTask.create(
+                fallback_actor,
+                task_description=build_task_execution_request(task),
+                _parent_chat_context=_parent_chat_context,
+                _clarification_up_q=_clarification_up_q,
+                _clarification_down_q=_clarification_down_q,
+                task_id=task_id,
+                instance_id=task.instance_id,
+                scheduler=self,
+                entrypoint=task.entrypoint,
+                entrypoint_kwargs=entrypoint_kwargs,
+                entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
+                entrypoint_repair_context=(
+                    {
+                        "task_run_context": entrypoint_kwargs.get(
+                            "task_execution_context",
+                            {},
+                        ),
+                        "task_request": build_task_execution_request(task),
+                    }
+                    if entrypoint_kwargs is not None
+                    else None
+                ),
+                destination=task.destination,
+                task_run_provenance=task_run_provenance,
+                task_entrypoint_review=self._build_task_entrypoint_review(
+                    task=task,
+                    reason=reason,
+                ),
+                task_guidelines=build_task_run_guidelines(task, reason),
+            )
+        finally:
+            current_task_execution_ancestors.reset(ancestor_token)
 
         return handle
 
