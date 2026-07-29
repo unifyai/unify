@@ -315,8 +315,17 @@ def consume_live_task_run_provenance(
     source_task_log_id: int | None = None,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
+    offline: bool | None = None,
 ) -> TaskRunProvenance | None:
-    """Claim the pending live-run provenance for one task, or build a fallback."""
+    """Claim the pending live-run provenance for one task, or build a fallback.
+
+    ``offline`` should be the target task definition's own ``offline`` field,
+    when known to the caller. It is used only for the fallback provenance
+    built below (no pending provenance was registered for this task/wake/
+    destination) -- a pending provenance already carries its own correct
+    ``delivery`` from whoever registered it. Without ``offline``, the
+    fallback defaults to live delivery, matching prior behavior.
+    """
 
     wake = _normalize_wake(wake)
     normalized_assistant_id = _coerce_str(assistant_id)
@@ -343,7 +352,7 @@ def consume_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
         wake=wake,
-        delivery=Delivery.live,
+        delivery=Delivery.offline if offline else Delivery.live,
         source_task_log_id=source_task_log_id
         or (execution.source_task_log_id if execution is not None else None),
         revision=(execution.revision if execution is not None else None),
