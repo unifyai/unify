@@ -268,6 +268,18 @@ def _task_trigger_event_from_payload(
     return TaskTriggerRequested.from_dict(payload, reason=reason)
 
 
+def _canvas_invocation_event_from_payload(
+    payload: dict[str, Any],
+    *,
+    reason: str = "",
+) -> "CanvasInvocationRequested | None":
+    """Build a canvas action invocation event from a comms Pub/Sub payload."""
+
+    from unify.conversation_manager.events import CanvasInvocationRequested
+
+    return CanvasInvocationRequested.from_dict(payload, reason=reason)
+
+
 def _provider_event_dispatch_event_from_payload(
     payload: dict[str, Any],
     *,
@@ -1070,6 +1082,9 @@ class CommsManager:
                     "task_trigger": lambda r: _task_trigger_event_from_payload(
                         event,
                         reason=r,
+                    ),
+                    "canvas_invocation": lambda r: (
+                        _canvas_invocation_event_from_payload(event, reason=r)
                     ),
                     "provider_event_dispatch": lambda r: (
                         _provider_event_dispatch_event_from_payload(
