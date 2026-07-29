@@ -207,7 +207,10 @@ class RecallMeetProvider:
             # Registering an endpoint the relay will reject burns 30 reconnect
             # attempts per bot and then gets the endpoint disabled workspace
             # wide, breaking the relay for later bots too. Skip it instead.
-            LOGGER.info("[recall] no RECALL_RELAY_SECRET; skipping realtime relay")
+            LOGGER.warning(
+                "[recall] no RECALL_RELAY_SECRET: this call will receive no "
+                "participant events -- no inbound chat, no speaker attribution",
+            )
             return None
         query = urlencode({"room": room_name, "token": secret})
         separator = "&" if "?" in self._relay_url else "?"
