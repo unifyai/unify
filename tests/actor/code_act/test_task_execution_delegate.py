@@ -272,7 +272,8 @@ async def test_codeact_task_primitive_delegates_execution_without_fallback_actor
         assert scheduler.__dict__.get("_TaskScheduler__actor") is None
         assert "_actor" not in scheduler.__dict__
         task = scheduler._get_task_or_raise(task_id)
-        assert task.completed_at is not None
+        # A one-shot that has run is disarmed; the run itself is on the ledger.
+        assert task.enabled is False
     finally:
         ManagerRegistry.clear()
 

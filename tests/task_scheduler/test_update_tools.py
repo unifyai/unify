@@ -90,7 +90,6 @@ def test_scheduled_task_is_armed_on_its_schedule():
 
     task_row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
     assert task_row.enabled is True
-    assert task_row.completed_at is None
     assert task_row.schedule_start_at is not None
 
 

@@ -2,9 +2,10 @@
 ActiveTask provides a handle for a single running task backed by an actor.
 
 It wraps a SteerableToolHandle returned by a BaseActor and, when a scheduler
-is provided, mirrors lifecycle status to the task row on completion or stop.
-It supports read-only ask, steering via interject (cancel intent only), stopping,
-and result retrieval.
+is provided, records the run's outcome on its ``Tasks/Executions`` row when it
+completes or stops. The definition is left alone apart from disarming a
+one-shot that has now run. It supports read-only ask, steering via interject
+(cancel intent only), stopping, and result retrieval.
 """
 
 import functools

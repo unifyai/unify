@@ -26,7 +26,6 @@ async def test_update_create_task_via_text():
     assert task.name == "Promote Jeff Smith"
     assert task.description.startswith("Send an email to Jeff Smith")
     assert task.enabled is True
-    assert task.completed_at is None
     assert task.priority == Priority.normal
 
 
