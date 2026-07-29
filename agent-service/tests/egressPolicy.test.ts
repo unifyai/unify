@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 
 import {
   EgressPolicyError,
+  acceptLanguage,
   parseEgressPolicy,
   resolveEgress,
   safeHost,
@@ -61,13 +62,11 @@ run("a managed region resolves proxy, timezone, locale and Accept-Language toget
   );
 });
 
-run("a non-English region gets a consistent Accept-Language chain", () => {
-  const resolved = resolveEgress({ mode: "region", region: "de" }, MANAGED_ENV);
-  assert.equal(resolved.contextOptions.locale, "de-DE");
-  assert.equal(
-    resolved.contextOptions.extraHTTPHeaders?.["Accept-Language"],
-    "de-DE,de;q=0.9,en;q=0.8",
-  );
+run("a non-English locale gets a consistent Accept-Language chain", () => {
+  // Both supported regions are English-speaking, so this covers the branch
+  // directly rather than through a region that does not exist yet.
+  assert.equal(acceptLanguage("en-GB"), "en-GB,en;q=0.9");
+  assert.equal(acceptLanguage("de-DE"), "de-DE,de;q=0.9,en;q=0.8");
 });
 
 run("any exit brings WebRTC containment with it", () => {
@@ -116,13 +115,13 @@ run("byo uses the caller's exit and still derives context when a region is given
   const resolved = resolveEgress(
     {
       mode: "byo",
-      region: "ie",
+      region: "gb",
       proxy: { server: "http://corp.example.com:3128", username: "u", password: "p" },
     },
     {},
   );
   assert.equal(resolved.proxy?.server, "http://corp.example.com:3128");
-  assert.equal(resolved.contextOptions.timezoneId, "Europe/Dublin");
+  assert.equal(resolved.contextOptions.timezoneId, "Europe/London");
   assert.ok(resolved.args.length > 0);
 });
 
@@ -185,9 +184,8 @@ run("parse normalises region case and passes through a well-formed policy", () =
   assert.equal(parseEgressPolicy(undefined), null);
 });
 
-run("supported regions are advertised for the console picker", () => {
-  const regions = supportedRegions();
-  assert.ok(regions.includes("gb"));
-  assert.ok(regions.includes("us"));
-  assert.deepEqual(regions, [...regions].sort());
+run("only contracted regions are advertised", () => {
+  // Advertising a country we have no egress for turns a clear refusal at
+  // configuration time into a session that starts and then behaves wrongly.
+  assert.deepEqual(supportedRegions(), ["gb", "us"]);
 });
