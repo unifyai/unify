@@ -13,6 +13,8 @@ worktree-direct-commits.md
 git-history-for-context.md
 shared-agent-context.md
 
+openrouter-only-llm-access.md
+
 # --- specific to this repo ---
 python-formatting-and-pre-commit.md
 full-local-stack-first.md

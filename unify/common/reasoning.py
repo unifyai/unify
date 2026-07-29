@@ -63,7 +63,7 @@ def list_llms(provider: str | None = None) -> list[str]:
     """Return supported UniLLM endpoint strings available in this runtime.
 
     Endpoint strings use ``model@provider`` form, such as
-    ``"gpt-4.1-nano@openai"``. Pass ``provider`` to filter to one provider,
+    ``"openai/gpt-4.1-nano@openrouter"``. Pass ``provider`` to filter to one provider,
     e.g. ``list_llms("openai")``.
 
     Use this helper when choosing a concrete ``model=`` value for
@@ -98,7 +98,7 @@ def get_llm_model_selection_context() -> str:
         ### Choosing A Model For `query_llm(...)`
 
         Pass model overrides as UniLLM endpoint strings, e.g.
-        `model="gpt-4.1-nano@openai"`.
+        `model="openai/gpt-4.1-nano@openrouter"`.
 
         For durable or recurring stored functions, choose `model=` deliberately.
         Do not silently inherit the default high-reasoning model for bounded,
@@ -245,7 +245,7 @@ async def query_llm(
             "in the user's voice. Return null for draft_reply when no reply is needed.\\n"
             f"Subject: {subject}\\nFrom: {sender}\\nBody: {body}",
             response_format=EmailDraftDecision,
-            model="gpt-4.1-nano@openai",
+            model="openai/gpt-4.1-nano@openrouter",
         )
 
     Custom rubric with ``system`` for consistent bulk classification::
