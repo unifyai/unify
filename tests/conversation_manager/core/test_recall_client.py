@@ -213,6 +213,7 @@ async def test_realtime_endpoint_is_omitted_when_no_relay_is_given() -> None:
             bridge_page_url="https://comms/meet/bridge?token=t",
         )
 
+    assert "realtime_endpoints" not in _create_payload(session)["recording_config"]
     assert "realtime_endpoints" not in _create_payload(session)
 
 
@@ -228,7 +229,7 @@ async def test_realtime_endpoint_subscribes_only_to_read_events() -> None:
             realtime_events_url="wss://comms/meet/events?room=r&token=t",
         )
 
-    endpoints = _create_payload(session)["realtime_endpoints"]
+    endpoints = _create_payload(session)["recording_config"]["realtime_endpoints"]
     assert len(endpoints) == 1
     assert endpoints[0]["type"] == "websocket"
     assert endpoints[0]["events"] == [
@@ -423,7 +424,7 @@ async def test_participant_video_is_off_by_default() -> None:
 
     payload = _create_payload(session)
     assert "video_mixed_layout" not in payload["recording_config"]
-    events = payload["realtime_endpoints"][0]["events"]
+    events = payload["recording_config"]["realtime_endpoints"][0]["events"]
     assert not any(e.startswith("video_") for e in events)
 
 
@@ -448,7 +449,8 @@ async def test_participant_video_needs_gallery_layout() -> None:
     assert payload["recording_config"]["video_mixed_layout"] == "gallery_view_v2"
     # Retention must survive being edited alongside it.
     assert payload["recording_config"]["retention"] is None
-    assert "video_separate_png.data" in payload["realtime_endpoints"][0]["events"]
+    endpoints = payload["recording_config"]["realtime_endpoints"]
+    assert "video_separate_png.data" in endpoints[0]["events"]
 
 
 @pytest.mark.asyncio
@@ -464,6 +466,33 @@ async def test_participant_video_stays_png() -> None:
             capture_participant_video=True,
         )
 
-    events = _create_payload(session)["realtime_endpoints"][0]["events"]
+    events = _create_payload(session)["recording_config"]["realtime_endpoints"][0][
+        "events"
+    ]
     assert "video_separate_h264.data" not in events
     assert "variant" not in _create_payload(session)
+
+
+@pytest.mark.asyncio
+async def test_realtime_endpoints_are_nested_under_recording_config() -> None:
+    """Recall ignores unknown top-level keys.
+
+    Registering at the top level silently registers nothing: the bot never
+    sends an event and it looks exactly like a relay that is down. Pinning the
+    nesting is the only cheap way to catch that.
+    """
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            realtime_events_url="wss://comms/meet/events?room=r&token=t",
+        )
+
+    payload = _create_payload(session)
+    assert "realtime_endpoints" not in payload, "must not be top level"
+    endpoints = payload["recording_config"]["realtime_endpoints"]
+    assert endpoints[0]["url"] == "wss://comms/meet/events?room=r&token=t"
+    # The compliance pin shares this dict with three features now.
+    assert payload["recording_config"]["retention"] is None

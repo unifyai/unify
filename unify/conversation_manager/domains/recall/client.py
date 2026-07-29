@@ -231,31 +231,34 @@ class RecallClient:
         if metadata:
             payload["metadata"] = dict(metadata)
         if realtime_events_url:
-            payload["realtime_endpoints"] = [
-                {
-                    "type": "websocket",
-                    "url": realtime_events_url,
-                    # Only what a consumer reads. Recall bills nothing extra
-                    # for breadth, but every unread event is traffic on the
-                    # room's data channel for the length of the call.
-                    "events": [
-                        "participant_events.join",
-                        "participant_events.leave",
-                        "participant_events.update",
-                        "participant_events.speech_on",
-                        "participant_events.speech_off",
-                        "participant_events.chat_message",
-                    ],
-                },
+            # Nested under recording_config, not top level. Recall ignores
+            # unknown top-level keys, so getting this wrong registers no
+            # endpoint at all and the bot silently never sends an event --
+            # indistinguishable from a relay that is down.
+            events = [
+                "participant_events.join",
+                "participant_events.leave",
+                "participant_events.update",
+                "participant_events.speech_on",
+                "participant_events.speech_off",
+                "participant_events.chat_message",
             ]
             if capture_participant_video:
                 # PNG rather than H264: 360p at 2fps needs no decoder and no
                 # web_4_core variant (+$0.10/hr), and H264 only reaches
                 # 200-1000px anyway -- too little extra to read a shared screen
                 # that PNG cannot, for materially more cost and complexity.
-                payload["realtime_endpoints"][0]["events"].append(
-                    "video_separate_png.data",
-                )
+                events.append("video_separate_png.data")
+            payload["recording_config"]["realtime_endpoints"] = [
+                {
+                    "type": "websocket",
+                    "url": realtime_events_url,
+                    # Only what a consumer reads. Recall bills nothing extra
+                    # for breadth, but every unread event is traffic on the
+                    # room's data channel for the length of the call.
+                    "events": events,
+                },
+            ]
 
         body = await self._request("POST", "/bot", json=payload)
         return _parse_bot_state(body)

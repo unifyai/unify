@@ -1176,6 +1176,21 @@ def _recorded_opening_source_count(config: dict) -> int:
     )
 
 
+def _strip_chat_html(raw: str) -> str:
+    """Flatten a meeting-chat message to plain text.
+
+    Recall returns formatted messages as HTML, and this text goes into a prompt
+    and a durable record -- neither of which wants markup. Entities are decoded
+    after tag removal so an escaped ``&lt;`` in the original survives as a
+    literal rather than being re-read as a tag.
+    """
+    import html
+    import re
+
+    without_tags = re.sub(r"<[^>]*>", " ", raw)
+    return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
     if raw in (None, ""):
         return {"mode": "speak"}
@@ -2868,7 +2883,11 @@ async def entrypoint(ctx: agents.JobContext):
                 if _meet_cached_active_speaker == name:
                     _meet_cached_active_speaker = None
             elif event_name == "participant_events.chat_message":
-                text = str((message.get("data") or {}).get("text") or "").strip()
+                # ``data.data.text`` -- the payload nests a second ``data``
+                # under the event's own. Reading one level short finds nothing
+                # and drops every message silently.
+                inner = (message.get("data") or {}).get("data") or {}
+                text = _strip_chat_html(str(inner.get("text") or "")).strip()
                 if not text:
                     return
                 chat_cls = (
