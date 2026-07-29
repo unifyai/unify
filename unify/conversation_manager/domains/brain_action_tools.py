@@ -1084,8 +1084,6 @@ class ConversationManagerBrainActionTools:
 
         # Stop the browser agent immediately so the assistant disappears
         # from the Meet before the event handler's full cleanup pipeline.
-        await self._notify_browser_meet_leave("googlemeet")
-
         from unify.conversation_manager.events import GoogleMeetEnded
 
         contact = self._cm.call_manager._disconnect_contact or {}
@@ -1158,8 +1156,6 @@ class ConversationManagerBrainActionTools:
                 "status": "error",
                 "message": "No active Teams meeting session to leave.",
             }
-
-        await self._notify_browser_meet_leave("teamsmeet")
 
         from unify.conversation_manager.events import TeamsMeetEnded
 
@@ -1356,37 +1352,6 @@ class ConversationManagerBrainActionTools:
             ),
             "ready_for_outbound_call": ready,
         }
-
-    async def _notify_browser_meet_leave(self, path_prefix: str) -> None:
-        """Best-effort notify the agent-service to leave the active browser meet.
-
-        ``path_prefix`` is the agent-service URL prefix (``"googlemeet"`` or
-        ``"teamsmeet"``).  Failures are silently ignored — the event handler's
-        cleanup pipeline still tears down the session even if this call fails.
-        """
-        session_id = self._cm.call_manager._meet_session_id
-        if not session_id:
-            return
-
-        import aiohttp
-
-        from unify.conversation_manager.medium_scripts.common import (
-            _resolve_agent_service_url,
-        )
-        from unify.session_details import SESSION_DETAILS
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"{_resolve_agent_service_url()}/{path_prefix}/leave",
-                    json={"sessionId": session_id},
-                    headers={
-                        "authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-        except Exception:
-            pass
 
     async def act(
         self,
