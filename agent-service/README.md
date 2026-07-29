@@ -98,8 +98,12 @@ Resolution **fails closed**: a policy that cannot be honoured returns
 a caller that asked for a specific exit and silently got the host's own address
 cannot tell that it happened.
 
-`region` accepts an ISO 3166-1 alpha-2 code; the supported set is returned in
-the error message when an unknown one is supplied.
+`region` accepts an ISO 3166-1 alpha-2 code. Only regions we have contracted
+egress for are supported — currently `gb` and `us` — and an unknown one is
+refused with the supported set in the error. Adding a region is two lines in
+`REGION_PROFILES` plus provider coverage; advertising one we cannot serve would
+turn a clear refusal at configuration time into a session that starts and then
+behaves wrongly.
 
 ## Running the Service
 

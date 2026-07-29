@@ -81,23 +81,15 @@ export interface ResolvedEgress {
  * Deliberately a small, explicit table rather than a lookup library: an
  * unknown region must fail rather than resolve to a default, because a
  * silently-wrong timezone is exactly the mismatch this exists to prevent.
+ *
+ * Only the regions we have actually contracted egress for belong here.
+ * Advertising a country we cannot serve turns a clear refusal at configuration
+ * time into a session that starts and then behaves wrongly. Adding one is two
+ * lines plus provider coverage.
  */
 const REGION_PROFILES: Record<string, { timezoneId: string; locale: string }> = {
   gb: { timezoneId: 'Europe/London', locale: 'en-GB' },
-  ie: { timezoneId: 'Europe/Dublin', locale: 'en-IE' },
   us: { timezoneId: 'America/New_York', locale: 'en-US' },
-  ca: { timezoneId: 'America/Toronto', locale: 'en-CA' },
-  au: { timezoneId: 'Australia/Sydney', locale: 'en-AU' },
-  de: { timezoneId: 'Europe/Berlin', locale: 'de-DE' },
-  fr: { timezoneId: 'Europe/Paris', locale: 'fr-FR' },
-  es: { timezoneId: 'Europe/Madrid', locale: 'es-ES' },
-  it: { timezoneId: 'Europe/Rome', locale: 'it-IT' },
-  nl: { timezoneId: 'Europe/Amsterdam', locale: 'nl-NL' },
-  se: { timezoneId: 'Europe/Stockholm', locale: 'sv-SE' },
-  sg: { timezoneId: 'Asia/Singapore', locale: 'en-SG' },
-  jp: { timezoneId: 'Asia/Tokyo', locale: 'ja-JP' },
-  br: { timezoneId: 'America/Sao_Paulo', locale: 'pt-BR' },
-  in: { timezoneId: 'Asia/Kolkata', locale: 'en-IN' },
 };
 
 export function supportedRegions(): string[] {
@@ -117,8 +109,14 @@ const WEBRTC_CONTAINMENT_ARGS = [
   '--webrtc-ip-handling-policy=disable_non_proxied_udp',
 ];
 
-/** `Accept-Language` consistent with the locale, with a plain-English fallback. */
-function acceptLanguage(locale: string): string {
+/**
+ * `Accept-Language` consistent with the locale, with a plain-English fallback.
+ *
+ * Exported so the non-English branch stays covered while the supported regions
+ * are both English-speaking — otherwise adding the first non-English region
+ * would silently ship an untested header.
+ */
+export function acceptLanguage(locale: string): string {
   const base = locale.split('-')[0];
   return base === 'en' ? `${locale},en;q=0.9` : `${locale},${base};q=0.9,en;q=0.8`;
 }
