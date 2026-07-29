@@ -104,6 +104,7 @@ from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
 from .types.repetition import (
+    deterministic_jitter_seconds,
     Frequency,
     RepeatPattern,
     Weekday,
@@ -1466,6 +1467,11 @@ class TaskScheduler(BaseTaskScheduler):
         # is applied to), so each step would measure from a jittered value and
         # the series would drift. Dispatch applies the offset instead.
         scheduled_for = next_start_at.isoformat()
+        dispatch_offset = deterministic_jitter_seconds(
+            task_id=int(task.task_id),
+            slot=next_start_at,
+            patterns=task.repeat,
+        )
 
         assistant_id = str(
             SESSION_DETAILS.assistant.agent_id
@@ -1491,6 +1497,7 @@ class TaskScheduler(BaseTaskScheduler):
                     ),
                     destination=task.destination,
                     scheduled_for=scheduled_for,
+                    dispatch_offset_seconds=dispatch_offset,
                     task_name=task.name,
                     task_description=task.description,
                 ),
