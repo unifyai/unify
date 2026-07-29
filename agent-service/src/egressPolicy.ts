@@ -129,6 +129,30 @@ export function acceptLanguage(locale: string): string {
  * ``cc-gb`` may ignore the geo-targeting rather than reject it, so traffic
  * exits from somewhere other than the region asked for and nothing errors.
  */
+/**
+ * The sticky handle actually sent to the provider, scoped by region.
+ *
+ * Verified against a live endpoint: a sticky session is pinned by its handle
+ * alone, so reusing one handle across two countries returns the *first*
+ * country's exit and silently ignores the second country parameter. Since a
+ * caller's natural handle is stable per identity (an assistant, a profile),
+ * changing its region would otherwise keep the old exit until the TTL lapsed —
+ * config saying one country while traffic left from another, with no error.
+ *
+ * Scoping the handle by region makes a region change a different session by
+ * construction.
+ */
+function sessionKeyFor(policy: EgressPolicy, region: string): string {
+  // Providers encode these usernames as dash-delimited key-value pairs, so a
+  // dash *inside* a value terminates it and silently discards everything after
+  // — verified live: a handle containing a dash lost both the country and the
+  // session-duration parameter, and two regions collapsed onto one exit. Strip
+  // anything that could be read as a delimiter, and separate with an
+  // underscore, which real accounts already use.
+  const base = (policy.sessionKey || 'default').replace(/[^A-Za-z0-9_]/g, '');
+  return `${base || 'default'}_${region}`;
+}
+
 function renderUsername(template: string, region: string, sessionKey: string): string {
   return template
     .replace(/\{region\}/g, region)
@@ -217,7 +241,7 @@ export function resolveEgress(
     proxy = {
       server,
       username: usernameTemplate
-        ? renderUsername(usernameTemplate, region, policy.sessionKey || 'default')
+        ? renderUsername(usernameTemplate, region, sessionKeyFor(policy, region))
         : undefined,
       password: env.UNITY_EGRESS_PROXY_PASSWORD || undefined,
     };

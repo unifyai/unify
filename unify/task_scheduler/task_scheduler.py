@@ -50,7 +50,10 @@ from ..common.model_to_fields import model_to_fields
 from ..common.read_only_ask_guard import ReadOnlyAskGuardHandle
 from ..common.search_utils import table_search_top_k
 from ..common.sentinels import _UnsetSentinel
-from ..common.task_execution_context import current_task_execution_delegate
+from ..common.task_execution_context import (
+    current_task_execution_ancestors,
+    current_task_execution_delegate,
+)
 from ..common.tool_outcome import ToolOutcome, ToolErrorException
 from ..common.tool_spec import ToolSpec, read_only
 from ..events.manager_event_logging import log_manager_call
@@ -67,12 +70,12 @@ from .machine_state import (
     TaskRunReference,
     build_task_run_key,
     consume_live_task_run_provenance,
-    create_or_adopt_live_task_run,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
     latest_scheduled_occurrence_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
+    project_task_occurrence,
     remember_live_task_run_provenance,
     update_task_run_record,
 )
@@ -180,6 +183,18 @@ class StaleActivationSuperseded(Exception):
 # Columns definitions carried before run state moved to Tasks/Executions.
 # Dropped on read so rows written before the migration still load.
 _LEGACY_DEFINITION_FIELDS = frozenset({"status", "activated_by", "instance_id"})
+
+
+class TaskSelfInvocationError(RuntimeError):
+    """A task attempted to execute itself while already active in its own run.
+
+    Raised when ``TaskScheduler.execute(task_id=N)`` is called (directly, or
+    via the ``primitives.tasks.execute`` tool) while ``N`` is already an
+    ancestor of the current execution -- i.e. the same task invoking itself,
+    rather than a genuinely separate concurrent instance or a distinct child
+    task. Do the work directly instead of re-invoking this task, or target a
+    different ``task_id`` if a distinct child task is intended.
+    """
 
 
 class TaskScheduler(BaseTaskScheduler):
@@ -826,10 +841,6 @@ class TaskScheduler(BaseTaskScheduler):
                     "Activation source task log does not match requested task: "
                     f"expected task_id={expected_task_id}, got task_id={row_task_id}.",
                 )
-            instance_id = entries.get("instance_id")
-            if instance_id is None:
-                instance_id = 0
-            entries["instance_id"] = instance_id
             entries.setdefault(
                 "destination",
                 self._destination_from_task_context(context_name),
@@ -875,8 +886,7 @@ class TaskScheduler(BaseTaskScheduler):
         if task_scheduled_for != provenance_scheduled_for:
             raise StaleActivationSuperseded(
                 "Scheduled activation superseded by re-armed task definition: "
-                f"task_id={task.task_id}, instance_id={task.instance_id}, "
-                f"task_start_at={task_scheduled_for}, "
+                f"task_id={task.task_id}, task_start_at={task_scheduled_for}, "
                 f"activation_scheduled_for={provenance_scheduled_for}.",
             )
 
@@ -1081,6 +1091,19 @@ class TaskScheduler(BaseTaskScheduler):
                 f"(run_key={finished.run_key}).",
             )
 
+        # Reject reentrancy: a task invoking its own task_id again (directly,
+        # or transitively via a nested primitives.tasks.execute call) while it
+        # is already active in this same execution chain. This is narrower
+        # than "any instance of task_id is active anywhere" -- see the
+        # concurrent-instance note below, which remains intentionally allowed.
+        if task_id in current_task_execution_ancestors.get():
+            raise TaskSelfInvocationError(
+                f"Task {task_id} cannot invoke itself via primitives.tasks.execute "
+                f"while it is already active in its own execution chain. Perform "
+                f"the work directly instead of re-invoking this task, or target a "
+                f"different task_id if a distinct child task is intended.",
+            )
+
         # Concurrent instances of the same task_id are allowed. Only block when
         # execution provenance targets a row that is already active.
         task_run_wake = (
@@ -1135,6 +1158,7 @@ class TaskScheduler(BaseTaskScheduler):
             wake=task_run_wake,
             destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
+            offline=task.offline,
         )
         explicit_assistant_id = str(
             SESSION_DETAILS.assistant.agent_id
@@ -1210,37 +1234,49 @@ class TaskScheduler(BaseTaskScheduler):
 
         self._project_next_occurrence(task)
 
-        handle = await ActiveTask.create(
-            fallback_actor,
-            task_description=build_task_execution_request(task),
-            _parent_chat_context=_parent_chat_context,
-            _clarification_up_q=_clarification_up_q,
-            _clarification_down_q=_clarification_down_q,
-            task_id=task_id,
-            instance_id=task.instance_id,
-            scheduler=self,
-            entrypoint=task.entrypoint,
-            entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
-            entrypoint_repair_context=(
-                {
-                    "task_run_context": entrypoint_kwargs.get(
-                        "task_execution_context",
-                        {},
-                    ),
-                    "task_request": build_task_execution_request(task),
-                }
-                if entrypoint_kwargs is not None
-                else None
-            ),
-            destination=task.destination,
-            task_run_provenance=task_run_provenance,
-            task_entrypoint_review=self._build_task_entrypoint_review(
-                task=task,
-                reason=reason,
-            ),
-            task_guidelines=build_task_run_guidelines(task, reason),
+        # Extend the ancestor chain for the duration of starting the child run,
+        # so a spawned run that calls back into TaskScheduler.execute with this
+        # same task_id (directly or via nested primitives.tasks.execute) is
+        # caught by the reentrancy check above. The spawned run's own asyncio
+        # task captures a copy of this context at creation time, so resetting
+        # it here afterward does not affect the already-running child.
+        ancestor_token = current_task_execution_ancestors.set(
+            current_task_execution_ancestors.get() | {task_id},
         )
+        try:
+            handle = await ActiveTask.create(
+                fallback_actor,
+                task_description=build_task_execution_request(task),
+                _parent_chat_context=_parent_chat_context,
+                _clarification_up_q=_clarification_up_q,
+                _clarification_down_q=_clarification_down_q,
+                task_id=task_id,
+                instance_id=0,
+                scheduler=self,
+                entrypoint=task.entrypoint,
+                entrypoint_kwargs=entrypoint_kwargs,
+                entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
+                entrypoint_repair_context=(
+                    {
+                        "task_run_context": entrypoint_kwargs.get(
+                            "task_execution_context",
+                            {},
+                        ),
+                        "task_request": build_task_execution_request(task),
+                    }
+                    if entrypoint_kwargs is not None
+                    else None
+                ),
+                destination=task.destination,
+                task_run_provenance=task_run_provenance,
+                task_entrypoint_review=self._build_task_entrypoint_review(
+                    task=task,
+                    reason=reason,
+                ),
+                task_guidelines=build_task_run_guidelines(task, reason),
+            )
+        finally:
+            current_task_execution_ancestors.reset(ancestor_token)
 
         return handle
 
@@ -1280,7 +1316,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         source_task_log_id = self._get_log_by_task_instance(
             task_id=definition.task_id,
-            instance_id=definition.instance_id,
+            instance_id=0,
         ).id
 
         provenance = TaskRunProvenance(
@@ -1355,7 +1391,7 @@ class TaskScheduler(BaseTaskScheduler):
             fallback_actor,
             task_description=task_request,
             task_id=definition.task_id,
-            instance_id=definition.instance_id,
+            instance_id=0,
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
@@ -1395,7 +1431,7 @@ class TaskScheduler(BaseTaskScheduler):
             row for row in rows if self._task_has_provider_event_trigger(row)
         ]
         if definitions:
-            return sorted(definitions, key=lambda row: row.instance_id)[0]
+            return definitions[0]
         try:
             return self._get_provider_event_task_or_raise(task_id)
         except ValueError as exc:
@@ -1483,7 +1519,7 @@ class TaskScheduler(BaseTaskScheduler):
             # project the next occurrence into.
             return False
         try:
-            create_or_adopt_live_task_run(
+            project_task_occurrence(
                 TaskRunProvenance(
                     assistant_id=assistant_id,
                     task_id=int(task.task_id),
@@ -2307,50 +2343,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return {"detail": "No-op provider-event task update."}
 
-    def _update_task_instance(
-        self,
-        *,
-        task_id: int,
-        instance_id: int,
-        **kwargs: Any,
-    ) -> Dict[str, str]:
-        """Update supported fields on one concrete task instance."""
-
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id} and instance_id == {instance_id}",
-                limit=1,
-                return_ids_only=False,
-            )
-            if not log_objs:
-                raise ValueError(
-                    f"No task instance found for task_id={task_id}, instance_id={instance_id}",
-                )
-
-            log_to_update = log_objs[0]
-            if self._running_execution(task_id) is not None:
-                return {
-                    "outcome": "skipped",
-                    "reason": "Cannot update a task while a run is in flight",
-                }
-
-            entries_to_write: Dict[str, Any] = {}
-
-            if "info" in kwargs:
-                entries_to_write["info"] = kwargs["info"]
-
-            if not entries_to_write:
-                return {
-                    "outcome": "no changes",
-                    "details": {"task_id": task_id, "instance_id": instance_id},
-                }
-
-            return self._write_log_entries(
-                logs=log_to_update.id,
-                entries=entries_to_write,
-            )
-
     @staticmethod
     def _default_ask_tool_policy(
         step_index: int,
@@ -2837,16 +2829,12 @@ class TaskScheduler(BaseTaskScheduler):
     def _task_from_typed_response(self, typed_response: dict[str, Any]) -> Task:
         """Build one Task from a typed Tasks API row."""
 
-        entries = {
-            "task_id": int(typed_response["task_id"]),
-            "instance_id": 0,
-        }
+        entries = {"task_id": int(typed_response["task_id"])}
         for key in (
             "task_revision",
             "provider_event_binding_id",
             "name",
             "description",
-            "status",
             "trigger",
             "schedule",
             "enabled",
@@ -2924,10 +2912,8 @@ class TaskScheduler(BaseTaskScheduler):
 
         allowed_fields: List[str] = [
             "task_id",
-            "instance_id",
             "name",
             "description",
-            "status",
             "priority",
             "schedule",
             "deadline",
@@ -2952,9 +2938,12 @@ class TaskScheduler(BaseTaskScheduler):
         """Filter tasks using a boolean expression over task fields.
 
         Returns all task rows that match the given filter expression.
-        The expression uses field names from the task schema (e.g.
-        ``status == 'scheduled'``, ``task_id == 42``).  Returns an empty
-        list when no rows match.
+        The expression uses field names from the task schema and Python
+        literals (e.g. ``task_id == 42``, ``priority == 'high'``).  Boolean
+        fields such as ``enabled`` compare against ``True``/``False``
+        capitalized — ``enabled == true`` is not a boolean literal here and
+        matches no rows rather than raising.  Returns an empty list when no
+        rows match.
         """
 
         normalized_filter = normalize_filter_expr(filter)
@@ -2971,7 +2960,9 @@ class TaskScheduler(BaseTaskScheduler):
                 return_ids_only=False,
                 include_fields=include_fields,
             )
-            for log in root_logs:
+            # Order by log id so callers that disambiguate duplicate rows for one
+            # task_id (a pre-migration shape) always resolve the oldest row.
+            for log in sorted(root_logs, key=lambda obj: int(obj.id)):
                 row = dict(log.entries or {})
                 row.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
                 row["destination"] = destination
@@ -3063,7 +3054,9 @@ class TaskScheduler(BaseTaskScheduler):
         """Compute aggregate metrics over the current task list.
 
         Supports count, sum, mean, min, max, and other standard reductions
-        grouped by one or more task fields (e.g. ``status``, ``priority``).
+        grouped by one or more task fields (e.g. ``priority``, ``enabled``).
+        Any ``filter`` follows the same expression rules as the task filter
+        tool, including capitalized ``True``/``False`` for boolean fields.
         Returns a dictionary of group keys to metric values.
         """
 

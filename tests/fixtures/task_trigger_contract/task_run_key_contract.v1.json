@@ -1,0 +1,45 @@
+{
+  "description": "Run keys Orchestra and Unify must both produce byte-identically. The key is the create-or-adopt idempotency token: when the two sides disagree, the dispatcher cannot adopt the occurrence Orchestra projected and mints a second execution for the same slot. Two rows read as concurrency, and an overlap guard then skips every tick — the campaign runtime halted this way with no error anywhere.",
+  "cases": [
+    {
+      "name": "team destination and an offset timestamp are both normalized",
+      "inputs": {
+        "delivery": "offline",
+        "wake": "scheduled",
+        "assistant_id": "1406",
+        "destination": "team:11",
+        "task_id": 12,
+        "revision": "r1",
+        "due_at": "2026-07-29T16:50:00+00:00"
+      },
+      "run_key": "offline:scheduled:1406:team-11:12:82f3e9c695dc:20260729T165000Z"
+    },
+    {
+      "name": "a Z-suffixed timestamp normalizes to the same fragment",
+      "inputs": {
+        "delivery": "offline",
+        "wake": "scheduled",
+        "assistant_id": "1406",
+        "destination": "team:11",
+        "task_id": 12,
+        "revision": "r1",
+        "due_at": "2026-07-29T16:50:00Z"
+      },
+      "run_key": "offline:scheduled:1406:team-11:12:82f3e9c695dc:20260729T165000Z"
+    },
+    {
+      "name": "no destination omits the segment entirely",
+      "inputs": {
+        "delivery": "live",
+        "wake": "scheduled",
+        "assistant_id": "42",
+        "destination": null,
+        "task_id": 7,
+        "revision": "rev-a",
+        "due_at": "2026-04-10T09:00:00+00:00"
+      },
+      "run_key": "live:scheduled:42:7:162af81f5de4:20260410T090000Z"
+    }
+  ],
+  "known_divergence": "A triggered wake with no due time tails on 'arm' here and 'once' in Unify. That is the same drift on the trigger path and is deliberately not asserted as agreed contract until the trigger lane is verified end to end."
+}

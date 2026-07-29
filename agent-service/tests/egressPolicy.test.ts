@@ -52,7 +52,8 @@ run("a managed region resolves proxy, timezone, locale and Accept-Language toget
   assert.equal(resolved.proxy?.server, "http://gate.example.net:7777");
   // Geography and stickiness are encoded in the username, which is how
   // residential providers expose them — the caller never sees a credential.
-  assert.equal(resolved.proxy?.username, "acct-country-gb-session-abc123");
+  // The handle is region-scoped — see the sticky-session test below.
+  assert.equal(resolved.proxy?.username, "acct-country-gb-session-abc123_gb");
   assert.equal(resolved.proxy?.password, "s3cret");
   assert.equal(resolved.contextOptions.timezoneId, "Europe/London");
   assert.equal(resolved.contextOptions.locale, "en-GB");
@@ -191,7 +192,34 @@ run("the region placeholder is filled in either case", () => {
     { mode: "region", region: "gb", sessionKey: "s1" },
     { ...MANAGED_ENV, UNITY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}" },
   );
-  assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-s1");
+  assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-s1_gb");
+});
+
+run("the sticky handle is scoped by region", () => {
+  // Verified against a live endpoint: a sticky session is pinned by its handle
+  // alone, so one handle reused across two countries returns the first
+  // country's exit and ignores the second country parameter entirely. A
+  // caller's handle is stable per identity, so without scoping, changing a
+  // region would keep the old exit until the TTL lapsed — silently.
+  const gb = resolveEgress({ mode: "region", region: "gb", sessionKey: "alice" }, MANAGED_ENV);
+  const us = resolveEgress({ mode: "region", region: "us", sessionKey: "alice" }, MANAGED_ENV);
+  assert.notEqual(gb.proxy?.username, us.proxy?.username);
+  assert.ok(gb.proxy?.username?.endsWith("_gb"));
+  assert.ok(us.proxy?.username?.endsWith("_us"));
+});
+
+run("delimiter characters are stripped from the sticky handle", () => {
+  // Verified live: these usernames are dash-delimited key-value pairs, so a
+  // dash inside a value terminates it and discards the rest — the country and
+  // session-duration parameters were both silently lost, collapsing two
+  // regions onto one exit. Profile keys like "reader-one" are the obvious way
+  // this reaches production.
+  const resolved = resolveEgress(
+    { mode: "region", region: "gb", sessionKey: "reader-one" },
+    { ...MANAGED_ENV, UNITY_EGRESS_PROXY_USERNAME: "customer-acme-cc-{REGION}-sessid-{session}-sesstime-30" },
+  );
+  assert.equal(resolved.proxy?.username, "customer-acme-cc-GB-sessid-readerone_gb-sesstime-30");
+  assert.ok(!resolved.proxy?.username?.includes("reader-one"));
 });
 
 run("only contracted regions are advertised", () => {
