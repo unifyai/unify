@@ -231,7 +231,8 @@ def test_entrypoint_clone_after_set_null():
     assert len(tasks_after_delete) == 1
     assert tasks_after_delete[0].entries.get("entrypoint") is None
 
-    # Re-arm the definition after the FK SET NULL and verify entrypoint stays null.
+    # Project the next occurrence after the FK SET NULL and verify entrypoint
+    # stays null.
     from unify.task_scheduler.types.task import Task
 
     task_entries = unisdk.get_logs(
@@ -240,7 +241,7 @@ def test_entrypoint_clone_after_set_null():
     )[0].entries
     task_obj = Task(**task_entries)
 
-    ts._rearm_task_definition(task_obj)
+    ts._project_next_occurrence(task_obj)
 
     all_instances = unisdk.get_logs(
         context=ts._ctx,
