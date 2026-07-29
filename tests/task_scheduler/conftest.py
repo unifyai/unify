@@ -11,11 +11,10 @@ import pytest_asyncio
 import unisdk
 
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.types.task import Task
 from unify.manager_registry import ManagerRegistry
 from unify.common.context_registry import ContextRegistry
 from tests.helpers import (
-    is_task_scenario_seeded,
-    rebuild_task_id_mapping,
     scenario_file_lock,
     mutation_test_lock,
     restore_scenario_context,
@@ -26,39 +25,64 @@ _READ_SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 _MUTATION_SCENARIO_COMMIT_HASHES: Dict[str, Any] = {}
 
 
-# Task data for seeding (shared by both scenarios)
-_TASKS_DATA: List[Dict[str, str]] = [
+# Task data for seeding (shared by both scenarios). The arming split is load
+# bearing: read-only tests count armed against paused tasks, so a scenario where
+# every task carries the same `enabled` value cannot tell a correct answer from a
+# uniform one.
+_TASKS_DATA: List[Dict[str, Any]] = [
     {
         "name": "Write quarterly report",
         "description": "Draft the Q2 report (send email to finance).",
+        "enabled": True,
     },
     {
         "name": "Prepare slide deck",
         "description": "Create slides for the board meeting. Email once done.",
+        "enabled": True,
     },
     {
         "name": "Client follow-up email",
         "description": "Send email to prospective client about proposal.",
+        "enabled": False,
     },
 ]
 
 
-def _seed_tasks(ts: TaskScheduler) -> List[int]:
-    """Create tasks if they don't exist. Returns list of task IDs in order."""
+def _declared_drift(task: Task, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the declared fields whose stored values no longer match."""
+
+    return {
+        field: value
+        for field, value in declared.items()
+        if field != "name" and getattr(task, field) != value
+    }
+
+
+def _seed_tasks(ts: TaskScheduler) -> Tuple[List[int], bool]:
+    """Reconcile the scenario against _TASKS_DATA.
+
+    Returns the task IDs in declaration order, plus whether anything was
+    written. Tasks are matched by name and updated in place when a declared
+    field has drifted, so editing _TASKS_DATA converges an already-seeded
+    context instead of being silently ignored.
+    """
+
     task_ids: List[int] = []
+    changed = False
     for task_data in _TASKS_DATA:
         name = task_data["name"]
-        try:
-            existing = ts._filter_tasks(filter=f"name == {name!r}", limit=1)
-            if existing:
-                task_id = existing[0].task_id
-            else:
-                result = ts._create_task(**task_data)
-                task_id = result["details"]["task_id"]
-            task_ids.append(task_id)
-        except Exception as e:
-            print(f"Warning: Could not create/find task '{name}': {e}")
-    return task_ids
+        existing = ts._filter_tasks(filter=f"name == {name!r}", limit=1)
+        if existing:
+            task_id = existing[0].task_id
+            drift = _declared_drift(existing[0], task_data)
+            if drift:
+                ts._update_task(task_id=task_id, **drift)
+                changed = True
+        else:
+            task_id = ts._create_task(**task_data)["details"]["task_id"]
+            changed = True
+        task_ids.append(task_id)
+    return task_ids, changed
 
 
 def _rebuild_commit_hashes(
@@ -121,16 +145,14 @@ def _setup_scenario(
 
     # Use file lock to coordinate seeding across parallel processes
     with scenario_file_lock(lock_name):
-        if is_task_scenario_seeded(ts, _TASKS_DATA):
-            # Scenario exists - just rebuild local state
-            print(f"Scenario already seeded ({ctx}), rebuilding local state...")
-            task_ids = rebuild_task_id_mapping(ts, _TASKS_DATA)
-            _rebuild_commit_hashes(ctx, commit_hashes)
-        else:
-            # Scenario not seeded - seed it
-            print(f"Seeding task scheduler scenario ({ctx})...")
-            task_ids = _seed_tasks(ts)
+        task_ids, changed = _seed_tasks(ts)
+        if changed:
+            # The rollback baseline has to contain the reconciled data.
+            print(f"Seeded task scheduler scenario ({ctx})...")
             _commit_contexts_for_rollback(ctx, commit_hashes)
+        else:
+            print(f"Scenario already seeded ({ctx}), rebuilding local state...")
+            _rebuild_commit_hashes(ctx, commit_hashes)
 
     unisdk.unset_context()
     return ts, task_ids
