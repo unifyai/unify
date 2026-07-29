@@ -62,6 +62,7 @@ _EXECUTION_QUERY_FIELDS = [
     "task_name",
     "task_description",
     "scheduled_for",
+    "dispatch_offset_seconds",
     "trigger_medium",
     "trigger_from_contact_ids",
     "trigger_omit_contact_ids",
@@ -114,6 +115,7 @@ class TaskExecutionSnapshot:
     task_name: str | None = None
     task_description: str | None = None
     scheduled_for: str | None = None
+    dispatch_offset_seconds: float | None = None
     trigger_medium: str | None = None
     trigger_from_contact_ids: list[int] = field(default_factory=list)
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
@@ -145,6 +147,7 @@ class TaskRunProvenance:
     task_name: str | None = None
     task_description: str | None = None
     attempt_token: str | None = None
+    dispatch_offset_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -449,6 +452,7 @@ def create_or_adopt_live_task_run(
                 "revision": provenance.revision,
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
+                "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
                 "source_medium": provenance.source_medium,
                 "source_ref": provenance.source_ref,
                 "source_contact_id": provenance.source_contact_id,
@@ -693,6 +697,103 @@ def get_open_task_execution(
             filter_clauses.append(f"wake == '{normalized_wake}'")
         if normalized_destination is not None:
             filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
+def find_running_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return an open execution for one task, whatever assistant owns it.
+
+    ``get_open_task_execution`` is assistant-scoped and returns ``None`` when
+    the session has no assistant context. "Is a run in flight for this task?"
+    must not depend on who is asking, so this queries by ``task_id`` alone —
+    the definition it guards is a single row shared by every assistant that
+    can execute it.
+    """
+
+    filter_clauses = [
+        f"task_id == {int(task_id)}",
+        _open_execution_state_filter(),
+    ]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
+def latest_scheduled_occurrence_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> str | None:
+    """The newest ``scheduled_for`` already projected for one task, if any.
+
+    The next occurrence is derived from the last one the ledger knows about,
+    not from a field the definition mutates. Every caller reading the same
+    ledger computes the same next slot, so concurrent runs converge on one
+    ``run_key`` instead of racing a shared row.
+    """
+
+    filter_clauses = [f"task_id == {int(task_id)}", "wake == 'scheduled'"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=200,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    occurrences = [
+        _coerce_str(getattr(_row_to_execution(row), "scheduled_for", None))
+        for row in rows
+    ]
+    known = [value for value in occurrences if value]
+    if not known:
+        return None
+    return max(known, key=_normalize_datetime_string)
+
+
+def find_terminal_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return a finished execution for one task, if any run has terminalized.
+
+    This is how a one-shot knows it has already run. Storing that on the
+    definition would put a run fact back on the shared row; the run ledger
+    already records it, so the definition can stay authored intent only.
+    """
+
+    terminal_states = " or ".join(
+        f"state == '{state.value}'"
+        for state in (
+            ExecutionState.completed,
+            ExecutionState.failed,
+            ExecutionState.cancelled,
+        )
+    )
+    filter_clauses = [f"task_id == {int(task_id)}", f"({terminal_states})"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
     rows = _execution_store().get_rows(
         filter=" and ".join(filter_clauses),
         limit=1,

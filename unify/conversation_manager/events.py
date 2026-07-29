@@ -137,6 +137,26 @@ class Event:
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(kw_only=True)
+class CallUtteranceEvent(Event):
+    """Shared shape for a line spoken aloud on a live call.
+
+    ``timestamp`` marks when the turn was committed, which for both speakers is
+    when the line *finished*: the user's arrives on STT finalisation, the
+    assistant's when the reply item lands in the chat context. Anything placing
+    an utterance inside a recording therefore overshoots by the length of the
+    line itself, so the audible start is carried separately.
+
+    Deliberately a string rather than a ``datetime``: ``custom_dict_factory``
+    ISO-encodes datetimes on the way out, but ``from_dict`` only decodes
+    ``timestamp`` back, so a datetime field would silently arrive as a string on
+    the far side of the voice-agent IPC hop. Being a string makes that explicit.
+    """
+
+    # ISO instant the speech became audible, when the agent could observe it.
+    speech_started_at: str | None = None
+
+
 @dataclass
 class PhoneCallReceived(Event):
     topic: ClassVar[str | None] = "app:comms:call_received"
@@ -206,7 +226,7 @@ class UnifyMeetStarted(Event):
 
 
 @dataclass
-class InboundPhoneUtterance(Event):
+class InboundPhoneUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a phone call."""
 
     topic: ClassVar[str | None] = "app:comms:phone_utterance"
@@ -234,7 +254,7 @@ class InboundPhoneUtterance(Event):
 
 
 @dataclass
-class InboundUnifyMeetUtterance(Event):
+class InboundUnifyMeetUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a web-based voice/video meeting."""
 
     topic: ClassVar[str | None] = "app:comms:unify_utterance"
@@ -252,7 +272,7 @@ class InboundUnifyMeetUtterance(Event):
 
 
 @dataclass
-class InboundWhatsAppCallUtterance(Event):
+class InboundWhatsAppCallUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a WhatsApp voice call."""
 
     topic: ClassVar[str | None] = "app:comms:whatsapp_call_utterance"
@@ -415,7 +435,7 @@ class GoogleMeetEnded(Event):
 
 
 @dataclass
-class InboundGoogleMeetUtterance(Event):
+class InboundGoogleMeetUtterance(CallUtteranceEvent):
     """Utterance received from a participant during a Google Meet call."""
 
     topic: ClassVar[str | None] = "app:comms:googlemeet_utterance"
@@ -432,7 +452,7 @@ class InboundGoogleMeetUtterance(Event):
 
 
 @dataclass
-class OutboundGoogleMeetUtterance(Event):
+class OutboundGoogleMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a Google Meet call."""
 
     topic: ClassVar[str | None] = "app:comms:googlemeet_utterance"
@@ -460,6 +480,23 @@ class GoogleMeetParticipantLeft(Event):
 
     contact: dict
     participant_name: str
+
+
+@dataclass
+class GoogleMeetChatMessage(Event):
+    """A participant posted in the Google Meet chat.
+
+    Kept distinct from an utterance because it is typed, not spoken: routing it
+    through the utterance path would record it in the call transcript as
+    something the participant said out loud.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
 
 
 @dataclass
@@ -509,7 +546,7 @@ class TeamsMeetEnded(Event):
 
 
 @dataclass
-class InboundTeamsMeetUtterance(Event):
+class InboundTeamsMeetUtterance(CallUtteranceEvent):
     """Utterance received from a participant during a Teams meeting."""
 
     topic: ClassVar[str | None] = "app:comms:teamsmeet_utterance"
@@ -526,7 +563,7 @@ class InboundTeamsMeetUtterance(Event):
 
 
 @dataclass
-class OutboundTeamsMeetUtterance(Event):
+class OutboundTeamsMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a Teams meeting."""
 
     topic: ClassVar[str | None] = "app:comms:teamsmeet_utterance"
@@ -554,6 +591,22 @@ class TeamsMeetParticipantLeft(Event):
 
     contact: dict
     participant_name: str
+
+
+@dataclass
+class TeamsMeetChatMessage(Event):
+    """A participant posted in the Teams meeting chat.
+
+    Unavailable in channel meetings, where the platform exposes no bot-readable
+    chat at all.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
 
 
 @dataclass
@@ -1152,7 +1205,7 @@ class PhoneCallSent(Event):
 
 
 @dataclass
-class OutboundPhoneUtterance(Event):
+class OutboundPhoneUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a phone call."""
 
     topic: ClassVar[str | None] = "app:comms:phone_utterance"
@@ -1162,7 +1215,7 @@ class OutboundPhoneUtterance(Event):
 
 
 @dataclass
-class OutboundUnifyMeetUtterance(Event):
+class OutboundUnifyMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a web-based voice/video meeting."""
 
     topic: ClassVar[str | None] = "app:comms:unify_utterance"
@@ -1174,7 +1227,7 @@ class OutboundUnifyMeetUtterance(Event):
 
 
 @dataclass
-class OutboundWhatsAppCallUtterance(Event):
+class OutboundWhatsAppCallUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a WhatsApp voice call."""
 
     topic: ClassVar[str | None] = "app:comms:whatsapp_call_utterance"

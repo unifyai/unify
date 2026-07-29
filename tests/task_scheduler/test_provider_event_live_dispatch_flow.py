@@ -19,7 +19,6 @@ from unify.task_scheduler.provider_event_dispatch import (
 )
 from unify.task_scheduler.prompt_builders import build_provider_event_run_guidelines
 from unify.task_scheduler.types.priority import Priority
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.task import Task
 from unify.task_scheduler.types.trigger import parse_task_trigger
 
@@ -94,7 +93,6 @@ def test_provider_event_context_is_marked_untrusted_data() -> None:
         instance_id=0,
         name="Triage",
         description="Triage issues",
-        status=Status.triggerable,
         priority=Priority.normal,
         trigger=parse_task_trigger(
             {

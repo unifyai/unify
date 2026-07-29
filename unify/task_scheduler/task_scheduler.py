@@ -7,10 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import functools
 import logging
 import os
-import random
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import (
     Any,
     Callable,
@@ -62,13 +61,17 @@ from .active_task import ActiveTask
 from .base import BaseTaskScheduler
 from .custom_tasks import (
     compute_custom_tasks_hash,
-    derive_initial_task_status,
 )
 from .machine_state import (
     TaskRunProvenance,
     TaskRunReference,
     build_task_run_key,
     consume_live_task_run_provenance,
+    create_or_adopt_live_task_run,
+    find_running_execution_for_task,
+    find_terminal_execution_for_task,
+    latest_scheduled_occurrence_for_task,
+    latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
     remember_live_task_run_provenance,
     update_task_run_record,
@@ -101,23 +104,19 @@ from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
 from .types.repetition import (
+    deterministic_jitter_seconds,
     Frequency,
     RepeatPattern,
     Weekday,
-    max_jitter_seconds,
     next_repeated_start_at,
     normalize_repeat_patterns,
 )
 from .types.schedule import Schedule
-from .types.status import Status, to_status
 from .types.task import Task, TaskBase
 from .types.task_row_field import split_provider_event_task_update
 from .types.run_source import RunSource
-from .types.execution import Delivery, Wake
+from .types.execution import Delivery, ExecutionState, Wake
 from .types.trigger import ProviderEventTrigger, TaskTrigger, parse_task_trigger
-from .provider_event_dispatch import (
-    PROVIDER_EVENT_OPERATION_INFO_PREFIX as _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
-)
 
 ScheduleLike = Optional[Union[Schedule, Dict[str, Any]]]
 TriggerLike = Optional[Union[TaskTrigger, Dict[str, Any]]]
@@ -178,17 +177,20 @@ class StaleActivationSuperseded(Exception):
     """
 
 
+# Columns definitions carried before run state moved to Tasks/Executions.
+# Dropped on read so rows written before the migration still load.
+_LEGACY_DEFINITION_FIELDS = frozenset({"status", "activated_by", "instance_id"})
+
+
 class TaskScheduler(BaseTaskScheduler):
     """Concrete scheduler backed by the Tasks context."""
-
-    _TERMINAL_STATUSES = {Status.completed, Status.cancelled, Status.failed}
 
     class Config:
         required_contexts = [
             TableContext(
                 name="Tasks",
                 description=(
-                    "List of all tasks with their name, description, status, "
+                    "List of all tasks with their name, description, "
                     "schedule, deadline, repeat pattern, and priority."
                 ),
                 fields=model_to_fields(Task),
@@ -1072,10 +1074,12 @@ class TaskScheduler(BaseTaskScheduler):
                 f"found {len(all_task_instances)} rows.",
             )
         task = all_task_instances[0]
-        if task.status in (Status.cancelled, Status.failed):
-            raise ValueError(f"No runnable task found with id={task_id}")
-        if task.status == Status.completed and task.repeat is None:
-            raise ValueError(f"No runnable task found with id={task_id}")
+        finished = self._one_shot_already_ran(task)
+        if finished is not None:
+            raise ValueError(
+                f"No runnable task found with id={task_id}: one-shot already ran "
+                f"(run_key={finished.run_key}).",
+            )
 
         # Concurrent instances of the same task_id are allowed. Only block when
         # execution provenance targets a row that is already active.
@@ -1132,25 +1136,44 @@ class TaskScheduler(BaseTaskScheduler):
             destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
         )
+        explicit_assistant_id = str(
+            SESSION_DETAILS.assistant.agent_id
+            or SESSION_DETAILS.assistant_context
+            or "",
+        ).strip()
+        if task_run_provenance is None and explicit_assistant_id:
+            # An explicit run has no dispatcher to remember provenance for it.
+            # Synthesize it so the run still materializes a Tasks/Executions
+            # row: run state lives only there now, so a run without one is
+            # invisible to every guard, listing and audit that reads it.
+            # Executions are assistant-owned in Orchestra, so a session with no
+            # assistant (unit tests) simply has no run ledger to write to.
+            task_run_provenance = TaskRunProvenance(
+                assistant_id=explicit_assistant_id,
+                task_id=int(task_id),
+                wake=task_run_wake,
+                delivery=Delivery.offline if task.offline else Delivery.live,
+                source_task_log_id=self._source_task_log_id(task_id),
+                revision=(
+                    str(task.task_revision) if task.task_revision is not None else None
+                ),
+                destination=task.destination,
+                task_name=task.name,
+                task_description=task.description,
+                attempt_token=trigger_attempt_token,
+            )
         if task_run_provenance and task_run_provenance.source_task_log_id is not None:
             task = self._get_task_for_source_log_id(
                 source_task_log_id=task_run_provenance.source_task_log_id,
                 expected_task_id=task_id,
             )
-            # Definition-only Tasks: concurrent Executions share one definition
-            # row, so ``active`` is allowed. Terminal rows are not runnable.
-            if task.status in (
-                Status.cancelled,
-                Status.failed,
-            ):
+            # Definitions carry intent only, so concurrent Executions against
+            # one row are expected. A run in flight never blocks the next wake;
+            # only a finished one-shot is unrunnable.
+            if self._one_shot_already_ran(task) is not None:
                 raise ValueError(
                     "Task definition is not runnable: "
-                    f"task_id={task.task_id}, status={task.status!r}.",
-                )
-            if task.status == Status.completed and task.repeat is None:
-                raise ValueError(
-                    "Task definition is not runnable: "
-                    f"task_id={task.task_id}, status={task.status!r}.",
+                    f"task_id={task.task_id} is a one-shot that already ran.",
                 )
             if _activated_by is None:
                 if task.trigger is not None:
@@ -1182,20 +1205,10 @@ class TaskScheduler(BaseTaskScheduler):
                 task=task,
                 wake=task_run_wake,
                 task_run_provenance=task_run_provenance,
-                state=Status.active.value,
+                state=ExecutionState.running.value,
             )
 
-        definition_rearmed = False
-        if task.status == Status.triggerable or (
-            task.repeat is not None and task.schedule_start_at is not None
-        ):
-            definition_rearmed = self._rearm_task_definition(task)
-
-        with self._use_task_destination(task.destination):
-            self._update_task_definition_status(
-                task_id=task_id,
-                new_status=Status.active,
-            )
+        self._project_next_occurrence(task)
 
         handle = await ActiveTask.create(
             fallback_actor,
@@ -1227,7 +1240,6 @@ class TaskScheduler(BaseTaskScheduler):
                 reason=reason,
             ),
             task_guidelines=build_task_run_guidelines(task, reason),
-            definition_rearmed=definition_rearmed,
         )
 
         return handle
@@ -1318,7 +1330,7 @@ class TaskScheduler(BaseTaskScheduler):
             task=definition,
             wake=Wake.provider_event,
             task_run_provenance=provenance,
-            state=Status.active.value,
+            state=ExecutionState.running.value,
         )
         entrypoint_kwargs["provider_event_context"] = provider_event_context
         entrypoint_kwargs["operation_id"] = request.operation_id
@@ -1380,12 +1392,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         rows = self._filter_tasks(filter=f"task_id == {task_id}", limit=1000)
         definitions = [
-            row
-            for row in rows
-            if self._task_has_provider_event_trigger(row)
-            and not str(row.info or "").startswith(
-                _PROVIDER_EVENT_OPERATION_INFO_PREFIX,
-            )
+            row for row in rows if self._task_has_provider_event_trigger(row)
         ]
         if definitions:
             return sorted(definitions, key=lambda row: row.instance_id)[0]
@@ -1411,107 +1418,132 @@ class TaskScheduler(BaseTaskScheduler):
             destination=destination,
         )
 
-    def _update_task_status_instance(
-        self,
-        *,
-        task_id: int,
-        instance_id: int,
-        new_status: str | Status,
-        activated_by: Optional[ActivatedBy] = None,
-    ) -> Dict[str, str]:
-        """Update the lifecycle status for one task instance."""
+    def _project_next_occurrence(self, task: Task) -> bool:
+        """Create the Execution row for this task's next occurrence.
 
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id} and instance_id == {instance_id}",
-                return_ids_only=False,
-            )
-            if not log_objs:
-                raise ValueError(f"No task instance ({task_id}.{instance_id}) found.")
-            if len(log_objs) != 1:
-                log_ids = [getattr(row, "id", None) for row in log_objs]
-                raise ValueError(
-                    "Task identity must resolve to one row for "
-                    f"task_id={task_id}, instance_id={instance_id}; "
-                    f"found {len(log_objs)} rows with log ids {log_ids}. "
-                    "Tasks holds one definition per task_id, so duplicates are "
-                    "pre-migration rows or hand-written identity fields; delete "
-                    "the stale row rather than renumbering instance_id.",
-                )
+        ``schedule.start_at`` is the series anchor and is never rewritten. The
+        next slot is derived from the newest occurrence the run ledger already
+        knows about, so every concurrent run computes the same timestamp; that
+        timestamp is baked into ``run_key``, and create-or-adopt turns the
+        second writer into an adopter instead of a racer. Nothing is written to
+        the definition, which is why a definition now carries authored intent
+        only.
 
-            new_status_enum = (
-                new_status
-                if isinstance(new_status, Status)
-                else Status(str(new_status))
-            )
-            entries: Dict[str, Any] = {"status": new_status_enum}
-            if new_status_enum == Status.active and activated_by is not None:
-                entries["activated_by"] = str(activated_by)
-            return self._write_log_entries(
-                logs=log_objs[0].id,
-                entries=entries,
-            )
-
-    def _rearm_task_definition(self, task: Task) -> bool:
-        """Advance the definition so the next open Execution can be projected.
-
-        Returns True when the definition was re-armed to another open slot
-        (scheduled or triggerable). Returns False when recurrence is exhausted
-        or the task is not a recurring/triggerable definition.
+        Returns True when a next occurrence exists (or the task is armed by a
+        trigger and needs none), False when recurrence is exhausted.
         """
 
-        updates: dict[str, Any] = {}
-        if task.repeat is not None and task.schedule_start_at is not None:
-            applied_prev = 0.0
-            if task.schedule is not None:
-                applied_prev = task.schedule.jitter_applied_seconds or 0.0
-            canonical_prev = task.schedule_start_at - timedelta(seconds=applied_prev)
-            # Advance exactly one slot from the occurrence that is starting.
-            # Wall-clock catch-up belongs to projection/due selection, not re-arm.
-            next_start_at = next_repeated_start_at(
-                previous_start=canonical_prev,
-                patterns=task.repeat,
-                current_occurrence_index=0,
-                now=canonical_prev,
-            )
-            if next_start_at is None:
-                return False
-            updates["status"] = Status.scheduled
-            schedule: dict[str, Any] = {"start_at": next_start_at.isoformat()}
-            jitter = max_jitter_seconds(task.repeat)
-            if jitter > 0:
-                applied = random.uniform(0.0, float(jitter))
-                jittered = next_start_at + timedelta(seconds=applied)
-                schedule["start_at"] = jittered.isoformat()
-                schedule["jitter_applied_seconds"] = applied
-            updates["schedule"] = schedule
-        elif task.trigger is not None:
-            updates["status"] = Status.triggerable
-        else:
+        if task.trigger is not None:
+            return True
+        if task.repeat is None or task.schedule_start_at is None:
             return False
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task.task_id}",
-                limit=1,
-                return_ids_only=False,
+
+        latest = latest_scheduled_occurrence_for_task(
+            task_id=int(task.task_id),
+            destination=task.destination,
+        )
+        previous_start = task.schedule_start_at
+        if latest:
+            try:
+                parsed = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if parsed > previous_start:
+                    previous_start = parsed
+        next_start_at = next_repeated_start_at(
+            previous_start=previous_start,
+            patterns=task.repeat,
+            current_occurrence_index=0,
+            now=previous_start,
+        )
+        if next_start_at is None:
+            return False
+        # The ledger records the *canonical* slot. Jitter spreads dispatch, it
+        # does not redefine the occurrence: baking it into scheduled_for makes
+        # the recorded time unrecoverable (the offset is seeded on the slot it
+        # is applied to), so each step would measure from a jittered value and
+        # the series would drift. Dispatch applies the offset instead.
+        scheduled_for = next_start_at.isoformat()
+        dispatch_offset = deterministic_jitter_seconds(
+            task_id=int(task.task_id),
+            slot=next_start_at,
+            patterns=task.repeat,
+        )
+
+        assistant_id = str(
+            SESSION_DETAILS.assistant.agent_id
+            or SESSION_DETAILS.assistant_context
+            or "",
+        ).strip()
+        if not assistant_id:
+            # Executions are assistant-owned; without one there is no ledger to
+            # project the next occurrence into.
+            return False
+        try:
+            create_or_adopt_live_task_run(
+                TaskRunProvenance(
+                    assistant_id=assistant_id,
+                    task_id=int(task.task_id),
+                    wake=Wake.scheduled,
+                    delivery=Delivery.offline if task.offline else Delivery.live,
+                    source_task_log_id=self._source_task_log_id(int(task.task_id)),
+                    revision=(
+                        str(task.task_revision)
+                        if task.task_revision is not None
+                        else None
+                    ),
+                    destination=task.destination,
+                    scheduled_for=scheduled_for,
+                    dispatch_offset_seconds=dispatch_offset,
+                    task_name=task.name,
+                    task_description=task.description,
+                ),
             )
-            if not log_objs:
-                raise ValueError(
-                    f"No task definition found for task_id={task.task_id}.",
-                )
-            self._write_log_entries(logs=log_objs[0].id, entries=updates)
+        except Exception:
+            # A run already in flight must not fail because the *next*
+            # occurrence could not be projected. Loud, because a series that
+            # stops projecting silently stops recurring.
+            logger.exception(
+                "Failed to project next occurrence (task_id=%s, scheduled_for=%s); "
+                "the series will not advance until this succeeds.",
+                task.task_id,
+                scheduled_for,
+            )
+            return False
         return True
 
-    def _update_task_definition_status(
-        self,
-        *,
-        task_id: int,
-        new_status: str | Status,
-    ) -> Dict[str, str]:
-        """Update the lifecycle status for one task definition row."""
+    def _one_shot_already_ran(self, task: Task) -> Any | None:
+        """The terminal execution of a finished one-shot, if it has run.
+
+        Derived rather than stored: "has this already run?" is a fact about the
+        run ledger, and keeping it there leaves the definition as pure authored
+        intent. Repeating and triggerable definitions are never "done" — their
+        next occurrence is always ahead of them.
+        """
+
+        if task.repeat is not None or task.trigger is not None:
+            return None
+        return find_terminal_execution_for_task(
+            task_id=int(task.task_id),
+            destination=task.destination,
+        )
+
+    def _mark_one_shot_completed(self, task_id: int) -> None:
+        """Disarm a finished one-shot.
+
+        No-op for repeating and triggerable definitions: they stay armed for
+        their next occurrence, and the outcome of the run that just finished
+        belongs on its ``Tasks/Executions`` row. This is the only path that
+        disarms a definition as a result of a run, and it can never apply to a
+        standing schedule.
+        """
 
         task = self._get_task_or_raise(task_id)
+        if task.repeat is not None or task.trigger is not None:
+            return
         with self._use_task_destination(task.destination):
             log_objs = self._store.get_rows(
                 filter=f"task_id == {task_id}",
@@ -1525,35 +1557,19 @@ class TaskScheduler(BaseTaskScheduler):
                     "Tasks definition must be unique for "
                     f"task_id={task_id}; found {len(log_objs)} rows with log ids {log_ids}.",
                 )
-
-            new_status_enum = (
-                new_status
-                if isinstance(new_status, Status)
-                else Status(str(new_status))
-            )
-            entries: Dict[str, Any] = {"status": new_status_enum}
-            return self._write_log_entries(
+            self._write_log_entries(
                 logs=log_objs[0].id,
-                entries=entries,
+                entries={"enabled": False},
             )
 
     def _validate_scheduled_invariants(
         self,
         *,
-        status: Status | str,
         schedule: ScheduleLike,
         trigger: TriggerLike = None,
         err_prefix: str = "Invalid task state:",
     ) -> None:
         """Validate the remaining scheduler invariants for task state."""
-
-        if isinstance(status, Status):
-            status_enum = status
-        else:
-            try:
-                status_enum = Status(str(status))
-            except Exception as exc:
-                raise ValueError(f"{err_prefix} invalid status {status!r}.") from exc
 
         start_at = None
         if isinstance(schedule, Schedule):
@@ -1561,34 +1577,63 @@ class TaskScheduler(BaseTaskScheduler):
         elif isinstance(schedule, dict):
             start_at = schedule.get("start_at")
 
-        if (
-            status_enum == Status.scheduled
-            and schedule is not None
-            and start_at is None
-        ):
+        if schedule is not None and trigger is None and start_at is None:
             raise ValueError(
-                f"{err_prefix} a task with status 'scheduled' must have a start_at timestamp.",
-            )
-        if status_enum == Status.triggerable and trigger is None:
-            raise ValueError(
-                f"{err_prefix} a task with status 'triggerable' must have a trigger.",
+                f"{err_prefix} a scheduled task must have a start_at timestamp.",
             )
 
+    def _source_task_log_id(self, task_id: int) -> int | None:
+        """Orchestra log id of one definition row, for execution provenance."""
+
+        task = self._get_task_or_raise(task_id)
+        with self._use_task_destination(task.destination):
+            log_objs = self._store.get_rows(
+                filter=f"task_id == {int(task_id)}",
+                limit=1,
+                return_ids_only=False,
+            )
+        return int(log_objs[0].id) if log_objs else None
+
+    def _running_execution(self, task_id: int) -> Any | None:
+        """The open execution for one definition, if a run is in flight."""
+
+        task = self._get_task_or_raise(task_id)
+        return find_running_execution_for_task(
+            task_id=int(task_id),
+            destination=task.destination,
+        )
+
+    def _cancel_open_executions(self, task_id: int) -> None:
+        """Terminalize any run still in flight for one definition."""
+
+        execution = self._running_execution(task_id)
+        if execution is None:
+            return
+        update_task_run_record(
+            latest_task_run_reference_for_source(
+                assistant_id=SESSION_DETAILS.assistant_context,
+                task_id=int(task_id),
+            ),
+            {
+                "state": ExecutionState.cancelled.value,
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
     def _ensure_not_active_task(self, task_ids: Union[int, List[int]]) -> None:
-        """Guard against mutating a task that currently has an active row."""
+        """Guard against mutating a definition whose run is in flight.
+
+        Reads ``Tasks/Executions`` rather than the definition: whether a run is
+        happening is a fact about the run.
+        """
 
         ids = [task_ids] if isinstance(task_ids, int) else list(task_ids)
         ids = [int(task_id) for task_id in ids]
-        if not ids:
-            return
-        active_rows = self._filter_tasks(
-            filter=f"task_id in {ids} and status == 'active'",
-            limit=1,
-        )
-        if active_rows:
-            raise RuntimeError(
-                f"Operation not permitted on the active task (task_id={active_rows[0].task_id})",
-            )
+        for task_id in ids:
+            if self._running_execution(task_id) is not None:
+                raise RuntimeError(
+                    f"Operation not permitted on the active task (task_id={task_id})",
+                )
 
     @overload
     def _get_logs_by_task_ids(
@@ -1650,7 +1695,6 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         name: str,
         description: str,
-        status: Optional[Status] = None,
         schedule: ScheduleLike = None,
         trigger: TriggerLike = None,
         deadline: Optional[Union[str, datetime]] = None,
@@ -1683,7 +1727,6 @@ class TaskScheduler(BaseTaskScheduler):
                 return self._create_task(
                     name=name,
                     description=description,
-                    status=status,
                     schedule=schedule,
                     trigger=trigger,
                     deadline=deadline,
@@ -1719,20 +1762,6 @@ class TaskScheduler(BaseTaskScheduler):
                         f"A task with {'description'!r} = {description!r} already exists",
                     )
 
-        explicit_status: Status | None = None
-        if status is not None:
-            if isinstance(status, Status):
-                explicit_status = status
-            else:
-                try:
-                    explicit_status = Status(str(status))
-                except Exception as exc:
-                    raise ValueError(f"Invalid status {status!r}.") from exc
-            if explicit_status == Status.active:
-                raise ValueError(
-                    "Tasks cannot be created directly in the 'active' state.",
-                )
-
         if schedule is not None and isinstance(schedule, dict):
             schedule = Schedule(**schedule)
         if trigger is not None and isinstance(trigger, dict):
@@ -1747,17 +1776,7 @@ class TaskScheduler(BaseTaskScheduler):
         if schedule is not None and trigger is not None:
             raise ValueError("`schedule` and `trigger` are mutually exclusive.")
 
-        if trigger is not None:
-            resolved_status = Status.triggerable
-        elif schedule is not None and schedule.start_at is not None:
-            resolved_status = Status.scheduled
-        elif explicit_status is not None:
-            resolved_status = explicit_status
-        else:
-            resolved_status = Status.scheduled
-
         self._validate_scheduled_invariants(
-            status=resolved_status,
             schedule=schedule,
             trigger=trigger,
             err_prefix="While creating a task:",
@@ -1770,7 +1789,6 @@ class TaskScheduler(BaseTaskScheduler):
             ),
             name=name,
             description=description,
-            status=resolved_status,
             schedule=schedule,
             trigger=trigger,
             deadline=deadline,
@@ -1854,7 +1872,6 @@ class TaskScheduler(BaseTaskScheduler):
             for key in (
                 "name",
                 "description",
-                "status",
                 "schedule",
                 "trigger",
                 "deadline",
@@ -1944,19 +1961,21 @@ class TaskScheduler(BaseTaskScheduler):
         }
 
     def _cancel_tasks(self, task_ids: List[int]) -> ToolOutcome:
-        """Cancel one or more tasks by id, marking them as cancelled.
+        """Cancel one or more tasks by id, disarming them permanently.
 
-        Raises if any requested task is currently active (running).  Raises
-        if any task id is already completed.  All other pending instances of
-        a recurring task are cancelled together.
+        Cancelling disarms the definition and terminalizes any open Executions.
+        A run already in flight is cancelled with it; cancellation is the one
+        operation that reaches into live runs, because the operator's intent is
+        to stop the work, not merely to stop the next wake.
         """
 
         requested_task_ids = list(dict.fromkeys(int(task_id) for task_id in task_ids))
-        self._ensure_not_active_task(requested_task_ids)
 
         missing: list[int] = []
         for task_id in requested_task_ids:
             task = self._get_task_or_raise(task_id)
+            if self._one_shot_already_ran(task) is not None:
+                raise ValueError(f"Cannot cancel completed task (id={task_id}).")
             with self._use_task_destination(task.destination):
                 logs = self._store.get_rows(
                     filter=f"task_id == {task_id}",
@@ -1965,17 +1984,11 @@ class TaskScheduler(BaseTaskScheduler):
                 if not logs:
                     missing.append(task_id)
                     continue
-                if any(
-                    str(log.entries.get("status")) == Status.completed.value
-                    for log in logs
-                ):
-                    raise ValueError(
-                        f"Cannot cancel completed task (id={task_id}).",
-                    )
                 self._write_log_entries(
                     logs=[int(log.id) for log in logs],
-                    entries={"status": Status.cancelled},
+                    entries={"enabled": False},
                 )
+            self._cancel_open_executions(task_id)
 
         if missing:
             raise ValueError(f"No matching task_ids resolved: {missing}")
@@ -1984,34 +1997,31 @@ class TaskScheduler(BaseTaskScheduler):
             "details": {"task_ids": requested_task_ids},
         }
 
-    def _update_task_status(
+    def _set_tasks_enabled(
         self,
         *,
         task_ids: Union[int, List[int]],
-        new_status: Status,
+        enabled: bool,
     ) -> Dict[str, str]:
-        """Change the lifecycle status of one or many tasks."""
+        """Arm or disarm one or many definitions.
+
+        Disarming stops the next wake and leaves runs in flight alone. Use
+        :meth:`_cancel_tasks` when the intent is to stop current work too.
+        """
 
         ids = [task_ids] if isinstance(task_ids, int) else list(task_ids)
         ids = [int(task_id) for task_id in ids]
         if not ids:
             return {"detail": "No updates"}
 
-        if new_status == Status.active:
-            raise ValueError(
-                "Direct status changes to 'active' are not allowed; use the dedicated activation method.",
-            )
-        self._ensure_not_active_task(ids)
-
         last_result: Dict[str, str] = {"detail": "No updates"}
         for task_id in ids:
             task = self._get_task_or_raise(task_id)
-            self._validate_scheduled_invariants(
-                status=new_status,
-                schedule=task.schedule,
-                trigger=task.trigger,
-                err_prefix=f"While changing status of task {task.task_id}:",
-            )
+            if enabled and self._one_shot_already_ran(task) is not None:
+                raise ValueError(
+                    f"Task {task_id} is a one-shot that already ran and cannot "
+                    "be re-armed; create a new task instead of re-running it.",
+                )
             with self._use_task_destination(task.destination):
                 log_ids = self._store.get_rows(
                     filter=f"task_id == {task_id}",
@@ -2019,7 +2029,7 @@ class TaskScheduler(BaseTaskScheduler):
                 )
                 last_result = self._write_log_entries(
                     logs=log_ids,
-                    entries={"status": new_status},
+                    entries={"enabled": enabled},
                 )
         return last_result
 
@@ -2029,7 +2039,6 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         name: Optional[str] = None,
         description: Optional[str] = None,
-        status: Optional[Union[Status, str]] = None,
         start_at: Optional[Union[str, datetime]] = None,
         deadline: Optional[Union[str, datetime]] = None,
         repeat: Optional[List[Union[RepeatPattern, Dict[str, Any]]]] = None,
@@ -2065,7 +2074,6 @@ class TaskScheduler(BaseTaskScheduler):
                     task_id=task_id,
                     name=name,
                     description=description,
-                    status=status,
                     start_at=start_at,
                     deadline=deadline,
                     repeat=repeat,
@@ -2092,7 +2100,6 @@ class TaskScheduler(BaseTaskScheduler):
         if (
             name is None
             and description is None
-            and status is None
             and start_at is None
             and deadline is None
             and repeat is None
@@ -2124,30 +2131,6 @@ class TaskScheduler(BaseTaskScheduler):
                 )
             schedule_payload = {"start_at": start_at}
 
-        desired_status: Optional[Status] = None
-        if status is not None:
-            if isinstance(status, Status):
-                status_enum = status
-            else:
-                try:
-                    status_enum = Status(str(status))
-                except Exception as exc:
-                    raise ValueError(f"Invalid status {status!r}.") from exc
-            if status_enum == Status.active:
-                raise ValueError(
-                    "Direct status changes to 'active' are not allowed; use the execution method.",
-                )
-            desired_status = status_enum
-        elif trigger_provided and trigger is not None:
-            desired_status = Status.triggerable
-        elif (
-            schedule_payload is not None
-            and schedule_payload.get("start_at") is not None
-        ):
-            desired_status = Status.scheduled
-        elif trigger_provided and trigger is None and task.status == Status.triggerable:
-            desired_status = Status.scheduled
-
         prospective_trigger: TriggerLike
         if not trigger_provided:
             prospective_trigger = task.trigger
@@ -2164,13 +2147,8 @@ class TaskScheduler(BaseTaskScheduler):
         if prospective_schedule is not None and prospective_trigger is not None:
             raise ValueError("A task cannot have both a schedule and a trigger.")
 
-        if (
-            desired_status is not None
-            or schedule_payload is not None
-            or trigger_provided
-        ):
+        if schedule_payload is not None or trigger_provided:
             self._validate_scheduled_invariants(
-                status=desired_status if desired_status is not None else task.status,
                 schedule=prospective_schedule,
                 trigger=prospective_trigger,
                 err_prefix=f"While updating task {task_id}:",
@@ -2215,8 +2193,6 @@ class TaskScheduler(BaseTaskScheduler):
                 entries["trigger"] = prospective_trigger
         if schedule_payload is not None:
             entries["schedule"] = schedule_payload
-        if desired_status is not None:
-            entries["status"] = desired_status
         if entrypoint is not _UNSET:
             if entrypoint is None:
                 entries["entrypoint"] = None
@@ -2331,28 +2307,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return {"detail": "No-op provider-event task update."}
 
-    def _update_task_definition_info(
-        self,
-        *,
-        task_id: int,
-        info: str,
-    ) -> Dict[str, str]:
-        """Write the execution summary onto the task definition row."""
-
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id}",
-                limit=1,
-                return_ids_only=False,
-            )
-            if not log_objs:
-                raise ValueError(f"No task definition found for task_id={task_id}.")
-            return self._write_log_entries(
-                logs=log_objs[0].id,
-                entries={"info": info},
-            )
-
     def _update_task_instance(
         self,
         *,
@@ -2375,37 +2329,13 @@ class TaskScheduler(BaseTaskScheduler):
                 )
 
             log_to_update = log_objs[0]
-            current_row = dict(log_to_update.entries or {})
-            if to_status(current_row.get("status")) == Status.active:
+            if self._running_execution(task_id) is not None:
                 return {
                     "outcome": "skipped",
-                    "reason": "Cannot update active task instance directly",
+                    "reason": "Cannot update a task while a run is in flight",
                 }
 
             entries_to_write: Dict[str, Any] = {}
-            current_schedule = current_row.get("schedule")
-            current_trigger = current_row.get("trigger")
-
-            if "status" in kwargs:
-                raw_status = kwargs["status"]
-                if isinstance(raw_status, Status):
-                    new_status = raw_status
-                else:
-                    try:
-                        new_status = Status(str(raw_status))
-                    except Exception as exc:
-                        raise ValueError(f"Invalid status {raw_status!r}.") from exc
-                if new_status == Status.active:
-                    raise ValueError(
-                        "Direct status changes to 'active' are not allowed.",
-                    )
-                self._validate_scheduled_invariants(
-                    status=new_status,
-                    schedule=current_schedule,
-                    trigger=current_trigger,
-                    err_prefix=f"While updating instance {task_id}.{instance_id}:",
-                )
-                entries_to_write["status"] = new_status
 
             if "info" in kwargs:
                 entries_to_write["info"] = kwargs["info"]
@@ -3176,30 +3106,22 @@ class TaskScheduler(BaseTaskScheduler):
     ) -> Union[Dict[str, Any], Task]:
         """Prepare a task row for ``Task`` construction after an Orchestra read.
 
-        Clears ``activated_by`` on pre-activation rows (active/terminal statuses
-        keep the activation reason). Also drops keys whose value is ``None``:
-        Orchestra ``get_logs`` / ``include_fields`` returns explicit null for
-        unset columns, and Pydantic v2 does not apply ``Field(default=…)`` when
-        the key is present with ``None`` (e.g. ``offline`` / ``enabled``).
-        """
-        keep_statuses = {
-            Status.active,
-            Status.completed,
-            Status.cancelled,
-            Status.failed,
-        }
+        Drops ``status`` and ``activated_by``, which definitions no longer
+        carry: run state lives on ``Tasks/Executions``. Rows written before the
+        migration still have those columns, and a read must not fail on one.
 
+        Also drops keys whose value is ``None``: Orchestra ``get_logs`` /
+        ``include_fields`` returns explicit null for unset columns, and Pydantic
+        v2 does not apply ``Field(default=…)`` when the key is present with
+        ``None`` (e.g. ``offline`` / ``enabled``).
+        """
         if isinstance(task, Task):
-            if task.status not in keep_statuses:
-                task.activated_by = None
             return task
-        try:
-            if to_status(task.get("status")) not in keep_statuses:  # type: ignore[arg-type]
-                task.pop("activated_by", None)
-        except Exception:
-            if str(task.get("status")) not in {s.value for s in keep_statuses}:
-                task.pop("activated_by", None)
-        return {key: value for key, value in task.items() if value is not None}
+        return {
+            key: value
+            for key, value in task.items()
+            if value is not None and key not in _LEGACY_DEFINITION_FIELDS
+        }
 
     def _meta_context_for_destination(self, destination: str | None) -> str:
         """Resolve a public destination into one concrete Tasks/Meta context."""
@@ -3387,7 +3309,6 @@ class TaskScheduler(BaseTaskScheduler):
         task_id: int,
         data: Dict[str, Any],
         function_name_to_id: Dict[str, int],
-        current_status: Status,
     ) -> None:
         payload = dict(data)
         custom_key = payload.pop("custom_key")
@@ -3426,25 +3347,16 @@ class TaskScheduler(BaseTaskScheduler):
                 else:
                     entrypoint = resolved
 
-        desired_status = None
-        if current_status in (Status.scheduled, Status.triggerable):
-            desired_status = derive_initial_task_status(
-                schedule=schedule,
-                trigger=trigger,
-            )
-
         self._ensure_not_active_task(task_id)
 
         if schedule is not None and trigger is not None:
             raise ValueError("A task cannot have both a schedule and a trigger.")
 
-        if desired_status is not None:
-            self._validate_scheduled_invariants(
-                status=desired_status,
-                schedule=schedule,
-                trigger=trigger,
-                err_prefix=f"While updating custom task {task_id}:",
-            )
+        self._validate_scheduled_invariants(
+            schedule=schedule,
+            trigger=trigger,
+            err_prefix=f"While updating custom task {task_id}:",
+        )
 
         entries: Dict[str, Any] = {
             "custom_key": custom_key,
@@ -3481,8 +3393,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         if entrypoint is not _UNSET:
             entries["entrypoint"] = entrypoint
-        if desired_status is not None:
-            entries["status"] = desired_status
 
         entries = {key: value for key, value in entries.items() if value is not _UNSET}
 
@@ -3535,10 +3445,10 @@ class TaskScheduler(BaseTaskScheduler):
                 logger.debug("Custom task unchanged: %s", custom_key)
                 return
             task_id = int(db_entry["task_id"])
-            current_status = to_status(db_entry.get("status"))
-            if current_status == Status.active:
+            if self._running_execution(task_id) is not None:
                 logger.warning(
-                    "Skipping update for active custom task key=%s task_id=%s",
+                    "Skipping update for custom task with a run in flight "
+                    "key=%s task_id=%s",
                     custom_key,
                     task_id,
                 )
@@ -3549,7 +3459,6 @@ class TaskScheduler(BaseTaskScheduler):
                     task_id=task_id,
                     data=task_data,
                     function_name_to_id=function_name_to_id,
-                    current_status=current_status,
                 )
             except RuntimeError:
                 logger.warning(

@@ -301,11 +301,16 @@ async def test_unify_meet_started_requests_recording_with_session_id(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_name", ["GoogleMeetStarted", "TeamsMeetStarted"])
-async def test_browser_meets_never_request_recording(monkeypatch, event_name):
-    """Browser-meet audio never reaches the LiveKit room, so egress cannot work.
+async def test_browser_meets_request_recording_keyed_on_the_meet_session(
+    monkeypatch,
+    event_name,
+):
+    """Browser meets are recorded now that the meeting is a published track.
 
-    Requesting it anyway is what left compositors waiting on rooms for up to an
-    hour before aborting with no file.
+    They were excluded while their audio was bridged through a pod-local device
+    and never reached the LiveKit room, leaving the compositor nothing to mix.
+    The linkage key is the meet session id -- the same key the utterances are
+    written under -- because browser meets carry no telephony identifiers.
     """
     from unify.conversation_manager.domains import event_handlers
     from unify.conversation_manager import utils as cm_utils
@@ -316,12 +321,19 @@ async def test_browser_meets_never_request_recording(monkeypatch, event_name):
 
     event_cls = getattr(events, event_name)
     cm = _recording_cm(room_name="unity_42_gmeet")
+    cm.call_manager.meet_session_id = "meet-sess-1"
     await event_handlers._start_session_recording(
         event_cls(contact={"contact_id": 2}),
         cm,
     )
 
-    start.assert_not_called()
+    start.assert_called_once()
+    args, kwargs = start.call_args
+    assert args[0] == "unity_42_gmeet"
+    assert kwargs["call_session_id"] == "meet-sess-1"
+    # No telephony leg, so these stay empty rather than leaking phone state.
+    assert kwargs["provider_call_sid"] == ""
+    assert kwargs["conference_name"] == ""
 
 
 @pytest.mark.asyncio

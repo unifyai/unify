@@ -31,17 +31,14 @@ _TASKS_DATA: List[Dict[str, str]] = [
     {
         "name": "Write quarterly report",
         "description": "Draft the Q2 report (send email to finance).",
-        "status": "scheduled",
     },
     {
         "name": "Prepare slide deck",
         "description": "Create slides for the board meeting. Email once done.",
-        "status": "scheduled",
     },
     {
         "name": "Client follow-up email",
         "description": "Send email to prospective client about proposal.",
-        "status": "cancelled",
     },
 ]
 

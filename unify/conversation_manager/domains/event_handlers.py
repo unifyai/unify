@@ -294,17 +294,14 @@ def _active_voice_thread_medium(cm: "ConversationManager") -> Medium:
 async def _start_session_recording(event, cm: "ConversationManager") -> None:
     """Request a recording for the LiveKit room backing a just-started session.
 
-    Browser meets (Google Meet / Teams) are not requested at all: their audio
-    is bridged through the agent-service audio device and never reaches the
-    LiveKit room, so there is nothing for the compositor to mix. The gateway
-    enforces the same rule, this just avoids the pointless hop.
+    Browser meets are included. They were excluded while their audio was
+    bridged through a pod-local audio device and never entered the LiveKit
+    room, leaving the compositor nothing to mix; the meeting now arrives as an
+    ordinary published track, so a room composite captures both sides.
 
     Best-effort throughout -- a recording problem must never disturb a live
     call, so every failure is logged and swallowed.
     """
-    if isinstance(event, (GoogleMeetStarted, TeamsMeetStarted)):
-        return
-
     from unify.settings import SETTINGS
 
     if (
@@ -332,6 +329,13 @@ async def _start_session_recording(event, cm: "ConversationManager") -> None:
         call_session_id = call_manager.unify_meet_call_session_id or (
             event.call_session_id or ""
         )
+        provider_call_sid = ""
+        conference_name = ""
+    elif isinstance(event, (GoogleMeetStarted, TeamsMeetStarted)):
+        # Same key the utterances are written under, so the finished recording
+        # resolves to the transcript of the meeting it came from. Browser meets
+        # have no telephony identifiers.
+        call_session_id = call_manager.meet_session_id
         provider_call_sid = ""
         conference_name = ""
     else:
@@ -1084,8 +1088,7 @@ async def _(
     # LiveKit room is known to exist and carry audio, which is what the Room
     # Composite Egress compositor waits for. Started earlier (at SIP bridge
     # setup or agent dispatch) it races the join and LiveKit kills the job with
-    # "Start signal not received", producing no file. Browser meets are excluded
-    # by the gateway: their audio never enters the LiveKit room.
+    # "Start signal not received", producing no file.
     #
     # Detached deliberately: the request is a gateway round-trip that ends in a
     # LiveKit API call, and everything below (the outbound call_answered status,
@@ -1172,6 +1175,40 @@ async def _(
         thread_name=medium,
         message_content=f"<{label}>",
         role="system",
+        timestamp=event.timestamp,
+    )
+
+
+@EventHandler.register((GoogleMeetChatMessage, TeamsMeetChatMessage))
+async def _(
+    event: GoogleMeetChatMessage | TeamsMeetChatMessage,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Surface a meeting-chat message to the brain as conversation context.
+
+    Deliberately not written to the call-utterance store: that is the record of
+    what was *said* on the call, and a typed message logged there would read as
+    speech. It lands in the contact thread instead, where the brain sees it with
+    its provenance intact and can answer a question someone pasted rather than
+    spoke.
+    """
+    medium = (
+        Medium.GOOGLE_MEET
+        if isinstance(event, GoogleMeetChatMessage)
+        else Medium.TEAMS_MEET
+    )
+    label = f"{event.sender_name} in meeting chat: {event.content}"
+    cm.notifications_bar.push_notif("Comms", label, event.timestamp)
+
+    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
+    cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=event.sender_name,
+        thread_name=medium,
+        message_content=f"<meeting chat> {event.content}",
+        role="user",
         timestamp=event.timestamp,
     )
 
@@ -1619,15 +1656,25 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
         local_message_id=message_id,
     )
 
-    # Unify Meet transcripts are first-class: Console reads them from
-    # Orchestra's call-utterance store, so every utterance is appended there
-    # in addition to the Transcripts mirror above. Every meet has a call
-    # session; its id is the only utterance key.
-    if is_unify_meet:
-        call_key = cm.call_manager.unify_meet_call_session_id
+    # Meet transcripts are first-class: Console reads them from Orchestra's
+    # call-utterance store, so every utterance is appended there in addition to
+    # the Transcripts mirror above.
+    #
+    # Browser meets are included now that their speaker names come from the
+    # meeting platform rather than a screen scrape -- before, the only names
+    # available were voice-cluster placeholders, and writing those into the
+    # permanent record would have been worse than writing nothing. Their key is
+    # the bot id: ``call_utterance.call_id`` is an opaque string, and readers
+    # group by it rather than joining a session row.
+    if is_unify_meet or is_google_meet or is_teams_meet:
+        call_key = (
+            cm.call_manager.unify_meet_call_session_id
+            if is_unify_meet
+            else cm.call_manager.meet_session_id
+        )
         if not call_key:
             LOGGER.error(
-                "Unify Meet utterance dropped from the call store: no call "
+                f"{medium.value} utterance dropped from the call store: no "
                 "session id on the active meet",
             )
         if call_key:
@@ -1644,8 +1691,34 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     and SESSION_DETAILS.assistant.agent_id is not None
                     else None
                 ),
+                # `spoken_at` stays the commit instant: it orders the store
+                # and predates this change. The audible start rides alongside
+                # it, so a reader can place the line in the recording without
+                # the meaning of an existing column shifting underneath it.
                 "spoken_at": event.timestamp.isoformat(),
-                "metadata": {"contact_id": contact_id},
+                "metadata": {
+                    key: value
+                    for key, value in {
+                        "contact_id": contact_id,
+                        # Who was in the meeting when this line was said. The
+                        # platform reports names but, for bots created through
+                        # the Create Bot API, no emails -- so the roster is the
+                        # only record of who could have spoken, and it is worth
+                        # keeping per line because attendance changes mid-call.
+                        # ``or None`` so an empty roster is dropped rather than
+                        # stored as an empty list.
+                        "participant_names": (
+                            list(getattr(event, "participant_names", None) or [])
+                            or None
+                        ),
+                        "speech_started_at": getattr(
+                            event,
+                            "speech_started_at",
+                            None,
+                        ),
+                    }.items()
+                    if value is not None
+                },
             }
             asyncio.create_task(
                 asyncio.to_thread(

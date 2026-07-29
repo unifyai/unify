@@ -1,7 +1,7 @@
 from tests.helpers import _handle_project
 from unify.task_scheduler.task_scheduler import TaskScheduler
 import pytest
-from unify.task_scheduler.types.status import Status
+from types import SimpleNamespace
 
 
 @_handle_project
@@ -20,7 +20,7 @@ def test_cancel_single_task():
 
     # Verify the task was cancelled
     tasks = ts._filter_tasks()
-    assert tasks[0].status == Status.cancelled
+    assert tasks[0].enabled is False
 
 
 @_handle_project
@@ -43,23 +43,47 @@ def test_cancel_multiple_tasks():
 
     # Verify both tasks were cancelled
     tasks = ts._filter_tasks()
-    status_by_id = {t.task_id: t.status for t in tasks}
-    assert status_by_id[0] == Status.cancelled
-    assert status_by_id[1] == Status.cancelled
+    armed_by_id = {t.task_id: t.enabled for t in tasks}
+    assert armed_by_id[0] is False
+    assert armed_by_id[1] is False
 
 
 @_handle_project
-def test_cancel_completed_task_raises():
-    """Attempting to cancel a task that is already completed should raise a ValueError."""
+def test_cancel_completed_task_raises(monkeypatch):
+    """Cancelling a one-shot that already ran is rejected.
+
+    "Already ran" is derived from a terminal Tasks/Executions row, so the run
+    ledger is stubbed here — a session without an assistant has no ledger of
+    its own to write to.
+    """
     ts = TaskScheduler()
 
-    # Create a task that is already completed
-    ts._create_task(
+    task_id = ts._create_task(
         name="Ship version 1.0",
         description="Publish release notes and push tags.",
-        status="completed",
+    )["details"]["task_id"]
+
+    monkeypatch.setattr(
+        "unify.task_scheduler.task_scheduler.find_terminal_execution_for_task",
+        lambda **kwargs: SimpleNamespace(run_key="run-done", state="completed"),
     )
 
-    # Expect a ValueError when trying to cancel it
-    with pytest.raises(ValueError):
-        ts._cancel_tasks([0])
+    with pytest.raises(ValueError, match="completed"):
+        ts._cancel_tasks([task_id])
+
+
+@_handle_project
+def test_cancel_disarmed_task_without_a_run_is_allowed():
+    """A paused one-shot has no terminal run, so it stays cancellable."""
+    ts = TaskScheduler()
+
+    task_id = ts._create_task(
+        name="Paused release",
+        description="Not started yet.",
+    )[
+        "details"
+    ]["task_id"]
+    ts._set_tasks_enabled(task_ids=task_id, enabled=False)
+
+    ts._cancel_tasks([task_id])
+    assert ts._filter_tasks(filter=f"task_id == {task_id}")[0].enabled is False

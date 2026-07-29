@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from tests.actor.state_managers.utils import make_code_act_actor
-from unify.task_scheduler.types.status import Status
 
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
@@ -39,7 +38,7 @@ async def test_code_act_creates_live_recurring_task_with_null_entrypoint():
         assert task.entrypoint is None
         assert task.schedule is not None
         assert task.repeat is not None
-        assert task.status == Status.scheduled
+        assert task.enabled is True
 
 
 @pytest.mark.asyncio
@@ -73,4 +72,4 @@ async def test_code_act_creates_live_triggerable_task_with_null_entrypoint():
         assert task.offline is False
         assert task.entrypoint is None
         assert task.trigger is not None
-        assert task.status == Status.triggerable
+        assert task.trigger is not None
