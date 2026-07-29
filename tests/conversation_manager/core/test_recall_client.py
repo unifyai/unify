@@ -95,6 +95,18 @@ def test_unknown_region_fails_loudly() -> None:
             recall.recall_base_url()
 
 
+def test_default_region_matches_our_workspace() -> None:
+    """Pods get no RECALL_REGION, so the default is what hosted joins use.
+
+    Our workspace is in Frankfurt. Defaulting elsewhere would point every
+    hosted join at a deployment our key is not valid in, which reads as bad
+    credentials rather than a wrong region.
+    """
+    with patch.dict("os.environ", {"RECALL_REGION": ""}, clear=False):
+        assert recall.recall_region() == "eu-central-1"
+        assert recall.recall_base_url() == "https://eu-central-1.recall.ai/api/v1"
+
+
 def test_region_drives_the_base_url() -> None:
     with patch.dict("os.environ", {"RECALL_REGION": "us-east-1"}, clear=False):
         assert recall.recall_base_url() == "https://us-east-1.recall.ai/api/v1"
