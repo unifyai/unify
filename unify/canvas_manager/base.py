@@ -746,6 +746,75 @@ class BaseCanvasManager:
         raise NotImplementedError
 
     @abstractmethod
+    def run_invocation(
+        self,
+        invocation_id: int,
+        *,
+        token: str,
+    ) -> CanvasInvocationRecord:
+        """
+        Execute one action run a viewer requested from a canvas.
+
+        Called when a viewer presses a control, not by a plan. The request was
+        already validated and recorded before it reached here, so this resolves
+        the declared target, runs it, and records what happened.
+
+        The arguments come from the stored run rather than from a caller, which is
+        the whole reason the run is persisted: neither available execution path
+        accepts a payload, so the record carries them.
+
+        Parameters
+        ----------
+        invocation_id : int
+            Identifier of the recorded run to execute.
+        token : str
+            Canvas the run belongs to. Runs are scoped to their canvas, so an
+            identifier from one canvas cannot be executed through another.
+
+        Returns
+        -------
+        CanvasInvocationRecord
+            The completed run, with ``status`` ``succeeded`` or ``failed``,
+            ``result`` or ``error``, and ``finished_at`` set.
+
+        Raises
+        ------
+        ValueError
+            If the run does not exist on this canvas, or the action it names is no
+            longer declared.
+
+        Examples
+        --------
+        Re-run a failed action after fixing its cause::
+
+            failed = [
+                run for run in primitives.canvas.list_invocations(token)
+                if run.status == "failed"
+            ]
+            for run in failed:
+                primitives.canvas.run_invocation(run.invocation_id, token=token)
+
+        Anti-patterns
+        -------------
+        - **Do not call this to perform work of your own.** It executes what a
+          viewer asked for, with their arguments. To do something yourself, call
+          the function or task directly.
+        - **Do not use it to retry a run that is still going.** A run already in
+          flight is left alone; check ``status`` first.
+
+        Notes
+        -----
+        A run that has already succeeded is returned unchanged rather than
+        repeated. Re-running a completed send because a message was redelivered is
+        the failure this prevents.
+
+        See Also
+        --------
+        list_invocations : See what viewers have triggered and how it went.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def list_invocations(
         self,
         token: str,
