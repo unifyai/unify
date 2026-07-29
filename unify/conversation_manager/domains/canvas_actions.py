@@ -21,6 +21,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from unify.conversation_manager.domains import comms_utils
 from unify.conversation_manager.events import CanvasInvocationRequested
 
 if TYPE_CHECKING:
@@ -65,7 +66,24 @@ async def handle_canvas_invocation_requested(
             event.invocation_id,
             event.canvas_token,
         )
+        # The control still has to stop saying "working". A run that could not start
+        # is a failure the viewer needs to see, not one to leave to the log.
+        comms_utils.publish_canvas_invocation(
+            token=event.canvas_token,
+            invocation_id=event.invocation_id,
+            action_name="",
+            status="failed",
+            error="This action could not be started.",
+        )
         return False
+
+    comms_utils.publish_canvas_invocation(
+        token=event.canvas_token,
+        invocation_id=event.invocation_id,
+        action_name=record.action_name,
+        status=record.status,
+        error=record.error,
+    )
 
     if record.status == "failed":
         LOGGER.warning(
