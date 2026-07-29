@@ -23,10 +23,16 @@ import aiohttp
 
 LOGGER = logging.getLogger(__name__)
 
-# Recall deployments. us-west-2 is the pay-as-you-go region and where
-# self-serve signup lands; the others are separate accounts entirely.
+# Recall deployments. Each is a wholly separate installation: an API key issued
+# in one is invalid in the others, and resources do not cross between them.
 RECALL_REGIONS = ("us-west-2", "us-east-1", "eu-central-1", "ap-northeast-1")
-DEFAULT_RECALL_REGION = "us-west-2"
+
+# Our workspace lives in eu-central-1 (Frankfurt), so that is the default rather
+# than the region self-serve signup happens to land in. This is not cosmetic:
+# ``RECALL_REGION`` is not injected into assistant pods, so a wrong default
+# sends every hosted join to a deployment our key is not valid in -- which
+# surfaces as an authentication failure, not as anything region-shaped.
+DEFAULT_RECALL_REGION = "eu-central-1"
 
 # A create/leave round trip is a control-plane call against Recall, not the
 # meeting itself, so it should either answer quickly or be retried by the
