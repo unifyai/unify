@@ -70,12 +70,12 @@ from .machine_state import (
     TaskRunReference,
     build_task_run_key,
     consume_live_task_run_provenance,
-    create_or_adopt_live_task_run,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
     latest_scheduled_occurrence_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
+    project_task_occurrence,
     remember_live_task_run_provenance,
     update_task_run_record,
 )
@@ -1524,7 +1524,7 @@ class TaskScheduler(BaseTaskScheduler):
             # project the next occurrence into.
             return False
         try:
-            create_or_adopt_live_task_run(
+            project_task_occurrence(
                 TaskRunProvenance(
                     assistant_id=assistant_id,
                     task_id=int(task.task_id),

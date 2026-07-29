@@ -446,6 +446,32 @@ def create_or_adopt_live_task_run(
 ) -> TaskRunReference | None:
     """Create or adopt one live execution row at the moment execution begins."""
 
+    return _create_or_adopt_task_run(
+        provenance,
+        state=ExecutionState.running,
+        started_at=started_at or _now_iso(),
+    )
+
+
+def project_task_occurrence(provenance: TaskRunProvenance) -> TaskRunReference | None:
+    """Create or adopt the pending execution row for one future occurrence.
+
+    A projected occurrence has not started: it is ``scheduled`` with no
+    ``started_at``, so overlap guards ignore it and dispatch owns the moment it
+    actually begins. Projecting it as a running row made every successor look
+    like a live concurrent run the instant its predecessor started, and the
+    predecessor and successor then overlap-skipped each other forever.
+    """
+
+    return _create_or_adopt_task_run(provenance, state=ExecutionState.scheduled)
+
+
+def _create_or_adopt_task_run(
+    provenance: TaskRunProvenance,
+    *,
+    state: ExecutionState,
+    started_at: str | None = None,
+) -> TaskRunReference | None:
     run_key = build_task_run_key(provenance)
     response_body = _orchestra_admin_post(
         _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
@@ -458,7 +484,11 @@ def create_or_adopt_live_task_run(
                 "source_task_log_id": provenance.source_task_log_id,
                 "wake": provenance.wake.value,
                 "delivery": provenance.delivery.value,
-                "revision": provenance.revision,
+                # The digest inside run_key hashed str(revision or ""), so the
+                # row must carry the same value the dispatcher will rebuild the
+                # key from at fire time. Dropping a None here would leave the
+                # dispatcher hashing a value the row never stored.
+                "revision": str(provenance.revision or ""),
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
                 "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
@@ -468,8 +498,8 @@ def create_or_adopt_live_task_run(
                 "source_contact_display_name": provenance.source_contact_display_name,
                 "task_name": provenance.task_name,
                 "task_description": provenance.task_description,
-                "started_at": started_at or _now_iso(),
-                "state": ExecutionState.running.value,
+                "started_at": started_at,
+                "state": state.value,
             },
         ),
     )
