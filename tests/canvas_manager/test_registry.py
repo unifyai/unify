@@ -35,6 +35,7 @@ PUBLIC_METHODS = (
     "list_views",
     "delete_view",
     "preview",
+    "run_invocation",
     "list_invocations",
 )
 

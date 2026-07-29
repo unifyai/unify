@@ -268,3 +268,99 @@ class TestDocstringContract:
         from unify.canvas_manager.base import BaseCanvasManager
 
         assert section in (BaseCanvasManager.create_view.__doc__ or "")
+
+
+class TestRunInvocation:
+    """Bookkeeping around one action run.
+
+    The lanes themselves need a real FunctionManager and venv, which is the
+    infrastructure the simulated manager exists to avoid. What is worth testing
+    without them is everything around the dispatch — and every case here is a way
+    a viewer's action could be run twice, or run against something the canvas no
+    longer declares.
+    """
+
+    def _canvas_with_action(self, canvas_manager, valid_tsx):
+        from unify.canvas_manager.types.action import CanvasAction
+
+        result = canvas_manager.create_view(
+            valid_tsx,
+            title="Actionable",
+            actions=[
+                CanvasAction(
+                    name="notify",
+                    label="Send the update",
+                    function_name="send_update",
+                ),
+            ],
+        )
+        assert result.token, result.error
+        return result.token
+
+    def test_a_pending_run_settles(self, canvas_manager, valid_tsx):
+        token = self._canvas_with_action(canvas_manager, valid_tsx)
+        run = canvas_manager.record_invocation(token, action_name="notify")
+
+        settled = canvas_manager.run_invocation(run.invocation_id, token=token)
+
+        assert settled.status == "succeeded"
+        assert settled.finished_at
+
+    def test_a_completed_run_is_not_repeated(self, canvas_manager, valid_tsx):
+        """A redelivered event must not send the same email twice.
+
+        At-least-once delivery makes this the normal case rather than an edge one,
+        so the run has to be idempotent on its own terms and not only behind the
+        idempotency key that created it.
+        """
+        token = self._canvas_with_action(canvas_manager, valid_tsx)
+        run = canvas_manager.record_invocation(token, action_name="notify")
+
+        first = canvas_manager.run_invocation(run.invocation_id, token=token)
+        finished_at = first.finished_at
+        again = canvas_manager.run_invocation(run.invocation_id, token=token)
+
+        assert again.status == "succeeded"
+        # Unchanged, so nothing ran a second time.
+        assert again.finished_at == finished_at
+
+    def test_a_run_in_flight_is_left_alone(self, canvas_manager, valid_tsx):
+        token = self._canvas_with_action(canvas_manager, valid_tsx)
+        run = canvas_manager.record_invocation(
+            token,
+            action_name="notify",
+            status="running",
+        )
+
+        assert canvas_manager.run_invocation(run.invocation_id, token=token).status == (
+            "running"
+        )
+
+    def test_an_action_the_canvas_dropped_fails_rather_than_runs(
+        self,
+        canvas_manager,
+        valid_tsx,
+    ):
+        """A revision that removed the action must not still execute its target.
+
+        Recording the refusal is better than running something the current canvas
+        disowns — the viewer pressed a control the author has since taken away.
+        """
+        token = self._canvas_with_action(canvas_manager, valid_tsx)
+        run = canvas_manager.record_invocation(token, action_name="notify")
+        canvas_manager.update_view(token, actions=[])
+
+        settled = canvas_manager.run_invocation(run.invocation_id, token=token)
+
+        assert settled.status == "failed"
+        assert "no longer declares" in (settled.error or "")
+
+    def test_an_unknown_run_is_an_error_not_a_silent_pass(
+        self,
+        canvas_manager,
+        valid_tsx,
+    ):
+        token = self._canvas_with_action(canvas_manager, valid_tsx)
+
+        with pytest.raises(ValueError, match="no invocation"):
+            canvas_manager.run_invocation(9999, token=token)

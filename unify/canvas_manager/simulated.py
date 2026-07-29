@@ -289,6 +289,45 @@ class SimulatedCanvasManager(BaseCanvasManager):
             return ReviewReport(rendered=False, error=f"Canvas {token!r} not found.")
         return ReviewReport(rendered=True, verdict="ok")
 
+    @functools.wraps(BaseCanvasManager.run_invocation, updated=())
+    def run_invocation(
+        self,
+        invocation_id: int,
+        *,
+        token: str,
+    ) -> CanvasInvocationRecord:
+        runs = self._invocations.get(token, [])
+        match = next(
+            (run for run in runs if run.invocation_id == invocation_id),
+            None,
+        )
+        if match is None:
+            raise ValueError(f"Canvas {token!r} has no invocation {invocation_id}.")
+
+        # Terminal and in-flight runs are left alone, mirroring the real
+        # implementation: a redelivered event must not repeat a completed send.
+        if match.status in ("succeeded", "running"):
+            return match
+
+        declared = {action.name for action in self._actions.get(token, [])}
+        if match.action_name not in declared:
+            match.status = "failed"
+            match.error = (
+                f"Canvas {token!r} no longer declares an action named "
+                f"{match.action_name!r}."
+            )
+            match.finished_at = _now()
+            return match
+
+        # No lane is executed here. Running a stored function needs a real
+        # FunctionManager and a real venv, which is exactly the infrastructure the
+        # simulated manager exists to avoid; the bookkeeping around it is what is
+        # worth exercising without one.
+        match.status = "succeeded"
+        match.result_json = json.dumps({"simulated": True})
+        match.finished_at = _now()
+        return match
+
     @functools.wraps(BaseCanvasManager.list_invocations, updated=())
     def list_invocations(
         self,

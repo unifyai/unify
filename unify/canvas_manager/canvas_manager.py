@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
@@ -617,6 +618,205 @@ class CanvasManager(BaseCanvasManager):
             rows=self._sample_stored_bindings(row or {}),
         )
 
+    def run_invocation(
+        self,
+        invocation_id: int,
+        *,
+        token: str,
+    ) -> CanvasInvocationRecord:
+        row, context = self._find_invocation(token, invocation_id)
+        if row is None:
+            raise ValueError(
+                f"Canvas {token!r} has no invocation {invocation_id}.",
+            )
+
+        record = CanvasInvocationRecord.model_validate(row)
+
+        # Already settled. A redelivered event or a manual retry of a completed
+        # send must not send again; returning what happened is the honest answer.
+        if record.status in ("succeeded", "running"):
+            return record
+
+        action = self._find_action(token, record.action_name)
+        if action is None:
+            # The canvas was revised and no longer declares this action. Recording
+            # that is better than executing a target the current canvas disowns.
+            return self._settle_invocation(
+                context,
+                invocation_id,
+                status="failed",
+                error=(
+                    f"Canvas {token!r} no longer declares an action named "
+                    f"{record.action_name!r}."
+                ),
+            )
+
+        self._get_dm().update_rows(
+            context,
+            {"status": "running"},
+            filter=f"invocation_id == {invocation_id}",
+        )
+
+        args = json.loads(record.args_json or "{}")
+        try:
+            result = self._dispatch_action(action, args)
+        except Exception as error:  # noqa: BLE001 - reported to the viewer verbatim
+            logger.exception("Canvas invocation %s failed", invocation_id)
+            return self._settle_invocation(
+                context,
+                invocation_id,
+                status="failed",
+                error=str(error)[:2000],
+            )
+
+        return self._settle_invocation(
+            context,
+            invocation_id,
+            status="succeeded",
+            result=result,
+        )
+
+    def _find_invocation(
+        self,
+        token: str,
+        invocation_id: int,
+    ) -> tuple[Optional[Dict[str, Any]], str]:
+        """Locate one invocation row, scoped to its canvas.
+
+        Scoped because invocation ids are sequential per context: without the
+        token in the filter, an id from one canvas would address another's run.
+        """
+        dm = self._get_dm()
+        for context in self._read_tables(INVOCATIONS_TABLE):
+            rows = dm.filter(
+                context,
+                filter=(
+                    f"canvas_token == '{token}' and invocation_id == {invocation_id}"
+                ),
+                limit=1,
+            )
+            if rows:
+                return rows[0], context
+        return None, ""
+
+    def _find_action(self, token: str, action_name: str) -> Optional[Dict[str, Any]]:
+        """The declared action for one name, or None if the canvas dropped it."""
+        dm = self._get_dm()
+        for context in self._read_tables(ACTIONS_TABLE):
+            rows = dm.filter(
+                context,
+                filter=(
+                    f"canvas_token == '{token}' and action_name == '{action_name}'"
+                ),
+                limit=1,
+            )
+            if rows:
+                return rows[0]
+        return None
+
+    def _settle_invocation(
+        self,
+        context: str,
+        invocation_id: int,
+        *,
+        status: str,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+    ) -> CanvasInvocationRecord:
+        """Record a terminal outcome and read the row back."""
+        updates: Dict[str, Any] = {"status": status, "finished_at": _now()}
+        if result is not None:
+            updates["result_json"] = json.dumps(result, default=str)[:20000]
+        if error is not None:
+            updates["error"] = error
+
+        dm = self._get_dm()
+        dm.update_rows(context, updates, filter=f"invocation_id == {invocation_id}")
+
+        rows = dm.filter(context, filter=f"invocation_id == {invocation_id}", limit=1)
+        return CanvasInvocationRecord.model_validate(rows[0])
+
+    def _dispatch_action(self, action: Dict[str, Any], args: Dict[str, Any]) -> Any:
+        """Run the declared target in whichever lane the action names.
+
+        All three lanes live here rather than in Orchestra because all three are
+        things only the assistant can do: it owns the function catalogue, the task
+        scheduler and the actor. Orchestra's job ended when it recorded the run.
+        """
+        kind = str(action.get("kind") or "function")
+
+        if kind == "function":
+            return self._run_function(action, args)
+
+        if kind == "task":
+            task_id = action.get("task_id")
+            if task_id is None:
+                raise ValueError("This action declares no task to trigger.")
+            from unify.task_scheduler.typed_tasks_client import trigger_task
+
+            # Never `update` to start work, per the TaskScheduler contract. The
+            # trigger route takes no payload, which is why the arguments live on
+            # the invocation row for the task itself to read.
+            return trigger_task(task_id=int(task_id))
+
+        if kind == "assistant":
+            request = action.get("request")
+            if not request:
+                raise ValueError("This action declares no request to hand over.")
+            return self._ask_assistant(str(request), args)
+
+        raise ValueError(f"Unknown action kind {kind!r}.")
+
+    def _run_function(self, action: Dict[str, Any], args: Dict[str, Any]) -> Any:
+        """Execute the stored function this action names."""
+        import asyncio
+
+        fm = self._get_fm()
+        function_id = action.get("function_id")
+        if function_id is None:
+            raise ValueError("This action declares no function to run.")
+
+        rows = fm.filter_functions(filter=f"function_id == {int(function_id)}", limit=1)
+        if not rows:
+            raise ValueError(f"Function {function_id} no longer exists.")
+        name = rows[0].get("name") or rows[0].get("function_name")
+        if not name:
+            raise ValueError(f"Function {function_id} has no name to call.")
+
+        # Runs on its own thread for the same reason the render gate does: this is
+        # reached from both plain sync code and `asyncio.to_thread`, and
+        # `asyncio.run` refuses a thread that already has a loop.
+        with ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="canvas-action",
+        ) as pool:
+            return pool.submit(
+                lambda: asyncio.run(
+                    fm.execute_function(function_name=str(name), call_kwargs=args),
+                ),
+            ).result()
+
+    def _ask_assistant(self, request: str, args: Dict[str, Any]) -> Any:
+        """Hand a request to the actor, with the viewer's arguments attached.
+
+        The escape hatch for when no stored function fits. The request template is
+        authored, the arguments are the viewer's, and the actor decides how to
+        satisfy it.
+        """
+        import asyncio
+
+        from unify.manager_registry import ManagerRegistry
+
+        actor = ManagerRegistry.get_actor()
+        prompt = (
+            f"{request}\n\n"
+            f"A viewer triggered this from a canvas with these arguments:\n"
+            f"{json.dumps(args, indent=2, default=str)}"
+        )
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="canvas-ask") as pool:
+            return pool.submit(lambda: asyncio.run(actor.act(prompt))).result()
+
     def list_invocations(
         self,
         token: str,
@@ -650,6 +850,7 @@ for _name in (
     "list_views",
     "delete_view",
     "preview",
+    "run_invocation",
     "list_invocations",
 ):
     _base_method = getattr(BaseCanvasManager, _name)
