@@ -292,65 +292,6 @@ class RecallClient:
             payload["to"] = to
         await self._request("POST", f"/bot/{bot_id}/send_chat_message", json=payload)
 
-    async def push_screenshare_frame(self, bot_id: str, jpeg_b64: str) -> None:
-        """Show one JPEG as the bot's screenshare, starting it if needed.
-
-        The screenshare surface holds the last frame pushed, so a moving view is
-        this called on a loop rather than a stream. Chosen over pointing the
-        screenshare at a webpage because the desktop we share lives on the pod's
-        own display: a webpage would have to be publicly reachable by Recall's
-        browser, which means exposing an interactive desktop to the internet.
-        Pushing frames keeps it inside our infrastructure and sends no
-        credential anywhere.
-        """
-
-        await self._request(
-            "POST",
-            f"/bot/{bot_id}/output_screenshare",
-            json={"kind": "jpeg", "b64_data": jpeg_b64},
-        )
-
-    async def stop_screenshare(self, bot_id: str) -> None:
-        """Stop screensharing, leaving the camera surface untouched."""
-
-        await self._request("DELETE", f"/bot/{bot_id}/output_screenshare")
-
-    async def set_output_media(
-        self,
-        bot_id: str,
-        *,
-        camera_url: str,
-        screenshare_url: str | None = None,
-    ) -> None:
-        """Set what the bot outputs, mid-call.
-
-        Camera and screenshare are independent surfaces, each rendering its own
-        webpage, so the assistant can share a desktop view without disturbing
-        the page that carries its audio.
-
-        ``camera_url`` is always sent, even when only the screenshare is
-        changing. This endpoint's merge-vs-replace behaviour is undocumented,
-        and the two failure modes are not equally bad: if it replaces, omitting
-        the camera would tear down the page bridging audio and the assistant
-        would go silent mid-meeting, whereas re-sending an unchanged camera URL
-        costs at worst a page reload. The bridge reconnects under the same
-        identity, and ``_recall_end_watch`` tolerates a short absence, so a
-        reload does not read as the meeting ending.
-
-        Not to be confused with ``POST /bot/{id}/output_screenshare``, which
-        takes a single base64 JPEG rather than a webpage.
-        """
-
-        payload: dict[str, Any] = {
-            "camera": {"kind": "webpage", "config": {"url": camera_url}},
-        }
-        if screenshare_url:
-            payload["screenshare"] = {
-                "kind": "webpage",
-                "config": {"url": screenshare_url},
-            }
-        await self._request("POST", f"/bot/{bot_id}/output_media", json=payload)
-
     async def _request(
         self,
         method: str,

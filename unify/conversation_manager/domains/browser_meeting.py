@@ -90,12 +90,6 @@ class MeetProvider(Protocol):
     async def state(self, *, channel: str, session_id: str) -> MeetState | None:
         """Current meeting state, or None when the session is unknown."""
 
-    async def present(self, *, channel: str, session_id: str, view_url: str) -> bool:
-        """Begin sharing ``view_url`` with the meeting."""
-
-    async def stop_present(self, *, channel: str, session_id: str) -> bool:
-        """Stop sharing."""
-
     async def send_chat(
         self,
         *,
