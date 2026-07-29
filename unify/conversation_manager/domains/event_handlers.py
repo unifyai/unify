@@ -1700,6 +1700,17 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     key: value
                     for key, value in {
                         "contact_id": contact_id,
+                        # Who was in the meeting when this line was said. The
+                        # platform reports names but, for bots created through
+                        # the Create Bot API, no emails -- so the roster is the
+                        # only record of who could have spoken, and it is worth
+                        # keeping per line because attendance changes mid-call.
+                        # ``or None`` so an empty roster is dropped rather than
+                        # stored as an empty list.
+                        "participant_names": (
+                            list(getattr(event, "participant_names", None) or [])
+                            or None
+                        ),
                         "speech_started_at": getattr(
                             event,
                             "speech_started_at",
