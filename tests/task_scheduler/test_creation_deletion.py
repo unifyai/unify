@@ -40,7 +40,6 @@ def test_create_task():
     assert row.repeat is None
     assert row.priority == Priority.normal
     assert row.task_id == 0
-    assert row.instance_id == 0
     assert row.response_policy is None
     assert row.entrypoint == 101
     assert row.enabled is True
@@ -314,7 +313,6 @@ def test_sanitize_activation_drops_orchestra_nulls_for_bool_defaults():
     ts = TaskScheduler.__new__(TaskScheduler)
     row = {
         "task_id": 1,
-        "instance_id": 0,
         "name": "Integration scheduled task",
         "description": "Quietly start this work when it becomes due.",
         "status": "scheduled",

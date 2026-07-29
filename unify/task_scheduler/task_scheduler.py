@@ -841,10 +841,6 @@ class TaskScheduler(BaseTaskScheduler):
                     "Activation source task log does not match requested task: "
                     f"expected task_id={expected_task_id}, got task_id={row_task_id}.",
                 )
-            instance_id = entries.get("instance_id")
-            if instance_id is None:
-                instance_id = 0
-            entries["instance_id"] = instance_id
             entries.setdefault(
                 "destination",
                 self._destination_from_task_context(context_name),
@@ -890,8 +886,7 @@ class TaskScheduler(BaseTaskScheduler):
         if task_scheduled_for != provenance_scheduled_for:
             raise StaleActivationSuperseded(
                 "Scheduled activation superseded by re-armed task definition: "
-                f"task_id={task.task_id}, instance_id={task.instance_id}, "
-                f"task_start_at={task_scheduled_for}, "
+                f"task_id={task.task_id}, task_start_at={task_scheduled_for}, "
                 f"activation_scheduled_for={provenance_scheduled_for}.",
             )
 
@@ -1256,7 +1251,7 @@ class TaskScheduler(BaseTaskScheduler):
                 _clarification_up_q=_clarification_up_q,
                 _clarification_down_q=_clarification_down_q,
                 task_id=task_id,
-                instance_id=task.instance_id,
+                instance_id=0,
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
@@ -1321,7 +1316,7 @@ class TaskScheduler(BaseTaskScheduler):
 
         source_task_log_id = self._get_log_by_task_instance(
             task_id=definition.task_id,
-            instance_id=definition.instance_id,
+            instance_id=0,
         ).id
 
         provenance = TaskRunProvenance(
@@ -1396,7 +1391,7 @@ class TaskScheduler(BaseTaskScheduler):
             fallback_actor,
             task_description=task_request,
             task_id=definition.task_id,
-            instance_id=definition.instance_id,
+            instance_id=0,
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
@@ -1436,7 +1431,7 @@ class TaskScheduler(BaseTaskScheduler):
             row for row in rows if self._task_has_provider_event_trigger(row)
         ]
         if definitions:
-            return sorted(definitions, key=lambda row: row.instance_id)[0]
+            return definitions[0]
         try:
             return self._get_provider_event_task_or_raise(task_id)
         except ValueError as exc:
@@ -2348,50 +2343,6 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return {"detail": "No-op provider-event task update."}
 
-    def _update_task_instance(
-        self,
-        *,
-        task_id: int,
-        instance_id: int,
-        **kwargs: Any,
-    ) -> Dict[str, str]:
-        """Update supported fields on one concrete task instance."""
-
-        task = self._get_task_or_raise(task_id)
-        with self._use_task_destination(task.destination):
-            log_objs = self._store.get_rows(
-                filter=f"task_id == {task_id} and instance_id == {instance_id}",
-                limit=1,
-                return_ids_only=False,
-            )
-            if not log_objs:
-                raise ValueError(
-                    f"No task instance found for task_id={task_id}, instance_id={instance_id}",
-                )
-
-            log_to_update = log_objs[0]
-            if self._running_execution(task_id) is not None:
-                return {
-                    "outcome": "skipped",
-                    "reason": "Cannot update a task while a run is in flight",
-                }
-
-            entries_to_write: Dict[str, Any] = {}
-
-            if "info" in kwargs:
-                entries_to_write["info"] = kwargs["info"]
-
-            if not entries_to_write:
-                return {
-                    "outcome": "no changes",
-                    "details": {"task_id": task_id, "instance_id": instance_id},
-                }
-
-            return self._write_log_entries(
-                logs=log_to_update.id,
-                entries=entries_to_write,
-            )
-
     @staticmethod
     def _default_ask_tool_policy(
         step_index: int,
@@ -2878,10 +2829,7 @@ class TaskScheduler(BaseTaskScheduler):
     def _task_from_typed_response(self, typed_response: dict[str, Any]) -> Task:
         """Build one Task from a typed Tasks API row."""
 
-        entries = {
-            "task_id": int(typed_response["task_id"]),
-            "instance_id": 0,
-        }
+        entries = {"task_id": int(typed_response["task_id"])}
         for key in (
             "task_revision",
             "provider_event_binding_id",
@@ -2965,7 +2913,6 @@ class TaskScheduler(BaseTaskScheduler):
 
         allowed_fields: List[str] = [
             "task_id",
-            "instance_id",
             "name",
             "description",
             "status",
@@ -3012,7 +2959,9 @@ class TaskScheduler(BaseTaskScheduler):
                 return_ids_only=False,
                 include_fields=include_fields,
             )
-            for log in root_logs:
+            # Order by log id so callers that disambiguate duplicate rows for one
+            # task_id (a pre-migration shape) always resolve the oldest row.
+            for log in sorted(root_logs, key=lambda obj: int(obj.id)):
                 row = dict(log.entries or {})
                 row.setdefault("assistant_id", SESSION_DETAILS.assistant_context)
                 row["destination"] = destination

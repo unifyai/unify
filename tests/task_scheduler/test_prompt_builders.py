@@ -17,7 +17,6 @@ from unify.task_scheduler.types.task import DeliveryMode, ExecutionStyle, Task
 def test_task_derives_delivery_mode_and_execution_style_independently():
     agentic_offline = Task(
         task_id=9,
-        instance_id=0,
         name="Offline agentic task",
         description="Interpret this description in the headless lane.",
         priority=Priority.normal,
@@ -28,7 +27,6 @@ def test_task_derives_delivery_mode_and_execution_style_independently():
     )
     symbolic_live = Task(
         task_id=10,
-        instance_id=0,
         name="Live symbolic task",
         description="Run the durable executor in the live lane.",
         priority=Priority.normal,
@@ -51,7 +49,6 @@ def test_task_derives_delivery_mode_and_execution_style_independently():
 def test_build_task_execution_request_includes_run_metadata():
     task = Task(
         task_id=7,
-        instance_id=2,
         name="Weekly AI report",
         description="Summarize the previous week's AI research.",
         priority=Priority.normal,
@@ -75,7 +72,6 @@ def test_build_task_execution_request_includes_run_metadata():
 def test_build_task_execution_request_omits_history_and_info():
     task = Task(
         task_id=7,
-        instance_id=3,
         name="Daily briefing",
         description="Prepare the briefing from current sources.",
         priority=Priority.normal,
@@ -93,7 +89,6 @@ def test_build_task_execution_request_omits_history_and_info():
 def test_build_task_run_guidelines_keep_child_actor_focused_on_one_task():
     task = Task(
         task_id=3,
-        instance_id=1,
         name="Invoice follow-up",
         description="Draft an invoice reply.",
         priority=Priority.normal,
