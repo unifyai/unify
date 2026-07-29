@@ -1163,6 +1163,7 @@ class TaskScheduler(BaseTaskScheduler):
             wake=task_run_wake,
             destination=task.destination,
             trigger_attempt_token=trigger_attempt_token,
+            offline=task.offline,
         )
         explicit_assistant_id = str(
             SESSION_DETAILS.assistant.agent_id
