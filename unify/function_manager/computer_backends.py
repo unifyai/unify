@@ -1360,10 +1360,11 @@ class MockComputerBackend(ComputerBackend):
         storage_state_name: str | None = None,
         headless: bool | None = None,
         stealth: bool | None = None,
+        egress: dict | None = None,
     ) -> "ComputerSession":
         """Return a new mock session for the given mode."""
         # accepted for signature compatibility
-        _ = (storage_state_name, headless, stealth)
+        _ = (storage_state_name, headless, stealth, egress)
         if mode == "desktop":
             raise RuntimeError("Desktop mode is singleton")
         return _MockSession(mode, self)
@@ -1837,6 +1838,7 @@ class MagnitudeBackend(ComputerBackend):
         storage_state_name: str | None = None,
         headless: bool | None = None,
         stealth: bool | None = None,
+        egress: dict | None = None,
     ) -> ComputerSession:
         """Create a session asynchronously.
 
@@ -1860,6 +1862,12 @@ class MagnitudeBackend(ComputerBackend):
         magnitude-core's BrowserProvider (realistic UA/locale, dropping the
         ``--enable-automation`` switch, patching ``navigator.webdriver`` etc.).
         Forwarded to ``/start``; an older agent-service simply ignores it.
+        ``egress`` selects where the session's traffic leaves from — a policy
+        object (``{"mode": "region", "region": "gb"}``) forwarded verbatim to
+        the agent-service, which resolves the proxy, the region-derived
+        timezone/locale and WebRTC containment together. An agent-service that
+        predates the feature rejects the request rather than silently egressing
+        from the host; that refusal is deliberate and must not be swallowed.
         """
         import time as _cs_time
 
@@ -1872,6 +1880,8 @@ class MagnitudeBackend(ComputerBackend):
             params["headless"] = headless
         if stealth is not None:
             params["stealth"] = stealth
+        if egress is not None:
+            params["egress"] = egress
         if self._url_mappings:
             params["urlMappings"] = self._url_mappings
         if storage_state_name:
@@ -1932,6 +1942,7 @@ class MagnitudeBackend(ComputerBackend):
         storage_state_name: str | None = None,
         headless: bool | None = None,
         stealth: bool | None = None,
+        egress: dict | None = None,
     ) -> ComputerSession:
         """Spawn an additional parallel session (web/web-vm only).
 
@@ -1955,6 +1966,7 @@ class MagnitudeBackend(ComputerBackend):
             storage_state_name=storage_state_name,
             headless=headless,
             stealth=stealth,
+            egress=egress,
         )
         self._extra_sessions.append(session)
         return session
