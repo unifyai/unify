@@ -338,23 +338,49 @@ class TestCoordinatorPrompt:
             assistant_has_teams=True,
         )
 
-        assert "Boss-only direct communication" in prompt
+        assert "Boss-only communication" in prompt
         assert "only for communicating directly with my boss" in prompt
         assert "They do not accept ``contact_id``" in prompt
         assert "always target the boss contact (``contact_id==1``" in prompt
-        assert (
-            "Communication with anyone else is never handled by direct tools" in prompt
-        )
-        assert "delegated third-party communication work goes through ``act``" in prompt
-        assert (
-            "send a message, draft a reply, place a call, or invite someone else on their behalf"
-            in prompt
-        )
+        assert "on ANY path — direct tools and ``act`` alike" in prompt
+        assert "draft the content for my boss to send themselves" in prompt
+        assert "Communication with anyone else is not possible for me" in prompt
+        # The act escape hatch is gone: no prompt text routes third-party
+        # communication through act any more.
+        assert "delegated third-party communication work" not in prompt
+        assert "through ``act`` instead of direct communication tools" not in prompt
         assert "Direct tools never accept inline contact details" in prompt
         assert "update the boss contact record first" in prompt
         assert "contact_id=5" not in prompt
         assert "Use the contact_id visible in active_conversations" not in prompt
         assert "send_slack_channel_message" not in prompt
+        # Browser meetings are gone from the single-player surface entirely.
+        assert "cannot join Google Meet or Microsoft Teams meetings" in prompt
+        assert "`join_google_meet`: Join a Google Meet call" not in prompt
+
+    def test_multiplayer_coordinator_gets_hire_comms_with_admin_surface(self):
+        prompt = _build(
+            is_coordinator=True,
+            is_multiplayer=True,
+            twin_name="Max Vector",
+            assistant_has_phone=True,
+            assistant_has_email=True,
+            assistant_has_whatsapp=True,
+            assistant_has_discord=True,
+            assistant_has_slack=True,
+            assistant_has_teams=True,
+        )
+
+        # Hire-like comms surface: open audience, channel posting, meets.
+        assert "Contact actions:" in prompt
+        assert "Boss-only communication" not in prompt
+        assert "send_slack_channel_message" in prompt
+        assert "`join_google_meet`: Join a Google Meet call" in prompt
+        assert "I do not communicate with other people" not in prompt
+        # Identity speaks under the twin's own name.
+        assert "I am Max Vector" in prompt
+        # The coordinator admin surface survives the flip.
+        assert "primitives.coordinator" in prompt
 
     def test_regular_direct_comms_guidance_keeps_contact_id_examples(self):
         prompt = _build(
