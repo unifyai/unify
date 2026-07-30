@@ -68,6 +68,23 @@ def test_matching_scheduled_activation_passes():
     )
 
 
+def test_projected_successor_after_the_anchor_passes():
+    """Every occurrence after the first is later than the anchor by design.
+
+    `schedule.start_at` is authored intent and is never rewritten, so a
+    recurring series only matches it on its first occurrence. Treating any
+    mismatch as stale skipped every projected successor — the skip finalized
+    the run as a benign "completed" and projected nothing, so a healthy
+    ten-minute series silently ended one occurrence after every re-arm.
+    """
+
+    scheduler = object.__new__(TaskScheduler)
+    scheduler._validate_task_matches_provenance(
+        task=_task("2026-07-14T15:10:00+00:00"),
+        provenance=_provenance("2026-07-14T15:20:00+00:00"),
+    )
+
+
 def test_equivalent_offset_scheduled_activation_passes():
     scheduler = object.__new__(TaskScheduler)
     scheduler._validate_task_matches_provenance(

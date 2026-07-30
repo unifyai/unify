@@ -883,7 +883,25 @@ class TaskScheduler(BaseTaskScheduler):
         provenance_scheduled_for = self._normalize_activation_datetime(
             provenance.scheduled_for,
         )
-        if task_scheduled_for != provenance_scheduled_for:
+        if task_scheduled_for is None or provenance_scheduled_for is None:
+            return
+        # `schedule.start_at` is the series anchor and is never rewritten, so
+        # only the first occurrence can equal it — every projected successor is
+        # later. An occurrence is superseded exactly when it falls *behind* the
+        # anchor: the author re-armed the series past it (the same `not_before`
+        # rule the backend projection applies). Requiring equality here skipped
+        # every successor as "stale", each skip projected no successor of its
+        # own, and a healthy ten-minute series silently ended one occurrence
+        # after each re-arm.
+        try:
+            is_stale = datetime.fromisoformat(
+                provenance_scheduled_for,
+            ) < datetime.fromisoformat(task_scheduled_for)
+        except ValueError:
+            # An unparseable timestamp survives normalization verbatim; the
+            # only safe comparison left is identity.
+            is_stale = provenance_scheduled_for != task_scheduled_for
+        if is_stale:
             raise StaleActivationSuperseded(
                 "Scheduled activation superseded by re-armed task definition: "
                 f"task_id={task.task_id}, task_start_at={task_scheduled_for}, "
