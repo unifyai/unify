@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from unify.task_scheduler import machine_state
 from unify.task_scheduler.machine_state import (
     TASK_MACHINE_STATE_PROJECT,
@@ -539,3 +541,97 @@ def test_task_machine_contexts_route_to_owner_team_for_team_owned():
         assistant_context="42",
     )
     assert explicit == "user123/42/Tasks/Executions"
+
+
+def _admin_post_env(monkeypatch):
+    monkeypatch.setattr(
+        machine_state.SETTINGS,
+        "ORCHESTRA_URL",
+        "https://orchestra.test/v0",
+    )
+    monkeypatch.setattr(
+        type(machine_state.SESSION_DETAILS),
+        "unify_key",
+        property(lambda self: "test-key"),
+        raising=False,
+    )
+    monkeypatch.setattr(machine_state.time, "sleep", lambda _s: None)
+
+
+class _Response:
+    def __init__(self, status_code: int, body: dict | None = None) -> None:
+        self.status_code = status_code
+        self._body = body or {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise machine_state.requests.HTTPError(
+                f"{self.status_code}",
+                response=self,
+            )
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_admin_post_retries_transient_failures(monkeypatch):
+    """One transient 500 must not end a series.
+
+    The occurrence that fails to project its successor is the only thing that
+    would ever project it, so a single unretried blip halts recurrence for
+    good — which is exactly how a ten-minute production tick died at 21:31.
+    """
+
+    _admin_post_env(monkeypatch)
+    responses = [
+        _Response(500),
+        machine_state.requests.ConnectionError("reset"),
+        _Response(200, {"run": {"run_key": "rk"}}),
+    ]
+
+    def _post(url, **kwargs):
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(machine_state.requests, "post", _post)
+
+    body = machine_state._orchestra_admin_post("/task-execution/create-or-adopt", {})
+
+    assert body == {"run": {"run_key": "rk"}}
+    assert responses == []
+
+
+def test_admin_post_gives_up_after_exhausting_attempts(monkeypatch):
+    _admin_post_env(monkeypatch)
+    calls: list[int] = []
+
+    def _post(url, **kwargs):
+        calls.append(1)
+        return _Response(503)
+
+    monkeypatch.setattr(machine_state.requests, "post", _post)
+
+    with pytest.raises(machine_state.requests.HTTPError):
+        machine_state._orchestra_admin_post("/task-execution/create-or-adopt", {})
+
+    assert len(calls) == machine_state._TASK_RUN_HTTP_ATTEMPTS
+
+
+def test_admin_post_does_not_retry_contract_errors(monkeypatch):
+    """A 4xx is a wrong request, not a flaky backend; retrying hides bugs."""
+
+    _admin_post_env(monkeypatch)
+    calls: list[int] = []
+
+    def _post(url, **kwargs):
+        calls.append(1)
+        return _Response(422)
+
+    monkeypatch.setattr(machine_state.requests, "post", _post)
+
+    with pytest.raises(machine_state.requests.HTTPError):
+        machine_state._orchestra_admin_post("/task-execution/create-or-adopt", {})
+
+    assert len(calls) == 1
