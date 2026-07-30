@@ -12,11 +12,12 @@ from unify.task_scheduler.machine_state import (
     create_or_adopt_task_outbound_operation,
     create_or_adopt_live_task_run,
     consume_live_task_run_provenance,
+    find_running_execution_for_task,
     get_open_task_execution,
     remember_live_task_run_provenance,
     validate_task_due_execution,
 )
-from unify.task_scheduler.types.execution import Delivery, Wake
+from unify.task_scheduler.types.execution import Delivery, ExecutionState, Wake
 
 
 def _scheduled_execution(**overrides) -> TaskExecutionSnapshot:
@@ -208,6 +209,45 @@ def test_get_open_task_execution_queries_assistants_machine_state_project(monkey
         user_context="user-1",
         assistant_context="42",
     )
+
+
+def test_find_running_execution_for_task_defaults_to_open_states(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+
+    execution = find_running_execution_for_task(task_id=101)
+
+    assert execution is None
+    filter_str = str(captured["filter"])
+    assert "state == 'scheduled'" in filter_str
+    assert "state == 'triggerable'" in filter_str
+    assert "state == 'running'" in filter_str
+
+
+def test_find_running_execution_for_task_scoped_to_running_state(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_get_logs(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr("unify.task_scheduler.storage.unisdk.get_logs", _fake_get_logs)
+
+    execution = find_running_execution_for_task(
+        task_id=101,
+        states=(ExecutionState.running,),
+    )
+
+    assert execution is None
+    filter_str = str(captured["filter"])
+    assert "state == 'running'" in filter_str
+    assert "state == 'scheduled'" not in filter_str
+    assert "state == 'triggerable'" not in filter_str
 
 
 def test_trigger_provenance_keeps_attempts_separate(monkeypatch):

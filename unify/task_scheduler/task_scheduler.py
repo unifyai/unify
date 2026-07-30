@@ -1630,14 +1630,25 @@ class TaskScheduler(BaseTaskScheduler):
             )
         return int(log_objs[0].id) if log_objs else None
 
-    def _running_execution(self, task_id: int) -> Any | None:
-        """The open execution for one definition, if a run is in flight."""
+    def _running_execution(
+        self,
+        task_id: int,
+        *,
+        states: tuple[ExecutionState, ...] | None = None,
+    ) -> Any | None:
+        """The execution for one definition matching ``states``, if any.
+
+        Defaults to the full open-state set (scheduled/triggerable/running).
+        """
 
         task = self._get_task_or_raise(task_id)
-        return find_running_execution_for_task(
-            task_id=int(task_id),
-            destination=task.destination,
-        )
+        kwargs: Dict[str, Any] = {
+            "task_id": int(task_id),
+            "destination": task.destination,
+        }
+        if states is not None:
+            kwargs["states"] = states
+        return find_running_execution_for_task(**kwargs)
 
     def _cancel_open_executions(self, task_id: int) -> None:
         """Terminalize any run still in flight for one definition."""
@@ -1657,16 +1668,21 @@ class TaskScheduler(BaseTaskScheduler):
         )
 
     def _ensure_not_active_task(self, task_ids: Union[int, List[int]]) -> None:
-        """Guard against mutating a definition whose run is in flight.
+        """Guard against mutating a definition with a genuinely running execution.
 
         Reads ``Tasks/Executions`` rather than the definition: whether a run is
-        happening is a fact about the run.
+        happening is a fact about the run. Scoped to ``running`` only —
+        ``scheduled``/``triggerable`` rows (e.g. an armed provider-event task)
+        are not mutation hazards and must not block this guard.
         """
 
         ids = [task_ids] if isinstance(task_ids, int) else list(task_ids)
         ids = [int(task_id) for task_id in ids]
         for task_id in ids:
-            if self._running_execution(task_id) is not None:
+            if (
+                self._running_execution(task_id, states=(ExecutionState.running,))
+                is not None
+            ):
                 raise RuntimeError(
                     f"Operation not permitted on the active task (task_id={task_id})",
                 )
