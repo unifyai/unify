@@ -1529,6 +1529,7 @@ class _SessionConfigBase(Event):
     # Owning team for team-owned assistants (None = user-owned).
     owner_team_id: int | None = None
     is_coordinator: bool = False
+    is_multiplayer: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
 

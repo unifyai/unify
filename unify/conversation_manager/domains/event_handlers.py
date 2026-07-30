@@ -756,6 +756,10 @@ async def _(
     **kwargs,
 ):
     """Handle request to join a Google Meet — spawn browser + audio bridge."""
+    # Backstop for the tool-surface gate: a single-player twin never enters
+    # a browser meeting, whatever path the request arrived through.
+    if SESSION_DETAILS.is_private_coordinator:
+        return
     if (
         cm.mode.is_voice
         or cm.call_manager.has_active_call
@@ -877,6 +881,10 @@ async def _(
     **kwargs,
 ):
     """Handle request to join a Microsoft Teams meeting — spawn browser + audio bridge."""
+    # Backstop for the tool-surface gate: a single-player twin never enters
+    # a browser meeting, whatever path the request arrived through.
+    if SESSION_DETAILS.is_private_coordinator:
+        return
     if (
         cm.mode.is_voice
         or cm.call_manager.has_active_call

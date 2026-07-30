@@ -565,9 +565,30 @@ class CommsPrimitives:
         return self._get_contact(contact_id=_coerce_contact_id(contact_id))
 
     def _check_outbound_allowed(self, contact: dict | None) -> str | None:
-        """Check whether a contact may receive assistant-owned outbound comms."""
+        """Check whether a contact may receive assistant-owned outbound comms.
+
+        For a single-player coordinator this is the hard privacy boundary:
+        every outbound path — direct tools and ``act`` plans alike — funnels
+        through here, and only the boss contact passes. No prompt-level
+        permission can widen it.
+        """
         if not contact:
             return "Contact not found"
+        if SESSION_DETAILS.is_private_coordinator:
+            try:
+                is_boss = int(contact.get("contact_id")) == int(
+                    SESSION_DETAILS.boss_contact_id,
+                )
+            except (TypeError, ValueError):
+                is_boss = False
+            if not is_boss:
+                contact_name = _get_contact_display_name(contact)
+                return (
+                    f"Cannot contact {contact_name}: a single-player twin "
+                    "communicates with its boss only, on every channel. "
+                    "Draft the content for the boss to send themselves, or "
+                    "suggest enabling multiplayer mode in Settings."
+                )
         should_respond = contact.get("should_respond", False)
         if should_respond:
             return None
@@ -580,7 +601,7 @@ class CommsPrimitives:
 
     @staticmethod
     def _is_coordinator_boss_contact(contact_id: int | str) -> bool:
-        if not SESSION_DETAILS.is_coordinator:
+        if not SESSION_DETAILS.is_private_coordinator:
             return False
         try:
             return int(contact_id) == int(SESSION_DETAILS.boss_contact_id)
@@ -2998,6 +3019,36 @@ class CommsPrimitives:
                 history_metadata=_history_metadata(),
             )
 
+        if SESSION_DETAILS.is_private_coordinator:
+            # Scheduling on the boss's calendar is workspace labor, but the
+            # Outlook invites a scheduled meeting fans out are outbound
+            # comms — a single-player twin may invite its boss only.
+            boss_contact_id = int(SESSION_DETAILS.boss_contact_id)
+
+            def _attendee_contact_id(item: int | str | dict) -> int | None:
+                raw = item.get("contact_id") if isinstance(item, dict) else item
+                try:
+                    return _coerce_contact_id(raw)
+                except (TypeError, ValueError):
+                    return None
+
+            if any(
+                _attendee_contact_id(item) != boss_contact_id
+                for item in attendee_contact_ids or []
+            ):
+                return await self._surface_comms_error(
+                    "Cannot invite these attendees: a single-player twin may "
+                    "invite its boss only. Create the meeting with the boss "
+                    "as sole attendee and share the link through them, or "
+                    "suggest enabling multiplayer mode in Settings.",
+                    topic,
+                    contact_id=anchor_contact_id,
+                    medium=medium,
+                    attempted_content=f"create teams meeting '{subject or ''}'",
+                    target_metadata=_target_metadata(),
+                    history_metadata=_history_metadata(),
+                )
+
         resolved_start: str | None = None
         resolved_end: str | None = None
         if mode == "scheduled":
@@ -3786,6 +3837,37 @@ class CommsPrimitives:
                     "attachment_filepath": attachment_filepath or "",
                 },
             )
+
+        if SESSION_DETAILS.is_private_coordinator:
+            # Hard privacy boundary: a single-player twin emails its boss
+            # only. reply_all is refused outright because thread
+            # participants can include third parties.
+            boss_contact_id = int(SESSION_DETAILS.boss_contact_id)
+            recipient_ids = [cid for cid, _ in (to or []) + (cc or []) + (bcc or [])]
+            if reply_all or any(cid != boss_contact_id for cid in recipient_ids):
+                return await self._surface_comms_error(
+                    "Cannot send this email: a single-player twin emails its "
+                    "boss only. Draft the content for the boss to send "
+                    "themselves, or suggest enabling multiplayer mode in "
+                    "Settings.",
+                    topic,
+                    contact_id=error_contact_id,
+                    medium=Medium.EMAIL,
+                    offline_reservation=offline_reservation,
+                    attempted_content=f"Subject: {subject}\n\n{body}",
+                    receiver_ids=(
+                        [error_contact_id] if error_contact_id is not None else None
+                    ),
+                    target_metadata={
+                        "to": _raw_recipients_for_history(to),
+                        "cc": _raw_recipients_for_history(cc),
+                        "bcc": _raw_recipients_for_history(bcc),
+                        "reply_all": reply_all,
+                        "email_id_to_reply_to": email_id_to_reply_to or "",
+                        "thread_id": thread_id or "",
+                        "attachment_filepath": attachment_filepath or "",
+                    },
+                )
 
         if not self._assistant_email():
             return await self._surface_comms_error(

@@ -2468,10 +2468,16 @@ class ConversationManagerBrainActionTools:
         return _send_whatsapp_window_aware
 
     def as_tools(self) -> dict[str, "Callable[..., Any]"]:
-        """Return the static tools dict for start_async_tool_loop."""
+        """Return the static tools dict for start_async_tool_loop.
+
+        The comms surface is decided by ``is_private_coordinator``, not
+        ``is_coordinator``: a single-player twin is boss-only on every
+        channel and cannot enter browser meetings at all, while a
+        multiplayer twin communicates like any hired teammate.
+        """
         from unify.settings import SETTINGS
 
-        is_coordinator = SESSION_DETAILS.is_coordinator
+        is_coordinator = SESSION_DETAILS.is_private_coordinator
         tools: dict[str, Callable[..., Any]] = {
             "send_unify_message": (
                 self.send_unify_message_to_boss
@@ -2495,8 +2501,12 @@ class ConversationManagerBrainActionTools:
             and self._cm.call_manager.is_ready_for_outbound_call
         )
         if not call_or_meet_in_progress:
-            tools["join_google_meet"] = self.join_google_meet
-            tools["join_teams_meet"] = self.join_teams_meet
+            # Browser meetings are multi-party rooms, so a single-player
+            # twin never gets the join tools — not even for a meeting its
+            # boss hosts.
+            if not is_coordinator:
+                tools["join_google_meet"] = self.join_google_meet
+                tools["join_teams_meet"] = self.join_teams_meet
             # Ringing the in-app Meet only signals the Console (the owner answers
             # in-browser), so unlike telephony call-start it needs no prewarmed
             # worker; expose it whenever no other voice session is live.
