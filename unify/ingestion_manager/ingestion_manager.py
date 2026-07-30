@@ -27,7 +27,6 @@ what happened.
 
 from __future__ import annotations
 
-import json
 import logging
 import secrets
 import threading
@@ -45,7 +44,6 @@ from unify.common.pipeline import (
     IncompleteIngest,
     InlineRowsHandle,
     LocalArtifactStore,
-    ObjectStoreArtifactHandle,
     TableWork,
 )
 from unify.data_manager.types.ingest import PostIngestConfig
@@ -465,7 +463,7 @@ class IngestionManager(BaseIngestionManager):
                 row_count=len(source.rows),
             )
             if source.kind == "rows"
-            else self._handle_for_table(run_key, source, declared=int(declared or 0))
+            else self._handle_for_table(source, declared=int(declared or 0))
         )
 
         embed = request.embed
@@ -506,58 +504,47 @@ class IngestionManager(BaseIngestionManager):
             ),
         )
 
-    def _handle_for_table(self, run_key: str, source: Any, *, declared: int) -> Any:
-        """Stage a stored table as a durable artifact, page by page.
+    def _handle_for_table(self, source: Any, *, declared: int) -> Any:
+        """Read a stored table into a handle the engine can stream from.
 
-        Read by offset because the backend caps a single read, and written to the
-        artifact store as each page arrives rather than accumulated: a page is the
-        most this process holds at once, whatever the table's size.
+        Paged by offset because the backend serves at most a page per read, so a
+        single large read would silently return a prefix.
 
-        Staging rather than reading the source directly at ingest time is also
-        what makes a resume correct. The artifact outlives this process and does
-        not change, so a resumed attempt re-reads exactly the rows the first
-        attempt saw -- where re-querying the source could return a table that has
-        since been written to, and skip_rows would then point at different rows.
+        The rows do end up in memory, and the bound on that is the tier ceiling
+        rather than anything here: a table only reaches this method when its
+        counted size is under ``MAX_INLINE_ROWS``, which is the same bound a rows
+        source of the same size already carries. A larger table is dispatched and
+        never arrives here.
+
+        One consequence worth knowing: a resumed run re-reads the source rather
+        than a frozen copy of it, so if the source has been written to in between,
+        the checkpoint's offset no longer points at the same rows. Freezing it
+        would need the rows staged through the artifact store, which the port's
+        materialise call is not shaped for today.
         """
         dm = self._get_dm()
         page = self._settings.EVENTS_PAGE_SIZE
-        key = f"jobs/{run_key}/source-table.jsonl"
-        path = Path(self._store.put_json(f"{key}.pending", {"staging": key}))
-        target = path.with_name("source-table.jsonl")
+        rows: List[Dict[str, Any]] = []
+        offset = 0
+        while len(rows) < declared:
+            batch = dm.filter(
+                source.context,
+                filter=source.filter,
+                columns=source.columns,
+                limit=min(page, declared - len(rows)),
+                offset=offset,
+            )
+            if not batch:
+                break
+            rows.extend(batch)
+            offset += len(batch)
+            if len(batch) < page:
+                break
 
-        columns: List[str] = list(source.columns or [])
-        written = 0
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("w", encoding="utf-8", newline="\n") as handle:
-            offset = 0
-            while written < declared:
-                batch = dm.filter(
-                    source.context,
-                    filter=source.filter,
-                    columns=source.columns,
-                    limit=min(page, declared - written),
-                    offset=offset,
-                )
-                if not batch:
-                    break
-                for row in batch:
-                    if not columns:
-                        columns = [str(column) for column in row.keys()]
-                    handle.write(json.dumps(row, ensure_ascii=False, default=str))
-                    handle.write("\n")
-                written += len(batch)
-                offset += len(batch)
-                if len(batch) < page:
-                    break
-
-        self._store.delete(f"{key}.pending")
-        return ObjectStoreArtifactHandle(
-            storage_uri=target.resolve().as_uri(),
-            logical_path=source.context,
-            source_local_path=str(target),
-            artifact_format="jsonl",
-            columns=columns,
-            row_count=written,
+        return InlineRowsHandle(
+            rows=rows,
+            columns=list(rows[0].keys()) if rows else list(source.columns or []),
+            row_count=len(rows),
         )
 
     def _dispatch(
