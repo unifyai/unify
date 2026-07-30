@@ -170,7 +170,11 @@ class TestContractDocumentation:
 
         doc = _flat(BaseCanvasManager.create_view.__doc__)
         assert "primitives.integrations.github.list_issues" in doc
-        assert "primitives.data.ingest" in doc
+        assert "primitives.ingestion.submit" in doc
+        # Waiting is what makes the binding below valid, since bindings are
+        # checked when the canvas is created. An example that stores without
+        # waiting teaches a creation that fails intermittently.
+        assert "primitives.ingestion.wait" in doc
         assert "Data/GitHubIssues" in doc
 
     def test_anti_patterns_name_the_tempting_shortcuts(self):

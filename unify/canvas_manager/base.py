@@ -72,8 +72,11 @@ class BaseCanvasManager:
     integration tools, write it to a table, keep it fresh with a scheduled task,
     and bind the canvas to that table like any other data::
 
-        rows = await primitives.integrations.github.list_issues(state="open")
-        await primitives.data.ingest(rows, "Data/GitHubIssues")
+        issues = await primitives.integrations.github.list_issues(state="open")
+        run = await primitives.ingestion.submit(
+            RowsSource(rows=issues["items"]), TableTarget(context="Data/GitHubIssues"),
+        )
+        await primitives.ingestion.wait(run.run_id)
         # ...schedule a task to repeat that, then bind the canvas to the table.
 
     This is also the only way to show two apps together. Providers cannot be
@@ -279,11 +282,18 @@ class BaseCanvasManager:
         which is what lets the canvas read both -- and what would let a single
         query join them::
 
-            # Store, on a schedule, well before the canvas is built.
+            # Store, on a schedule, well before the canvas is built. Waiting is
+            # what makes the bindings below valid -- they are checked at creation.
             issues = await primitives.integrations.github.list_issues(state="open")
-            await primitives.data.ingest(issues, "Data/GitHubIssues")
             deals = await primitives.integrations.hubspot.list_deals()
-            await primitives.data.ingest(deals, "Data/HubSpotDeals")
+            for rows, context in (
+                (issues["items"], "Data/GitHubIssues"),
+                (deals["results"], "Data/HubSpotDeals"),
+            ):
+                run = await primitives.ingestion.submit(
+                    RowsSource(rows=rows), TableTarget(context=context),
+                )
+                await primitives.ingestion.wait(run.run_id)
 
             result = primitives.canvas.create_view(
                 tsx='''

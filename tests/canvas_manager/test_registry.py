@@ -61,7 +61,7 @@ class TestPrimitiveSurface:
         # cannot be read live, which is the mistake it would otherwise make.
         note = get_registry().get_manager_spec("canvas").special_note or ""
         assert "STORED FIRST" in note
-        assert "primitives.data.ingest" in note
+        assert "primitives.ingestion.submit" in note
 
     def test_the_spec_warns_off_colour(self):
         note = get_registry().get_manager_spec("canvas").special_note or ""
@@ -127,7 +127,7 @@ class TestPromptExamples:
         # Fetch, store, schedule, bind. An example missing the schedule step
         # teaches a canvas that goes stale silently.
         assert "primitives.integrations." in examples
-        assert "primitives.data.ingest" in examples
+        assert "primitives.ingestion.submit" in examples
         assert "primitives.tasks" in examples
         assert "PrimitiveBinding" in examples
 
