@@ -772,6 +772,13 @@ class Renderer:
             return "\n".join(parts)
 
         if not vm_ready:
+            meet_note = (
+                ""
+                if SESSION_DETAILS.is_private_coordinator
+                else "Note: join_google_meet and join_teams_meet do NOT depend "
+                "on the desktop VM — they use a local browser and are "
+                "available immediately.\n"
+            )
             parts.append(
                 "<infrastructure status='vm_pending'>\n"
                 "Your managed desktop VM is still booting. Computer actions "
@@ -779,10 +786,7 @@ class Renderer:
                 "yet. Do not attempt computer actions until you receive a "
                 "notification that the VM is ready. If a user asks you to do "
                 "something on the computer, let them know you will action it "
-                "in just a moment.\n"
-                "Note: join_google_meet and join_teams_meet do NOT depend on "
-                "the desktop VM — they use a local browser and are available "
-                "immediately.\n"
+                f"in just a moment.\n{meet_note}"
                 "</infrastructure>",
             )
 

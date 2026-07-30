@@ -411,14 +411,21 @@ class AudioRingBuffer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Provenance of a resolved speaker display label — the single documented
-# authority ordering, highest first. A transcript row carries its source so it
-# is self-describing ("is voice fingerprinting actually working?" is answerable
-# from the row alone), and the late-binding Google-Meet transcript reconciler
-# (Orchestra-side, fed by the Workspace-Events ``meet_bridge``) has one place to
-# honour: a lower source must never overwrite a name already set by a higher
-# one. ``anonymous`` is the only source that is a placeholder ("Speaker N")
-# rather than a real name — consumers key off it instead of "no voice match".
+# Provenance of a resolved speaker display label. A transcript row carries its
+# source so it is self-describing -- "is voice fingerprinting actually working?"
+# is answerable from the row alone.
+#
+# Authority ordering is expressed by the order ``_resolve_speaker`` in the call
+# script consumes these, highest first: voice pin, then platform participant,
+# then org-call roster, then the anonymous placeholder. It is deliberately not
+# also stated as a table here; two statements of one ordering drift apart, and
+# the one nothing executes is the one that goes stale.
+#
+# Stored rows from earlier runtimes carry sources no longer produced --
+# ``dom_meet_map`` and ``dom_active_speaker`` (scraped from a meeting UI in a
+# browser we no longer run) and ``google_meet_transcript``. Readers should treat
+# an unrecognised source as a real name of unknown provenance, ranked below the
+# ones above.
 LABEL_SOURCE_VOICE_PIN = "voice_pin"
 # The meeting platform's own name for a participant, reported by the meeting
 # backend rather than read off the screen. Ranked above ``meet_roster`` because
@@ -427,23 +434,9 @@ LABEL_SOURCE_VOICE_PIN = "voice_pin"
 # display name does not.
 LABEL_SOURCE_RECALL_PARTICIPANT = "recall_participant"
 LABEL_SOURCE_MEET_ROSTER = "meet_roster"
-LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT = "google_meet_transcript"
-# No longer produced -- both came from scraping the meeting UI in a browser we
-# no longer run. Kept because historical transcript rows carry them and the
-# ordering below is what stops a lower source overwriting a higher one.
-LABEL_SOURCE_DOM_MEET_MAP = "dom_meet_map"
-LABEL_SOURCE_DOM_ACTIVE_SPEAKER = "dom_active_speaker"
+# The only source that is a placeholder ("Speaker N") rather than a real name --
+# consumers key off it instead of "no voice match".
 LABEL_SOURCE_ANONYMOUS = "anonymous"
-
-LABEL_SOURCE_PRECEDENCE = (
-    LABEL_SOURCE_VOICE_PIN,
-    LABEL_SOURCE_RECALL_PARTICIPANT,
-    LABEL_SOURCE_MEET_ROSTER,
-    LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT,
-    LABEL_SOURCE_DOM_MEET_MAP,
-    LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
-    LABEL_SOURCE_ANONYMOUS,
-)
 
 
 @dataclass
@@ -456,9 +449,8 @@ class SpeakerResolution:
     id spans more than one voice cluster, so downstream consumers know the
     diarization id alone is not a reliable speaker key. ``source`` records how
     the identity was derived (``LABEL_SOURCE_VOICE_PIN`` for an embedding match,
-    ``LABEL_SOURCE_ANONYMOUS`` for a minted "Speaker N"); higher-authority
-    sources (roster, DOM, recorded transcript) are stamped one level up in the
-    call script, not here.
+    ``LABEL_SOURCE_ANONYMOUS`` for a minted "Speaker N"); the platform-reported
+    sources are stamped one level up in the call script, not here.
     """
 
     contact_id: Optional[int] = None

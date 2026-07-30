@@ -80,6 +80,18 @@ from unify.conversation_manager.medium_scripts.meet_floor import (
     MeetFloor,
 )
 from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
+from unify.conversation_manager.domains.recall.events import (
+    EVENT_CHAT_MESSAGE,
+    EVENT_LEAVE,
+    EVENT_SPEECH_OFF,
+    EVENT_SPEECH_ON,
+    ROSTER_EVENTS,
+    parse_relayed_event,
+)
+from unify.conversation_manager.meet_speaker_map import (
+    MeetSpeakerVotes,
+    MeetSpeakerWindows,
+)
 from unify.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
     generate_screenshot_path,
@@ -1435,7 +1447,8 @@ async def entrypoint(ctx: agents.JobContext):
     # 1. Deepgram diarization (enable_diarization=True) for precise per-utterance
     #    anonymous speaker IDs (S0, S1, ...).
     # 2. The meeting platform's own roster and speech events, relayed in.
-    # The correlation mapping table (_meet_speaker_map) links the two.
+    # ``_meet_speech_windows`` and ``_meet_speaker_votes`` link the two, by
+    # overlapping each finalised utterance with the platform's speaking spans.
     _meet_auth_key = SESSION_DETAILS.unify_key
     _meet_cached_active_speaker: str | None = None
     _meet_cached_participants: list[dict] = []
@@ -1443,7 +1456,8 @@ async def entrypoint(ctx: agents.JobContext):
     _meet_latest_screenshot: str | None = None
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
-    _meet_speaker_map: dict[str, dict[str, int]] = {}
+    _meet_speech_windows = MeetSpeakerWindows()
+    _meet_speaker_votes = MeetSpeakerVotes()
     if channel in ("google_meet", "teams_meet"):
         if meta:
             _meet_display_name = meta.get("meet_display_name", "")
@@ -1453,8 +1467,9 @@ async def entrypoint(ctx: agents.JobContext):
     def _meet_participant_email(display_name: str) -> str:
         """The meeting platform's email for a participant, by display name.
 
-        Only browser meets have one: it arrives on the roster the CM pushes,
-        sourced from the platform itself rather than anything we inferred.
+        Frequently empty. Platforms disclose an address to a bot created through
+        the Create Bot API only sometimes, so this is a bonus signal rather than
+        one anything may depend on -- name matching has to carry the rest.
         """
         if not display_name:
             return ""
@@ -1463,6 +1478,56 @@ async def entrypoint(ctx: agents.JobContext):
             if str(participant.get("name") or "").strip().lower() == wanted:
                 return str(participant.get("email") or "").strip()
         return ""
+
+    def _merge_meet_participant(entry: dict) -> None:
+        """Merge one participant into the cached roster, keyed on platform id.
+
+        Realtime events and the ten-second roster poll describe the same person
+        from different sources, and either may know an email the other does not.
+        An absent name or address therefore never overwrites a known one, so
+        whichever source saw it wins regardless of which arrived last. Host
+        status is taken from the newer report, being the kind of thing that
+        genuinely changes mid-meeting.
+        """
+        participant_id = str(entry.get("id") or "")
+        for existing in _meet_cached_participants:
+            if str(existing.get("id") or "") != participant_id:
+                continue
+            existing["is_host"] = bool(entry.get("is_host"))
+            if entry.get("name"):
+                existing["name"] = entry["name"]
+            if entry.get("email"):
+                existing["email"] = entry["email"]
+            return
+        _meet_cached_participants.append(
+            {
+                "id": participant_id,
+                "name": str(entry.get("name") or ""),
+                "email": entry.get("email") or None,
+                "is_host": bool(entry.get("is_host")),
+            },
+        )
+
+    def _drop_meet_participant(participant_id: str) -> None:
+        """Drop one participant from the cached roster by platform id."""
+        for index, existing in enumerate(_meet_cached_participants):
+            if str(existing.get("id") or "") == participant_id:
+                del _meet_cached_participants[index]
+                return
+
+    def _reconcile_meet_roster(incoming: list[dict]) -> None:
+        """Fold a polled roster into the cache, dropping whoever is gone.
+
+        Merged rather than swapped in wholesale: the poll is authoritative about
+        *who* is present, but not about every field of them, and replacing the
+        list would discard an email only a realtime join had carried.
+        """
+        for entry in incoming:
+            _merge_meet_participant(entry)
+        present = {str(entry.get("id") or "") for entry in incoming}
+        for existing in list(_meet_cached_participants):
+            if str(existing.get("id") or "") not in present:
+                _drop_meet_participant(str(existing.get("id") or ""))
 
     def _resolve_contact_by_name(display_name: str) -> dict | None:
         """Best-effort contact resolution from a Meet display name.
@@ -1725,13 +1790,16 @@ async def entrypoint(ctx: agents.JobContext):
         Returns (contact_dict, display_name, speaker_id, voice_verified,
         engaged, label_source). ``label_source`` is a ``speaker_id.LABEL_SOURCE_*``
         tag recording which of the signals below produced ``display_name`` (None
-        when no name was resolved). Signals in priority order — the same ordering
-        as ``LABEL_SOURCE_PRECEDENCE``:
+        when no name was resolved). The order these are consumed in *is* the
+        authority ordering — there is no table enforcing it elsewhere:
         1. Voice-embedding pin against enrolled contact profiles (all channels).
         2. LiveKit identity → org-call roster (Unify Meet multi-party).
-        3. Diarization speaker_id → name correlation mapping (browser meets).
+        3. Diarization speaker_id → name correlation, accumulated by overlapping
+           finalised utterances with the platform's speaking spans (browser
+           meets).
         4. Platform-reported active speaker (browser meets, relayed in near
-           real time from participant speech events).
+           real time from participant speech events) — weaker than 3 because it
+           is a single reading rather than accumulated evidence.
         5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
            name from 1-4 always outranks this placeholder, so it is evaluated
            last even though it comes from the same tracker resolution as 1.
@@ -1739,10 +1807,10 @@ async def entrypoint(ctx: agents.JobContext):
         sid = _meet_last_speaker_id
         engaged = _speaker_is_engaged(sid)
 
-        # Resolve once, then consume in documented-authority order
-        # (``speaker_id.LABEL_SOURCE_PRECEDENCE``): the embedding pin is returned
-        # immediately, but the anonymous "Speaker N" fallback is held to the very
-        # end so a real roster or platform name always wins over a placeholder.
+        # Resolve once, then consume in the authority order above: the embedding
+        # pin is returned immediately, but the anonymous "Speaker N" fallback is
+        # held to the very end so a real roster or platform name always wins
+        # over a placeholder.
         resolution = (
             speaker_tracker.resolve(sid)
             if sid and speaker_tracker is not None
@@ -1789,32 +1857,27 @@ async def entrypoint(ctx: agents.JobContext):
         # participant events rather than anything read off a screen.
         if channel in ("google_meet", "teams_meet"):
             # 3. Diarization speaker_id → correlated display name.
-            if sid and sid in _meet_speaker_map:
-                votes = _meet_speaker_map[sid]
-                if votes:
-                    top_name = max(votes, key=votes.get)
-                    top_count = votes[top_name]
-                    total = sum(votes.values())
-                    if top_count >= 2 and top_count / total > 0.6:
-                        resolved = _resolve_contact_by_name(top_name)
-                        if resolved:
-                            label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                            return (
-                                resolved,
-                                label or None,
-                                sid,
-                                False,
-                                engaged,
-                                speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
-                            )
-                        return (
-                            contact,
-                            top_name,
-                            sid,
-                            False,
-                            engaged,
-                            speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
-                        )
+            correlated = _meet_speaker_votes.resolve(sid)
+            if correlated:
+                resolved = _resolve_contact_by_name(correlated)
+                if resolved:
+                    label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+                    return (
+                        resolved,
+                        label or None,
+                        sid,
+                        False,
+                        engaged,
+                        speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
+                    )
+                return (
+                    contact,
+                    correlated,
+                    sid,
+                    False,
+                    engaged,
+                    speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
+                )
 
             # 4. Whoever the platform says is speaking right now.
             active_name = _meet_cached_active_speaker
@@ -1873,12 +1936,10 @@ async def entrypoint(ctx: agents.JobContext):
                     name = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
                     if name:
                         return name, speaker_id.LABEL_SOURCE_VOICE_PIN
-        if channel in ("google_meet", "teams_meet") and sid in _meet_speaker_map:
-            votes = _meet_speaker_map[sid]
-            if votes:
-                top_name = max(votes, key=votes.get)
-                if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
-                    return top_name, speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT
+        if channel in ("google_meet", "teams_meet"):
+            correlated = _meet_speaker_votes.resolve(sid)
+            if correlated:
+                return correlated, speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT
         if resolution.label:
             return resolution.label, speaker_id.LABEL_SOURCE_ANONYMOUS
         return None, None
@@ -2009,6 +2070,7 @@ async def entrypoint(ctx: agents.JobContext):
         channel=channel,
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
     ).flatten()
@@ -2494,10 +2556,22 @@ async def entrypoint(ctx: agents.JobContext):
             return
         _meet_last_speaker_id = ev.speaker_id
         if channel in ("google_meet", "teams_meet"):
-            speaking_name = _meet_cached_active_speaker
+            # Matched against the platform's speaking spans over this turn's own
+            # span, not against whoever is speaking at this instant: a final
+            # arrives *after* its speaker stopped, by which point the platform
+            # has already reported speech_off and nobody is speaking at all.
+            turn_ended_at = prompt_now(as_string=False).timestamp()
+            turn_started_at = (
+                user_speech_started_at.timestamp()
+                if user_speech_started_at is not None
+                else turn_ended_at
+            )
+            speaking_name = _meet_speech_windows.speaker_during(
+                turn_started_at,
+                turn_ended_at,
+            )
             if speaking_name and speaking_name != _meet_display_name:
-                bucket = _meet_speaker_map.setdefault(ev.speaker_id, {})
-                bucket[dom_speaker] = bucket.get(dom_speaker, 0) + 1
+                _meet_speaker_votes.observe(ev.speaker_id, speaking_name)
 
     # -- Screenshot state --
     screenshot_history = ScreenshotHistory()
@@ -2854,9 +2928,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     if channel in ("google_meet", "teams_meet"):
         # The relay republishes the meeting platform's participant events into
-        # this room. speech_on/speech_off is the only one that needs to arrive
-        # faster than the CM's roster poll: it names whoever is talking *right
-        # now*, which is what pins a diarized voice to a person.
+        # this room. Roster changes are applied from here as well as from the
+        # CM's ten-second poll: the poll is what proves who is present, but a
+        # join or leave is worth acting on the moment it happens, and the
+        # join/leave publish downstream diffs against the previous set, so the
+        # poll re-reporting the same person emits nothing a second time.
         @ctx.room.on("data_received")
         def _on_recall_event(packet) -> None:
             nonlocal _meet_cached_active_speaker
@@ -2866,28 +2942,40 @@ async def entrypoint(ctx: agents.JobContext):
                 message = json.loads(bytes(packet.data).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 return
-            if not isinstance(message, dict):
-                return
 
-            event_name = message.get("event") or ""
-            participant = (message.get("data") or {}).get("participant") or {}
-            name = str(participant.get("name") or "").strip()
+            event = parse_relayed_event(message)
+            if event is None or event.participant is None:
+                return
+            participant = event.participant
+            name = participant.name.strip()
             if not name or name == _meet_display_name:
                 return
 
-            if event_name == "participant_events.speech_on":
+            at = prompt_now(as_string=False).timestamp()
+            if event.name in ROSTER_EVENTS:
+                if event.name == EVENT_LEAVE:
+                    _drop_meet_participant(participant.id)
+                else:
+                    _merge_meet_participant(
+                        {
+                            "id": participant.id,
+                            "name": name,
+                            "email": participant.email,
+                            "is_host": participant.is_host,
+                        },
+                    )
+                _publish_meet_roster_changes()
+            elif event.name == EVENT_SPEECH_ON:
                 _meet_cached_active_speaker = name
-            elif event_name == "participant_events.speech_off":
+                _meet_speech_windows.speech_on(name, at)
+            elif event.name == EVENT_SPEECH_OFF:
                 # Only clear if this speaker is still the one on record, or a
                 # trailing speech_off would blank whoever started next.
                 if _meet_cached_active_speaker == name:
                     _meet_cached_active_speaker = None
-            elif event_name == "participant_events.chat_message":
-                # ``data.data.text`` -- the payload nests a second ``data``
-                # under the event's own. Reading one level short finds nothing
-                # and drops every message silently.
-                inner = (message.get("data") or {}).get("data") or {}
-                text = _strip_chat_html(str(inner.get("text") or "")).strip()
+                _meet_speech_windows.speech_off(name, at)
+            elif event.name == EVENT_CHAT_MESSAGE:
+                text = _strip_chat_html(event.chat_text or "").strip()
                 if not text:
                     return
                 chat_cls = (
@@ -2899,7 +2987,7 @@ async def entrypoint(ctx: agents.JobContext):
                     contact=contact,
                     sender_name=name,
                     content=text,
-                    sender_email=(str(participant.get("email") or "") or None),
+                    sender_email=participant.email,
                 )
                 asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
 
@@ -3050,13 +3138,12 @@ async def entrypoint(ctx: agents.JobContext):
             # Browser-meet roster, pushed by the CM because only it holds the
             # backend credentials. Publishes join/leave so the brain knows who
             # is in the room, and feeds _get_meet_participant_names, which is
-            # what turns a diarized voice into a person's name.
+            # what names a diarized voice. Realtime join/leave events already
+            # maintain the same cache; this is the reconciliation pass that
+            # corrects it if one was missed.
             incoming = data.get("participants") or []
             if isinstance(incoming, list):
-                _meet_cached_participants.clear()
-                _meet_cached_participants.extend(
-                    [p for p in incoming if isinstance(p, dict)],
-                )
+                _reconcile_meet_roster([p for p in incoming if isinstance(p, dict)])
                 _publish_meet_roster_changes()
         elif event_type == "unify_meet_roster":
             incoming = data.get("participants") or []

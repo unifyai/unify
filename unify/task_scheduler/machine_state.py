@@ -750,19 +750,24 @@ def find_running_execution_for_task(
     *,
     task_id: int,
     destination: str | None = None,
+    states: tuple[ExecutionState, ...] = _OPEN_EXECUTION_STATES,
 ) -> TaskExecutionSnapshot | None:
-    """Return an open execution for one task, whatever assistant owns it.
+    """Return an execution in one of ``states`` for one task, whatever assistant owns it.
 
     ``get_open_task_execution`` is assistant-scoped and returns ``None`` when
     the session has no assistant context. "Is a run in flight for this task?"
     must not depend on who is asking, so this queries by ``task_id`` alone —
     the definition it guards is a single row shared by every assistant that
     can execute it.
+
+    ``states`` defaults to the full open-state set (``scheduled``,
+    ``triggerable``, ``running``) so existing callers are unaffected; pass a
+    narrower tuple to match only a subset, e.g. genuinely ``running`` rows.
     """
 
     filter_clauses = [
         f"task_id == {int(task_id)}",
-        _open_execution_state_filter(),
+        _open_execution_state_filter(states),
     ]
     normalized_destination = _canonical_destination_or_none(destination)
     if normalized_destination is not None:
@@ -966,12 +971,12 @@ def _execution_store() -> TasksStore:
     )
 
 
-def _open_execution_state_filter() -> str:
-    """Return a filter clause matching open execution states."""
+def _open_execution_state_filter(
+    states: tuple[ExecutionState, ...] = _OPEN_EXECUTION_STATES,
+) -> str:
+    """Return a filter clause matching the given execution states."""
 
-    quoted = " or ".join(
-        f"state == '{state.value}'" for state in _OPEN_EXECUTION_STATES
-    )
+    quoted = " or ".join(f"state == '{state.value}'" for state in states)
     return f"({quoted})"
 
 

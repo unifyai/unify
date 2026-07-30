@@ -21,6 +21,12 @@ from typing import Any, Mapping
 
 import aiohttp
 
+from unify.conversation_manager.domains.recall.events import (
+    SUBSCRIBED_EVENTS,
+    RecallParticipant,
+    participant_from_payload,
+)
+
 LOGGER = logging.getLogger(__name__)
 
 # Recall deployments. Each is a wholly separate installation: an API key issued
@@ -84,22 +90,6 @@ class RecallError(RuntimeError):
 
 class RecallNotConfigured(RecallError):
     """No API key is present, so this environment cannot dispatch bots."""
-
-
-@dataclass(frozen=True)
-class RecallParticipant:
-    """One meeting participant as the platform reports it.
-
-    This is the payload that makes Recall worth adopting for attribution: the
-    platform's own name and email for a speaker, rather than a label scraped
-    out of the meeting UI.
-    """
-
-    id: str
-    name: str
-    email: str | None = None
-    is_host: bool = False
-    platform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -235,14 +225,7 @@ class RecallClient:
             # unknown top-level keys, so getting this wrong registers no
             # endpoint at all and the bot silently never sends an event --
             # indistinguishable from a relay that is down.
-            events = [
-                "participant_events.join",
-                "participant_events.leave",
-                "participant_events.update",
-                "participant_events.speech_on",
-                "participant_events.speech_off",
-                "participant_events.chat_message",
-            ]
+            events = list(SUBSCRIBED_EVENTS)
             if capture_participant_video:
                 # PNG rather than H264: 360p at 2fps needs no decoder and no
                 # web_4_core variant (+$0.10/hr), and H264 only reaches
@@ -388,28 +371,13 @@ def _parse_bot_state(body: Mapping[str, Any]) -> RecallBotState:
 
 
 def _parse_participants(value: Any) -> tuple[RecallParticipant, ...]:
+    """The roster from a REST bot payload's ``meeting_participants``.
+
+    Shares its per-entry parsing with the realtime relay so a participant means
+    the same thing whichever source reported them.
+    """
+
     if not isinstance(value, list):
         return ()
-    participants = []
-    for entry in value:
-        if not isinstance(entry, Mapping):
-            continue
-        participant_id = entry.get("id")
-        if participant_id is None:
-            continue
-        extra = entry.get("extra_data")
-        email = entry.get("email")
-        if not email and isinstance(extra, Mapping):
-            email = extra.get("email")
-        participants.append(
-            RecallParticipant(
-                id=str(participant_id),
-                name=str(entry.get("name") or ""),
-                email=str(email) if email else None,
-                is_host=bool(entry.get("is_host")),
-                platform=(
-                    str(entry.get("platform")) if entry.get("platform") else None
-                ),
-            ),
-        )
-    return tuple(participants)
+    parsed = (participant_from_payload(entry) for entry in value)
+    return tuple(p for p in parsed if p is not None)

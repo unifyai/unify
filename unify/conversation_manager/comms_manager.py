@@ -1018,6 +1018,7 @@ class CommsManager:
                     "team_ids": event.get("team_ids") or [],
                     "team_summaries": event.get("team_summaries") or [],
                     "is_coordinator": event.get("is_coordinator", False),
+                    "is_multiplayer": event.get("is_multiplayer", False),
                     "update_kind": event.get("update_kind", "general"),
                 }
                 await publish(
@@ -2825,6 +2826,7 @@ class CommsManager:
                     "team_ids": event.get("team_ids") or [],
                     "team_summaries": event.get("team_summaries") or [],
                     "is_coordinator": event.get("is_coordinator", False),
+                    "is_multiplayer": event.get("is_multiplayer", False),
                     "wake_reasons": event.get("wake_reasons") or [],
                 }
 

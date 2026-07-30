@@ -372,6 +372,14 @@ jobs:
       continue-on-error: true
       run: orchestra/scripts/local.sh stop || true
 
+    - name: Collect orchestra server log
+      if: always()
+      continue-on-error: true
+      # Server-side tracebacks (logger.exception in request handlers) exist
+      # only here; without this file a backend programming error is reduced to
+      # whatever one-line detail reached the client.
+      run: cp /tmp/orchestra-local-server.log logs/orchestra-server.log || true
+
     - name: Upload flow smoke logs
       if: always()
       uses: actions/upload-artifact@v4

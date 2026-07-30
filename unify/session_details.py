@@ -280,6 +280,10 @@ class AssistantDetails:
     slack_team_id: str = ""
     has_ms_teams_bot: bool = False
     is_coordinator: bool = False
+    # Coordinator multiplayer mode: hire-like comms surface and open audience
+    # instead of the private boss-only surface. Meaningful only when
+    # is_coordinator is True.
+    is_multiplayer: bool = False
     # Default LLM as a unillm 'model@provider' endpoint plus a reasoning-effort
     # level. Empty = platform default (UNIFY_MODEL and per-call-site efforts).
     default_model: str = ""
@@ -487,6 +491,20 @@ class SessionDetails:
         self.assistant.is_coordinator = value
 
     @property
+    def is_multiplayer(self) -> bool:
+        """Shortcut to assistant.is_multiplayer for role-gated runtime behavior."""
+        return self.assistant.is_multiplayer
+
+    @is_multiplayer.setter
+    def is_multiplayer(self, value: bool) -> None:
+        self.assistant.is_multiplayer = value
+
+    @property
+    def is_private_coordinator(self) -> bool:
+        """A coordinator still in single-player mode: boss-only on every channel."""
+        return self.assistant.is_coordinator and not self.assistant.is_multiplayer
+
+    @property
     def self_contact_id(self) -> int:
         """Shortcut to assistant.self_contact_id for convenient access."""
         return self.assistant.self_contact_id
@@ -577,6 +595,7 @@ class SessionDetails:
         managed_desktop_status: str | None = None,
         user_desktops: "list[UserDesktopLink | dict] | dict[str, UserDesktopLink | dict] | None" = None,
         is_coordinator: bool = False,
+        is_multiplayer: bool = False,
     ) -> None:
         """Populate the session with runtime values.
 
@@ -599,6 +618,7 @@ class SessionDetails:
         self.assistant.slack_team_id = _runtime_str(assistant_slack_team_id)
         self.assistant.has_ms_teams_bot = bool(assistant_has_ms_teams_bot)
         self.assistant.is_coordinator = is_coordinator
+        self.assistant.is_multiplayer = is_multiplayer
         self.assistant.contact_id = assistant_contact_id
         self.self_contact_id = assistant_self_contact_id
         self.assistant.binding_id = _runtime_str(binding_id)
@@ -690,6 +710,7 @@ class SessionDetails:
             self.assistant.user_desktops,
         )
         os.environ["ASSISTANT_IS_COORDINATOR"] = str(self.assistant.is_coordinator)
+        os.environ["ASSISTANT_IS_MULTIPLAYER"] = str(self.assistant.is_multiplayer)
         os.environ["ASSISTANT_DEFAULT_MODEL"] = _runtime_str(
             self.assistant.default_model,
         )

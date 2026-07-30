@@ -149,6 +149,11 @@ def _kill_port(port: int) -> bool:
 def _restart_agent_service_with_key(api_key: str) -> None:
     """Kill and restart the agent-service so it picks up the user's API key.
 
+    ``entrypoint.sh`` starts the service with the container's own key as part of
+    the desktop substrate, so this is a genuine respawn rather than a cold start.
+    Do not treat it as the only start path: offline task pods have no
+    ConversationManager and would otherwise have nothing listening on 3000.
+
     1. Updates the agent-service .env file (UNIFY_KEY + infrastructure URLs)
     2. Kills the process listening on port 3000
     3. Spawns a new agent-service with logs to /var/log/unity/agent-service.log
@@ -751,6 +756,10 @@ async def _(
     **kwargs,
 ):
     """Handle request to join a Google Meet — spawn browser + audio bridge."""
+    # Backstop for the tool-surface gate: a single-player twin never enters
+    # a browser meeting, whatever path the request arrived through.
+    if SESSION_DETAILS.is_private_coordinator:
+        return
     if (
         cm.mode.is_voice
         or cm.call_manager.has_active_call
@@ -872,6 +881,10 @@ async def _(
     **kwargs,
 ):
     """Handle request to join a Microsoft Teams meeting — spawn browser + audio bridge."""
+    # Backstop for the tool-surface gate: a single-player twin never enters
+    # a browser meeting, whatever path the request arrived through.
+    if SESSION_DETAILS.is_private_coordinator:
+        return
     if (
         cm.mode.is_voice
         or cm.call_manager.has_active_call
@@ -1701,10 +1714,10 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     for key, value in {
                         "contact_id": contact_id,
                         # Who was in the meeting when this line was said. The
-                        # platform reports names but, for bots created through
-                        # the Create Bot API, no emails -- so the roster is the
-                        # only record of who could have spoken, and it is worth
-                        # keeping per line because attendance changes mid-call.
+                        # platform reports names reliably and emails only
+                        # sometimes, so the roster is the record of who could
+                        # have spoken, and it is worth keeping per line because
+                        # attendance changes mid-call.
                         # ``or None`` so an empty roster is dropped rather than
                         # stored as an empty list.
                         "participant_names": (
