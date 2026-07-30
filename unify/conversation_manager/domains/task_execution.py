@@ -972,6 +972,56 @@ async def _dispatch_offline_explicit_candidate_local(
     }
 
 
+def _multiplayer_flipped_wake_reason(reason: object) -> dict | None:
+    """Return the flip payload when the wake reason announces multiplayer."""
+    if (
+        not isinstance(reason, dict)
+        or reason.get("type") != "coordinator_multiplayer_flipped"
+    ):
+        return None
+    return reason
+
+
+async def _handle_multiplayer_flipped_wake_reason(
+    reason: dict,
+    cm: "ConversationManager",
+) -> None:
+    """Surface the multiplayer transition so the brain announces it.
+
+    The flip retires the shared pool contact details out from under the
+    boss's address book, so the very first act of the multiplayer twin is
+    telling them where it now lives. The notification carries every fact
+    the message needs; the brain composes it in its own voice.
+    """
+    from unify.common.prompt_helpers import now as prompt_now
+    from unify.session_details import SESSION_DETAILS
+
+    alias_email = str(reason.get("alias_email") or "") or (
+        SESSION_DETAILS.assistant.email or ""
+    )
+    address_line = (
+        f"My new dedicated email address is {alias_email}. " if alias_email else ""
+    )
+    cm.notifications_bar.push_notif(
+        "System",
+        (
+            "Multiplayer mode is now active. "
+            f"{address_line}"
+            "The shared T-W1N contact details (the old shared email address, "
+            "phone number, and WhatsApp) no longer reach me. I must message "
+            "my boss RIGHT NOW with: my new email address, a heads-up that "
+            "the old shared contact details no longer work, and a pointer to "
+            "my Contact Details page in the Console if they want to add a "
+            "dedicated phone or WhatsApp number for me."
+        ),
+        prompt_now(),
+    )
+    await cm.request_llm_run(
+        delay=0,
+        triggering_contact_id=SESSION_DETAILS.boss_contact_id,
+    )
+
+
 async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
     """Replay startup wake reasons once managers are initialized."""
 
@@ -1004,6 +1054,11 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         )
         if coordinator_delegate_event is not None:
             await _handle_coordinator_delegate_event(coordinator_delegate_event, cm)
+            continue
+
+        flipped_reason = _multiplayer_flipped_wake_reason(wake_reason)
+        if flipped_reason is not None:
+            await _handle_multiplayer_flipped_wake_reason(flipped_reason, cm)
             continue
 
         cm._session_logger.info(
