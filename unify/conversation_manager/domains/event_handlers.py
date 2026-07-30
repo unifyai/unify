@@ -149,6 +149,11 @@ def _kill_port(port: int) -> bool:
 def _restart_agent_service_with_key(api_key: str) -> None:
     """Kill and restart the agent-service so it picks up the user's API key.
 
+    ``entrypoint.sh`` starts the service with the container's own key as part of
+    the desktop substrate, so this is a genuine respawn rather than a cold start.
+    Do not treat it as the only start path: offline task pods have no
+    ConversationManager and would otherwise have nothing listening on 3000.
+
     1. Updates the agent-service .env file (UNIFY_KEY + infrastructure URLs)
     2. Kills the process listening on port 3000
     3. Spawns a new agent-service with logs to /var/log/unity/agent-service.log
