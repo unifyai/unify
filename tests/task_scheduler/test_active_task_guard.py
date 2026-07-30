@@ -101,3 +101,51 @@ def test_cancel_open_executions_still_cancels_non_running_open_states(
 
     assert len(update_calls) == 1
     assert update_calls[0]["state"] == ExecutionState.cancelled.value
+
+
+def test_upsert_custom_task_allows_armed_triggerable_task(monkeypatch):
+    """An armed (triggerable) custom task must still be synced, not skipped."""
+
+    monkeypatch.setattr(
+        task_scheduler_module,
+        "find_running_execution_for_task",
+        _fake_find_running_execution(running_states={ExecutionState.triggerable}),
+    )
+    scheduler = _scheduler_with_task()
+    update_calls: list[int] = []
+    scheduler._update_custom_task = lambda **kwargs: update_calls.append(
+        kwargs["task_id"],
+    )
+
+    scheduler._upsert_one_custom_task(
+        custom_key="k",
+        source_data={"custom_hash": "new"},
+        db_tasks={"k": {"task_id": 5, "custom_hash": "old"}},
+        function_name_to_id={},
+        insert_lock=None,
+    )
+
+    assert update_calls == [5]
+
+
+def test_upsert_custom_task_skips_genuinely_running_task(monkeypatch):
+    monkeypatch.setattr(
+        task_scheduler_module,
+        "find_running_execution_for_task",
+        _fake_find_running_execution(running_states={ExecutionState.running}),
+    )
+    scheduler = _scheduler_with_task()
+    update_calls: list[int] = []
+    scheduler._update_custom_task = lambda **kwargs: update_calls.append(
+        kwargs["task_id"],
+    )
+
+    scheduler._upsert_one_custom_task(
+        custom_key="k",
+        source_data={"custom_hash": "new"},
+        db_tasks={"k": {"task_id": 5, "custom_hash": "old"}},
+        function_name_to_id={},
+        insert_lock=None,
+    )
+
+    assert update_calls == []
