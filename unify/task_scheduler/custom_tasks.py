@@ -31,6 +31,7 @@ TASK_SYNC_FIELDS = (
     "max_runtime_seconds",
     "repeat",
     "priority",
+    "tags",
     "response_policy",
     "entrypoint_function",
     "offline",
@@ -51,6 +52,7 @@ class CustomTaskSourceEntry(BaseModel):
     max_runtime_seconds: Optional[int] = None
     repeat: Optional[List[Dict[str, Any]]] = None
     priority: str = "normal"
+    tags: Optional[List[str]] = None
     response_policy: Optional[str] = None
     entrypoint_function: Optional[str] = None
     offline: bool = False
@@ -187,6 +189,7 @@ def collect_custom_tasks(
             "max_runtime_seconds": entry.max_runtime_seconds,
             "repeat": entry.repeat,
             "priority": entry.priority,
+            "tags": entry.tags,
             "response_policy": entry.response_policy,
             "entrypoint_function": entry.entrypoint_function,
             "offline": entry.offline,
