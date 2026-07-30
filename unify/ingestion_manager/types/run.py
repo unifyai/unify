@@ -78,6 +78,29 @@ class LogEntry(BaseModel):
     message: str
 
 
+class IngestionEventRow(AuthoredRow):
+    """Row stored in the ``Ingestion/Events`` context.
+
+    One append-only line per thing that happened. Stage progress is folded from
+    these rather than kept as a separate counter, so there is one source of truth: a
+    counter maintained alongside events drifts the moment a worker dies between
+    incrementing it and recording why.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_key: str
+    at: str
+    stage: Optional[str] = None
+    level: Literal["info", "warning", "error"] = "info"
+    message: str = ""
+    # Progress carried on the event so a reader can reconstruct where a stage got
+    # to without replaying the work.
+    state: Optional[str] = None
+    done: Optional[int] = None
+    total: Optional[int] = None
+
+
 class IngestionRunRecord(AuthoredRow):
     """Row stored in the ``Ingestion/Runs`` context.
 
