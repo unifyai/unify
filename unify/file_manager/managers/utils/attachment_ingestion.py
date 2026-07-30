@@ -1,9 +1,24 @@
+"""Attachment ingestion: hand the file to IngestionManager, track its status.
+
+An attachment used to take one of two entirely separate routes. With cloud
+dispatch configured it published to the worker fleet; without, it parsed on a
+thread **inside the assistant's own process** -- which is the case this module no
+longer contains. Parsing loads the file and its model into whatever process does
+it, and a thread shares that process's memory limit, so an oversized attachment
+could take the assistant down with it. Neither route checkpointed, so an
+interrupted attachment was simply lost.
+
+Both are now one call to ``IngestionManager.submit``, which decides where the work
+runs from a single rule and checkpoints it either way. What remains here is the
+part that is genuinely FileManager's: keeping ``FileRecords.ingestion_status``
+current, because that is what the UI reads to show an attachment as still landing.
+"""
+
 from __future__ import annotations
 
 import logging
 import threading
-import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Sequence
 
 from unify.file_manager.types.config import FilePipelineConfig
@@ -17,22 +32,31 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
+# How long a status watcher follows one attachment before giving up on it. The
+# run itself is unaffected -- it is recorded, checkpointed and resumable, so this
+# bounds only how long a thread sits here waiting to relay the outcome.
+_WATCH_TIMEOUT_S = 3600.0
+
 
 class AttachmentIngestionPool:
-    """Manages a pool of background attachment ingestion workers.
+    """Submits attachments for ingestion and relays their status.
 
-    Wraps a ``ThreadPoolExecutor`` with deduplication so the same file path
-    is never ingested concurrently more than once.  Instances are safe for
-    use from multiple threads.
+    Holds no parsing and no queue of its own. The thread pool exists only to
+    watch runs and write their outcome back to ``FileRecords``, so its size
+    bounds concurrent *watchers*, not concurrent work -- the work is placed
+    wherever the tier decision puts it.
+
+    Deduplication is kept: the same path submitted twice while still in flight
+    would produce two runs writing the same namespace.
     """
 
     def __init__(self, *, max_workers: int = 2) -> None:
         self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
-            thread_name_prefix="attachment-ingest",
+            thread_name_prefix="attachment-watch",
         )
-        self._active: dict[str, Future[None]] = {}
+        self._active: dict[str, str] = {}
 
     def enqueue(
         self,
@@ -41,65 +65,109 @@ class AttachmentIngestionPool:
         *,
         config: FilePipelineConfig | None = None,
     ) -> list[str]:
-        queued: list[str] = []
-        ingest_config = config or _default_attachment_ingest_config()
+        """Submit each path for ingestion and return the paths now in flight.
 
-        if _pipeline_dispatch_enabled():
-            for file_path in _normalize_paths(file_paths):
-                _upsert_attachment_status(
-                    file_manager,
-                    file_path=file_path,
-                    ingestion_status="queued",
-                )
-                try:
-                    _dispatch_attachment_to_workers(
-                        file_manager,
-                        file_path=file_path,
-                    )
-                    queued.append(file_path)
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to dispatch attachment to workers",
-                        extra={"file_path": file_path},
-                    )
-                    _upsert_attachment_status(
-                        file_manager,
-                        file_path=file_path,
-                        ingestion_status="error",
-                        error=str(exc) or "dispatch failed",
-                        parse_status="error",
-                    )
-            return queued
+        ``config`` is accepted for callers that pin parse behaviour, and its
+        table-extraction choice is carried onto the target. Everything else it
+        used to control -- where the work runs, how many files at a time -- is
+        decided by the ingestion tier rule now, which is why it no longer needs
+        to be threaded through per caller.
+        """
+        queued: list[str] = []
 
         for file_path in _normalize_paths(file_paths):
             with self._lock:
-                active = self._active.get(file_path)
-                if active is not None and not active.done():
+                if file_path in self._active:
+                    # Already in flight. A second run would write the same
+                    # namespace as the first and race it.
                     queued.append(file_path)
                     continue
+                self._active[file_path] = ""
 
+            try:
+                run_id = _submit_attachment(
+                    file_manager,
+                    file_path=file_path,
+                    config=config,
+                )
+            except Exception as error:
+                logger.exception(
+                    "Failed to submit attachment for ingestion",
+                    extra={"file_path": file_path},
+                )
+                with self._lock:
+                    self._active.pop(file_path, None)
                 _upsert_attachment_status(
                     file_manager,
                     file_path=file_path,
-                    ingestion_status="queued",
+                    ingestion_status="error",
+                    error=str(error) or "could not submit for ingestion",
+                    parse_status="error",
                 )
-                future = self._executor.submit(
-                    _run_attachment_ingest_job,
-                    file_manager,
-                    file_path=file_path,
-                    config=ingest_config,
-                )
-                self._active[file_path] = future
+                continue
 
-            def _cleanup(done: Future[None], *, key: str = file_path) -> None:
-                with self._lock:
-                    if self._active.get(key) is done:
-                        self._active.pop(key, None)
-
-            future.add_done_callback(_cleanup)
+            with self._lock:
+                self._active[file_path] = run_id
+            self._executor.submit(
+                self._watch,
+                file_manager,
+                file_path=file_path,
+                run_id=run_id,
+            )
             queued.append(file_path)
 
         return queued
+
+    def _watch(
+        self,
+        file_manager: "FileManager",
+        *,
+        file_path: str,
+        run_id: str,
+    ) -> None:
+        """Follow one run and write its outcome to ``FileRecords``.
+
+        Watching rather than doing. If this thread dies the attachment still
+        completes -- the run owns the work -- and only the status relay is lost,
+        which the next read of the run repairs.
+        """
+        from unify.manager_registry import ManagerRegistry
+
+        try:
+            ingestion = ManagerRegistry.get_ingestion_manager()
+            status = ingestion.wait(run_id, timeout_s=_WATCH_TIMEOUT_S)
+            if status.state == "succeeded":
+                _upsert_attachment_status(
+                    file_manager,
+                    file_path=file_path,
+                    ingestion_status="success",
+                )
+            elif status.is_terminal:
+                _upsert_attachment_status(
+                    file_manager,
+                    file_path=file_path,
+                    ingestion_status="error",
+                    # next_step names the recovery, so the record carries what
+                    # to do rather than only that something went wrong.
+                    error=status.error or status.next_step,
+                    parse_status="error",
+                )
+            else:
+                # Still running past the watch window. Left as-is deliberately:
+                # marking it failed would be untrue, and the run is still live.
+                logger.info(
+                    "Attachment %s still ingesting after the watch window (run %s)",
+                    file_path,
+                    run_id,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to relay attachment ingestion status",
+                extra={"file_path": file_path, "run_id": run_id},
+            )
+        finally:
+            with self._lock:
+                self._active.pop(file_path, None)
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
@@ -144,10 +212,41 @@ def _normalize_paths(file_paths: str | Sequence[str]) -> list[str]:
     return [path for path in file_paths if path]
 
 
-def _default_attachment_ingest_config() -> FilePipelineConfig:
-    config = FilePipelineConfig()
-    config.execution.parallel_files = False
-    return config
+def _submit_attachment(
+    file_manager: "FileManager",
+    *,
+    file_path: str,
+    config: FilePipelineConfig | None,
+) -> str:
+    """Submit one attachment and mark the record as queued.
+
+    Targets an unnamed collection, which gives the file its own namespace --
+    attachments arrive unrelated to each other, so grouping them under a shared
+    name would make one file's re-ingest touch another's rows.
+    """
+    from unify.ingestion_manager.types import CollectionTarget, FilesSource
+    from unify.manager_registry import ManagerRegistry
+
+    _upsert_attachment_status(
+        file_manager,
+        file_path=file_path,
+        ingestion_status="queued",
+    )
+    extract_tables = True
+    if config is not None:
+        extract_tables = bool(getattr(config.ingest, "table_ingest", True))
+
+    run = ManagerRegistry.get_ingestion_manager().submit(
+        FilesSource(paths=[file_path]),
+        CollectionTarget(extract_tables=extract_tables),
+    )
+    logger.info(
+        "Submitted attachment %s for ingestion as run %s (%s)",
+        file_path,
+        run.run_id,
+        run.executed_as,
+    )
+    return run.run_id
 
 
 def _upsert_attachment_status(
@@ -177,184 +276,8 @@ def _upsert_attachment_status(
         )
 
 
-def _run_attachment_ingest_job(
-    file_manager: "FileManager",
-    *,
-    file_path: str,
-    config: FilePipelineConfig,
-) -> None:
-    try:
-        _upsert_attachment_status(
-            file_manager,
-            file_path=file_path,
-            ingestion_status="ingesting",
-        )
-        result = file_manager.ingest_files(file_path, config=config)
-        file_result = getattr(result, "files", {}).get(file_path)
-        if file_result is None:
-            _upsert_attachment_status(
-                file_manager,
-                file_path=file_path,
-                ingestion_status="error",
-                error="attachment ingestion completed without a per-file result",
-                parse_status="error",
-            )
-            return
-        if getattr(file_result, "status", None) == "error":
-            _upsert_attachment_status(
-                file_manager,
-                file_path=file_path,
-                ingestion_status="error",
-                error=getattr(file_result, "error", None) or "file could not be parsed",
-                parse_status="error",
-            )
-            return
-        _upsert_attachment_status(
-            file_manager,
-            file_path=file_path,
-            ingestion_status="success",
-        )
-    except Exception as exc:
-        logger.exception(
-            "Attachment ingestion job failed",
-            extra={"file_path": file_path},
-        )
-        _upsert_attachment_status(
-            file_manager,
-            file_path=file_path,
-            ingestion_status="error",
-            error=str(exc) or "attachment ingestion failed",
-            parse_status="error",
-        )
-
-
 # ---------------------------------------------------------------------------
-# Worker dispatch (attachment -> GKE parse/ingest workers)
-# ---------------------------------------------------------------------------
-
-
-def _pipeline_dispatch_enabled() -> bool:
-    """Return True when attachment ingestion should dispatch to GKE workers.
-
-    Checks ``SETTINGS.file.PIPELINE_DISPATCH_ENABLED`` and verifies that a
-    bucket and GCP project are configured; otherwise falls back to the
-    in-process ``AttachmentIngestionPool``.
-    """
-    try:
-        from unify.settings import SETTINGS
-    except Exception:
-        return False
-    if not SETTINGS.file.PIPELINE_DISPATCH_ENABLED:
-        return False
-    if not SETTINGS.file.PIPELINE_ARTIFACT_BUCKET:
-        return False
-    if not SETTINGS.GCP_PROJECT_ID:
-        return False
-    return True
-
-
-def _dispatch_attachment_to_workers(
-    file_manager: "FileManager",
-    *,
-    file_path: str,
-) -> None:
-    """Upload attachment bytes to GCS and publish a ParseRequested envelope.
-
-    Uses :func:`unify.common.pipeline.publish_parse_request` so the GCS
-    upload + Pub/Sub publish logic (and the ``one file per
-    ParseRequested`` invariant) stays in one place shared with operator
-    dispatch scripts. The attachment path sets ``ingestion_mode="fm"``
-    and an ``FmBinding`` so the ingest worker lands the file under
-    ``Files/{alias}/{storage_id}/...`` via ``fm_process_plan``, not a
-    bare ``DataManager`` context.
-
-    The ingest worker publishes an ``attachment_ingestion_complete``
-    event back to the per-assistant topic, which ``CommsManager``
-    dispatches into the existing event broker.
-    """
-    from unify.common.pipeline import (
-        DispatchTarget,
-        publish_parse_request,
-    )
-    from unify.common.pipeline.types import AttachmentCallback, FmBinding
-    from unify.session_details import SESSION_DETAILS, UNASSIGNED_USER_CONTEXT
-    from unify.settings import SETTINGS
-
-    bucket_name = SETTINGS.file.PIPELINE_ARTIFACT_BUCKET
-    project_id = SETTINGS.GCP_PROJECT_ID
-    env_suffix = SETTINGS.ENV_SUFFIX
-
-    assistant_id = getattr(
-        getattr(SESSION_DETAILS, "assistant", None),
-        "agent_id",
-        None,
-    )
-    if not assistant_id:
-        raise RuntimeError(
-            "PIPELINE_DISPATCH_ENABLED requires SESSION_DETAILS.assistant.agent_id",
-        )
-    user_id = (
-        getattr(getattr(SESSION_DETAILS, "user", None), "id", None)
-        or UNASSIGNED_USER_CONTEXT
-    )
-
-    data = file_manager._open_bytes_by_filepath(file_path)
-    attachment_id = uuid.uuid4().hex
-    job_id = f"attachment-{assistant_id}-{attachment_id}"
-
-    callback = AttachmentCallback(
-        assistant_id=str(assistant_id),
-        env_suffix=env_suffix,
-        display_name=file_path,
-    )
-    # Attachments always land under the "Local" alias -- this is the
-    # alias exposed by ``LocalFileSystemAdapter`` and mirrors what the
-    # ingest worker reconstructs via ``LocalFileSystemAdapter(root=None,
-    # enable_sync=False)`` in :func:`_run_fm_mode`.
-    fm_binding = FmBinding(
-        user_id=str(user_id),
-        assistant_id=str(assistant_id),
-        fm_alias="Local",
-        logical_path=file_path,
-    )
-    # No ``upload_prefix`` -- ``publish_parse_request`` composes every
-    # source file under ``jobs/<job_id>/source/<basename>``. Because
-    # ``job_id = f"attachment-{assistant_id}-{attachment_id}"`` below,
-    # attachments remain scoped per-assistant-and-attachment, just
-    # nested under the unified ``jobs/`` root that every other
-    # pipeline artifact also lives under.
-    target = DispatchTarget(
-        project_id=project_id,
-        bucket_name=bucket_name,
-        env_suffix=env_suffix,
-    )
-
-    result = publish_parse_request(
-        target=target,
-        logical_path=file_path,
-        ingestion_mode="fm",
-        fm_binding=fm_binding,
-        source_bytes=data,
-        attachment_callback=callback,
-        job_id=job_id,
-        pubsub_attributes={"thread": "attachment_parse"},
-    )
-
-    _upsert_attachment_status(
-        file_manager,
-        file_path=file_path,
-        ingestion_status="dispatched",
-    )
-    logger.info(
-        "Dispatched attachment to parse worker: job=%s uri=%s message_id=%s",
-        result.job_id,
-        result.gs_uri,
-        result.message_id,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Completion callback (invoked by CommsManager when the worker reports back)
+# Completion callback (invoked by CommsManager when a worker reports back)
 # ---------------------------------------------------------------------------
 
 
@@ -368,7 +291,10 @@ def apply_attachment_completion(
     """Update ``FileRecords`` for a completed worker-dispatched attachment.
 
     Called from ``CommsManager`` when a ``thread="attachment_ingestion_complete"``
-    message arrives on the per-assistant Pub/Sub topic.
+    message arrives on the per-assistant topic. Kept alongside the watcher rather
+    than replaced by it: the callback arrives as soon as the fleet finishes, where
+    the watcher only notices on its next poll, so the two together make the status
+    prompt without either being the sole path.
     """
     if status == "success":
         _upsert_attachment_status(
