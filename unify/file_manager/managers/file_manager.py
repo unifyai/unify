@@ -1577,63 +1577,6 @@ class FileManager(BaseFileManager):
                 successful_paths.append(orig)
 
             if not successful_parse_results:
-                if getattr(getattr(cfg, "cost", None), "enable_cost_ledger", False):
-                    from unify.common.pipeline import (
-                        JsonlCostLedger,
-                        PipelineCostAccumulator,
-                        PipelineCostRateCard,
-                        build_observability_cost_line_items,
-                        build_parse_cost_line_items,
-                        generate_cost_ledger_path,
-                    )
-
-                    rate_card = PipelineCostRateCard.from_config(cfg.cost)
-                    accumulator = PipelineCostAccumulator(
-                        run_id=run_id,
-                        rate_card=rate_card,
-                        environment=getattr(cfg.cost, "environment", "local"),
-                        tenant_id=getattr(cfg.cost, "tenant_id", None),
-                    )
-                    for pr in parse_results:
-                        _trace = getattr(pr, "trace", None)
-                        accumulator.add_line_items(
-                            build_parse_cost_line_items(
-                                run_id=run_id,
-                                file_path=str(getattr(pr, "logical_path", "") or ""),
-                                parse_duration_seconds=(
-                                    getattr(_trace, "duration_seconds", 0.0) or 0.0
-                                ),
-                                parse_backend=getattr(_trace, "backend", None),
-                                trace_status=getattr(_trace, "status", None),
-                                rate_card=rate_card,
-                            ),
-                        )
-                    accumulator.add_line_items(
-                        build_observability_cost_line_items(
-                            run_id=run_id,
-                            rate_card=rate_card,
-                            progress_event_count=(
-                                2 * len(parse_results)
-                                if enable_progress and _reporter is not None
-                                else 0
-                            ),
-                            run_manifest_count=0,
-                            file_manifest_count=0,
-                            stage_manifest_count=0,
-                            cost_ledger_count=1,
-                        ),
-                    )
-                    cost_ledger = JsonlCostLedger(
-                        path=(
-                            getattr(cfg.cost, "cost_ledger_file", None)
-                            or generate_cost_ledger_path()
-                        ),
-                    )
-                    try:
-                        cost_ledger.write(accumulator.build_ledger())
-                    finally:
-                        cost_ledger.flush()
-                        cost_ledger.close()
                 return IngestPipelineResult.from_results(error_results)
 
             # Build results and ingest per-file artifacts using the PipelineExecutor

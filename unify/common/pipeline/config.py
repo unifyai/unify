@@ -36,7 +36,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from unify.data_manager.types.ingest import PostIngestConfig
 from unify.file_manager.types.config import (
-    CostLedgerConfig,
     DiagnosticsConfig,
     EmbeddingsConfig,
     ExecutionConfig,
@@ -106,7 +105,6 @@ class PipelineConfig(BaseModel):
     retry: RetryConfig = Field(default_factory=RetryConfig)
     diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
     transport: TransportConfig = Field(default_factory=TransportConfig)
-    cost: CostLedgerConfig = Field(default_factory=CostLedgerConfig)
 
     # -- factory -----------------------------------------------------------
 
@@ -177,7 +175,6 @@ class PipelineConfig(BaseModel):
             output=self.output,
             diagnostics=self.diagnostics,
             transport=self.transport,
-            cost=self.cost,
             execution=ExecutionConfig(
                 parallel_files=self.execution.parallel_files,
                 max_file_workers=self.execution.max_file_workers,

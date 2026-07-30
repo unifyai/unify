@@ -280,7 +280,6 @@ class LocalDeploymentIngestionRunner:
                 j.status = "success"
                 j.finished_at = utc_now_iso()
                 j.error = None
-                j.cost_ledger_path = outcome.cost_ledger_path
                 j.observability_refs = outcome.observability_refs
                 j.metadata.update(outcome.metadata)
 

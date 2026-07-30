@@ -35,7 +35,6 @@ from unify.common.pipeline import (
     ArtifactWorkItem,
     IngestCheckpoint,
     IngestPlan,
-    ParsedFileBundle,
     PipelineCancelled,
     PipelineInstrumentation,
     ingest_artifacts,
@@ -154,71 +153,6 @@ def _make_checkpoint_callback(
             )
 
     return _on_task_complete
-
-
-# ---------------------------------------------------------------------------
-# Parse-cost metric extraction (keeps parser imports out of cost_ledger.py)
-# ---------------------------------------------------------------------------
-
-
-def _extract_parse_cost_metrics(
-    parse_result,
-    file_path: str,
-    parse_config,
-) -> dict:
-    """Extract pre-computed metrics from a FileParseResult for cost estimation.
-
-    Returns kwargs suitable for ``build_parse_cost_line_items``.
-    """
-    from pathlib import Path as _Path
-
-    from unify.file_manager.file_parsers.types.contracts import FileParseRequest
-    from unify.file_manager.file_parsers.utils.memory_scheduler import (
-        estimate_peak_memory_bytes,
-    )
-
-    trace = getattr(parse_result, "trace", None)
-    duration_ms = float(getattr(trace, "duration_ms", 0.0) or 0.0)
-    trace_status = getattr(getattr(trace, "status", None), "value", None)
-    backend = getattr(trace, "backend", None)
-
-    estimated_peak_bytes = 0
-    source_candidates = [
-        getattr(trace, "source_local_path", None),
-        getattr(trace, "parsed_local_path", None),
-        file_path,
-    ]
-    for candidate in source_candidates:
-        if not candidate:
-            continue
-        try:
-            path = _Path(str(candidate)).expanduser()
-        except Exception:
-            continue
-        if not path.exists():
-            continue
-        request = FileParseRequest(
-            logical_path=file_path,
-            source_local_path=str(path),
-        )
-        estimated_peak_bytes = estimate_peak_memory_bytes(request)
-        break
-
-    llm_calls = 0
-    for step in list(getattr(trace, "steps", []) or []):
-        counters = getattr(step, "counters", {}) or {}
-        for key in ("llm_calls", "summary_calls", "metadata_calls"):
-            value = counters.get(key)
-            if value:
-                llm_calls += int(value)
-
-    return {
-        "parse_duration_seconds": duration_ms / 1000.0,
-        "estimated_peak_memory_bytes": estimated_peak_bytes,
-        "llm_enrichment_calls": llm_calls,
-        "parse_backend": backend,
-        "trace_status": trace_status,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -608,14 +542,6 @@ def fm_process_file(
         if not fr_outcome.success:
             raise RuntimeError(f"File record creation failed: {fr_outcome.error}")
 
-        instrumentation.add_transport_costs(
-            file_path=file_path,
-            file_id=file_id,
-            storage_id=storage_id,
-            bundle=ingest_payload.bundle,
-            retention_days=getattr(config.cost, "artifact_retention_days", 30),
-        )
-
         # 2. Build ArtifactWorkItems for content + tables
         work_items: List[ArtifactWorkItem] = []
         tables = list(getattr(parse_result, "tables", []) or [])
@@ -748,15 +674,6 @@ def fm_process_file(
                         **(src_item.meta if src_item else {}),
                     },
                 )
-
-        instrumentation.add_observability_costs(
-            progress_event_count=(
-                1 + len(work_items) + 1 if enable_progress and reporter else 0
-            ),
-            file_path=file_path,
-            file_id=file_id,
-            storage_id=storage_id,
-        )
 
         # 5. Aggregate
         content_ar = next((r for r in artifact_results if r.kind == "content"), None)
@@ -980,20 +897,6 @@ def fm_process_plan(
         if not fr_outcome.success:
             raise RuntimeError(f"File record creation failed: {fr_outcome.error}")
 
-        # Transport cost accounting still needs a ParsedFileBundle view of
-        # the per-table handles; reconstruct a lightweight one from the plan.
-        transport_bundle = ParsedFileBundle(
-            result=parse_summary,
-            table_inputs=dict(plan.table_inputs or {}),
-        )
-        instrumentation.add_transport_costs(
-            file_path=file_path,
-            file_id=file_id,
-            storage_id=storage_id,
-            bundle=transport_bundle,
-            retention_days=getattr(config.cost, "artifact_retention_days", 30),
-        )
-
         # 2. Build ArtifactWorkItems for content + tables
         work_items: List[ArtifactWorkItem] = []
         do_tables = bool(config.ingest.table_ingest and plan.tables_meta)
@@ -1168,15 +1071,6 @@ def fm_process_plan(
                         **(src_item.meta if src_item else {}),
                     },
                 )
-
-        instrumentation.add_observability_costs(
-            progress_event_count=(
-                1 + len(work_items) + 1 if enable_progress and reporter else 0
-            ),
-            file_path=file_path,
-            file_id=file_id,
-            storage_id=storage_id,
-        )
 
         content_ar = next((r for r in artifact_results if r.kind == "content"), None)
         table_ars = [r for r in artifact_results if r.kind == "table"]
@@ -1371,7 +1265,7 @@ def run_pipeline(
     reporter : ProgressReporter | None
         Optional progress reporter.
     all_parse_results : list | None
-        All parse results (including failures) for cost accounting.
+        All parse results, including failures, so the run manifest counts them.
     run_id : str | None
         Pipeline run ID.
     enable_progress : bool
@@ -1407,15 +1301,6 @@ def run_pipeline(
     )
 
     with instrumentation:
-        # Record parse costs for all files (including failures)
-        if instrumentation.has_cost_tracking:
-            for pr in list(all_parse_results or parse_results):
-                logical_path = str(getattr(pr, "logical_path", "") or "")
-                instrumentation.add_parse_costs(
-                    file_path=logical_path,
-                    **_extract_parse_cost_metrics(pr, logical_path, config.parse),
-                )
-
         if enable_progress:
             logger.info(
                 f"Processing {len(parse_results)} files "
@@ -1482,15 +1367,6 @@ def run_pipeline(
 
         if enable_progress and reporter:
             reporter.flush()
-
-        # Final run-level observability costs
-        instrumentation.add_observability_costs(
-            progress_event_count=(
-                2 * len(list(all_parse_results or parse_results))
-                if enable_progress and reporter
-                else 0
-            ),
-        )
 
         # Update file count for the completed manifest
         success_count = sum(
