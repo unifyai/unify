@@ -66,16 +66,6 @@ WORKDIR /app
 # Remove git credentials after all git operations (security best practice)
 RUN git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
-# UNITY_SHA is the commit of this source tree. A content-addressed COPY should
-# invalidate on its own, but the registry cache import has been observed serving
-# a stale /app layer: unity-base:latest shipped a deploy/entrypoint.sh 62 lines
-# behind the commit the image was tagged with, so a deploy succeeded end to end
-# while changing nothing in the running pods. Referencing the SHA in a RUN ahead
-# of the COPY moves the cache key with every commit, the same way DEP_REPOS_SHA
-# does for the cloned dependencies above.
-ARG UNITY_SHA=unknown
-RUN echo "unity_sha=${UNITY_SHA}"
-
 # Copy source and install unify with all dependencies
 COPY . /app
 RUN uv pip install --system --no-cache .
