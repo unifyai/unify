@@ -3,9 +3,9 @@
 Two of them are load-bearing and neither is visible in a result, which is why they
 are tested directly rather than through a run:
 
-* **Which tier runs a request.** Getting it wrong is either a needless cloud
-  dispatch that adds minutes to seconds of work, or a plan held open by an
-  ingestion that should have been queued.
+* **Where a request runs.** Getting it wrong means either parsing a large file in
+  the assistant's own process, or paying queue latency for work that would have
+  finished sooner than the round trip.
 * **What a caller should do next.** A status that has to be interpreted eventually
   is, and the two ways that goes wrong are a retry that duplicates data and a
   failure nobody notices.
@@ -20,7 +20,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from unify.ingestion_manager.policy import choose_tier, next_step, stages_from_events
+from unify.ingestion_manager.policy import (
+    choose_tier,
+    next_step,
+    stages_from_events,
+)
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.ingestion_manager.types import (
     CollectionTarget,
@@ -32,80 +36,111 @@ from unify.ingestion_manager.types import (
     TableTarget,
 )
 
+# A fleet is configured, so the tier decision is a real choice rather than the
+# single-option fallback. The ceiling is small so the tests read clearly.
 SETTINGS = IngestionSettings(
     MAX_INLINE_ROWS=100,
-    MAX_INLINE_FILES=2,
-    MAX_INLINE_BYTES=1024,
+    PIPELINE_URL="https://comms.example/",
 )
 
 
-def request(source, target=None, mode="auto") -> IngestionRequest:
+def request(source, target=None) -> IngestionRequest:
     return IngestionRequest(
         source=source,
         target=target or TableTarget(context="Data/Target"),
-        mode=mode,
     )
 
 
 class TestTierSelection:
     def test_a_small_pull_stays_in_process(self):
-        # An API page or connected-app pull is seconds of work; dispatching it would
-        # add queue latency for nothing.
+        # An API page or connected-app pull finishes faster than a queue round
+        # trip, and the next step in the plan usually wants it immediately.
         assert (
             choose_tier(request(RowsSource(rows=[{"a": 1}] * 10)), SETTINGS) == "inline"
         )
 
     def test_a_large_row_set_is_dispatched(self):
+        # Past the ceiling this is sustained I/O. Workers scale out for it; the
+        # assistant's process would be competing with itself.
         assert (
             choose_tier(request(RowsSource(rows=[{"a": 1}] * 500)), SETTINGS)
             == "dispatched"
         )
 
-    def test_a_folder_is_always_dispatched(self):
-        # A folder states that the set is open-ended. Its size cannot be known
-        # without walking it, and a plan must not be held open to find out.
-        tier = choose_tier(
-            request(FolderSource(path="/exports", pattern="*.xlsx")),
-            SETTINGS,
-        )
-        assert tier == "dispatched"
+    def test_the_ceiling_is_inclusive(self):
+        # Stated because an off-by-one here silently moves the boundary, and the
+        # boundary is the only number in the design.
+        rows = [{"a": 1}] * SETTINGS.MAX_INLINE_ROWS
+        assert choose_tier(request(RowsSource(rows=rows)), SETTINGS) == "inline"
 
-    def test_file_count_decides_when_size_cannot_be_measured(self):
-        # These paths do not exist, so bytes are unmeasurable. The count has to
-        # decide alone rather than an assumed zero making everything look small.
-        assert choose_tier(request(FilesSource(paths=["a.pdf"])), SETTINGS) == "inline"
-        assert (
-            choose_tier(request(FilesSource(paths=["a", "b", "c"])), SETTINGS)
-            == "dispatched"
-        )
+    @pytest.mark.parametrize(
+        "source",
+        [
+            FilesSource(paths=["one.pdf"]),
+            FilesSource(paths=["a.csv", "b.csv", "c.csv"]),
+            FolderSource(path="/exports", pattern="*.xlsx"),
+        ],
+    )
+    def test_files_always_dispatch(self, source):
+        """No file count runs in process, including a single file.
 
-    def test_size_dispatches_what_the_count_would_miss(self, tmp_path):
-        # Two files sound small; two very large spreadsheets are dispatch work.
+        Parsing loads the file and its model into whatever process does it, and a
+        thread shares that process's memory limit -- so an overrun takes the
+        assistant down with the ingestion. There is also no number that predicts
+        the risk: bytes and count say nothing about page count or density. The
+        answer is therefore a boundary, not a threshold, and the boundary is the
+        process.
+        """
+        assert choose_tier(request(source), SETTINGS) == "dispatched"
+
+    def test_file_size_is_never_consulted(self, tmp_path):
+        # A large file and a small one take the same route, because size does not
+        # predict cost in either direction.
         big = tmp_path / "big.csv"
-        big.write_bytes(b"x" * 4096)
-        assert (
-            choose_tier(request(FilesSource(paths=[str(big)])), SETTINGS)
-            == "dispatched"
+        big.write_bytes(b"x" * 4_000_000)
+        assert choose_tier(request(FilesSource(paths=[str(big)])), SETTINGS) == (
+            choose_tier(request(FilesSource(paths=["tiny.csv"])), SETTINGS)
         )
 
-    def test_a_stored_table_stays_in_process(self):
-        # Read server-side in bounded pages, so the local cost does not scale with
-        # how many rows match.
+    def test_a_counted_table_is_judged_on_its_exact_count(self):
+        source = TableSource(context="Data/Source")
+        assert choose_tier(request(source), SETTINGS, row_count=10) == "inline"
+        assert choose_tier(request(source), SETTINGS, row_count=10_000) == "dispatched"
+
+    def test_an_uncounted_table_is_dispatched(self):
+        # An unknown size is not evidence of a small one. A table can hold
+        # millions of rows, so the unmeasured case takes the safe route.
         assert (
             choose_tier(request(TableSource(context="Data/Source")), SETTINGS)
-            == "inline"
+            == "dispatched"
         )
 
-    @pytest.mark.parametrize("forced", ["inline", "dispatched"])
-    def test_an_explicit_mode_wins(self, forced):
-        # The caller sometimes knows what the shape cannot show -- a small file that
-        # takes minutes to parse.
-        source = (
-            RowsSource(rows=[{"a": 1}] * 500)
-            if forced == "inline"
-            else RowsSource(rows=[{"a": 1}])
+    def test_without_a_fleet_everything_runs_in_process(self):
+        """Safe rather than merely tolerated.
+
+        Both tiers write the same artifacts and checkpoints, so a run interrupted
+        here leaves progress in the layout a fleet reads -- one configured later
+        adopts it instead of starting over.
+        """
+        local = IngestionSettings(MAX_INLINE_ROWS=100, PIPELINE_URL="")
+        assert choose_tier(request(FilesSource(paths=["a.pdf"])), local) == "inline"
+        assert (
+            choose_tier(request(RowsSource(rows=[{"a": 1}] * 5000)), local) == "inline"
         )
-        assert choose_tier(request(source, mode=forced), SETTINGS) == forced
+
+    def test_the_caller_cannot_choose(self):
+        """There is no mode field to override the decision with.
+
+        Withheld on purpose: the choice follows a measurement and a deployment
+        fact, and offering a knob would invite a guess in the one direction that
+        hurts -- parsing a large file in the assistant's own process.
+        """
+        with pytest.raises(ValidationError):
+            IngestionRequest(
+                source=RowsSource(rows=[{"a": 1}]),
+                target=TableTarget(context="Data/Target"),
+                mode="inline",
+            )
 
 
 class TestNextStep:
@@ -135,8 +170,8 @@ class TestNextStep:
         assert "column mismatch" in step
 
     def test_success_with_parked_items_is_not_reported_as_clean(self):
-        # The dangerous case: a run that finished with items parked looks fine in a
-        # listing, and the missing rows are easy to miss.
+        # The dangerous case: a run that finished with items parked looks fine in
+        # a listing, and the missing rows are easy to miss.
         step = self._step("succeeded", parked=2)
         assert 'retry(only="dlq")' in step
         assert "not in the result" in step
@@ -152,10 +187,31 @@ class TestNextStep:
         assert "cancel()" in step
         assert "retry" not in step
 
+    def test_paused_says_a_resume_continues_rather_than_restarts(self):
+        # The reason resume is safe to offer at all: it picks up from the
+        # checkpoint, so a caller cannot read it as "start over".
+        assert "checkpoint" in self._step("paused")
+
     def test_running_offers_polling_or_waiting(self):
         step = self._step("running")
         assert "get_status" in step
         assert "wait()" in step
+
+    def test_queued_says_where_it_will_run(self):
+        assert "in process" in next_step(
+            state="queued",
+            parked=0,
+            error=None,
+            executed_as="inline",
+            contexts=[],
+        )
+        assert "fleet" in next_step(
+            state="queued",
+            parked=0,
+            error=None,
+            executed_as="dispatched",
+            contexts=[],
+        )
 
     @pytest.mark.parametrize(
         "state",

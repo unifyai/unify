@@ -5,7 +5,6 @@ from unify.ingestion_manager.types.request import (
     EmbedSpec,
     FilesSource,
     FolderSource,
-    IngestionMode,
     IngestionRequest,
     IngestionSource,
     IngestionTarget,
@@ -39,7 +38,6 @@ __all__ = [
     "CollectionTarget",
     "IngestionTarget",
     "EmbedSpec",
-    "IngestionMode",
     "IngestionRequest",
     # Run vocabulary
     "RunState",
