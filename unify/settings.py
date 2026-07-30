@@ -24,6 +24,7 @@ from unify.file_manager.settings import FileSettings
 from unify.function_manager.settings import FunctionSettings
 from unify.guidance_manager.settings import GuidanceSettings
 from unify.image_manager.settings import ImageSettings
+from unify.ingestion_manager.settings import IngestionSettings
 from unify.knowledge_manager.settings import KnowledgeSettings
 from unify.memory_manager.settings import MemorySettings
 from unify.secret_manager.settings import SecretSettings
@@ -241,6 +242,7 @@ class ProductionSettings(BaseSettings):
     function: FunctionSettings = Field(default_factory=FunctionSettings)
     guidance: GuidanceSettings = Field(default_factory=GuidanceSettings)
     image: ImageSettings = Field(default_factory=ImageSettings)
+    ingestion: IngestionSettings = Field(default_factory=IngestionSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     secret: SecretSettings = Field(default_factory=SecretSettings)
