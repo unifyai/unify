@@ -257,6 +257,27 @@ def test_load_config_from_env_canonicalizes_destination(monkeypatch):
     assert config.destination == "team:7"
 
 
+def test_load_config_from_env_accepts_an_empty_revision(monkeypatch):
+    """An empty revision is a value, not an omission.
+
+    The machine-state contract stores ``str(revision or "")`` and digests that
+    exact value into ``run_key``, and a definition with no authored
+    ``task_revision`` — every deployment-reconciled task — projects all of its
+    occurrences with "". Treating empty as missing boot-crashed each of those
+    runs at dispatch, before any task code ran, so the series burned an
+    occurrence per wake with nothing but a Job-failed marker to show for it.
+    """
+
+    from unify.task_scheduler import offline_runner
+
+    _seed_env(monkeypatch, wake="scheduled")
+    monkeypatch.setenv("UNITY_OFFLINE_TASK_REVISION", "")
+
+    config = offline_runner._load_config_from_env()
+
+    assert config.revision == ""
+
+
 def test_load_config_from_env_reads_resource_flags(monkeypatch):
     """Resource knobs load from UNITY_OFFLINE_TASK_REQUIRES_* env vars."""
 
