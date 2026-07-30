@@ -559,11 +559,11 @@ class _OfflineTaskExecutionDelegate:
                 f"activation requested {self._config.function_id}, "
                 f"task row provides {entrypoint}.",
             )
-        if not requested_symbolic and entrypoint is not None:
-            raise RuntimeError(
-                "Offline task entrypoint mismatch: activation requested "
-                "agentic execution, task row provides a symbolic entrypoint.",
-            )
+        # An activation with no function id is not a request for agentic
+        # execution — it is an activation with no opinion. The definition is
+        # the authored intent, so its entrypoint governs. Refusing here failed
+        # every projected successor of a symbolic recurring task, because those
+        # occurrences historically materialized without an entrypoint.
 
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = dict(kwargs.pop("entrypoint_kwargs", {}) or {})

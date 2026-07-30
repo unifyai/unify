@@ -68,3 +68,19 @@ def test_a_starting_run_is_still_marked_running() -> None:
     body = _posted_body(post.call_args)
     assert body["state"] == "running"
     assert body["started_at"]
+
+
+def test_projection_carries_the_definitions_entrypoint() -> None:
+    """Dispatch reads the entrypoint from the materialized row.
+
+    A projected occurrence stored without one launched as agentic, and a
+    symbolic recurring task then refused its own successor at start —
+    "activation requested agentic execution, task row provides a symbolic
+    entrypoint" — so the series failed one occurrence after every re-arm.
+    """
+
+    with patch.object(machine_state, "_orchestra_admin_post") as post:
+        post.return_value = {"run": {"run_key": "k"}}
+        project_task_occurrence(_provenance(entrypoint=0))
+
+    assert _posted_body(post.call_args)["entrypoint"] == 0
