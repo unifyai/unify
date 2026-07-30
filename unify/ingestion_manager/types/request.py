@@ -241,6 +241,19 @@ class CollectionTarget(BaseModel):
                 f"CollectionTarget.name {value!r} is not a single safe path segment. "
                 "Use letters, digits, spaces, '_' or '-' -- no '/' and no '..'.",
             )
+        # An all-numeric name would alias the namespace an unnamed file is assigned,
+        # which is its numeric record id. The storage layer distinguishes a shared
+        # collection from a single file's namespace by exactly that comparison, so a
+        # collection called "42" holding the file whose id is 42 would be read as
+        # unshared -- and re-storing that one file would then clear every *other*
+        # file's rows in the collection rather than just its own. Reserving the
+        # numeric namespace makes the collision impossible instead of unlikely.
+        if cleaned.isdigit():
+            raise ValueError(
+                f"CollectionTarget.name {value!r} is all digits, which collides with "
+                "the namespace an unnamed file is given. Include at least one "
+                "letter, e.g. 'batch-42'.",
+            )
         return cleaned
 
 
