@@ -1,6 +1,26 @@
 from __future__ import annotations
 
-from .artifact_store import ArtifactStore, LocalArtifactStore
+from .artifact_store import (
+    CONTENT_ROWS_TABLE_ID,
+    ArtifactNotFound,
+    ArtifactStore,
+    LeaseNotAcquired,
+    LeaseRecord,
+    LocalArtifactStore,
+    StaleLeaseError,
+)
+from .checkpointed_ingest import (
+    INGEST_KEY_COLUMN,
+    SURRENDER_SENTINEL,
+    CheckpointedIngest,
+    DuplicateLiveAttempt,
+    IncompleteIngest,
+    IngestOutcome,
+    TableOutcome,
+    TableWork,
+    incomplete_tables,
+    wait_for_lease_release,
+)
 from .dispatch import DispatchTarget, PublishResult, publish_parse_request
 from .instrumentation import PipelineInstrumentation
 from .orchestration import (
@@ -9,19 +29,6 @@ from .orchestration import (
     ArtifactWorkResult,
     ingest_artifacts,
     run_with_retry,
-)
-from .cost_ledger import (
-    CostLedger,
-    JsonlCostLedger,
-    PipelineCostAccumulator,
-    PipelineCostLedger,
-    PipelineCostLineItem,
-    PipelineCostRateCard,
-    build_ingest_cost_line_items,
-    build_observability_cost_line_items,
-    build_parse_cost_line_items,
-    build_transport_cost_line_items,
-    generate_cost_ledger_path,
 )
 from .deployment import (
     DeploymentBundle,
@@ -94,8 +101,24 @@ from .work_queue import (
 __all__ = sorted(
     [
         # Artifact store
+        "ArtifactNotFound",
         "ArtifactStore",
+        "CONTENT_ROWS_TABLE_ID",
+        "LeaseNotAcquired",
+        "LeaseRecord",
         "LocalArtifactStore",
+        "StaleLeaseError",
+        # Checkpointed ingest (shared by every tier)
+        "CheckpointedIngest",
+        "DuplicateLiveAttempt",
+        "INGEST_KEY_COLUMN",
+        "IncompleteIngest",
+        "IngestOutcome",
+        "SURRENDER_SENTINEL",
+        "TableOutcome",
+        "TableWork",
+        "incomplete_tables",
+        "wait_for_lease_release",
         # Dispatch (publish ParseRequested)
         "DispatchTarget",
         "PublishResult",
@@ -108,18 +131,6 @@ __all__ = sorted(
         "ArtifactWorkResult",
         "ingest_artifacts",
         "run_with_retry",
-        # Cost ledger
-        "CostLedger",
-        "JsonlCostLedger",
-        "PipelineCostAccumulator",
-        "PipelineCostLedger",
-        "PipelineCostLineItem",
-        "PipelineCostRateCard",
-        "build_ingest_cost_line_items",
-        "build_observability_cost_line_items",
-        "build_parse_cost_line_items",
-        "build_transport_cost_line_items",
-        "generate_cost_ledger_path",
         # Deployment
         "DeploymentBundle",
         "DeploymentBundleArtifact",
