@@ -149,11 +149,12 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "the browser. Use ``props`` only for values that needed reasoning to "
             "produce. A canvas can ONLY display data that already lives in a "
             "table, so data from connected apps must be STORED FIRST: call the "
-            "integration tools, write rows with ``primitives.data.ingest``, keep "
-            "it fresh with ``primitives.tasks``, then bind to that table. Binding "
-            "to a table that does not exist yet fails at creation naming the "
-            "table. This is also the only way to show two apps together, since "
-            "providers cannot be joined directly. "
+            "integration tools, store rows with ``primitives.ingestion.submit`` "
+            "and ``wait`` for the run, keep it fresh with ``primitives.tasks``, "
+            "then bind to that table. Binding to a table that does not exist yet "
+            "fails at creation naming the table, so waiting is what makes the "
+            "binding valid. This is also the only way to show two apps together, "
+            "since providers cannot be joined directly. "
             "INTERACTIVITY: declare ``actions`` for anything the viewer should be "
             "able to do; give an ``input_schema`` with explicit maxItems/maxLength "
             "and set ``destructive=True`` with ``confirm`` text for anything "
@@ -215,20 +216,25 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         manager_alias="data",
         manager_registry_key="data",
         primitive_class_path="unify.data_manager.data_manager.DataManager",
-        excluded_methods=frozenset(),
+        # `ingest` is deliberately not exposed here. Storing anything goes
+        # through `primitives.ingestion.submit`, which records a run, checkpoints
+        # it and can resume it. A direct ingest call has none of that: it blocks
+        # the plan for as long as the write takes and leaves nothing to inspect
+        # if it dies part-way.
+        excluded_methods=frozenset({"ingest"}),
         priority=9,
-        domain="Data Operations & Ingestion",
+        domain="Data Operations",
         description=(
-            "Low-level and high-level data operations on any Unify context "
-            "(filter, search, reduce, join, ingest, vectorize)"
+            "Read and reshape data already stored in any Unify context "
+            "(filter, search, reduce, join, update_rows, vectorize)"
         ),
         use_when=(
-            "Data operations, aggregations, "
-            "data ingestion from APIs/warehouses, cross-context joins"
+            "Querying, aggregating or joining stored tables; updating rows in "
+            "place. To *store* new data from anywhere, use primitives.ingestion"
         ),
         examples=(
             "'Filter rows where amount > 1000', 'Join repairs with telematics', "
-            "'Sum revenue by region', 'Ingest this API data'"
+            "'Sum revenue by region', 'Mark these rows reviewed'"
         ),
         special_note=(
             "DataManager operates on any Unify context path. "
@@ -240,7 +246,65 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`update_rows(..., filter=...)` over fetch-all then per-row "
             "updates. Team-shared tables are already readable via "
             "`primitives.data` team-root fan-out — do not peek into "
-            "another assistant's private contexts."
+            "another assistant's private contexts. "
+            "STORING new data is not here: use `primitives.ingestion.submit` "
+            "for rows from an API or connected app, for files, and for "
+            "reshaping one table into another."
+        ),
+    ),
+    ManagerSpec(
+        manager_alias="ingestion",
+        manager_registry_key="ingestion",
+        primitive_class_path=(
+            "unify.ingestion_manager.ingestion_manager.IngestionManager"
+        ),
+        excluded_methods=frozenset(),
+        priority=9,
+        domain="Storing Data & Files",
+        description=(
+            "Store data from anywhere into queryable tables or document "
+            "collections: rows fetched from an API or connected app, uploaded "
+            "and attached files, a whole folder, or a reshape of a stored table"
+        ),
+        use_when=(
+            "Anything that puts NEW data somewhere it can later be queried, "
+            "searched or bound to a canvas — API responses, connected-app pulls, "
+            "attachments, uploads, exports, folder syncs, table reshapes"
+        ),
+        examples=(
+            "'Pull my HubSpot deals in and chart them', 'Ingest this PDF', "
+            "'Load the whole exports folder', 'Store these API results', "
+            "'Make a current-state table out of that event log'"
+        ),
+        special_note=(
+            "ONE VERB: `submit(source, target)`. The source says where data "
+            "comes from — `RowsSource(rows=[...])` for anything already in hand "
+            "(API responses, connected-app pulls via primitives.integrations, "
+            "computed values), `FilesSource(paths=[...])` for specific files, "
+            "`FolderSource(path=..., pattern=...)` for an open-ended set, "
+            "`TableSource(context=...)` to reshape stored rows. The target says "
+            "where it lands — `TableTarget(context=...)` for one queryable "
+            "table, `CollectionTarget(name=...)` to keep documents whole with "
+            "their inner tables extracted alongside. Choose by intent: a table "
+            "is for querying columns, a collection is for reading and citing "
+            "documents. "
+            "NOTHING BLOCKS: submit returns a run handle immediately. Poll "
+            "`get_status(run_id)` and read its `next_step`, which states the one "
+            "action that makes sense; call `wait(run_id)` only when the plan "
+            "genuinely cannot continue, such as when the next step builds a "
+            "canvas over the result. `status.contexts` reports the exact paths "
+            "written, so bind a canvas to those rather than guessing a layout. "
+            "WHERE IT RUNS IS NOT YOURS TO CHOOSE and there is no mode "
+            "argument: files always parse off this process, and rows run here "
+            "only under a measured ceiling. Both paths checkpoint identically, "
+            "so a run is always resumable — `retry(run_id)` re-attempts only "
+            "what was parked, `pause`/`resume` stop and continue from the last "
+            "checkpoint. "
+            "FOR A CANVAS OVER CONNECTED APPS the shape is always: call the "
+            "integration tool, `submit(RowsSource(rows=...), TableTarget(...))`, "
+            "`wait` for it, schedule `primitives.tasks` to keep it fresh, then "
+            "bind the canvas to that table. This is also the only way to show "
+            "two providers together, since providers cannot be joined directly."
         ),
     ),
     ManagerSpec(
@@ -592,8 +656,13 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
     "data": [
         "get_primitives_data_filter_example",
         "get_primitives_data_reduce_example",
-        "get_primitives_data_ingest_example",
         "get_primitives_data_external_sync_example",
+    ],
+    "ingestion": [
+        # One example covering every source, because the point of the design is
+        # that they are the same verb -- showing them separately would imply a
+        # choice of function where there is only a choice of argument.
+        "get_primitives_ingestion_sources_example",
     ],
     "canvas": [
         # The component reference comes first: the actor needs to know what it

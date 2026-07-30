@@ -170,9 +170,10 @@ def verify_bindings(
                 f"{error}\n"
                 f"If this table does not exist yet, materialise it before binding to it. "
                 f"Data from connected apps in particular has to be fetched and stored "
-                f"first -- call the integration tools, write the rows with "
-                f"`primitives.data.ingest` or `primitives.data.insert_rows`, schedule the "
-                f"refresh with `primitives.tasks`, then bind the canvas to that table.",
+                f"first -- call the integration tools, store the rows with "
+                f"`primitives.ingestion.submit(RowsSource(rows=...), "
+                f"TableTarget(context=...))` and wait for the run, schedule the refresh "
+                f"with `primitives.tasks`, then bind the canvas to that table.",
             ) from error
 
         samples[binding.alias] = _as_rows(rows)

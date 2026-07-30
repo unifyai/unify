@@ -1630,22 +1630,98 @@ async def sales_dashboard() -> str:
 '''
 
 
-def get_primitives_data_ingest_example() -> str:
-    """Example: ingesting API data into a data context via ``primitives.data.ingest(...)``."""
+def get_primitives_ingestion_sources_example() -> str:
+    """Every place data comes from, through the one verb that stores it."""
 
-    return '''
-# Example: Ingest API data into a data context
-async def ingest_api_response(records: list) -> dict:
-    """Ingest rows from an API response into the Data namespace."""
-    result = await primitives.data.ingest(
+    return """
+# Storing data is ONE verb whatever the source: submit(source, target).
+#
+# The source says where data comes from; the target says where it lands. They
+# vary independently, so pick each on its own terms rather than looking for a
+# different function per case.
+from unify.ingestion_manager.types import (
+    CollectionTarget, EmbedSpec, FilesSource, FolderSource,
+    RowsSource, TableSource, TableTarget,
+)
+
+# --- 1. A third-party API you called yourself -------------------------------
+# Anything already in hand is RowsSource, however it was obtained.
+orders = httpx.get("https://api.example.com/orders").json()["data"]
+run = await primitives.ingestion.submit(
+    RowsSource(rows=orders),
+    TableTarget(
         context="Data/ExternalAPI/Orders",
-        rows=records,
-        description="Orders imported from external API",
-        fields={"order_id": "int", "customer": "str", "amount": "float", "date": "datetime"},
+        description="Orders imported from the billing API.",
+        # A stable key makes a re-run an upsert rather than an append, which is
+        # what a current-state table wants. Omit it to accumulate a time series.
         unique_keys={"order_id": "int"},
-    )
-    return {"rows_inserted": result.rows_inserted, "context": result.context}
-'''
+        fields={"order_id": "int", "customer": "str", "amount": "float"},
+    ),
+)
+
+# --- 2. A connected app, via the integration tools --------------------------
+# Identical shape: the integration call is just another way to get rows.
+deals = await primitives.integrations.hubspot.list_deals()
+await primitives.ingestion.submit(
+    RowsSource(rows=deals.get("results", [])),
+    TableTarget(context="Data/HubSpotDeals", unique_keys={"id": "str"}),
+)
+
+# --- 3. Files someone sent or uploaded --------------------------------------
+# A collection keeps documents whole and extracts any tables inside them, so
+# use it when the point is to read, search or cite -- not to query columns.
+await primitives.ingestion.submit(
+    FilesSource(paths=["Downloads/Q4-report.pdf", "Downloads/contract.docx"]),
+    CollectionTarget(name="Q4 Reports"),
+    embed=EmbedSpec(columns=["text"]),  # makes the content searchable
+)
+
+# --- 4. Spreadsheets that should become ONE queryable table -----------------
+# Same file source, different target: a table, because the point is to filter
+# and chart the columns rather than to read the documents.
+await primitives.ingestion.submit(
+    FilesSource(paths=["exports/jan.csv", "exports/feb.csv"]),
+    TableTarget(context="Data/Sales", infer_untyped_fields=True),
+)
+
+# --- 5. A whole folder, open-ended -----------------------------------------
+# Prefer this over listing hundreds of paths: it says the membership is
+# whatever matches now, rather than a snapshot taken earlier.
+await primitives.ingestion.submit(
+    FolderSource(path="exports/2026", pattern="*.xlsx", recursive=True),
+    CollectionTarget(name="2026 Exports"),
+)
+
+# --- 6. Reshaping something already stored ---------------------------------
+# Read server-side and write a narrower table a canvas can bind to cheaply.
+await primitives.ingestion.submit(
+    TableSource(
+        context="Data/EventLog",
+        filter="status == 'open'",
+        columns=["id", "owner", "opened_at"],
+    ),
+    TableTarget(context="Data/OpenItems", unique_keys={"id": "str"}),
+)
+
+# --- Then: nothing blocks, so find out how it went -------------------------
+# submit returns immediately. Poll when there is other work to do; wait only
+# when the plan genuinely cannot continue without the data.
+status = await primitives.ingestion.get_status(run.run_id)
+if not status.is_terminal:
+    status = await primitives.ingestion.wait(run.run_id, timeout_s=300)
+
+# next_step states the single action that makes sense -- including that there
+# is nothing to do. Prefer it over re-deriving the rule from the other fields.
+if status.state != "succeeded":
+    notify(f"Ingestion {run.run_id}: {status.next_step}")
+    # Parked items are the recoverable case: retry re-attempts only those.
+    if status.parked:
+        await primitives.ingestion.retry(run.run_id, only="dlq")
+
+# status.contexts reports the exact paths written -- bind to these rather than
+# guessing a storage layout, especially for files, where the layout is derived.
+return {"contexts": status.contexts, "rows": status.rows_written}
+"""
 
 
 def get_primitives_data_external_sync_example() -> str:
@@ -2295,7 +2371,7 @@ def get_example_function_map() -> dict[str, callable]:
         # Data (using real DataManager primitives)
         "get_primitives_data_filter_example": get_primitives_data_filter_example,
         "get_primitives_data_reduce_example": get_primitives_data_reduce_example,
-        "get_primitives_data_ingest_example": get_primitives_data_ingest_example,
+        "get_primitives_ingestion_sources_example": get_primitives_ingestion_sources_example,
         "get_primitives_data_external_sync_example": get_primitives_data_external_sync_example,
         # Dashboards
         "get_primitives_dashboards_baked_in_example": get_primitives_dashboards_baked_in_example,
@@ -2759,30 +2835,47 @@ def get_primitives_canvas_connected_apps_example() -> str:
 # a reconnection that a rendered surface cannot resolve. Storing it is also the
 # only way to show two apps together, since providers cannot be joined directly.
 from unify.canvas_manager.types import PrimitiveBinding
+from unify.ingestion_manager.types import RowsSource, TableTarget
 
-# 1. Pull from each app and store it.
+# 1. Pull from each app and store it. Whatever the provider, data in hand is a
+#    RowsSource -- the integration call is just one way to obtain rows.
 issues = await primitives.integrations.github.list_issues(state="open", per_page=100)
-await primitives.data.ingest(
-    "Data/GitHubIssues",
-    rows=[{"repo": i["repository"]["name"], "title": i["title"],
-           "opened": i["created_at"]} for i in issues.get("items", [])],
-    description="Open GitHub issues, refreshed hourly.",
-    # A stable key makes the refresh an upsert rather than an append, which is
-    # what a current-state view wants. Omit it to accumulate a time series.
-    unique_keys={"title": "str"},
+issues_run = await primitives.ingestion.submit(
+    RowsSource(
+        rows=[{"repo": i["repository"]["name"], "title": i["title"],
+               "opened": i["created_at"]} for i in issues.get("items", [])],
+    ),
+    TableTarget(
+        context="Data/GitHubIssues",
+        description="Open GitHub issues, refreshed hourly.",
+        # A stable key makes the refresh an upsert rather than an append, which is
+        # what a current-state view wants. Omit it to accumulate a time series.
+        unique_keys={"title": "str"},
+    ),
 )
 
 deals = await primitives.integrations.hubspot.list_deals()
-await primitives.data.ingest("Data/HubSpotDeals", rows=deals.get("results", []))
+deals_run = await primitives.ingestion.submit(
+    RowsSource(rows=deals.get("results", [])),
+    TableTarget(context="Data/HubSpotDeals"),
+)
 
-# 2. Keep it fresh. Without this the canvas shows whatever was stored once.
+# 2. The canvas is created against these tables, so wait for both before
+#    binding -- a binding to a table that does not exist yet fails at creation.
+for run in (issues_run, deals_run):
+    status = await primitives.ingestion.wait(run.run_id, timeout_s=300)
+    if status.state != "succeeded":
+        notify(f"Could not store the data: {status.next_step}")
+        return
+
+# 3. Keep it fresh. Without this the canvas shows whatever was stored once.
 await primitives.tasks.update(
     "Create a recurring task every hour that re-runs the GitHub and HubSpot "
     "pulls above and re-ingests them into Data/GitHubIssues and "
     "Data/HubSpotDeals.",
 )
 
-# 3. Build the view over the stored tables.
+# 4. Build the view over the stored tables.
 result = await primitives.canvas.create_view(
     tsx="""
 import {
