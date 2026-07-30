@@ -3454,7 +3454,10 @@ class TaskScheduler(BaseTaskScheduler):
                 logger.debug("Custom task unchanged: %s", custom_key)
                 return
             task_id = int(db_entry["task_id"])
-            if self._running_execution(task_id) is not None:
+            if (
+                self._running_execution(task_id, states=(ExecutionState.running,))
+                is not None
+            ):
                 logger.warning(
                     "Skipping update for custom task with a run in flight "
                     "key=%s task_id=%s",
