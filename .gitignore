@@ -74,6 +74,10 @@ discord_messages.md
 /.cursor/plans/
 # ConversationManager sandbox persistent config (project-local)
 .cm_sandbox_config
+# Per-run parse/ingest progress events. The reporter auto-generates these
+# relative to the working directory when no path is configured, so a test run
+# started from the repo root drops them here.
+pipeline_progress_*.jsonl
 # Ignore log contents but keep the README and utility scripts
 logs/*
 deploy/logs/*
