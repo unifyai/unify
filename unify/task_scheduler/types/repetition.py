@@ -260,6 +260,23 @@ def max_jitter_seconds(patterns) -> int:
     return best
 
 
+def _fixed_stride(pattern: RepeatPattern) -> timedelta | None:
+    """Exact step size for frequencies whose occurrences are evenly spaced.
+
+    Only minutely and hourly qualify: every other frequency re-derives its
+    candidates from the calendar (weekday scans, month and leap-day clamping,
+    time-of-day anchoring), where stepping k times is not the same as jumping
+    k steps at once. They are also the only frequencies whose slots are dense
+    enough to exhaust the iteration bound below within a plausible outage.
+    """
+
+    if pattern.frequency == Frequency.MINUTELY:
+        return timedelta(minutes=pattern.interval)
+    if pattern.frequency == Frequency.HOURLY:
+        return timedelta(hours=pattern.interval)
+    return None
+
+
 def _next_pattern_occurrence(
     *,
     previous_start: datetime,
@@ -273,6 +290,18 @@ def _next_pattern_occurrence(
     if pattern.count is not None and occurrence_count >= pattern.count:
         return None
     candidate = previous_start
+    # A pattern can be asked for its next slot long after the series stopped
+    # firing (a crashed worker released weeks later). Stepping one occurrence
+    # at a time from the last consumed slot would exhaust the iteration bound,
+    # so evenly spaced frequencies jump straight to the last slot at or before
+    # *now* and let the loop advance from there. The jump is exact (timedelta
+    # floor division) and a no-op unless *now* is ahead of the previous
+    # occurrence, which keeps dispatch-time projection — where the caller
+    # passes now=previous_start — byte-identical. `count` is unaffected: it is
+    # accounted against the occurrence index, never against steps taken here.
+    stride = _fixed_stride(pattern)
+    if stride is not None and reference_now > candidate:
+        candidate += stride * ((reference_now - candidate) // stride)
     for _ in range(2048):
         candidate = _advance_one_occurrence(candidate, pattern)
         if pattern.until is not None and candidate > _normalize_until(
