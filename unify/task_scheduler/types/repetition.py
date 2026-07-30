@@ -1,6 +1,15 @@
 """
 Schema describing how a task repeats over time. The model serializes to and
 from JSON for storage and transport.
+
+The recurrence subset (pattern schema, normalization, next-occurrence
+projection, deterministic dispatch jitter) is deliberately mirrored into
+``orchestra/services/task_repetition.py`` so Orchestra can re-project a future
+head for a repeating series whose worker died before dispatch. Any change to
+those semantics MUST be applied to both files in the same changeset; the two
+copies are pinned against each other by the shared
+``repeat_projection_vectors.json`` checked into each repo's test tree with
+byte-identical content.
 """
 
 from __future__ import annotations

@@ -1552,6 +1552,7 @@ class TaskScheduler(BaseTaskScheduler):
                     destination=task.destination,
                     scheduled_for=scheduled_for,
                     dispatch_offset_seconds=dispatch_offset,
+                    entrypoint=task.entrypoint,
                     task_name=task.name,
                     task_description=task.description,
                 ),
