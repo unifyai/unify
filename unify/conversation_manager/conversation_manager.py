@@ -2761,6 +2761,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         team_summaries = payload.get("team_summaries") or []
         self.owner_team_id: int | None = payload.get("owner_team_id")
         is_coordinator = bool(payload.get("is_coordinator", False))
+        is_multiplayer = bool(payload.get("is_multiplayer", False))
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -2806,6 +2807,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             managed_desktop_status=self.managed_desktop_status,
             user_desktops=self.user_desktops,
             is_coordinator=is_coordinator,
+            is_multiplayer=is_multiplayer,
         )
         self.team_summaries = SESSION_DETAILS.team_summaries
         # Export to env vars for subprocess inheritance

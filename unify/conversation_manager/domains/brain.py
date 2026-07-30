@@ -241,6 +241,8 @@ def build_brain_spec(
         runtime_setup_note=runtime_setup_note,
         team_summaries=getattr(cm, "team_summaries", []),
         is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_multiplayer=SESSION_DETAILS.is_multiplayer,
+        twin_name=SESSION_DETAILS.assistant.name,
         authorized_humans=authorized_humans,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,

@@ -2070,6 +2070,7 @@ async def entrypoint(ctx: agents.JobContext):
         channel=channel,
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
     ).flatten()
