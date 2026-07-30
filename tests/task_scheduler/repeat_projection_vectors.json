@@ -282,6 +282,55 @@
         }
       ],
       "expected": "2026-07-30T00:00:00+00:00"
+    },
+    {
+      "name": "minutely_10_survives_a_month_long_outage",
+      "previous_start": "2026-06-29T22:10:00+00:00",
+      "now": "2026-07-30T09:47:23+00:00",
+      "patterns": [
+        {
+          "frequency": "minutely",
+          "interval": 10
+        }
+      ],
+      "expected": "2026-07-30T09:50:00+00:00"
+    },
+    {
+      "name": "minutely_1_survives_a_multi_year_outage",
+      "previous_start": "2024-01-01T00:00:00+00:00",
+      "now": "2026-07-30T09:00:30+00:00",
+      "patterns": [
+        {
+          "frequency": "minutely",
+          "interval": 1
+        }
+      ],
+      "expected": "2026-07-30T09:01:00+00:00"
+    },
+    {
+      "name": "hourly_6_survives_a_two_year_outage",
+      "previous_start": "2024-07-29T05:15:00+00:00",
+      "now": "2026-07-30T14:03:00+00:00",
+      "patterns": [
+        {
+          "frequency": "hourly",
+          "interval": 6
+        }
+      ],
+      "expected": "2026-07-30T17:15:00+00:00"
+    },
+    {
+      "name": "outage_past_a_distant_until_is_exhausted",
+      "previous_start": "2026-01-01T00:00:00+00:00",
+      "now": "2026-07-30T00:00:00+00:00",
+      "patterns": [
+        {
+          "frequency": "minutely",
+          "interval": 10,
+          "until": "2026-02-01T00:00:00+00:00"
+        }
+      ],
+      "expected": null
     }
   ],
   "dispatch_jitter": [
