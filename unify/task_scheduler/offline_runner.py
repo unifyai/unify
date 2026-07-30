@@ -214,7 +214,12 @@ def _load_config_from_env() -> OfflineTaskConfig:
             or "Execute dashboard action"
         )
     else:
-        revision = _require_env("UNITY_OFFLINE_TASK_REVISION")
+        # Empty is a legitimate revision, not a missing one: the machine-state
+        # contract stores ``str(revision or "")`` and digests that exact value
+        # into ``run_key``, and a task with no authored ``task_revision`` (every
+        # deployment-reconciled definition) projects its occurrences with "".
+        # Requiring non-empty here boot-crashed each of those runs at dispatch.
+        revision = os.environ.get("UNITY_OFFLINE_TASK_REVISION", "").strip()
         request = _require_env("UNITY_OFFLINE_TASK_REQUEST")
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
