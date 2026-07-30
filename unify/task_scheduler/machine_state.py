@@ -148,6 +148,10 @@ class TaskRunProvenance:
     task_description: str | None = None
     attempt_token: str | None = None
     dispatch_offset_seconds: float | None = None
+    # Symbolic function id the definition binds this occurrence to. Dispatch
+    # reads it from the materialized row, so a projected occurrence stored
+    # without it launches as agentic and a symbolic task refuses the run.
+    entrypoint: int | None = None
 
 
 @dataclass(frozen=True)
@@ -492,6 +496,7 @@ def _create_or_adopt_task_run(
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
                 "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
+                "entrypoint": provenance.entrypoint,
                 "source_medium": provenance.source_medium,
                 "source_ref": provenance.source_ref,
                 "source_contact_id": provenance.source_contact_id,
