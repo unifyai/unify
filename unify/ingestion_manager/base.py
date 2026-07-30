@@ -26,23 +26,31 @@ background whichever tier runs it, so a plan is never held open by a large
 ingestion. Poll ``get_status`` when there is other work to do, or call ``wait`` when
 there genuinely is not.
 
-## Two tiers, one interface
+## Where work runs is not a parameter
 
-Small work runs in process; large or open-ended work is dispatched to run remotely.
-The tier is chosen from measurable shape — how many rows, how many files, how many
-bytes, whether the source is a folder — and never from how a request was phrased.
-``mode`` overrides that when the caller knows better.
+There is no mode or tier argument, and adding one would be a mistake rather than a
+convenience. Files are always parsed away from the assistant's own process, because
+parsing loads the file and its model into whatever process does it and no number
+predicts that cost in advance. Rows and stored tables run in process only under a
+*measured* row ceiling, where queue round-trip would cost more than the work.
 
-The distinction is deliberately invisible to everything downstream: a run has the
-same id, the same statuses and the same recovery verbs either way. Code that
-submits work does not need to know where it ran in order to find out how it ended.
+Both paths write the same artifacts and the same checkpoints, so the choice affects
+latency and nothing else. A run has the same id, the same states and the same
+recovery verbs either way, and asking about one reads identically.
 
-## Runs are recoverable, not fire-and-forget
+## Runs survive the process that started them
 
-Every run is recorded before any work starts, so a failure is always something with
-an id that can be inspected and retried rather than an error that scrolled past.
+Every run is recorded before any work starts, and progress is checkpointed as it
+commits — so an interrupted run resumes from its last committed chunk instead of
+starting over or double-writing. A failure is always something with an id that can
+be inspected and retried, never an error that scrolled past.
+
+A run also cannot report success while holding less than its source declared: the
+committed total is checked against the measured count, and a shortfall keeps the run
+open for resume and then fails loudly rather than passing as a quiet under-ingest.
+
 Items that exhaust their retries are parked rather than dropped, and
-``retry(only="dlq")`` re-attempts exactly those, leaving successful work untouched.
+``retry(only="dlq")`` re-attempts exactly those, leaving committed work untouched.
 """
 
 from __future__ import annotations
@@ -52,7 +60,6 @@ from typing import List, Optional
 
 from unify.ingestion_manager.types.request import (
     EmbedSpec,
-    IngestionMode,
     IngestionSource,
     IngestionTarget,
 )
@@ -85,14 +92,15 @@ class BaseIngestionManager(ABC):
         embed: Optional[EmbedSpec] = None,
         post_ingest: Optional[PostIngestConfig] = None,
         destination: Optional[str] = None,
-        mode: IngestionMode = "auto",
     ) -> IngestionRun:
         """Start storing data, and return a handle without waiting for it.
 
-        Returns as soon as the run is recorded. The returned ``run_id`` is how
-        everything afterwards refers to this work, and the run's ``contexts``
-        report the exact paths it wrote — which is what lets a view be built over
-        the result without anyone predicting the storage layout in advance.
+        Returns as soon as the run is recorded — before the work runs, so that a
+        crash a moment later still leaves something with an id to resume. The
+        returned ``run_id`` is how everything afterwards refers to this work, and
+        the run's ``contexts`` report the exact paths it wrote, which is what lets
+        a view be built over the result without anyone predicting the storage
+        layout in advance.
 
         Parameters
         ----------
@@ -117,12 +125,6 @@ class BaseIngestionManager(ABC):
             Ownership root: ``"personal"`` (the default) or ``"team:<id>"``. The
             privacy floor is personal — when it is unclear whether something
             belongs to a team, ask rather than widening the audience.
-        mode : "auto" | "inline" | "dispatched"
-            Leave as ``"auto"`` unless there is a reason not to. ``"inline"``
-            forces in-process execution, which is worth doing when a later step in
-            the same plan needs the data immediately and it is known to be small.
-            ``"dispatched"`` forces remote execution for work that would otherwise
-            be judged small but is known to be slow.
 
         Returns
         -------
@@ -160,11 +162,17 @@ class BaseIngestionManager(ABC):
         *,
         stage: Optional[str] = None,
         limit: int = 200,
+        offset: int = 0,
     ) -> List[LogEntry]:
-        """Read what a run recorded, newest last.
+        """Read what a run recorded, oldest first.
 
         For the question ``get_status`` cannot answer: *why* a stage failed. Narrow
         to one stage when a status has already identified where the failure was.
+
+        A long run records more than one read returns. ``offset`` continues from
+        where the last read stopped, so a full history is a loop rather than a
+        larger ``limit`` — raising the limit past what the backend serves would
+        silently return a prefix and read as the whole story.
         """
 
     @abstractmethod

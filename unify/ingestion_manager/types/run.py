@@ -11,6 +11,11 @@ ledger machinery, no cost accounting and no bespoke progress files: a run's hist
 is rows, queryable like anything else. The data and files themselves still go to
 object storage, which is what lets a parse worker and an ingest worker hand off
 remotely -- but observing the run does not.
+
+Nothing here holds bulk data. Row payloads are staged as artifacts and referenced
+by key, so a run row stays small however large the ingestion: a single row
+carrying an embedded payload is both a write the backend can reject outright and a
+read that costs more than the answer is worth.
 """
 
 from __future__ import annotations
@@ -20,7 +25,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from unify.common.authorship import AuthoredRow
-from unify.ingestion_manager.types.request import IngestionMode
 
 # Lifecycle of a run. `paused` is distinct from `cancelled`: a paused run keeps its
 # queued work and can be resumed, a cancelled one cannot.
@@ -115,15 +119,21 @@ class IngestionRunRecord(AuthoredRow):
     run_key: str
 
     state: RunState = "queued"
-    mode: IngestionMode = "auto"
-    # Which tier actually ran it, once `auto` has resolved. Worth recording
-    # separately from `mode`: "why did this take an hour" is usually answered by it.
+    # Which tier ran it. Recorded because "why did this take an hour" is usually
+    # answered by it, and because a resume has to know where to look.
     executed_as: Optional[Literal["inline", "dispatched"]] = None
 
     source_kind: str = ""
     target_kind: str = ""
-    # The whole request, so a retry or resume does not need the caller to rebuild it.
-    request_json: str = ""
+
+    # Artifact key of the staged request, so a retry or resume can rebuild the
+    # work without the caller reconstructing it. A *key*, never the request
+    # itself: a rows source can be arbitrarily large, and embedding it here would
+    # put bulk data in a log row.
+    request_key: str = ""
+    # Exact size once measured -- the count the tier decision was made on, and
+    # what the completion check holds the durable checkpoint against.
+    declared_rows: Optional[int] = None
 
     # Concrete context paths this run wrote. The reason a canvas can be built over
     # ingested files without anyone hardcoding the storage layout: the run says

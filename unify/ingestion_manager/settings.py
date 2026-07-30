@@ -1,9 +1,16 @@
 """Settings for IngestionManager.
 
-The thresholds below are what ``mode="auto"`` decides on. They are settings rather
-than constants because the right boundary depends on the deployment: a pod with
-generous memory can absorb a larger inline run than a constrained one, and moving
-the boundary should not require a code change.
+Deliberately small. An earlier shape carried thresholds for file count and for
+how long an in-process run was allowed to take, and both were unsound: what a
+file costs to parse is unknowable before parsing it, so any number derived from
+count or bytes misroutes work in both directions -- a 40 KB PDF can be hundreds
+of dense pages and a 12 MB spreadsheet one sheet of images.
+
+What remains is a single row ceiling, and it is legitimate for a reason the file
+thresholds were not: a row count is *measured*, exactly and cheaply, before
+anything runs. Rows in hand are counted directly; rows in a context are counted
+by one server-side aggregate. Deciding on a measurement is sound; deciding on a
+prediction is not.
 """
 
 from __future__ import annotations
@@ -21,28 +28,42 @@ class IngestionSettings(BaseSettings):
 
     IMPL: str = "real"
 
-    # Base URL of the hosted pipeline control plane that runs dispatched work.
-    # Empty means this deployment cannot dispatch: submitting such a run then fails
-    # immediately and says so, rather than queueing something nothing will collect.
+    # Base URL of the pipeline control plane that dispatches to the worker
+    # fleet. Empty means this deployment has no fleet reachable, and every run
+    # then executes in process -- which is safe rather than merely tolerable,
+    # because both tiers write the same artifacts and checkpoints, so a fleet
+    # configured later can adopt anything an interrupted local run left behind.
     PIPELINE_URL: str = ""
 
-    # Row count at or below which a rows/table source runs in process. Chosen so a
-    # typical API page or connected-app pull stays inline -- dispatching those would
-    # add minutes of queue latency to work that takes seconds.
-    MAX_INLINE_ROWS: int = 50_000
+    # Row count at or below which a rows or table source runs in process.
+    #
+    # This is not a memory limit -- it is a latency boundary. Below it, queue
+    # round-trip and worker cold start dominate the work itself, and the common
+    # case is a plan that fetches a page from an API and builds a canvas over it
+    # in the next step. Above it, ingestion is sustained I/O that belongs on
+    # workers that scale horizontally and do not compete with the assistant for
+    # its own process.
+    MAX_INLINE_ROWS: int = 10_000
 
-    # File count at or below which a file source runs in process.
-    MAX_INLINE_FILES: int = 10
-
-    # Total bytes at or below which a file source runs in process. Guards the case
-    # the file count misses: three very large spreadsheets are dispatch work even
-    # though three files sound small.
-    MAX_INLINE_BYTES: int = 64 * 1024 * 1024
-
-    # How many worker threads run inline ingestions concurrently. Inline work is
-    # I/O-bound against the backend, so a small pool is enough and keeps a burst of
-    # submissions from starving the rest of the process.
+    # Threads draining the in-process queue. Small on purpose: in-process work
+    # exists for latency, not throughput, and a deep pool would let a burst of
+    # submissions contend with the assistant it shares a process with.
     INLINE_WORKERS: int = 2
 
-    # Rows kept per status read when reconstructing stage progress.
-    MAX_EVENTS_PER_READ: int = 500
+    # Rows per page when reading runs or events back. The backend caps a single
+    # read at 1000, so this is a page size and never a total: reads past it
+    # continue by offset rather than truncating, which would silently under-report
+    # a long run's history.
+    EVENTS_PAGE_SIZE: int = 1_000
+
+    # How long a worker holds a unit of work before its lease may be taken over,
+    # and the grace period past expiry before a peer steals it. The grace exists
+    # so a merely-slow heartbeat does not lose work to a racing peer.
+    LEASE_TTL_SECONDS: int = 900
+    LEASE_STEAL_AFTER_SECONDS: int = 30
+
+    # Resume attempts allowed when a run finishes with its durable checkpoint
+    # short of the row count the source declared. Bounded so a shortfall that
+    # cannot be resolved surfaces as a failure instead of retrying forever.
+    INCOMPLETE_MAX_RETRIES: int = 5
+    INCOMPLETE_RETRY_SECONDS: int = 15

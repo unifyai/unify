@@ -17,9 +17,16 @@ Keeping them separate is what lets the actor pick each on its own terms: it know
 what it is holding (the source) and what it wants to do with it (the target),
 and never has to reason about a single config whose fields half apply.
 
-The execution tier is deliberately *not* part of this. Whether a request runs in
-process or is dispatched to the cloud is a property of its size, not of what it
-means, so it lives on the submit call instead.
+**Where the work runs is not expressible here, on purpose.** There is no mode,
+tier or worker field, because the choice is not a judgement about intent -- it
+follows from measured size and from what the deployment has running, both of
+which the manager knows and a caller does not. Offering the knob would invite a
+guess in place of a measurement, and the guess would be wrong in the direction
+that hurts: parsing a large file in the assistant's own process.
+
+Nothing is lost by withholding it. Both tiers write the same artifacts and the
+same checkpoints, so a run is resumable and recoverable either way, and asking
+about one reads identically.
 """
 
 from __future__ import annotations
@@ -92,9 +99,10 @@ class FolderSource(BaseModel):
     """Everything matching a pattern under a directory.
 
     The batch shape: a drive or SharePoint pull, an export directory, a month of
-    reports. Prefer this over listing hundreds of paths in ``FilesSource`` -- the
-    file count is what the execution tier is chosen on, and a folder states the
-    intent that the set is open-ended.
+    reports. Prefer this over listing hundreds of paths in ``FilesSource`` when the
+    set is open-ended -- naming a directory and a pattern says the membership is
+    whatever matches at the time, which is both shorter and more accurate than a
+    snapshot of paths taken earlier.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -287,12 +295,6 @@ class EmbedSpec(BaseModel):
     )
 
 
-# How a request is executed. `auto` decides from measurable shape -- row count,
-# file count and bytes, whether the source is a folder -- never from anything a
-# user typed. The actor can force either tier when it knows better.
-IngestionMode = Literal["auto", "inline", "dispatched"]
-
-
 class IngestionRequest(BaseModel):
     """One complete ingestion, before it is run.
 
@@ -317,7 +319,6 @@ class IngestionRequest(BaseModel):
             "floor is personal; ask rather than guess toward the wider audience."
         ),
     )
-    mode: IngestionMode = "auto"
 
     @field_validator("target")
     @classmethod
