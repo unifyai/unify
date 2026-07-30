@@ -15,6 +15,7 @@ from unify.ingestion_manager.types.request import (
 )
 from unify.ingestion_manager.types.run import (
     TERMINAL_STATES,
+    IngestionEventRow,
     IngestionRun,
     IngestionRunRecord,
     IngestionSummary,
@@ -46,6 +47,7 @@ __all__ = [
     "RetryScope",
     "StageProgress",
     "LogEntry",
+    "IngestionEventRow",
     "IngestionRunRecord",
     "IngestionRun",
     "RunStatus",
