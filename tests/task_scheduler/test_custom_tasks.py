@@ -21,6 +21,7 @@ _EXAMPLE_TASK_LINES = [
         "name": "Daily check",
         "description": "Run the daily operational check.",
         "repeat": [{"frequency": "daily"}],
+        "tags": ["ops", "daily"],
     },
     {
         "key": "ops/on-event",
@@ -203,3 +204,34 @@ async def test_sync_custom_tasks_deletes_removed_entries(
     names = {row.name for row in rows}
     assert "Daily check" not in names
     assert "On inbound email" in names
+
+
+def test_collect_custom_tasks_carries_tags(custom_tasks_dir):
+    """Tags declared in tasks.jsonl reach the planted definition row.
+
+    Tags are labels only — no scheduling semantics — but they must survive the
+    jsonl → reconcile → Tasks row path or the console has nothing to filter on.
+    A task without tags stays tagless rather than growing an empty list.
+    """
+
+    tasks = collect_custom_tasks(str(custom_tasks_dir))
+    assert tasks["ops/daily-check"]["tags"] == ["ops", "daily"]
+    assert tasks["ops/on-event"]["tags"] is None
+
+
+def test_tags_participate_in_the_sync_hash(custom_tasks_dir, tmp_path):
+    """Editing only a task's tags must count as a change reconcile applies."""
+
+    retagged = tmp_path / "retagged"
+    retagged.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = dict(row)
+        if row["key"] == "ops/daily-check":
+            row["tags"] = ["ops", "weekly"]
+        lines.append(json.dumps(row))
+    (retagged / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+
+    original = collect_custom_tasks(str(custom_tasks_dir))["ops/daily-check"]
+    changed = collect_custom_tasks(str(retagged))["ops/daily-check"]
+    assert original["custom_hash"] != changed["custom_hash"]

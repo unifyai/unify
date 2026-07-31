@@ -79,6 +79,14 @@ class TaskBase(AuthoredRow):
         description="Importance level of the task (low, normal, high, urgent)",
         json_schema_extra={"ui_editable": True},
     )
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Freeform labels for grouping and filtering tasks (e.g. 'gtm', "
+            "'community'). Tags carry no scheduling semantics."
+        ),
+        json_schema_extra={"ui_editable": True},
+    )
     response_policy: Optional[str] = Field(
         default=None,
         description=(
