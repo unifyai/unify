@@ -2,8 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from unify.common.custom_sync import reconcile_custom_rows
 from unify.task_scheduler import task_scheduler as task_scheduler_module
-from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler.task_scheduler import TaskScheduler, _TaskSyncAdapter
 from unify.task_scheduler.types.execution import ExecutionState
 
 
@@ -103,7 +104,25 @@ def test_cancel_open_executions_still_cancels_non_running_open_states(
     assert update_calls[0]["state"] == ExecutionState.cancelled.value
 
 
-def test_upsert_custom_task_allows_armed_triggerable_task(monkeypatch):
+def _reconcile_one_update(scheduler) -> list[int]:
+    """Run one engine pass over a single changed task and return update calls."""
+
+    update_calls: list[int] = []
+    scheduler._update_custom_task = lambda **kwargs: update_calls.append(
+        kwargs["task_id"],
+    )
+    adapter = _TaskSyncAdapter(scheduler, function_name_to_id={})
+    adapter.live_rows = lambda: [
+        {"custom_key": "k", "task_id": 5, "custom_hash": "old"},
+    ]
+    reconcile_custom_rows(
+        source={"k": {"custom_hash": "new"}},
+        adapter=adapter,
+    )
+    return update_calls
+
+
+def test_sync_updates_armed_triggerable_custom_task(monkeypatch):
     """An armed (triggerable) custom task must still be synced, not skipped."""
 
     monkeypatch.setattr(
@@ -111,41 +130,15 @@ def test_upsert_custom_task_allows_armed_triggerable_task(monkeypatch):
         "find_running_execution_for_task",
         _fake_find_running_execution(running_states={ExecutionState.triggerable}),
     )
-    scheduler = _scheduler_with_task()
-    update_calls: list[int] = []
-    scheduler._update_custom_task = lambda **kwargs: update_calls.append(
-        kwargs["task_id"],
-    )
 
-    scheduler._upsert_one_custom_task(
-        custom_key="k",
-        source_data={"custom_hash": "new"},
-        db_tasks={"k": {"task_id": 5, "custom_hash": "old"}},
-        function_name_to_id={},
-        insert_lock=None,
-    )
-
-    assert update_calls == [5]
+    assert _reconcile_one_update(_scheduler_with_task()) == [5]
 
 
-def test_upsert_custom_task_skips_genuinely_running_task(monkeypatch):
+def test_sync_skips_genuinely_running_custom_task(monkeypatch):
     monkeypatch.setattr(
         task_scheduler_module,
         "find_running_execution_for_task",
         _fake_find_running_execution(running_states={ExecutionState.running}),
     )
-    scheduler = _scheduler_with_task()
-    update_calls: list[int] = []
-    scheduler._update_custom_task = lambda **kwargs: update_calls.append(
-        kwargs["task_id"],
-    )
 
-    scheduler._upsert_one_custom_task(
-        custom_key="k",
-        source_data={"custom_hash": "new"},
-        db_tasks={"k": {"task_id": 5, "custom_hash": "old"}},
-        function_name_to_id={},
-        insert_lock=None,
-    )
-
-    assert update_calls == []
+    assert _reconcile_one_update(_scheduler_with_task()) == []

@@ -70,24 +70,24 @@ def test_crud_single_key():
 
 
 def test_composite_key_snapshot():
-    ds = DataStore.for_context("C/Tasks", key_fields=("task_id", "instance_id"))
+    ds = DataStore.for_context("C/Tasks", key_fields=("task_id", "attempt"))
 
-    ds.put({"task_id": 10, "instance_id": 0, "status": "queued", "_meta": "x"})
+    ds.put({"task_id": 10, "attempt": 0, "status": "queued", "_meta": "x"})
 
     r1 = ds[(10, 0)]
     r2 = ds["10.0"]
     r3 = ds[[10, 0]]
-    assert r1 == r2 == r3 == {"task_id": 10, "instance_id": 0, "status": "queued"}
+    assert r1 == r2 == r3 == {"task_id": 10, "attempt": 0, "status": "queued"}
 
     assert (10, 0) in ds
     assert "10.0" in ds
 
     snap = ds.snapshot()
-    assert snap == {"10.0": {"task_id": 10, "instance_id": 0, "status": "queued"}}
+    assert snap == {"10.0": {"task_id": 10, "attempt": 0, "status": "queued"}}
 
 
 def test_miss_raises_keyerror():
-    ds = DataStore.for_context("C/Tasks", key_fields=("task_id", "instance_id"))
+    ds = DataStore.for_context("C/Tasks", key_fields=("task_id", "attempt"))
 
     with pytest.raises(KeyError):
         ds.update((99, 1), {"status": "queued"})

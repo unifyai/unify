@@ -25,8 +25,14 @@ from unify.common.context_registry import (
     TEAM_DESTINATION_PREFIX,
     TableContext,
 )
+from unify.common.custom_sync import (
+    CustomSyncAdapter,
+    CustomSyncPartialFailure,
+    reconcile_custom_rows,
+)
 from unify.common.log_utils import create_logs as unity_create_logs
 from unify.common.model_to_fields import model_to_fields
+from unify.common.sync_lease import exclusive_sync_lease
 from unify.common.tool_outcome import ToolErrorException
 from unify.dashboard_manager.base import DASHBOARD_DATA_SCOPE, BaseDashboardManager
 from unify.dashboard_manager.custom_dashboards import (
@@ -1050,7 +1056,10 @@ class DashboardManager(BaseDashboardManager):
                 exc.payload,
             )
             return False
-        with self._temporary_meta_context(meta_context):
+        with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
+            self._temporary_meta_context(meta_context),
+        ):
             if source_entities is None:
                 source_entities = {TILES_NAMESPACE: {}, LAYOUTS_NAMESPACE: {}}
             destination_entities = {
@@ -1089,67 +1098,31 @@ class DashboardManager(BaseDashboardManager):
                 expected_hash,
             )
 
-            dm = self._get_dm()
-            tile_db_rows = self._get_custom_rows(TILES_TABLE, destination)
-            processed_tile_keys: Set[str] = set()
+            failures: Dict[str, BaseException] = {}
 
+            tile_source: Dict[str, Dict[str, Any]] = {}
+            tile_scopes: Dict[str, Any] = {}
             for _entity_id, tile_spec in destination_entities[TILES_NAMESPACE].items():
                 data_scope = tile_spec.get("data_scope", DASHBOARD_DATA_SCOPE)
                 for row in tile_spec.get("rows", []):
                     custom_key = str(row.get("custom_key", ""))
                     if not custom_key:
                         continue
-                    processed_tile_keys.add(custom_key)
-                    token = self._resolve_entity_token(
-                        row=row,
-                        db_rows=tile_db_rows,
-                    )
-                    try:
-                        bindings, resolved_scope = self._prepare_tile_bindings(
-                            row=row,
-                            destination=destination,
-                            data_scope=data_scope,
-                            dm=dm,
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Skipping custom tile %s: %s",
-                            custom_key,
-                            exc,
-                        )
-                        continue
-                    row_data = self._build_tile_row_data(
-                        row=row,
-                        token=token,
-                        bindings=bindings,
-                        data_scope=resolved_scope,
-                    )
-                    if custom_key in tile_db_rows:
-                        db_entry = tile_db_rows[custom_key]
-                        if db_entry.get("custom_hash") != row_data.get("custom_hash"):
-                            self._update_custom_tile(
-                                destination=destination,
-                                tile_id=int(db_entry["tile_id"]),
-                                row_data=row_data,
-                            )
-                    else:
-                        self._insert_custom_tile(
-                            destination=destination,
-                            row_data=row_data,
-                        )
-
-            tile_db_rows = self._get_custom_rows(TILES_TABLE, destination)
-            for custom_key in tile_db_rows:
-                if custom_key not in processed_tile_keys:
-                    self._delete_custom_tile_by_key(
+                    tile_source[custom_key] = row
+                    tile_scopes[custom_key] = data_scope
+            try:
+                reconcile_custom_rows(
+                    source=tile_source,
+                    adapter=_DashboardTileSyncAdapter(
+                        self,
                         destination=destination,
-                        custom_key=custom_key,
-                    )
+                        data_scope_by_key=tile_scopes,
+                    ),
+                )
+            except CustomSyncPartialFailure as exc:
+                failures.update(exc.failures)
 
-            tile_tokens_by_id = self._tile_tokens_by_id(destination)
-            layout_db_rows = self._get_custom_rows(LAYOUTS_TABLE, destination)
-            processed_layout_keys: Set[str] = set()
-
+            layout_source: Dict[str, Dict[str, Any]] = {}
             for _entity_id, layout_spec in destination_entities[
                 LAYOUTS_NAMESPACE
             ].items():
@@ -1157,52 +1130,21 @@ class DashboardManager(BaseDashboardManager):
                     custom_key = str(row.get("custom_key", ""))
                     if not custom_key:
                         continue
-                    processed_layout_keys.add(custom_key)
-                    positions = row.get("positions", [])
-                    if not isinstance(positions, list):
-                        logger.warning(
-                            "Skipping custom layout %s: positions must be a list",
-                            custom_key,
-                        )
-                        continue
-                    tile_positions = self._resolve_layout_positions(
-                        positions,
-                        tile_tokens_by_id,
-                    )
-                    token = self._resolve_entity_token(
-                        row=row,
-                        db_rows=layout_db_rows,
-                    )
-                    layout_row = build_dashboard_record_row(
-                        token=token,
-                        title=str(row.get("title", "")),
-                        tiles=tile_positions,
-                        description=row.get("description"),
-                    )
-                    row_data = layout_row.model_dump()
-                    row_data["custom_key"] = row.get("custom_key")
-                    row_data["custom_hash"] = row.get("custom_hash")
-                    if custom_key in layout_db_rows:
-                        db_entry = layout_db_rows[custom_key]
-                        if db_entry.get("custom_hash") != row_data.get("custom_hash"):
-                            self._update_custom_layout(
-                                destination=destination,
-                                dashboard_id=int(db_entry["dashboard_id"]),
-                                row_data=row_data,
-                            )
-                    else:
-                        self._insert_custom_layout(
-                            destination=destination,
-                            row_data=row_data,
-                        )
-
-            layout_db_rows = self._get_custom_rows(LAYOUTS_TABLE, destination)
-            for custom_key in layout_db_rows:
-                if custom_key not in processed_layout_keys:
-                    self._delete_custom_layout_by_key(
+                    layout_source[custom_key] = row
+            try:
+                reconcile_custom_rows(
+                    source=layout_source,
+                    adapter=_DashboardLayoutSyncAdapter(
+                        self,
                         destination=destination,
-                        custom_key=custom_key,
-                    )
+                        tile_tokens_by_id=self._tile_tokens_by_id(destination),
+                    ),
+                )
+            except CustomSyncPartialFailure as exc:
+                failures.update(exc.failures)
+
+            if failures:
+                raise CustomSyncPartialFailure("dashboards", failures)
 
             self._store_custom_dashboards_hash(expected_hash)
             if is_personal:
@@ -1233,3 +1175,148 @@ class DashboardManager(BaseDashboardManager):
                 destination=destination_arg,
             )
         return changed
+
+
+class _DashboardEntitySyncAdapter(CustomSyncAdapter):
+    """Shared storage mechanics for tile and layout reconciles."""
+
+    table: str = ""
+
+    def __init__(self, manager: DashboardManager, *, destination: str | None) -> None:
+        self._manager = manager
+        self._destination = destination
+        self._live_by_key: Dict[str, Dict[str, Any]] = {}
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        context = self._manager._table_context_for_destination(
+            self.table,
+            self._destination,
+        )
+        rows = self._manager._get_dm().filter(
+            context,
+            filter="custom_hash != None",
+            limit=1000,
+        )
+        self._live_by_key = {
+            str(row["custom_key"]): row for row in rows if row.get("custom_key")
+        }
+        return rows
+
+
+class _DashboardTileSyncAdapter(_DashboardEntitySyncAdapter):
+    kind = "dashboard tile"
+    table = TILES_TABLE
+
+    def __init__(
+        self,
+        manager: DashboardManager,
+        *,
+        destination: str | None,
+        data_scope_by_key: Dict[str, Any],
+    ) -> None:
+        super().__init__(manager, destination=destination)
+        self._data_scope_by_key = data_scope_by_key
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        token = self._manager._resolve_entity_token(
+            row=fields,
+            db_rows=self._live_by_key,
+        )
+        bindings, resolved_scope = self._manager._prepare_tile_bindings(
+            row=fields,
+            destination=self._destination,
+            data_scope=self._data_scope_by_key.get(key, DASHBOARD_DATA_SCOPE),
+            dm=self._manager._get_dm(),
+        )
+        return self._manager._build_tile_row_data(
+            row=fields,
+            token=token,
+            bindings=bindings,
+            data_scope=resolved_scope,
+        )
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_tile(
+            destination=self._destination,
+            row_data=fields,
+        )
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_tile(
+            destination=self._destination,
+            tile_id=int(live_row["tile_id"]),
+            row_data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_tile_by_key(
+            destination=self._destination,
+            custom_key=key,
+        )
+
+
+class _DashboardLayoutSyncAdapter(_DashboardEntitySyncAdapter):
+    kind = "dashboard layout"
+    table = LAYOUTS_TABLE
+
+    def __init__(
+        self,
+        manager: DashboardManager,
+        *,
+        destination: str | None,
+        tile_tokens_by_id: Dict[str, str],
+    ) -> None:
+        super().__init__(manager, destination=destination)
+        self._tile_tokens_by_id = tile_tokens_by_id
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        positions = fields.get("positions", [])
+        if not isinstance(positions, list):
+            raise ValueError("positions must be a list")
+        tile_positions = self._manager._resolve_layout_positions(
+            positions,
+            self._tile_tokens_by_id,
+        )
+        token = self._manager._resolve_entity_token(
+            row=fields,
+            db_rows=self._live_by_key,
+        )
+        layout_row = build_dashboard_record_row(
+            token=token,
+            title=str(fields.get("title", "")),
+            tiles=tile_positions,
+            description=fields.get("description"),
+        )
+        row_data = layout_row.model_dump()
+        row_data["custom_key"] = fields.get("custom_key")
+        row_data["custom_hash"] = fields.get("custom_hash")
+        return row_data
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_layout(
+            destination=self._destination,
+            row_data=fields,
+        )
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_layout(
+            destination=self._destination,
+            dashboard_id=int(live_row["dashboard_id"]),
+            row_data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_layout_by_key(
+            destination=self._destination,
+            custom_key=key,
+        )

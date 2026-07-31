@@ -893,6 +893,42 @@ class SessionDetails:
             self.unify_key = val
         self._initialized = True
 
+    def bind_derived_ownership(self) -> None:
+        """Bind team ownership from the platform's assistant record.
+
+        Ownership used to travel env-var → form → secret → session, one hop
+        per launch surface, and the surface that forgot silently routed a
+        team-owned assistant's shared storage to the personal root. The
+        assistant record is the identity; anything a launcher delivered is
+        only a cross-check, and a disagreement is a split-brain that must
+        stop the boot rather than pick a side.
+        """
+
+        agent_id = self.assistant.agent_id
+        if agent_id is None:
+            return
+
+        import unisdk
+
+        records = unisdk.list_assistants(agent_id=int(agent_id))
+        if not records:
+            raise RuntimeError(
+                f"Assistant {agent_id} has no platform record; refusing to "
+                "boot without authoritative ownership.",
+            )
+        raw = records[0].get("owner_team_id")
+        derived = int(raw) if raw is not None else None
+
+        delivered = self.assistant.owner_team_id
+        if delivered is not None and derived != delivered:
+            raise RuntimeError(
+                f"Ownership split-brain for assistant {agent_id}: the "
+                f"launcher delivered owner_team_id={delivered} but the "
+                f"platform record says {derived!r}.",
+            )
+        self.assistant.owner_team_id = derived
+        os.environ["OWNER_TEAM_ID"] = str(derived) if derived is not None else ""
+
     def get_subprocess_env(self, **overrides: str) -> dict[str, str]:
         """Get a copy of the current environment for subprocess use.
 

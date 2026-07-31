@@ -153,7 +153,6 @@ def test_allowlist_dense_under_task_run_lineage():
             "method": "act",
             "manager": "CodeActActor",
             "task_id": 5,
-            "instance_id": 1,
             "run_key": "live:scheduled:1:5:abc:once",
         },
         mode="allowlist",
@@ -165,7 +164,6 @@ def test_allowlist_dense_under_task_run_lineage():
             "method": "ask",
             "manager": "ContactManager",
             "task_id": 5,
-            "instance_id": 1,
         },
         mode="allowlist",
         tools=tools,
@@ -183,7 +181,7 @@ def test_allowlist_dense_under_task_run_lineage():
     # Other event types stay sparse even with lineage fields.
     assert not should_persist_to_orchestra(
         "LLM",
-        {"model": "gpt", "task_id": 5, "instance_id": 1, "run_key": "rk"},
+        {"model": "gpt", "task_id": 5, "run_key": "rk"},
         mode="allowlist",
         tools=tools,
     )

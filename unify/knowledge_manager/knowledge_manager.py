@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime
-from typing import FrozenSet, List, Dict, Optional, Any, Tuple, Set
+from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import functools
 import inspect
 import logging
@@ -37,6 +37,8 @@ from .custom_knowledge import (
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
+from ..common.custom_sync import CustomSyncAdapter, run_custom_sync
+from ..common.sync_lease import exclusive_sync_lease
 
 KNOWLEDGE_TABLE = "Knowledge"
 KNOWLEDGE_META_TABLE = "Knowledge/Meta"
@@ -1062,18 +1064,6 @@ class KnowledgeManager(BaseKnowledgeManager):
         except Exception as exc:
             logger.warning("Failed to store custom knowledge hash: %s", exc)
 
-    def _get_custom_knowledge_from_db(self) -> Dict[str, Dict[str, Any]]:
-        logs = unisdk.get_logs(
-            context=self._ctx,
-            filter="custom_hash != None",
-            exclude_fields=list_private_fields(self._ctx),
-        )
-        return {
-            lg.entries.get("custom_key"): lg.entries
-            for lg in logs
-            if lg.entries.get("custom_key")
-        }
-
     def _delete_custom_knowledge_by_key(self, custom_key: str) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
@@ -1154,87 +1144,33 @@ class KnowledgeManager(BaseKnowledgeManager):
             return False
 
         with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
             self._temporary_knowledge_context("_ctx", knowledge_context),
             self._temporary_knowledge_context("_meta_ctx", meta_context),
         ):
-            if source_claims is None:
-                source_claims = {}
-            expected_hash = compute_custom_knowledge_hash(
-                source_claims=source_claims,
-            )
-            current_hash = self._get_stored_custom_knowledge_hash()
-            already_synced = (
-                self._custom_knowledge_synced
-                if is_personal
-                else knowledge_context in self._custom_knowledge_synced_contexts
-            )
+            source_claims = source_claims or {}
 
-            if already_synced and current_hash == expected_hash:
-                return False
-
-            if current_hash == expected_hash:
-                logger.debug("Custom knowledge hash matches, skipping sync")
+            def _mark_synced() -> None:
                 if is_personal:
                     self._custom_knowledge_synced = True
                 else:
                     self._custom_knowledge_synced_contexts.add(knowledge_context)
-                return False
 
-            logger.info(
-                "Custom knowledge hash mismatch "
-                "(current=%s, expected=%s), syncing...",
-                current_hash,
-                expected_hash,
+            return run_custom_sync(
+                adapter=_KnowledgeSyncAdapter(self),
+                source=source_claims,
+                expected_hash=compute_custom_knowledge_hash(
+                    source_claims=source_claims,
+                ),
+                stored_hash=self._get_stored_custom_knowledge_hash(),
+                already_synced=(
+                    self._custom_knowledge_synced
+                    if is_personal
+                    else knowledge_context in self._custom_knowledge_synced_contexts
+                ),
+                mark_synced=_mark_synced,
+                store_hash=self._store_custom_knowledge_hash,
             )
-
-            db_claims = self._get_custom_knowledge_from_db()
-            processed_keys: Set[str] = set()
-
-            for custom_key, source_data in source_claims.items():
-                processed_keys.add(custom_key)
-                claim_data = dict(source_data)
-                claim_data.pop("destination", None)
-
-                if custom_key in db_claims:
-                    db_entry = db_claims[custom_key]
-                    if db_entry.get("custom_hash") != claim_data.get("custom_hash"):
-                        logger.info("Updating custom knowledge: %s", custom_key)
-                        self._update_custom_knowledge(
-                            knowledge_id=db_entry["knowledge_id"],
-                            data=claim_data,
-                        )
-                    else:
-                        logger.debug("Custom knowledge unchanged: %s", custom_key)
-                else:
-                    existing = unisdk.get_logs(
-                        context=self._ctx,
-                        filter=f"custom_key == '{custom_key}'",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(
-                            "Overwriting user-added knowledge with custom: %s",
-                            custom_key,
-                        )
-                        unisdk.delete_logs(
-                            context=self._ctx,
-                            logs=[existing[0].id],
-                        )
-
-                    logger.info("Inserting custom knowledge: %s", custom_key)
-                    self._insert_custom_knowledge(claim_data)
-
-            for custom_key in db_claims:
-                if custom_key not in processed_keys:
-                    logger.info("Deleting removed custom knowledge: %s", custom_key)
-                    self._delete_custom_knowledge_by_key(custom_key)
-
-            self._store_custom_knowledge_hash(expected_hash)
-            if is_personal:
-                self._custom_knowledge_synced = True
-            else:
-                self._custom_knowledge_synced_contexts.add(knowledge_context)
-            return True
 
     def sync_custom(
         self,
@@ -1380,3 +1316,61 @@ def mark_knowledge_stale_for_deleted_sources(
                     },
                     overwrite=True,
                 )
+
+
+class _KnowledgeSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom knowledge reconcile."""
+
+    kind = "knowledge"
+
+    def __init__(self, manager: KnowledgeManager) -> None:
+        self._manager = manager
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._manager._ctx),
+        )
+        return [dict(lg.entries or {}) for lg in logs]
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        fields.pop("destination", None)
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_knowledge(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_knowledge(
+            knowledge_id=live_row["knowledge_id"],
+            data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_knowledge_by_key(key)
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter=f"custom_key == '{key}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        unisdk.delete_logs(
+            context=self._manager._ctx,
+            logs=[live_row["_log_id"]],
+        )

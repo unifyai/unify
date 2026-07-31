@@ -58,12 +58,8 @@ async def _make_scheduler_with_task(description: str, *, steps: int = 1):
     return scheduler, handle
 
 
-def _source_log_id(scheduler: TaskScheduler, task_id: int, instance_id: int = 0) -> int:
-    del instance_id
-    return scheduler._get_log_by_task_instance(
-        task_id=task_id,
-        instance_id=0,
-    ).id
+def _source_log_id(scheduler: TaskScheduler, task_id: int) -> int:
+    return scheduler._get_task_log(task_id=task_id).id
 
 
 @pytest.mark.asyncio

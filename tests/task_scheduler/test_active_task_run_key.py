@@ -92,7 +92,6 @@ async def test_active_task_scopes_lineage_before_watcher_result():
         actor,
         task_description="Summarize the inbox.",
         task_id=42,
-        instance_id=0,
         task_run_reference=TaskRunReference(
             assistant_id="1",
             run_key="live:scheduled:1:42:revision:once",
