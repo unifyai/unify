@@ -45,6 +45,58 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 
+
+def make_session_details(
+    monkeypatch,
+    *,
+    user_id: str = "",
+    is_coordinator: bool = False,
+    first_name: str = "Coordinator",
+    surname: str = "Unity",
+    channel: str = "unify_meet",
+    contact_json: str | None = None,
+    boss_json: str | None = None,
+):
+    """A real ``SessionDetails`` for tests that drive the voice entrypoint.
+
+    Built from the production dataclass rather than a hand-assembled stand-in.
+    Seven near-identical ``SimpleNamespace`` fakes used to live in this file, each
+    listing the attributes its own test happened to need, and they rotted the
+    moment the entrypoint read a new one: four broke on ``export_to_env`` and two
+    more on ``assistant.agent_id``, all with an ``AttributeError`` that says
+    nothing about the real contract. A real object cannot drift from itself.
+
+    ``name`` and ``has_managed_desktop`` are computed properties on the real
+    class, so they are set through what they derive from -- ``first_name`` /
+    ``surname``, and ``desktop_mode`` (defaulting to no desktop).
+    """
+    from unify.session_details import SessionDetails
+
+    details = SessionDetails()
+    details.assistant.first_name = first_name
+    details.assistant.surname = surname
+    details.assistant.about = "Assistant bio"
+    details.assistant.is_coordinator = is_coordinator
+    details.user.id = user_id
+    details.voice.provider = "cartesia"
+    details.voice_call.outbound = False
+    details.voice_call.channel = channel
+    if contact_json is not None:
+        details.voice_call.contact_json = contact_json
+    if boss_json is not None:
+        details.voice_call.boss_json = boss_json
+
+    # The two environment seams are stubbed, and only these two. In production the
+    # entrypoint exports identity so subprocesses inherit it, then repopulates from
+    # the environment; in a test process both are corrosive. The export writes
+    # ASSISTANT_* / CONTACT / BOSS into the process for every later test to
+    # inherit, and the repopulate lets any of those leaked values overwrite what a
+    # test just set -- which is why the fakes this replaced stubbed it too.
+    monkeypatch.setattr(details, "export_to_env", lambda: None)
+    monkeypatch.setattr(details, "populate_from_env", lambda: None)
+    return details
+
+
 # =============================================================================
 # Fixtures
 # =============================================================================
@@ -961,24 +1013,7 @@ async def test_simulated_opening_publishes_ready_before_utterance(monkeypatch):
     async def _noop_end_call():
         return None
 
-    fake_session_details = SimpleNamespace(
-        user=SimpleNamespace(id=None),
-        assistant=SimpleNamespace(
-            has_managed_desktop=False,
-            about="Assistant bio",
-            is_coordinator=True,
-            agent_id=None,
-            name="Coordinator Unity",
-            first_name="",
-            surname="",
-            user_desktop_for=lambda user_id: None,
-        ),
-        voice=SimpleNamespace(provider="cartesia", id=""),
-        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
-        is_coordinator=True,
-        org_id=None,
-        unify_key="",
-    )
+    fake_session_details = make_session_details(monkeypatch, is_coordinator=True)
 
     monkeypatch.setattr(call_script, "event_broker", _FakeEventBroker())
     monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
@@ -1185,24 +1220,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
         audio_sources.append(source)
         return fake_audio
 
-    fake_session_details = SimpleNamespace(
-        user=SimpleNamespace(id="user-123"),
-        assistant=SimpleNamespace(
-            has_managed_desktop=False,
-            about="Assistant bio",
-            is_coordinator=False,
-            agent_id=None,
-            name="Coordinator Unity",
-            first_name="",
-            surname="",
-            user_desktop_for=lambda user_id: None,
-        ),
-        voice=SimpleNamespace(provider="cartesia", id=""),
-        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
-        is_coordinator=False,
-        org_id=None,
-        unify_key="",
-    )
+    fake_session_details = make_session_details(monkeypatch, user_id="user-123")
 
     session_holder = {}
 
@@ -1460,24 +1478,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
         audio_sources.append(source)
         return fake_audio
 
-    fake_session_details = SimpleNamespace(
-        user=SimpleNamespace(id="user-123"),
-        assistant=SimpleNamespace(
-            has_managed_desktop=False,
-            about="Assistant bio",
-            is_coordinator=False,
-            agent_id=None,
-            name="Coordinator Unity",
-            first_name="",
-            surname="",
-            user_desktop_for=lambda user_id: None,
-        ),
-        voice=SimpleNamespace(provider="cartesia", id=""),
-        voice_call=SimpleNamespace(outbound=False, channel="unify_meet"),
-        is_coordinator=False,
-        org_id=None,
-        unify_key="",
-    )
+    fake_session_details = make_session_details(monkeypatch, user_id="user-123")
 
     session_holder = {}
 
@@ -1866,28 +1867,13 @@ class TestFastBrainGuidanceFlow:
             return None
 
         fake_broker = _FakeEventBroker()
-        fake_session_details = SimpleNamespace(
-            populate_from_env=lambda: None,
-            user=SimpleNamespace(id="user-123"),
-            voice=SimpleNamespace(provider="cartesia", id=""),
-            assistant=SimpleNamespace(
-                has_managed_desktop=False,
-                about="Assistant bio",
-                name="Ava",
-                first_name="Assistant",
-                surname="Example",
-                agent_id=None,
-                user_desktop_for=lambda user_id: None,
-            ),
-            voice_call=SimpleNamespace(
-                outbound=False,
-                channel="unify_meet",
-                contact_json=json.dumps(contact),
-                boss_json=json.dumps(boss),
-            ),
-            is_coordinator=False,
-            org_id=None,
-            unify_key="",
+        fake_session_details = make_session_details(
+            monkeypatch,
+            user_id="user-123",
+            first_name="Assistant",
+            surname="Example",
+            contact_json=json.dumps(contact),
+            boss_json=json.dumps(boss),
         )
 
         monkeypatch.setattr(call_script, "event_broker", fake_broker)
@@ -2129,28 +2115,13 @@ class TestFastBrainGuidanceFlow:
             return None
 
         fake_broker = _FakeEventBroker()
-        fake_session_details = SimpleNamespace(
-            populate_from_env=lambda: None,
-            voice=SimpleNamespace(provider="cartesia", id=""),
-            assistant=SimpleNamespace(
-                has_managed_desktop=False,
-                about="Assistant bio",
-                name="Ava",
-                first_name="Assistant",
-                surname="Example",
-                agent_id=None,
-                user_desktop_for=lambda user_id: None,
-            ),
-            user=SimpleNamespace(id="default"),
-            is_coordinator=False,
-            org_id=None,
-            voice_call=SimpleNamespace(
-                outbound=False,
-                channel="unify_meet",
-                contact_json=json.dumps(contact),
-                boss_json=json.dumps(boss),
-            ),
-            unify_key="",
+        fake_session_details = make_session_details(
+            monkeypatch,
+            user_id="default",
+            first_name="Assistant",
+            surname="Example",
+            contact_json=json.dumps(contact),
+            boss_json=json.dumps(boss),
         )
 
         monkeypatch.setattr(call_script, "SESSION_DETAILS", fake_session_details)
@@ -2400,25 +2371,11 @@ class TestFastBrainGuidanceFlow:
             return None
 
         fake_broker = _FakeEventBroker()
-        fake_session_details = SimpleNamespace(
-            populate_from_env=lambda: None,
-            voice=SimpleNamespace(provider="cartesia", id=""),
-            voice_call=SimpleNamespace(
-                outbound=False,
-                channel="unify_meet",
-                contact_json=json.dumps(contact),
-                boss_json=json.dumps(boss),
-            ),
-            assistant=SimpleNamespace(
-                has_managed_desktop=False,
-                about="Assistant bio",
-                name="Ava",
-                user_desktop_for=lambda user_id: None,
-            ),
-            user=SimpleNamespace(id="default"),
-            is_coordinator=False,
-            org_id=None,
-            unify_key="",
+        fake_session_details = make_session_details(
+            monkeypatch,
+            user_id="default",
+            contact_json=json.dumps(contact),
+            boss_json=json.dumps(boss),
         )
 
         monkeypatch.setattr(call_script, "event_broker", fake_broker)
@@ -2641,25 +2598,11 @@ class TestFastBrainGuidanceFlow:
             return None
 
         fake_broker = _FakeEventBroker()
-        fake_session_details = SimpleNamespace(
-            populate_from_env=lambda: None,
-            voice=SimpleNamespace(provider="cartesia", id=""),
-            voice_call=SimpleNamespace(
-                outbound=False,
-                channel="unify_meet",
-                contact_json=json.dumps(contact),
-                boss_json=json.dumps(boss),
-            ),
-            assistant=SimpleNamespace(
-                has_managed_desktop=False,
-                about="Assistant bio",
-                name="Ava",
-                user_desktop_for=lambda user_id: None,
-            ),
-            user=SimpleNamespace(id="default"),
-            is_coordinator=False,
-            org_id=None,
-            unify_key="",
+        fake_session_details = make_session_details(
+            monkeypatch,
+            user_id="default",
+            contact_json=json.dumps(contact),
+            boss_json=json.dumps(boss),
         )
 
         monkeypatch.setattr(call_script, "event_broker", fake_broker)

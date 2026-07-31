@@ -2909,9 +2909,16 @@ class TestTaskDueEventHandlers:
             == "Prepare the scheduled report."
         )
 
+        # ``Tasks`` is definition-only: one row per ``task_id`` for the whole
+        # series, with run state living in ``Tasks/Executions``. Starting an
+        # occurrence must therefore leave exactly one definition row, still armed
+        # -- a run that disarmed its own series would silently stop recurring.
+        # This previously asserted a ``status`` field, which the arming-flag
+        # migration removed from the model altogether.
         rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
-        assert rows[0].status == Status.active
+        assert rows[0].task_id == task_id
+        assert rows[0].enabled is True
 
     @pytest.mark.asyncio
     async def test_task_due_start_failure_surfaces_error_without_llm_prompt(
