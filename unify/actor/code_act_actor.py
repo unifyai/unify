@@ -4750,6 +4750,46 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
+    @staticmethod
+    async def _run_repair_diagnostic_probe(code: str) -> str:
+        """Execute a short read-only Python diagnosis snippet in a fresh subprocess.
+
+        Use this to observe the CURRENT behavior of the external interfaces a
+        failing function reads — for example, fetch the endpoint it ingests
+        and print the response's shape, keys, and a sample record — so the
+        repair is grounded in observed reality rather than in assumptions or
+        in the function's own error messages. The snippet runs in a fresh
+        isolated interpreter with the standard library only and must print
+        its observations to stdout.
+
+        Strictly read-only diagnosis: fetch and inspect inputs only. Never
+        perform the failing function's side effects (no writes, deliveries,
+        or state mutations on external systems). Output is truncated after
+        20,000 characters; the subprocess is killed after 60 seconds.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-c",
+            str(code),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return "Probe timed out after 60 seconds and was killed."
+        output = raw.decode("utf-8", errors="replace")
+        if len(output) > 20_000:
+            output = output[:20_000] + "\n... (output truncated)"
+        return (
+            f"exit_code={proc.returncode}\n{output}"
+            if output.strip()
+            else f"exit_code={proc.returncode} (no output printed)"
+        )
+
     async def _repair_symbolic_entrypoint(
         self,
         *,
@@ -4808,6 +4848,7 @@ class CodeActActor(BaseCodeActActor):
             fm.get_function_venv,
             include_class_name=True,
         )
+        tools["run_diagnostic_probe"] = self._run_repair_diagnostic_probe
         client = new_llm_client(self._model)
         client.set_system_message(
             "You are repairing a stored symbolic task executor. The contract "
@@ -4819,15 +4860,21 @@ class CodeActActor(BaseCodeActActor):
             "a function is stored (fields get renamed or nested, endpoints get "
             "versioned), and adapting ingestion to the environment's current "
             "shape while keeping the outcome exactly equivalent is precisely "
-            "what repair is for. The task description records the environment "
-            "as it looked when the task was created; when the observed failure "
-            "contradicts it, trust the failure evidence over the description's "
+            "what repair is for. Diagnose before you rewrite: when the failure "
+            "implicates an external input surface, first use "
+            "run_diagnostic_probe to observe what that interface actually "
+            "returns right now (its shape, keys, and a sample record) and base "
+            "the repair on that observation. Probes are strictly read-only "
+            "diagnosis — never perform the function's side effects through "
+            "them. The task description records the environment "
+            "as it looked when the task was created; when observed reality "
+            "contradicts it, trust the observation over the description's "
             "input details. Bear in mind that the function's own validation "
             "messages describe its assumptions, not what the environment "
             "actually returned — a missing expected field usually means the "
             "interface changed shape, not that the data is corrupt, so prefer "
-            "ingestion that detects the current shape (e.g. accepts a renamed "
-            "equivalent field) over rejecting the input. Never weaken the "
+            "ingestion that reads the observed current shape over rejecting "
+            "the input. Never weaken the "
             "outcome to make the error disappear: do not fabricate values, "
             "skip required side effects, or coerce genuinely invalid data. "
             "Update the existing function in place with overwrite=True so its "
@@ -4845,12 +4892,15 @@ class CodeActActor(BaseCodeActActor):
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
             f"Failure: {type(failure).__name__}: {failure}\n\n"
-            "Diagnose the failure, repair the stored function in place "
-            "(overwrite=True) when an outcome-equivalent fix exists — "
+            "Diagnose the failure — observing the current behavior of any "
+            "implicated external input surface via run_diagnostic_probe "
+            "(read-only) before deciding — then repair the stored function in "
+            "place (overwrite=True) when an outcome-equivalent fix exists, "
             "including adapting input handling to an evolved external "
-            "interface — then briefly summarize the equivalence rationale and "
-            "the change made. Only if no fix can preserve the task's outcome "
-            "semantics, say so without modifying the function."
+            "interface. Briefly summarize the observed evidence, the "
+            "equivalence rationale, and the change made. Only if no fix can "
+            "preserve the task's outcome semantics, say so without modifying "
+            "the function."
         )
         handle = start_async_tool_loop(
             client=client,
