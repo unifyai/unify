@@ -112,7 +112,7 @@ def _fake_function_manager() -> FunctionManager:
         lambda app_keys: setattr(fm, "_deleted_apps", app_keys) or 0
     )
     fm._inserted_rows = []
-    fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows)
+    fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows) or True
     fm._count_provider_integration_rows_for_app = lambda **_kwargs: len(
         fm._inserted_rows,
     )
@@ -149,7 +149,14 @@ def test_materializes_connected_provider_tools_with_active_only_search(
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
 
     assert result["status"] == "synced"
-    assert result["apps"] == [{"key": "composio:hubspot", "rows": 1, "rows_deleted": 0}]
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
+    ]
     assert client.calls == [
         ("list_connections", (), {"owner_scope": "assistant", "assistant_id": 42}),
     ]
@@ -521,7 +528,12 @@ def test_one_app_mismatch_does_not_block_sibling_app_sync(monkeypatch) -> None:
         },
     ]
     assert result["apps"] == [
-        {"key": "composio:hubspot", "rows": 1, "rows_deleted": 0},
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
     ]
     assert {row["name"] for row in fm._inserted_rows} == {
         "primitives.integrations.hubspot.search_contacts",
@@ -606,7 +618,14 @@ def test_materialization_pages_app_scoped_provider_tools(monkeypatch) -> None:
     result = fm.sync_provider_integration_tools(app_slug="HubSpot", limit=1)
 
     assert result["status"] == "synced"
-    assert result["apps"] == [{"key": "composio:hubspot", "rows": 2, "rows_deleted": 0}]
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 2,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
+    ]
     assert all(call[0] != "search_tools" for call in client.calls)
     assert catalog_calls == [{"canonical_app_slug": "hubspot", "limit": 1}]
     assert [row["name"] for row in fm._inserted_rows] == [
@@ -727,6 +746,115 @@ def test_sync_materializes_only_connected_backend_tools(monkeypatch) -> None:
     assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "pipedream"
 
 
+def test_workspace_trigger_facade_only_connection_materializes_nothing(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+
+    result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+
+    assert result["status"] == "unchanged"
+    assert result["apps"] == []
+    assert result["unchanged_apps"] == []
+    assert fm._inserted_rows == []
+    assert not hasattr(fm, "_deleted_apps")
+    assert not hasattr(fm, "_stored_hashes")
+
+
+def test_workspace_trigger_facade_with_composio_resolves_composio_without_warning(
+    monkeypatch,
+    caplog,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+        {
+            "connection_id": "conn-composio",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "composio",
+            "status": "connected",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    sync_logger = logging.getLogger("unify.function_manager.function_manager")
+    sync_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="unify.function_manager.function_manager")
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "synced"
+    assert len(fm._inserted_rows) == 1
+    assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "composio"
+    assert "Multiple connected backends" not in caplog.text
+
+
 def test_insert_primitives_preserves_validated_integration_metadata(
     monkeypatch,
 ) -> None:
@@ -826,14 +954,19 @@ def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
         "_delete_primitives_by_function_ids",
         lambda self, function_ids: deleted_ids.extend(function_ids),
     )
+
+    def _fake_create_logs(**kwargs):
+        captured.extend(kwargs["entries"])
+        return [SimpleNamespace(entries=entry) for entry in kwargs["entries"]]
+
     monkeypatch.setattr(
         "unify.function_manager.function_manager.unity_create_logs",
-        lambda **kwargs: captured.extend(kwargs["entries"]),
+        _fake_create_logs,
     )
     fm = _fake_function_manager()
     fm._primitives_ctx = "Functions/Primitives"
 
-    FunctionManager._insert_primitives(
+    fully_inserted = FunctionManager._insert_primitives(
         fm,
         [
             {
@@ -856,6 +989,59 @@ def test_insert_primitives_replaces_exact_function_ids(monkeypatch) -> None:
 
     assert deleted_ids == [123]
     assert captured[0]["function_id"] == 123
+    assert fully_inserted is True
+
+
+def test_insert_primitives_skips_already_catalogued_rows(monkeypatch) -> None:
+    """Provider-backed rows are connection-agnostic catalogue entries: a row
+    can already exist (e.g. seeded once system-wide) on an assistant's first
+    sync, and this session's delete can't remove a row it doesn't own. The
+    insert must ask Orchestra to skip already-existing rows instead of
+    failing the whole batch on the first collision, and must report back
+    that it didn't actually write anything -- so the caller knows not to
+    cache "fully synced" state it never confirmed.
+    """
+    captured_kwargs: list[dict] = []
+
+    monkeypatch.setattr(
+        FunctionManager,
+        "_delete_primitives_by_function_ids",
+        lambda self, function_ids: None,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.unity_create_logs",
+        # Orchestra's on_duplicate="skip" path returns only the rows it
+        # actually wrote; every row here already existed, so nothing comes
+        # back.
+        lambda **kwargs: captured_kwargs.append(kwargs) or [],
+    )
+    fm = _fake_function_manager()
+    fm._primitives_ctx = "Functions/Primitives"
+
+    fully_inserted = FunctionManager._insert_primitives(
+        fm,
+        [
+            {
+                "name": "primitives.integrations.google_calendar.acl_delete",
+                "function_id": 903599057,
+                "argspec": "() -> dict",
+                "docstring": "Delete an ACL rule.",
+                "embedding_text": "Function Name: primitives.integrations.google_calendar.acl_delete",
+                "implementation": None,
+                "depends_on": [],
+                "precondition": None,
+                "verify": False,
+                "is_primitive": True,
+                "guidance_ids": [],
+                "primitive_class": "unify.integrations.primitives.IntegrationPrimitives",
+                "primitive_method": "google_calendar_acl_delete",
+            },
+        ],
+    )
+
+    assert len(captured_kwargs) == 1
+    assert captured_kwargs[0]["on_duplicate"] == "skip"
+    assert fully_inserted is False
 
 
 def test_function_manager_queries_do_not_call_integration_ops(monkeypatch) -> None:
@@ -937,13 +1123,101 @@ def test_materialization_hash_match_skips_delete_and_insert(monkeypatch) -> None
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": current_hash,
     }
+    # Rows already materialized from a prior sync -- the unchanged-hash
+    # verification (_count_provider_integration_rows_for_app) must see them
+    # present so it doesn't mistake a cached hash for the real thing.
+    fm._inserted_rows = [expected_row]
 
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
 
     assert result["status"] == "unchanged"
     assert result["apps"] == []
     assert result["unchanged_apps"] == [{"key": "composio:hubspot", "rows": 1}]
-    assert fm._inserted_rows == []
+    assert fm._inserted_rows == [expected_row]
+    assert not hasattr(fm, "_deleted_apps")
+
+
+def test_zombie_unchanged_hash_with_zero_rows_falls_through_to_changed(
+    monkeypatch,
+) -> None:
+    """A cached hash match is a hint, not a guarantee -- if the rows behind
+    it were deleted out-of-band (bulk cleanup, --full reset, retention), the
+    unchanged branch must notice they're actually gone and rematerialize
+    instead of trusting the hash forever.
+    """
+    client = FakeIntegrationOps()
+    expected_row = FunctionManager.__new__(
+        FunctionManager,
+    )._integration_tool_to_function_row(MOCK_TOOL)
+    current_hash = FunctionManager._hash_integration_rows([expected_row])
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    fm._get_stored_integration_tool_hash_by_app = lambda: {
+        "composio:hubspot": current_hash,
+    }
+    # No rows actually materialized (the zombie scenario): hash claims
+    # synced, but the context has zero rows for this app.
+
+    result = fm.sync_provider_integration_tools(app_slug="hubspot")
+
+    assert result["status"] == "synced"
+    assert result["unchanged_apps"] == []
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
+    ]
+    assert fm._deleted_apps == [("composio", "hubspot")]
+    assert fm._inserted_rows == [expected_row]
+    assert fm._stored_hashes == {"composio:hubspot": current_hash}
+
+
+def test_materialization_does_not_cache_hash_when_rows_already_catalogued(
+    monkeypatch,
+) -> None:
+    """When _insert_primitives reports it didn't write every row itself
+    (some already existed under a shared, connection-agnostic catalogue
+    entry -- see _insert_primitives), the sync must still report success for
+    this call (the tools genuinely exist, per the row count) but must NOT
+    cache the per-assistant hash as "synced". Caching it would let this
+    assistant silently trust content it never actually confirmed -- if the
+    upstream tool definition later changes, a cached hash would mean this
+    assistant never notices and never retries.
+    """
+    client = FakeIntegrationOps()
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    fm._insert_primitives = lambda rows: fm._inserted_rows.extend(rows) or False
+
+    result = fm.sync_provider_integration_tools(app_slug="hubspot")
+
+    assert result["status"] == "synced"
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": False,
+        },
+    ]
+    assert fm._stored_hashes == {}
 
 
 def test_disconnect_cleanup_removes_materialized_rows(monkeypatch) -> None:

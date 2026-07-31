@@ -129,6 +129,31 @@ current_task_execution_delegate: ContextVar[TaskExecutionDelegate | None] = Cont
 )
 
 
+# Tracks the chain of task_ids currently active in this async execution's own
+# ancestry (the task_id passed to each still-running `TaskScheduler.execute`
+# call in this async task tree, from the outermost run down to the current
+# one).
+#
+# This exists to catch *reentrancy*: a task invoking its own task_id again
+# (directly, or transitively via a nested `primitives.tasks.execute` call)
+# while it is still active. It is intentionally narrower than "is any
+# instance of this task_id active anywhere" -- unrelated concurrent
+# instances of the same task_id (e.g. two separate scheduled wakes) are
+# allowed and must not trip this check.
+#
+# - Set at the top of `TaskScheduler.execute`, extended with the current
+#   task_id, and reset in a `finally` block once the child run has been
+#   started (the spawned run keeps its own copied context, so resetting the
+#   caller's context afterward does not affect it).
+# - Checked at the top of `TaskScheduler.execute`: if the requested task_id
+#   is already in this set, the call is self-invocation and must be
+#   rejected rather than silently starting a duplicate nested run.
+current_task_execution_ancestors: ContextVar[frozenset[int]] = ContextVar(
+    "current_task_execution_ancestors",
+    default=frozenset(),
+)
+
+
 @dataclass(frozen=True)
 class PostRunReviewContext:
     """Run-scoped metadata for an optional post-completion storage review."""

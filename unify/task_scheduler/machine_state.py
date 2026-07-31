@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -50,6 +51,7 @@ _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
 )
 _TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/task-outbound-operation/update"
 _TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
+_TASK_RUN_HTTP_ATTEMPTS = 4
 _EXECUTION_QUERY_FIELDS = [
     "assistant_id",
     "destination",
@@ -62,6 +64,7 @@ _EXECUTION_QUERY_FIELDS = [
     "task_name",
     "task_description",
     "scheduled_for",
+    "dispatch_offset_seconds",
     "trigger_medium",
     "trigger_from_contact_ids",
     "trigger_omit_contact_ids",
@@ -114,6 +117,7 @@ class TaskExecutionSnapshot:
     task_name: str | None = None
     task_description: str | None = None
     scheduled_for: str | None = None
+    dispatch_offset_seconds: float | None = None
     trigger_medium: str | None = None
     trigger_from_contact_ids: list[int] = field(default_factory=list)
     trigger_omit_contact_ids: list[int] = field(default_factory=list)
@@ -145,6 +149,11 @@ class TaskRunProvenance:
     task_name: str | None = None
     task_description: str | None = None
     attempt_token: str | None = None
+    dispatch_offset_seconds: float | None = None
+    # Symbolic function id the definition binds this occurrence to. Dispatch
+    # reads it from the materialized row, so a projected occurrence stored
+    # without it launches as agentic and a symbolic task refuses the run.
+    entrypoint: int | None = None
 
 
 @dataclass(frozen=True)
@@ -312,8 +321,17 @@ def consume_live_task_run_provenance(
     source_task_log_id: int | None = None,
     destination: str | None = None,
     trigger_attempt_token: str | None = None,
+    offline: bool | None = None,
 ) -> TaskRunProvenance | None:
-    """Claim the pending live-run provenance for one task, or build a fallback."""
+    """Claim the pending live-run provenance for one task, or build a fallback.
+
+    ``offline`` should be the target task definition's own ``offline`` field,
+    when known to the caller. It is used only for the fallback provenance
+    built below (no pending provenance was registered for this task/wake/
+    destination) -- a pending provenance already carries its own correct
+    ``delivery`` from whoever registered it. Without ``offline``, the
+    fallback defaults to live delivery, matching prior behavior.
+    """
 
     wake = _normalize_wake(wake)
     normalized_assistant_id = _coerce_str(assistant_id)
@@ -340,7 +358,7 @@ def consume_live_task_run_provenance(
         assistant_id=normalized_assistant_id,
         task_id=task_id,
         wake=wake,
-        delivery=Delivery.live,
+        delivery=Delivery.offline if offline else Delivery.live,
         source_task_log_id=source_task_log_id
         or (execution.source_task_log_id if execution is not None else None),
         revision=(execution.revision if execution is not None else None),
@@ -434,6 +452,32 @@ def create_or_adopt_live_task_run(
 ) -> TaskRunReference | None:
     """Create or adopt one live execution row at the moment execution begins."""
 
+    return _create_or_adopt_task_run(
+        provenance,
+        state=ExecutionState.running,
+        started_at=started_at or _now_iso(),
+    )
+
+
+def project_task_occurrence(provenance: TaskRunProvenance) -> TaskRunReference | None:
+    """Create or adopt the pending execution row for one future occurrence.
+
+    A projected occurrence has not started: it is ``scheduled`` with no
+    ``started_at``, so overlap guards ignore it and dispatch owns the moment it
+    actually begins. Projecting it as a running row made every successor look
+    like a live concurrent run the instant its predecessor started, and the
+    predecessor and successor then overlap-skipped each other forever.
+    """
+
+    return _create_or_adopt_task_run(provenance, state=ExecutionState.scheduled)
+
+
+def _create_or_adopt_task_run(
+    provenance: TaskRunProvenance,
+    *,
+    state: ExecutionState,
+    started_at: str | None = None,
+) -> TaskRunReference | None:
     run_key = build_task_run_key(provenance)
     response_body = _orchestra_admin_post(
         _TASK_EXECUTION_CREATE_OR_ADOPT_PATH,
@@ -446,17 +490,23 @@ def create_or_adopt_live_task_run(
                 "source_task_log_id": provenance.source_task_log_id,
                 "wake": provenance.wake.value,
                 "delivery": provenance.delivery.value,
-                "revision": provenance.revision,
+                # The digest inside run_key hashed str(revision or ""), so the
+                # row must carry the same value the dispatcher will rebuild the
+                # key from at fire time. Dropping a None here would leave the
+                # dispatcher hashing a value the row never stored.
+                "revision": str(provenance.revision or ""),
                 "destination": provenance.destination,
                 "scheduled_for": provenance.scheduled_for,
+                "dispatch_offset_seconds": provenance.dispatch_offset_seconds,
+                "entrypoint": provenance.entrypoint,
                 "source_medium": provenance.source_medium,
                 "source_ref": provenance.source_ref,
                 "source_contact_id": provenance.source_contact_id,
                 "source_contact_display_name": provenance.source_contact_display_name,
                 "task_name": provenance.task_name,
                 "task_description": provenance.task_description,
-                "started_at": started_at or _now_iso(),
-                "state": ExecutionState.running.value,
+                "started_at": started_at,
+                "state": state.value,
             },
         ),
     )
@@ -703,6 +753,108 @@ def get_open_task_execution(
     return _row_to_execution(rows[0])
 
 
+def find_running_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+    states: tuple[ExecutionState, ...] = _OPEN_EXECUTION_STATES,
+) -> TaskExecutionSnapshot | None:
+    """Return an execution in one of ``states`` for one task, whatever assistant owns it.
+
+    ``get_open_task_execution`` is assistant-scoped and returns ``None`` when
+    the session has no assistant context. "Is a run in flight for this task?"
+    must not depend on who is asking, so this queries by ``task_id`` alone —
+    the definition it guards is a single row shared by every assistant that
+    can execute it.
+
+    ``states`` defaults to the full open-state set (``scheduled``,
+    ``triggerable``, ``running``) so existing callers are unaffected; pass a
+    narrower tuple to match only a subset, e.g. genuinely ``running`` rows.
+    """
+
+    filter_clauses = [
+        f"task_id == {int(task_id)}",
+        _open_execution_state_filter(states),
+    ]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
+def latest_scheduled_occurrence_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> str | None:
+    """The newest ``scheduled_for`` already projected for one task, if any.
+
+    The next occurrence is derived from the last one the ledger knows about,
+    not from a field the definition mutates. Every caller reading the same
+    ledger computes the same next slot, so concurrent runs converge on one
+    ``run_key`` instead of racing a shared row.
+    """
+
+    filter_clauses = [f"task_id == {int(task_id)}", "wake == 'scheduled'"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=200,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    occurrences = [
+        _coerce_str(getattr(_row_to_execution(row), "scheduled_for", None))
+        for row in rows
+    ]
+    known = [value for value in occurrences if value]
+    if not known:
+        return None
+    return max(known, key=_normalize_datetime_string)
+
+
+def find_terminal_execution_for_task(
+    *,
+    task_id: int,
+    destination: str | None = None,
+) -> TaskExecutionSnapshot | None:
+    """Return a finished execution for one task, if any run has terminalized.
+
+    This is how a one-shot knows it has already run. Storing that on the
+    definition would put a run fact back on the shared row; the run ledger
+    already records it, so the definition can stay authored intent only.
+    """
+
+    terminal_states = " or ".join(
+        f"state == '{state.value}'"
+        for state in (
+            ExecutionState.completed,
+            ExecutionState.failed,
+            ExecutionState.cancelled,
+        )
+    )
+    filter_clauses = [f"task_id == {int(task_id)}", f"({terminal_states})"]
+    normalized_destination = _canonical_destination_or_none(destination)
+    if normalized_destination is not None:
+        filter_clauses.append(f"destination == '{normalized_destination}'")
+    rows = _execution_store().get_rows(
+        filter=" and ".join(filter_clauses),
+        limit=1,
+        include_fields=_EXECUTION_QUERY_FIELDS,
+    )
+    if not rows:
+        return None
+    return _row_to_execution(rows[0])
+
+
 def list_scheduled_executions(
     *,
     assistant_id: str | int | None,
@@ -826,12 +978,12 @@ def _execution_store() -> TasksStore:
     )
 
 
-def _open_execution_state_filter() -> str:
-    """Return a filter clause matching open execution states."""
+def _open_execution_state_filter(
+    states: tuple[ExecutionState, ...] = _OPEN_EXECUTION_STATES,
+) -> str:
+    """Return a filter clause matching the given execution states."""
 
-    quoted = " or ".join(
-        f"state == '{state.value}'" for state in _OPEN_EXECUTION_STATES
-    )
+    quoted = " or ".join(f"state == '{state.value}'" for state in states)
     return f"({quoted})"
 
 
@@ -914,15 +1066,36 @@ def _orchestra_admin_post(
             "Skipping task-execution persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
         )
         return None
-    response = requests.post(
-        f"{orchestra_url}{path}",
-        json=dict(payload),
-        headers={"Authorization": f"Bearer {unify_key}"},
-        timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    body = response.json()
-    return body if isinstance(body, dict) else None
+    # Every payload on this path is idempotent — create-or-adopt converges on
+    # run_key / operation_key, and updates are keyed patches — so a transient
+    # failure is retried rather than surfaced. A single 500 here once ended a
+    # recurring series for good: the occurrence that failed to project was the
+    # only thing that would ever project its successor.
+    last_error: Exception | None = None
+    for attempt in range(_TASK_RUN_HTTP_ATTEMPTS):
+        if attempt:
+            time.sleep(2 ** (attempt - 1))
+        try:
+            response = requests.post(
+                f"{orchestra_url}{path}",
+                json=dict(payload),
+                headers={"Authorization": f"Bearer {unify_key}"},
+                timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+        if response.status_code >= 500 or response.status_code == 429:
+            last_error = requests.HTTPError(
+                f"{response.status_code} from {path}",
+                response=response,
+            )
+            continue
+        response.raise_for_status()
+        body = response.json()
+        return body if isinstance(body, dict) else None
+    assert last_error is not None
+    raise last_error
 
 
 def _drop_none_values(payload: Mapping[str, Any]) -> dict[str, Any]:

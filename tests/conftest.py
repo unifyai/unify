@@ -654,6 +654,21 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     total = sum(cost for _, cost in _session_costs)
     terminalreporter.write_sep("=", f"UNILLM Provider Cost Summary: ${total:.6g}")
 
+    # Record outcome counts for parallel_run.sh. pytest exits 0 when every test
+    # skips, so exit status alone cannot tell a session that passed from one
+    # that ran nothing — and a summary that calls those the same thing hides
+    # coverage silently disappearing.
+    try:
+        session_id = os.environ.get("UNITY_TMUX_SESSION_ID", "")
+        if session_id:
+            passed = len(terminalreporter.stats.get("passed", []))
+            skipped = len(terminalreporter.stats.get("skipped", []))
+            outcome_file = f"/tmp/parallel_run_outcome_{session_id}.txt"
+            with open(outcome_file, "w") as f:
+                f.write(f"{passed}|{skipped}\n")
+    except Exception:
+        pass  # Don't fail the test run if outcome stats writing fails
+
 
 # --------------------------------------------------------------------------- #
 # 7. Test run hooks                                                           #

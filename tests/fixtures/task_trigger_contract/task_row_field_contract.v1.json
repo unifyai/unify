@@ -15,15 +15,5 @@
     "response_policy",
     "destination"
   ],
-  "runtime_fields": [
-    "status",
-    "activated_by",
-    "instance_id"
-  ],
-  "runtime_status_values": [
-    "active",
-    "completed",
-    "cancelled",
-    "failed"
-  ]
+  "runtime_fields": []
 }

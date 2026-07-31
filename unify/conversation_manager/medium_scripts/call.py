@@ -1,9 +1,7 @@
 import os
 import sys
 import json
-import queue
 import asyncio
-import threading
 import time
 from dataclasses import dataclass
 from importlib import resources
@@ -18,8 +16,6 @@ from livekit.agents import (
     Agent,
     RoomInputOptions,
     utils,
-    tokenize,
-    tts,
     stt,
 )
 from livekit.plugins import (
@@ -45,6 +41,7 @@ from typing import AsyncIterable, Callable
 load_dotenv()
 
 from unify.conversation_manager.events import *
+from unify.common.prompt_helpers import now as prompt_now
 from unify.conversation_manager import speaker_id
 from unify.conversation_manager.utils import dispatch_livekit_agent
 from unify.conversation_manager.prompt_builders import (
@@ -73,6 +70,7 @@ from unify.conversation_manager.medium_scripts.common import (
     UserTrackCaptureManager,
     ScreenshotHistory,
     capture_assistant_screenshot,
+    fetch_meet_screenshare_frame,
     render_participant_comms,
     publish_meet_interaction_from_track,
     FastBrainLogger,
@@ -81,6 +79,21 @@ from unify.conversation_manager.medium_scripts.common import (
 from unify.conversation_manager.medium_scripts.meet_floor import (
     FLOOR_TOPIC,
     MeetFloor,
+)
+from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
+from unify.conversation_manager.domains.recall.events import (
+    EVENT_CHAT_MESSAGE,
+    EVENT_LEAVE,
+    EVENT_SCREENSHARE_OFF,
+    EVENT_SCREENSHARE_ON,
+    EVENT_SPEECH_OFF,
+    EVENT_SPEECH_ON,
+    ROSTER_EVENTS,
+    parse_relayed_event,
+)
+from unify.conversation_manager.meet_speaker_map import (
+    MeetSpeakerVotes,
+    MeetSpeakerWindows,
 )
 from unify.conversation_manager.cm_types.screenshot import (
     ScreenshotEntry,
@@ -106,10 +119,28 @@ _log = FastBrainLogger()
 # Channels where many people share one audio stream with no single primary, so
 # every distinct voice needs its own "Speaker N" label even when nobody on the
 # call is enrolled. Deliberately wider than the ("google_meet", "teams_meet")
-# checks elsewhere in this module: those mean *browser* meets specifically —
-# DOM scraping and the PortAudio bridge — whereas Unify Meet is LiveKit-native
-# but just as multi-party.
+# checks elsewhere in this module: those mean a meeting on someone else's
+# platform, reached through a hosted bot, whereas Unify Meet is our own room —
+# but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
+
+# How often to re-read the screen a meeting participant is sharing. Recall sends
+# frames at 2fps and the relay stores one a second, so polling faster only costs
+# round trips; polling much slower would leave the frame behind the conversation
+# it is meant to explain. Runs only while somebody is actually presenting.
+_MEET_SCREENSHARE_POLL_INTERVAL_S = 1.0
+
+# How often a shared screen is fed to the brains while nobody is speaking.
+# Deliberately far slower than the poll: every push is a screenshot written to
+# disk, buffered for the slow brain, and registered as an image downstream, so
+# pushing each polled frame would file hundreds of images per meeting. Ten
+# seconds keeps an idle share current without that.
+_MEET_AMBIENT_PUSH_INTERVAL_S = 10.0
+
+# Consecutive empty polls before saying so. Somebody is presenting whenever this
+# loop runs, so no frame is a fault; a couple of misses is just the first frame
+# not having landed yet.
+_MEET_FETCH_MISS_ALERT_AFTER = 5
 
 DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
@@ -188,95 +219,6 @@ class FastBrainCreditGateMonitor:
             await asyncio.sleep(self._refresh_interval_s)
 
 
-class MeetAudioBridge:
-    """Owns all PortAudio/sounddevice streams on a single dedicated thread.
-
-    PortAudio is thread-hostile: all API calls (open/start/stop/close) must
-    happen on the same thread.  Keeping streams open for the entire Meet
-    session also avoids the PulseAudio ring-buffer memory leak triggered by
-    repeated open/close cycles (PortAudio issue #968).
-    """
-
-    def __init__(self, capture_rate: int = 16000):
-        self._capture_rate = capture_rate
-        self.capture_q: asyncio.Queue[bytes] = asyncio.Queue()
-        self._playback_q: queue.Queue[tuple[bytes, int, int] | None] | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._thread: threading.Thread | None = None
-        self._stop_event: threading.Event | None = None
-        self._in_stream = None
-        self._out_stream = None
-
-    def start(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
-        self._playback_q = queue.Queue()
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def write_playback(self, pcm: bytes, sample_rate: int, num_channels: int) -> None:
-        if self._playback_q is not None:
-            self._playback_q.put((pcm, sample_rate, num_channels))
-
-    def stop(self) -> None:
-        if self._stop_event is not None:
-            self._stop_event.set()
-        if self._playback_q is not None:
-            self._playback_q.put(None)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            self._thread = None
-
-    def _run(self) -> None:
-        import sounddevice as sd
-        import numpy as np
-
-        def _capture_callback(indata, frames, time_info, status):
-            pcm = (indata * 32767).astype(np.int16).tobytes()
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self.capture_q.put_nowait, pcm)
-
-        self._in_stream = sd.InputStream(
-            channels=1,
-            samplerate=self._capture_rate,
-            dtype="float32",
-            blocksize=1024,
-            callback=_capture_callback,
-        )
-        self._in_stream.start()
-
-        try:
-            while not self._stop_event.is_set():
-                try:
-                    item = self._playback_q.get(timeout=0.1)
-                except Exception:
-                    continue
-                if item is None:
-                    break
-                pcm_bytes, sample_rate, num_channels = item
-                if self._out_stream is None:
-                    self._out_stream = sd.OutputStream(
-                        samplerate=sample_rate,
-                        channels=num_channels,
-                        dtype="int16",
-                        latency="high",
-                    )
-                    self._out_stream.start()
-                audio_arr = np.frombuffer(pcm_bytes, dtype=np.int16)
-                if num_channels > 1:
-                    audio_arr = audio_arr.reshape(-1, num_channels)
-                self._out_stream.write(audio_arr)
-        finally:
-            if self._out_stream is not None:
-                self._out_stream.stop()
-                self._out_stream.close()
-                self._out_stream = None
-            if self._in_stream is not None:
-                self._in_stream.stop()
-                self._in_stream.close()
-                self._in_stream = None
-
-
 def prewarm(_ctx=None):
     global STT, VAD, SPEAKER_EMBEDDER
     try:
@@ -320,19 +262,13 @@ class Assistant(Agent):
         channel: str,
         instructions: str,
         outbound: bool = False,
-        audio_bridge: MeetAudioBridge | None = None,
         normalize_elevenlabs_twin_pronunciation: bool = False,
         speaker_tracker: "speaker_id.SpeakerTracker | None" = None,
-        engaged_speakers: "speaker_id.EngagedSpeakers | None" = None,
-        realtime_scorer: "speaker_id.RealtimeSpeakerScorer | None" = None,
     ) -> None:
         self.contact = contact
         self.boss = boss
         self.channel = channel
-        self.audio_bridge = audio_bridge
         self.speaker_tracker = speaker_tracker
-        self.engaged_speakers = engaged_speakers
-        self.realtime_scorer = realtime_scorer
         # Speaking-floor coordination for multi-assistant org meets; None on
         # every other channel (no gating overhead).
         self.meet_floor: MeetFloor | None = None
@@ -414,15 +350,6 @@ class Assistant(Agent):
         self._publish_fast_brain_turn_completed: Callable | None = None
         # Latest user turn for which the slow brain was already scheduled.
         self._fast_brain_completed_turn = -1
-        # Whether the current committed user turn belongs to an engaged speaker.
-        # Captured at turn completion (before the diarization id is consumed);
-        # a non-engaged turn is published as labeled context but gets no fast
-        # filler and schedules no slow-brain user run.
-        self._current_turn_engaged = True
-        # Resolves the just-completed turn's speaker to an engagement verdict.
-        self._turn_engaged_provider: Callable[[], bool] | None = None
-        # Sink for final transcripts swallowed as non-engaged background speech.
-        self._on_background_final: Callable[[str, str | None], None] | None = None
         self._fast_brain_system_prompt: str = ""
         self._fast_brain_history_provider: Callable[[], list[dict]] | None = None
         self._idle_smalltalk_allowed = False
@@ -513,10 +440,6 @@ class Assistant(Agent):
         # New user turn: a fresh buffer filler is now warranted (until the slow
         # brain responds to this turn).
         self._user_turn_seq += 1
-        # Capture the turn's engagement verdict now, while the diarization id
-        # is still current (the utterance publisher consumes it shortly after).
-        provider = self._turn_engaged_provider
-        self._current_turn_engaged = provider() if provider is not None else True
         # On an outbound call, the callee's first completed utterance triggers the
         # held opener (the opener answers it). Signalling on turn-completed means
         # we respond after their "Hello?", never over it.
@@ -551,14 +474,6 @@ class Assistant(Agent):
         turn_classification: str | None = None
         intended_speech = ""
         try:
-            # A committed turn from a non-engaged voice is context, not an
-            # instruction: no filler, no small talk, and (classification stays
-            # None) no FastBrainTurnCompleted, so no slow-brain user run. The
-            # utterance itself is still published with its speaker label.
-            if not self._current_turn_engaged:
-                _log.info("Fast-brain turn suppressed: non-engaged speaker")
-                return
-
             _log.info("Waiting for call to be received…")
             while not self.call_received:
                 await asyncio.sleep(0.1)
@@ -802,145 +717,26 @@ class Assistant(Agent):
 
         return _tee()
 
-    def _should_swallow_final(self, transcript_speaker_id: str | None) -> bool:
-        """Whether a final transcript belongs to a confidently non-engaged voice.
-
-        Fails open: no tracker, no engagement state, no diarization id, or an
-        unresolved speaker all forward the transcript unchanged.
-        """
-        tracker = self.speaker_tracker
-        engaged = self.engaged_speakers
-        if tracker is None or engaged is None or not transcript_speaker_id:
-            return False
-        resolution = tracker.resolve(transcript_speaker_id)
-        if resolution is None:
-            return False
-        return not engaged.is_engaged(resolution)
-
-    def _filter_stt_events(self, events):
-        """Gate the STT stream by speaker engagement.
-
-        Finals from confidently non-engaged voices are diverted to the
-        background sink (labeled context) instead of reaching the session's
-        turn machinery, where they would otherwise extend or commit turns.
-        Interim/preflight transcripts are dropped only while the realtime
-        scorer is confident that only non-engaged voices hold the mic (they
-        carry no per-word speaker ids). The speaker tracker observes every
-        final here — before gating — so attribution windows stay aligned.
-        """
-
-        async def _filtered():
-            async for ev in events:
-                ev_type = getattr(ev, "type", None)
-                if ev_type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
-                    data = ev.alternatives[0]
-                    tracker = self.speaker_tracker
-                    if tracker is not None:
-                        tracker.observe_final_transcript(
-                            data.speaker_id,
-                            end_ts=time.time(),
-                        )
-                    if self._should_swallow_final(data.speaker_id):
-                        handler = self._on_background_final
-                        if handler is not None:
-                            handler(data.text or "", data.speaker_id)
-                        continue
-                elif ev_type in (
-                    stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                    stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                ):
-                    scorer = self.realtime_scorer
-                    if scorer is not None and scorer.confidently_non_engaged:
-                        continue
-                yield ev
-
-        return _filtered()
-
     async def stt_node(
         self,
         audio: AsyncIterable[rtc.AudioFrame],
         model_settings: ModelSettings,
     ):
         audio = self._tee_frames_to_speaker_tracker(audio)
-        if (
-            self.channel not in ("google_meet", "teams_meet")
-            or self.audio_bridge is None
-        ):
-            events = super().stt_node(audio, model_settings)
-            async for event in self._filter_stt_events(events):
-                yield event
-            return
-
-        activity = self._get_activity_or_raise()
-        assert activity.stt is not None
-
-        wrapped_stt = activity.stt
-        if not activity.stt.capabilities.streaming:
-            if not activity.vad:
-                raise RuntimeError(
-                    "STT does not support streaming and no VAD is available",
-                )
-            wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
-
-        _RATE = self.audio_bridge._capture_rate
-
-        async def _audio_from_bridge():
-            tracker = self.speaker_tracker
-            scorer = self.realtime_scorer
-            while True:
-                pcm = await self.audio_bridge.capture_q.get()
+        async for event in super().stt_node(audio, model_settings):
+            if (
+                getattr(event, "type", None) == stt.SpeechEventType.FINAL_TRANSCRIPT
+                and event.alternatives
+            ):
+                # The tracker observes every final so attribution windows stay
+                # aligned with the transcript; nothing is gated on the result.
+                tracker = self.speaker_tracker
                 if tracker is not None:
-                    tracker.add_audio(pcm, _RATE, 1)
-                if scorer is not None:
-                    # The LiveKit room carries no caller audio on a browser
-                    # meet, so the scorer's usual feed inside EngagedGateVAD is
-                    # silent and its verdict never leaves "unknown". This is
-                    # the only real audio on this channel; the VAD wrapper is
-                    # constructed with feed_scorer=False to keep it single-fed.
-                    scorer.add_audio(pcm, _RATE, 1)
-                samples = len(pcm) // 2
-                yield rtc.AudioFrame(
-                    data=pcm,
-                    sample_rate=_RATE,
-                    num_channels=1,
-                    samples_per_channel=samples,
-                )
-
-        async with wrapped_stt.stream() as stt_stream:
-
-            async def _forward():
-                async for frame in _audio_from_bridge():
-                    stt_stream.push_frame(frame)
-
-            async def _stream_events():
-                async for event in stt_stream:
-                    yield event
-
-            fwd = asyncio.create_task(_forward())
-            try:
-                async for event in self._filter_stt_events(_stream_events()):
-                    yield event
-            finally:
-                await utils.aio.cancel_and_wait(fwd)
-
-    async def tts_node(
-        self,
-        text: AsyncIterable[str],
-        model_settings: ModelSettings,
-    ) -> AsyncIterable:
-        # Multi-assistant meets: hold the shared speaking floor for the whole
-        # playout so co-assistants never talk over each other. Fails open on
-        # timeout — coordination can degrade, speech can not deadlock.
-        if self.meet_floor is None:
-            async for frame in self._tts_node_unlocked(text, model_settings):
-                yield frame
-            return
-        await self.meet_floor.acquire()
-        try:
-            async for frame in self._tts_node_unlocked(text, model_settings):
-                yield frame
-        finally:
-            self.meet_floor.release_soon()
+                    tracker.observe_final_transcript(
+                        event.alternatives[0].speaker_id,
+                        end_ts=time.time(),
+                    )
+            yield event
 
     async def _tts_node_unlocked(
         self,
@@ -950,42 +746,8 @@ class Assistant(Agent):
         if self.normalize_elevenlabs_twin_pronunciation:
             text = _normalize_elevenlabs_twin_pronunciation_stream(text)
 
-        if (
-            self.channel not in ("google_meet", "teams_meet")
-            or self.audio_bridge is None
-        ):
-            async for frame in super().tts_node(text, model_settings):
-                yield frame
-            return
-
-        activity = self._get_activity_or_raise()
-        assert activity.tts is not None
-
-        wrapped_tts = activity.tts
-        if not activity.tts.capabilities.streaming:
-            wrapped_tts = tts.StreamAdapter(
-                tts=wrapped_tts,
-                sentence_tokenizer=tokenize.basic.SentenceTokenizer(),
-            )
-
-        async with wrapped_tts.stream() as tts_stream:
-
-            async def _forward_input():
-                async for chunk in text:
-                    tts_stream.push_text(chunk)
-                tts_stream.end_input()
-
-            fwd = asyncio.create_task(_forward_input())
-            try:
-                async for ev in tts_stream:
-                    frame = ev.frame
-                    self.audio_bridge.write_playback(
-                        frame.data,
-                        frame.sample_rate,
-                        frame.num_channels,
-                    )
-            finally:
-                await utils.aio.cancel_and_wait(fwd)
+        async for frame in super().tts_node(text, model_settings):
+            yield frame
 
 
 def _load_config_from_metadata(ctx: agents.JobContext) -> dict | None:
@@ -1379,6 +1141,21 @@ def _recorded_opening_source_count(config: dict) -> int:
     )
 
 
+def _strip_chat_html(raw: str) -> str:
+    """Flatten a meeting-chat message to plain text.
+
+    Recall returns formatted messages as HTML, and this text goes into a prompt
+    and a durable record -- neither of which wants markup. Entities are decoded
+    after tag removal so an escaped ``&lt;`` in the original survives as a
+    literal rather than being re-read as a tag.
+    """
+    import html
+    import re
+
+    without_tags = re.sub(r"<[^>]*>", " ", raw)
+    return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
     if raw in (None, ""):
         return {"mode": "speak"}
@@ -1542,22 +1319,13 @@ async def entrypoint(ctx: agents.JobContext):
     meet_session_id: str = ""
     call_session_id: str = ""
     meet_url: str = ""
-    meet_agent_service_url: str = ""
-    # Per-channel agent-service URL prefix.
-    _MEET_PATH_PREFIX = {
-        "google_meet": "googlemeet",
-        "teams_meet": "teamsmeet",
-    }
-    meet_path_prefix = _MEET_PATH_PREFIX.get(channel, "")
     if channel in ("google_meet", "teams_meet"):
         if meta:
             meet_session_id = meta.get("meet_session_id", "")
             meet_url = meta.get("meet_url", "")
-            meet_agent_service_url = meta.get("agent_service_url", "")
         else:
             meet_session_id = os.environ.get("MEET_SESSION_ID", "")
             meet_url = os.environ.get("MEET_URL", "")
-            meet_agent_service_url = os.environ.get("AGENT_SERVICE_URL", "")
     call_session_id = (
         str(meta.get("call_session_id", "")).strip()
         if meta
@@ -1631,38 +1399,122 @@ async def entrypoint(ctx: agents.JobContext):
     # Speaker identity uses two complementary signals:
     # 1. Deepgram diarization (enable_diarization=True) for precise per-utterance
     #    anonymous speaker IDs (S0, S1, ...).
-    # 2. DOM scraping (activeSpeaker) via _meet_poll_loop for display names.
-    # The correlation mapping table (_meet_speaker_map) links the two.
+    # 2. The meeting platform's own roster and speech events, relayed in.
+    # ``_meet_speech_windows`` and ``_meet_speaker_votes`` link the two, by
+    # overlapping each finalised utterance with the platform's speaking spans.
     _meet_auth_key = SESSION_DETAILS.unify_key
     _meet_cached_active_speaker: str | None = None
     _meet_cached_participants: list[dict] = []
     _meet_prev_participant_names: set[str] = set()
+    # The screen somebody is sharing into the meeting, refreshed by
+    # ``_meet_screenshare_poller`` while at least one person is presenting.
     _meet_latest_screenshot: str | None = None
+    _meet_screenshare_sharer: str = ""
+    # Presenter ids in the order they started, so the label follows whoever the
+    # store has focused. Empty means nobody is sharing and the frame is dropped.
+    _meet_sharing: list[str] = []
+    _meet_screenshare_task: asyncio.Task | None = None
+    # What was last handed to the brains, and when. A share is mostly static --
+    # somebody's slide sits there for a minute -- so re-filing an identical frame
+    # every few seconds buys nothing and costs a stored image each time.
+    _meet_last_pushed_frame: str | None = None
+    _meet_last_push_at: float = 0.0
+    _meet_fetch_misses: int = 0
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
-    _meet_speaker_map: dict[str, dict[str, int]] = {}
-    # Alone-detection state (browser meets). "Alone" = no other participants
-    # (assistant is the only one). Debounced over consecutive polls; guarded so
-    # a solo start (assistant in before any human) never fires immediately.
-    _MEET_ALONE_DEBOUNCE_POLLS = 3
-    _meet_seen_human: bool = False
-    _meet_alone_streak: int = 0
-    _meet_alone_notified: bool = False
+    _meet_speech_windows = MeetSpeakerWindows()
+    _meet_speaker_votes = MeetSpeakerVotes()
     if channel in ("google_meet", "teams_meet"):
         if meta:
             _meet_display_name = meta.get("meet_display_name", "")
         if not _meet_display_name:
             _meet_display_name = SESSION_DETAILS.assistant.name or "Unity Assistant"
 
+    def _meet_participant_email(display_name: str) -> str:
+        """The meeting platform's email for a participant, by display name.
+
+        Frequently empty. Platforms disclose an address to a bot created through
+        the Create Bot API only sometimes, so this is a bonus signal rather than
+        one anything may depend on -- name matching has to carry the rest.
+        """
+        if not display_name:
+            return ""
+        wanted = display_name.strip().lower()
+        for participant in _meet_cached_participants:
+            if str(participant.get("name") or "").strip().lower() == wanted:
+                return str(participant.get("email") or "").strip()
+        return ""
+
+    def _merge_meet_participant(entry: dict) -> None:
+        """Merge one participant into the cached roster, keyed on platform id.
+
+        Realtime events and the ten-second roster poll describe the same person
+        from different sources, and either may know an email the other does not.
+        An absent name or address therefore never overwrites a known one, so
+        whichever source saw it wins regardless of which arrived last. Host
+        status is taken from the newer report, being the kind of thing that
+        genuinely changes mid-meeting.
+        """
+        participant_id = str(entry.get("id") or "")
+        for existing in _meet_cached_participants:
+            if str(existing.get("id") or "") != participant_id:
+                continue
+            existing["is_host"] = bool(entry.get("is_host"))
+            if entry.get("name"):
+                existing["name"] = entry["name"]
+            if entry.get("email"):
+                existing["email"] = entry["email"]
+            return
+        _meet_cached_participants.append(
+            {
+                "id": participant_id,
+                "name": str(entry.get("name") or ""),
+                "email": entry.get("email") or None,
+                "is_host": bool(entry.get("is_host")),
+            },
+        )
+
+    def _drop_meet_participant(participant_id: str) -> None:
+        """Drop one participant from the cached roster by platform id."""
+        for index, existing in enumerate(_meet_cached_participants):
+            if str(existing.get("id") or "") == participant_id:
+                del _meet_cached_participants[index]
+                return
+
+    def _reconcile_meet_roster(incoming: list[dict]) -> None:
+        """Fold a polled roster into the cache, dropping whoever is gone.
+
+        Merged rather than swapped in wholesale: the poll is authoritative about
+        *who* is present, but not about every field of them, and replacing the
+        list would discard an email only a realtime join had carried.
+        """
+        for entry in incoming:
+            _merge_meet_participant(entry)
+        present = {str(entry.get("id") or "") for entry in incoming}
+        for existing in list(_meet_cached_participants):
+            if str(existing.get("id") or "") not in present:
+                _drop_meet_participant(str(existing.get("id") or ""))
+
     def _resolve_contact_by_name(display_name: str) -> dict | None:
         """Best-effort contact resolution from a Meet display name.
 
-        Tries an exact first_name+surname match across known contacts
-        (the caller contact and the boss). Falls back to None if no match,
-        letting the caller use the original contact dict.
+        Email first where the platform gave us one: two people called "Dan" are
+        indistinguishable by name, and a display name is whatever the
+        participant typed, whereas the address is the account they are signed in
+        as. Falls back to matching first_name+surname across the known contacts
+        (the caller and the boss), then None, letting the caller keep the
+        original contact dict.
         """
         if not display_name:
             return None
+
+        email = _meet_participant_email(display_name).lower()
+        if email:
+            for candidate in (contact, boss):
+                candidate_email = str(candidate.get("email_address") or "").strip()
+                if candidate_email and candidate_email.lower() == email:
+                    return candidate
+
         dn_lower = display_name.strip().lower()
         for candidate in (contact, boss):
             full = f"{candidate.get('first_name', '')} {candidate.get('surname', '')}".strip()
@@ -1673,11 +1525,11 @@ async def entrypoint(ctx: agents.JobContext):
         return None
 
     # --- Voice-embedding speaker tracker (all voice channels) ---
-    # Pins Deepgram's per-call anonymous speaker ids to enrolled contact voice
-    # profiles, accumulates an auto-enrollment on single-voice calls, and
-    # suggests manual enrollment when multiple unattributable voices are heard.
-    # Dispatch metadata on the worker path; an env var on the legacy per-call
-    # subprocess path, which has no metadata to carry them.
+    # Voice-enrollment capture only: accumulates an auto-enrollment on
+    # single-voice calls and suggests manual enrollment when multiple voices
+    # are heard. Enrolled profiles arrive as dispatch metadata on the worker
+    # path (an env var on the legacy per-call subprocess path) and gate capture
+    # — they are never matched against live audio to attribute turns.
     _raw_profiles = (meta or {}).get("voice_profiles")
     if not _raw_profiles:
         try:
@@ -1751,74 +1603,6 @@ async def entrypoint(ctx: agents.JobContext):
             on_enrollment_captured=_on_enrollment_captured,
             on_enrollment_suggested=_on_enrollment_suggested,
         )
-
-    # --- Engagement: who currently has conversational standing ---
-    # The call contact and boss are permanently engaged; the slow brain
-    # promotes/demotes everyone else via app:call:speaker_engagement.
-    engaged_speakers = speaker_id.EngagedSpeakers(
-        permanent_contact_ids={
-            int(cand["contact_id"])
-            for cand in (contact, boss)
-            if cand and cand.get("contact_id") is not None
-        },
-    )
-
-    def on_speaker_engagement(data: dict) -> None:
-        action = str(data.get("action") or "")
-        cid = data.get("contact_id")
-        label = data.get("label")
-        if action == "engage":
-            changed = engaged_speakers.engage(contact_id=cid, label=label)
-        elif action == "disengage":
-            changed = engaged_speakers.disengage(contact_id=cid, label=label)
-        else:
-            return
-        _log.info(
-            f"Speaker engagement: {action} contact_id={cid} label={label} "
-            f"applied={changed} now_engaged_labels={engaged_speakers.engaged_labels}",
-        )
-
-    event_broker.register_callback(
-        "app:call:speaker_engagement",
-        on_speaker_engagement,
-    )
-
-    # --- Realtime floor gating (enrolled calls only) ---
-    # A sliding-window verifier drives a VAD wrapper so that background voices
-    # neither hold the floor nor barge in once they are confidently known.
-    # Without an enrollment for the call contact the plain VAD is used and
-    # behavior is identical to an ungated call.
-    realtime_scorer: speaker_id.RealtimeSpeakerScorer | None = None
-    session_vad = VAD
-    _call_contact_id = contact.get("contact_id")
-    if (
-        speaker_tracker is not None
-        and VAD is not None
-        and _call_contact_id is not None
-        and int(_call_contact_id) in voice_profiles
-    ):
-        from unify.conversation_manager.engaged_vad import EngagedGateVAD
-
-        realtime_scorer = speaker_id.RealtimeSpeakerScorer(
-            embedder=SPEAKER_EMBEDDER,
-            profiles_provider=lambda: speaker_tracker.profiles_partition(
-                engaged_speakers,
-            ),
-        )
-        session_vad = EngagedGateVAD(
-            inner=VAD,
-            scorer=realtime_scorer,
-            # Browser meets feed the scorer from the PortAudio bridge instead
-            # (see Assistant.stt_node); one source only.
-            feed_scorer=channel not in ("google_meet", "teams_meet"),
-        )
-        _log.config("Engaged-speaker floor gating active (call contact enrolled)")
-
-    def _speaker_is_engaged(sid: str | None) -> bool:
-        """Engagement verdict for a diarization id (fail-open on unresolved)."""
-        if speaker_tracker is None:
-            return True
-        return engaged_speakers.is_engaged(speaker_tracker.resolve(sid))
 
     def _user_id_from_livekit_identity(identity: str) -> str | None:
         """Parse ``user-{userId}-{suffix}`` LiveKit identities from Console tokens."""
@@ -1896,55 +1680,30 @@ async def entrypoint(ctx: agents.JobContext):
             _merge_unify_meet_roster_from_identity(identity)
         return (names or None), (ids or None)
 
-    def _resolve_speaker() -> (
-        tuple[dict, str | None, str | None, bool, bool, str | None]
-    ):
+    def _resolve_speaker() -> tuple[dict, str | None, str | None, str | None]:
         """Resolve the current speaker.
 
-        Returns (contact_dict, display_name, speaker_id, voice_verified,
-        engaged, label_source). ``label_source`` is a ``speaker_id.LABEL_SOURCE_*``
-        tag recording which of the signals below produced ``display_name`` (None
-        when no name was resolved). Signals in priority order — the same ordering
-        as ``LABEL_SOURCE_PRECEDENCE``:
-        1. Voice-embedding pin against enrolled contact profiles (all channels).
-        2. LiveKit identity → org-call roster (Unify Meet multi-party).
-        3. Diarization speaker_id → DOM correlation mapping (browser meets).
-        4. DOM-scraped activeSpeaker name (browser meets, 2s polling granularity).
-        5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
-           name from 1-4 always outranks this placeholder, so it is evaluated
-           last even though it comes from the same tracker resolution as 1.
+        Returns (contact_dict, display_name, speaker_id, label_source).
+        ``label_source`` is a ``speaker_id.LABEL_SOURCE_*`` tag recording which
+        of the signals below produced ``display_name`` (None when no name was
+        resolved). The order these are consumed in *is* the authority ordering:
+        1. LiveKit identity → org-call roster (Unify Meet multi-party).
+        2. Diarization speaker_id → name correlation, accumulated by overlapping
+           finalised utterances with the platform's speaking spans (browser
+           meets).
+        3. Platform-reported active speaker (browser meets, relayed in near
+           real time from participant speech events) — weaker than 2 because it
+           is a single reading rather than accumulated evidence.
+
+        Voice embeddings are deliberately not consulted: measured on production
+        audio they conflate distinct speakers (including the assistant's own
+        TTS voice) as often as they separate them, so an unresolved turn falls
+        back to the call contact and the slow brain infers the true speaker
+        from the conversation itself.
         """
         sid = _meet_last_speaker_id
-        engaged = _speaker_is_engaged(sid)
 
-        # Resolve once, then consume in documented-authority order
-        # (``speaker_id.LABEL_SOURCE_PRECEDENCE``): the embedding pin is returned
-        # immediately, but the anonymous "Speaker N" fallback is held to the very
-        # end so a real roster/DOM name always wins over a placeholder ordinal.
-        resolution = (
-            speaker_tracker.resolve(sid)
-            if sid and speaker_tracker is not None
-            else None
-        )
-
-        # 1. Embedding-pinned enrolled contact (all channels).
-        if resolution is not None and resolution.contact_id is not None:
-            for cand in (contact, boss):
-                if cand.get("contact_id") == resolution.contact_id:
-                    label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                    # Not literally True: a provisional (co-located,
-                    # contaminated) id attributes the primary voice for
-                    # routing but cannot certify this utterance.
-                    return (
-                        cand,
-                        label or None,
-                        sid,
-                        resolution.verified,
-                        engaged,
-                        speaker_id.LABEL_SOURCE_VOICE_PIN,
-                    )
-
-        # 2. Unify-meet roster identity.
+        # 1. Unify-meet roster identity.
         if channel == "unify_meet" and unify_meet_roster:
             identity = _unify_meet_active_identity
             if identity:
@@ -1958,42 +1717,32 @@ async def entrypoint(ctx: agents.JobContext):
                             resolved,
                             label,
                             sid,
-                            False,
-                            engaged,
                             speaker_id.LABEL_SOURCE_MEET_ROSTER,
                         )
 
-        # 3-4. Browser-meet DOM name resolution.
+        # 2-3. Browser-meet name resolution, from the meeting platform's own
+        # participant events rather than anything read off a screen.
         if channel in ("google_meet", "teams_meet"):
-            # 3. Diarization speaker_id → DOM-correlated display name.
-            if sid and sid in _meet_speaker_map:
-                votes = _meet_speaker_map[sid]
-                if votes:
-                    top_name = max(votes, key=votes.get)
-                    top_count = votes[top_name]
-                    total = sum(votes.values())
-                    if top_count >= 2 and top_count / total > 0.6:
-                        resolved = _resolve_contact_by_name(top_name)
-                        if resolved:
-                            label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
-                            return (
-                                resolved,
-                                label or None,
-                                sid,
-                                False,
-                                engaged,
-                                speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
-                            )
-                        return (
-                            contact,
-                            top_name,
-                            sid,
-                            False,
-                            engaged,
-                            speaker_id.LABEL_SOURCE_DOM_MEET_MAP,
-                        )
+            # 2. Diarization speaker_id → correlated display name.
+            correlated = _meet_speaker_votes.resolve(sid)
+            if correlated:
+                resolved = _resolve_contact_by_name(correlated)
+                if resolved:
+                    label = f"{resolved.get('first_name', '')} {resolved.get('surname', '')}".strip()
+                    return (
+                        resolved,
+                        label or None,
+                        sid,
+                        speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
+                    )
+                return (
+                    contact,
+                    correlated,
+                    sid,
+                    speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
+                )
 
-            # 4. DOM active speaker.
+            # 3. Whoever the platform says is speaking right now.
             active_name = _meet_cached_active_speaker
             if active_name:
                 resolved = _resolve_contact_by_name(active_name)
@@ -2003,62 +1752,16 @@ async def entrypoint(ctx: agents.JobContext):
                         resolved,
                         label or None,
                         sid,
-                        False,
-                        engaged,
-                        speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                        speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                     )
                 return (
                     contact,
                     active_name,
                     sid,
-                    False,
-                    engaged,
-                    speaker_id.LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
+                    speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                 )
 
-        # 5. Anonymous "Speaker N" from the voice tracker (lowest authority, all
-        # channels): a confidently distinct but unidentified voice. Keep the call
-        # contact for routing but surface the placeholder label.
-        if resolution is not None and resolution.label:
-            return (
-                contact,
-                resolution.label,
-                sid,
-                False,
-                engaged,
-                speaker_id.LABEL_SOURCE_ANONYMOUS,
-            )
-
-        return contact, None, sid, False, engaged, None
-
-    def _background_label_for(sid: str | None) -> tuple[str | None, str | None]:
-        """Best display label for a background (non-engaged) voice.
-
-        Prefers a pinned contact name, then a confidently DOM-correlated meet
-        display name, then the tracker's session-scoped anonymous label. Returns
-        ``(label, label_source)`` where ``label_source`` is a
-        ``speaker_id.LABEL_SOURCE_*`` tag (None when no label resolved).
-        """
-        if speaker_tracker is None or not sid:
-            return None, None
-        resolution = speaker_tracker.resolve(sid)
-        if resolution is None:
-            return None, None
-        if resolution.contact_id is not None:
-            for cand in (contact, boss):
-                if cand.get("contact_id") == resolution.contact_id:
-                    name = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                    if name:
-                        return name, speaker_id.LABEL_SOURCE_VOICE_PIN
-        if channel in ("google_meet", "teams_meet") and sid in _meet_speaker_map:
-            votes = _meet_speaker_map[sid]
-            if votes:
-                top_name = max(votes, key=votes.get)
-                if votes[top_name] >= 2 and votes[top_name] / sum(votes.values()) > 0.6:
-                    return top_name, speaker_id.LABEL_SOURCE_DOM_MEET_MAP
-        if resolution.label:
-            return resolution.label, speaker_id.LABEL_SOURCE_ANONYMOUS
-        return None, None
+        return contact, None, sid, None
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -2072,166 +1775,80 @@ async def entrypoint(ctx: agents.JobContext):
     if channel == "teams_meet":
         _ParticipantJoinedEvent = TeamsMeetParticipantJoined
         _ParticipantLeftEvent = TeamsMeetParticipantLeft
-        _AloneEvent = TeamsMeetAlone
         _participant_topic = "app:comms:teamsmeet_participant"
     else:
         _ParticipantJoinedEvent = GoogleMeetParticipantJoined
         _ParticipantLeftEvent = GoogleMeetParticipantLeft
-        _AloneEvent = GoogleMeetAlone
         _participant_topic = "app:comms:googlemeet_participant"
 
-    async def _meet_poll_loop() -> None:
-        """Background loop: poll agent-service for active speaker + meeting status.
+    def _publish_meet_roster_changes() -> None:
+        """Emit join/leave for the difference since the last roster push."""
+        nonlocal _meet_prev_participant_names
+        current = {p["name"] for p in _meet_cached_participants if p.get("name")}
+        joined = current - _meet_prev_participant_names
+        left = _meet_prev_participant_names - current
+        _meet_prev_participant_names = current
 
-        Two phases:
-        1. Discovery — if meet_session_id wasn't provided at dispatch time,
-           poll GET /{meet_path_prefix}/sessions and match by meetUrl.
-        2. State polling — poll GET /{meet_path_prefix}/state for active speaker,
-           participant roster, and meeting-end detection.
+        for name, event_cls in (
+            *((n, _ParticipantJoinedEvent) for n in joined),
+            *((n, _ParticipantLeftEvent) for n in left),
+        ):
+            if name == _meet_display_name:
+                continue
+            evt = event_cls(contact=contact, participant_name=name)
+            asyncio.create_task(
+                event_broker.publish(_participant_topic, evt.to_json()),
+            )
+
+    # How long the bridge may be absent before the meeting is treated as over.
+    # It has to outlast a LiveKit reconnect: the page retries, and shutting down
+    # on a transient blip would drop the assistant out of a live meeting. It
+    # also has to cover the gap before the bridge first arrives, which is why
+    # the watch waits to see it once before it starts counting.
+    _RECALL_BRIDGE_ABSENT_GRACE_S = 20.0
+
+    def _recall_bridge_present() -> bool:
+        """Whether the Recall bot's bridge page is in the room."""
+        remotes = getattr(ctx.room, "remote_participants", {}) or {}
+        for participant in remotes.values():
+            identity = getattr(participant, "identity", "") or ""
+            if identity.startswith("recall-bridge-"):
+                return True
+        return False
+
+    async def _recall_end_watch() -> None:
+        """End the session once the Recall bridge leaves the room for good.
+
+        The bot's page is a real LiveKit participant, so its departure is the
+        meeting ending -- no Recall API call and no webhook needed. Ending here
+        is what ultimately publishes the channel's *Ended event: shutdown drops
+        this process's IPC client, and the CM turns that into the event.
         """
-        nonlocal _meet_cached_active_speaker, _meet_cached_participants
-        nonlocal _meet_prev_participant_names, meet_session_id
-        nonlocal _meet_latest_screenshot
-        nonlocal _meet_seen_human, _meet_alone_streak, _meet_alone_notified
-        import aiohttp as _aiohttp
-
+        seen = False
+        absent_since: float | None = None
         try:
-            async with _aiohttp.ClientSession() as http:
-                # Phase 1: discover session ID if not provided
-                while not meet_session_id:
-                    _log.info(
-                        f"Discovering {channel} session ID via /{meet_path_prefix}/sessions...",
-                    )
-                    try:
-                        resp = await http.get(
-                            f"{meet_agent_service_url}/{meet_path_prefix}/sessions",
-                            headers={"authorization": f"Bearer {_meet_auth_key}"},
-                            timeout=_aiohttp.ClientTimeout(total=5),
-                        )
-                        if resp.status == 200:
-                            body = await resp.json()
-                            for s in body.get("sessions", []):
-                                if meet_url and s.get("meetUrl") == meet_url:
-                                    meet_session_id = s["sessionId"]
-                                    _log.info(
-                                        f"Discovered {channel} session ID: {meet_session_id}",
-                                    )
-                                    break
-                    except Exception:
-                        pass
-                    if not meet_session_id:
-                        await asyncio.sleep(1)
-
-                # Phase 2: poll state for active speaker + meeting end
-                while True:
-                    await asyncio.sleep(1)
-                    try:
-                        resp = await http.get(
-                            f"{meet_agent_service_url}/{meet_path_prefix}/state",
-                            params={"sessionId": meet_session_id},
-                            headers={"authorization": f"Bearer {_meet_auth_key}"},
-                            timeout=_aiohttp.ClientTimeout(total=5),
-                        )
-                        if resp.status != 200:
-                            continue
-                        body = await resp.json()
-                    except Exception:
-                        continue
-
-                    _meet_cached_active_speaker = body.get("activeSpeaker")
-                    _meet_cached_participants = body.get("participants", [])
-
-                    # Diff roster for join/leave notifications
-                    current_names = {
-                        p["name"] for p in _meet_cached_participants if p.get("name")
-                    }
-                    joined = current_names - _meet_prev_participant_names
-                    left = _meet_prev_participant_names - current_names
-                    _meet_prev_participant_names = current_names
-
-                    for name in joined:
-                        if name == _meet_display_name:
-                            continue
-                        evt = _ParticipantJoinedEvent(
-                            contact=contact,
-                            participant_name=name,
-                        )
-                        asyncio.create_task(
-                            event_broker.publish(
-                                _participant_topic,
-                                evt.to_json(),
-                            ),
-                        )
-
-                    for name in left:
-                        if name == _meet_display_name:
-                            continue
-                        evt = _ParticipantLeftEvent(
-                            contact=contact,
-                            participant_name=name,
-                        )
-                        asyncio.create_task(
-                            event_broker.publish(
-                                _participant_topic,
-                                evt.to_json(),
-                            ),
-                        )
-
-                    # Alone detection: notify the slow brain once the assistant
-                    # is the only participant left, sustained over a debounce
-                    # window. The brain decides whether to say a closing line
-                    # and hang up (never an automatic kill here). Guarded so a
-                    # solo start never fires before any human has been seen.
-                    other_count = len(_get_meet_participant_names())
-                    if other_count > 0:
-                        _meet_seen_human = True
-                        _meet_alone_streak = 0
-                        _meet_alone_notified = False
-                    else:
-                        _meet_alone_streak += 1
-                    if (
-                        _meet_seen_human
-                        and _meet_alone_streak >= _MEET_ALONE_DEBOUNCE_POLLS
-                        and not _meet_alone_notified
-                    ):
-                        _log.info(
-                            f"{channel}: assistant alone "
-                            f"(streak={_meet_alone_streak}) — notifying slow brain",
-                        )
-                        alone_evt = _AloneEvent(contact=contact)
-                        asyncio.create_task(
-                            event_broker.publish(
-                                _AloneEvent.topic,
-                                alone_evt.to_json(),
-                            ),
-                        )
-                        _meet_alone_notified = True
-
-                    # Fetch cached screenshot (non-blocking — agent-service
-                    # captures during its own poll cycle)
-                    try:
-                        ss_resp = await http.get(
-                            f"{meet_agent_service_url}/{meet_path_prefix}/screenshot/latest",
-                            params={"sessionId": meet_session_id},
-                            headers={"authorization": f"Bearer {_meet_auth_key}"},
-                            timeout=_aiohttp.ClientTimeout(total=5),
-                        )
-                        if ss_resp.status == 200:
-                            ss_body = await ss_resp.json()
-                            _meet_latest_screenshot = ss_body.get("screenshot")
-                    except Exception:
-                        pass
-
-                    status = body.get("status", "")
-                    if status in ("ended", "removed", "error"):
-                        _log.info(f"{channel} ended (status={status})")
-                        ctx.shutdown(reason=f"meet_{status}")
-                        return
+            while True:
+                await asyncio.sleep(1)
+                if _recall_bridge_present():
+                    seen = True
+                    absent_since = None
+                    continue
+                if not seen:
+                    # Still waiting for the bot to arrive; a bot that never
+                    # arrives is the CM's join timeout to report, not ours.
+                    continue
+                now = asyncio.get_event_loop().time()
+                if absent_since is None:
+                    absent_since = now
+                elif now - absent_since >= _RECALL_BRIDGE_ABSENT_GRACE_S:
+                    _log.info(f"{channel} ended (recall bridge left the room)")
+                    ctx.shutdown(reason="meet_ended")
+                    return
         except asyncio.CancelledError:
             pass
 
     if channel in ("google_meet", "teams_meet"):
-        asyncio.create_task(_meet_poll_loop())
+        asyncio.create_task(_recall_end_watch())
 
     from unify.settings import SETTINGS
 
@@ -2272,6 +1889,7 @@ async def entrypoint(ctx: agents.JobContext):
         channel=channel,
         has_linked_user_desktop=call_has_linked_user_desktop,
         is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_multiplayer=SESSION_DETAILS.is_multiplayer,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
     ).flatten()
@@ -2291,7 +1909,7 @@ async def entrypoint(ctx: agents.JobContext):
         llm=llm_model,
         stt=stt_instance,
         tts=tts_instance,
-        vad=session_vad,
+        vad=VAD,
         turn_handling={
             "turn_detection": EnglishModel(),
             "endpointing": {"min_delay": 0.75},
@@ -2301,6 +1919,13 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     user_is_speaking = False
+    # When each side's current line became audible, so an utterance can be
+    # placed in the recording by its start rather than by the commit that
+    # follows it. Consumed when the utterance is published: a turn that
+    # finalises into several items must not reuse one span's start for all of
+    # them, which would place the later ones far too early.
+    user_speech_started_at = None
+    agent_speech_started_at = None
     _queued_speech: list[tuple[str, str, str, str, str]] = []
     _say_meta_queue: list[dict] = []
     _recorded_opening_preloaded: dict[str, _PreloadedAudio] = {}
@@ -2530,6 +2155,22 @@ async def entrypoint(ctx: agents.JobContext):
         user_utterance_event = InboundUnifyMeetUtterance
         assistant_utterance_event = OutboundUnifyMeetUtterance
 
+    def _consume_speech_start(*, assistant_side: bool) -> str | None:
+        """The captured start for this side's current line, cleared on read.
+
+        Clearing matters: one speaking span can finalise into several items, and
+        reusing the span's start for each would place the later ones at the
+        moment the whole turn began. Whatever is left unmatched falls back to the
+        commit timestamp, which is the pre-existing behaviour.
+        """
+        nonlocal user_speech_started_at, agent_speech_started_at
+        started = agent_speech_started_at if assistant_side else user_speech_started_at
+        if assistant_side:
+            agent_speech_started_at = None
+        else:
+            user_speech_started_at = None
+        return started.isoformat() if started else None
+
     async def _publish_assistant_utterance(text: str) -> None:
         if channel == "google_meet":
             event = OutboundGoogleMeetUtterance(
@@ -2553,65 +2194,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
         else:
             event = assistant_utterance_event(contact, content=text)
-        await event_broker.publish(
-            f"app:comms:{channel}_utterance",
-            event.to_json(),
-        )
-
-    async def _publish_background_utterance(
-        text: str,
-        label: str | None,
-        sid: str | None,
-        label_source: str | None = None,
-    ) -> None:
-        """Publish a non-engaged voice's line as labeled context (no turn)."""
-        if channel == "google_meet":
-            event = InboundGoogleMeetUtterance(
-                contact=contact,
-                content=text,
-                speaker_label=label,
-                participant_names=_get_meet_participant_names() or None,
-                diarization_speaker_id=sid,
-                voice_verified=False,
-                speaker_label_source=label_source,
-                engaged=False,
-            )
-        elif channel == "teams_meet":
-            event = InboundTeamsMeetUtterance(
-                contact=contact,
-                content=text,
-                speaker_label=label,
-                participant_names=_get_meet_participant_names() or None,
-                diarization_speaker_id=sid,
-                voice_verified=False,
-                speaker_label_source=label_source,
-                engaged=False,
-            )
-        elif channel == "unify_meet":
-            names, cids = _unify_meet_stamp(
-                exclude_contact_id=contact.get("contact_id"),
-            )
-            event = InboundUnifyMeetUtterance(
-                contact=contact,
-                content=text,
-                speaker_label=label,
-                diarization_speaker_id=sid,
-                voice_verified=False,
-                speaker_label_source=label_source,
-                engaged=False,
-                participant_names=names,
-                participant_contact_ids=cids,
-            )
-        else:
-            event = user_utterance_event(
-                contact,
-                content=text,
-                speaker_label=label,
-                diarization_speaker_id=sid,
-                voice_verified=False,
-                speaker_label_source=label_source,
-                engaged=False,
-            )
+        event.speech_started_at = _consume_speech_start(assistant_side=True)
         await event_broker.publish(
             f"app:comms:{channel}_utterance",
             event.to_json(),
@@ -2634,10 +2217,6 @@ async def entrypoint(ctx: agents.JobContext):
             # single-voice calls that ended before reaching the full target.
             # finalize() also emits the attribution summary.
             await speaker_tracker.finalize()
-            if realtime_scorer is not None:
-                # Floor gating fails open, so an inert scorer looks exactly
-                # like a working one from the outside; the tally is the tell.
-                realtime_scorer.log_summary()
             if speaker_event_tasks:
                 await asyncio.gather(
                     *list(speaker_event_tasks),
@@ -2647,8 +2226,8 @@ async def entrypoint(ctx: agents.JobContext):
             await utils.aio.cancel_and_wait(credit_gate_task)
         if hang_up_gate_watcher_task is not None:
             await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
-        if audio_bridge is not None:
-            await asyncio.to_thread(audio_bridge.stop)
+        if _meet_screenshare_task is not None:
+            await utils.aio.cancel_and_wait(_meet_screenshare_task)
         await screen_capture.close()
         await webcam_capture.close()
         # Unify Meet rooms belong to the call session, never to one agent:
@@ -2688,10 +2267,13 @@ async def entrypoint(ctx: agents.JobContext):
 
     @session.on("user_state_changed")
     def _on_user_state_changed(ev):
-        nonlocal user_is_speaking, user_state_seq
+        nonlocal user_is_speaking, user_state_seq, user_speech_started_at
         user_state_seq += 1
         state_id = f"usrstate-{user_state_seq:06d}"
         user_is_speaking = ev.new_state == "speaking"
+        if user_is_speaking:
+            # VAD onset: the moment their line became audible in the room.
+            user_speech_started_at = prompt_now(as_string=False)
         if not user_is_speaking:
             # The user just freed the floor: a queued slow-brain line should play
             # at the next silent moment, not wait for the next agent-state cycle.
@@ -2711,11 +2293,16 @@ async def entrypoint(ctx: agents.JobContext):
         Triggering here guarantees the full thinking → speaking → listening cycle
         has completed before queued notification speech plays.
         """
+        nonlocal agent_speech_started_at
+        if ev.new_state == "speaking":
+            # Playback start, not `speech_created` -- that fires when the reply
+            # is scheduled, which can precede audio by a noticeable margin.
+            agent_speech_started_at = prompt_now(as_string=False)
         if ev.new_state in ("listening", "idle"):
             maybe_speak_queued()
         _check_quiescence_transition()
 
-    # -- Diarization: last-speaker tracking + DOM correlation (meets) --
+    # -- Diarization: last-speaker tracking + name correlation (meets) --
     # The speaker tracker itself is fed from the STT filter (which sees every
     # final, including gated background speech); this handler only sees
     # forwarded finals, so it tracks the current *turn's* speaker.
@@ -2726,18 +2313,29 @@ async def entrypoint(ctx: agents.JobContext):
             return
         _meet_last_speaker_id = ev.speaker_id
         if channel in ("google_meet", "teams_meet"):
-            dom_speaker = _meet_cached_active_speaker
-            if dom_speaker and dom_speaker != _meet_display_name:
-                bucket = _meet_speaker_map.setdefault(ev.speaker_id, {})
-                bucket[dom_speaker] = bucket.get(dom_speaker, 0) + 1
+            # Matched against the platform's speaking spans over this turn's own
+            # span, not against whoever is speaking at this instant: a final
+            # arrives *after* its speaker stopped, by which point the platform
+            # has already reported speech_off and nobody is speaking at all.
+            turn_ended_at = prompt_now(as_string=False).timestamp()
+            turn_started_at = (
+                user_speech_started_at.timestamp()
+                if user_speech_started_at is not None
+                else turn_ended_at
+            )
+            speaking_name = _meet_speech_windows.speaker_during(
+                turn_started_at,
+                turn_ended_at,
+            )
+            if speaking_name and speaking_name != _meet_display_name:
+                _meet_speaker_votes.observe(ev.speaker_id, speaking_name)
 
     # -- Screenshot state --
     screenshot_history = ScreenshotHistory()
     assistant_screen_share_active = False
     user_remote_control_active = False
     _agent_service_url: str | None = (
-        meet_agent_service_url
-        or (meta.get("agent_service_url") if meta else None)
+        (meta.get("agent_service_url") if meta else None)
         or os.environ.get("AGENT_SERVICE_URL")
         or None
     )
@@ -2792,6 +2390,7 @@ async def entrypoint(ctx: agents.JobContext):
                         "timestamp": entry.timestamp.isoformat(),
                         "source": entry.source,
                         "filepath": filepath,
+                        "attribution": entry.attribution,
                     },
                 ),
             )
@@ -2805,6 +2404,33 @@ async def entrypoint(ctx: agents.JobContext):
         _inject_visual_context()
         if entry.source != "assistant":
             _publish_screenshot(entry, filepath)
+
+    def _push_meet_frame(utterance: str = "") -> None:
+        """Hand the current shared screen to both brains.
+
+        The slot on its own reaches nobody: the fast brain reads it from its
+        visual context and the slow brain from its screenshot buffer, and both are
+        filled here. Without this the frame sits in the slot unseen -- which is
+        exactly what happened in a meeting held entirely over Meet chat, where a
+        screen was shared, stored, and never once looked at.
+        """
+        from datetime import datetime, timezone
+
+        nonlocal _meet_last_pushed_frame, _meet_last_push_at
+
+        if not _meet_latest_screenshot:
+            return
+        _meet_last_pushed_frame = _meet_latest_screenshot
+        _meet_last_push_at = time.monotonic()
+        _handle_screenshot(
+            ScreenshotEntry(
+                b64=_meet_latest_screenshot,
+                utterance=utterance,
+                timestamp=datetime.now(timezone.utc),
+                source=channel,
+                attribution=_meet_screenshare_sharer,
+            ),
+        )
 
     async def _refresh_screenshots() -> None:
         """Capture fresh screenshots from all active sources and update visual context.
@@ -2850,15 +2476,89 @@ async def entrypoint(ctx: agents.JobContext):
             if entry and assistant_screen_share_active:
                 _handle_screenshot(entry)
 
-        if channel in ("google_meet", "teams_meet") and _meet_latest_screenshot:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=_meet_latest_screenshot,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source=channel,
-                ),
+        if channel in ("google_meet", "teams_meet"):
+            _push_meet_frame()
+
+    async def _meet_screenshare_poll_loop() -> None:
+        """Keep the shared screen fresh, and keep feeding it to both brains.
+
+        Polled rather than pushed: the frames live in comms, and the LiveKit data
+        channel that carries participant events is no place for a screenshot. The
+        loop runs only between ``screenshare_on`` and the last ``screenshare_off``,
+        so an ordinary meeting costs nothing.
+
+        It also pushes, not just polls. Every other visual source in this file is
+        sampled on a spoken user turn, which silently made a shared screen
+        invisible in any meeting conducted over chat, or with a screen up while
+        nobody happens to be talking. A share is ambient context, so it is fed on
+        its own schedule -- rate-limited, and only when the picture has actually
+        changed, because each push costs a stored and registered image downstream.
+        """
+        nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
+        nonlocal _meet_fetch_misses
+
+        while True:
+            frame = await fetch_meet_screenshare_frame(
+                ctx.room.name,
+                http_session=_screenshot_http_session,
+                fb_logger=_log,
             )
+            if frame is None:
+                # Nobody sharing yet, or the frame aged out. Drop what we hold
+                # rather than describing a screen that is no longer up.
+                _meet_latest_screenshot = None
+                _meet_screenshare_sharer = ""
+                _meet_fetch_misses += 1
+                # Somebody is presenting (or this loop would not be running) and
+                # yet no frame arrives: that is a fault, not a quiet meeting.
+                # Logged once per outage because the alternative -- staying silent
+                # -- is indistinguishable from working, which is what made an
+                # unprovisioned bucket invisible from this side for a whole call.
+                if _meet_fetch_misses == _MEET_FETCH_MISS_ALERT_AFTER:
+                    _log.screenshot(
+                        f"Meet screenshare: presenter active but no frame after "
+                        f"{_meet_fetch_misses} polls (room={ctx.room.name}) -- "
+                        f"the relay or its store is not delivering",
+                    )
+            else:
+                if _meet_fetch_misses >= _MEET_FETCH_MISS_ALERT_AFTER:
+                    _log.screenshot(
+                        f"Meet screenshare: frames recovered after "
+                        f"{_meet_fetch_misses} missed polls",
+                    )
+                _meet_fetch_misses = 0
+                _meet_latest_screenshot = frame.b64
+                _meet_screenshare_sharer = frame.participant_name
+
+                changed = _meet_latest_screenshot != _meet_last_pushed_frame
+                due = (
+                    time.monotonic() - _meet_last_push_at
+                    >= _MEET_AMBIENT_PUSH_INTERVAL_S
+                )
+                if changed and due:
+                    _push_meet_frame()
+
+            await asyncio.sleep(_MEET_SCREENSHARE_POLL_INTERVAL_S)
+
+    def _sync_meet_screenshare_poller() -> None:
+        """Start or stop the poller to match whether anyone is presenting."""
+        nonlocal _meet_screenshare_task
+        nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
+
+        if _meet_sharing and _meet_screenshare_task is None:
+            _meet_screenshare_task = asyncio.create_task(
+                _meet_screenshare_poll_loop(),
+            )
+            return
+        if not _meet_sharing and _meet_screenshare_task is not None:
+            _meet_screenshare_task.cancel()
+            _meet_screenshare_task = None
+            _meet_latest_screenshot = None
+            _meet_screenshare_sharer = ""
+            # The shared screen is gone from the prompt as well as from the slot:
+            # a stale snapshot in the fast brain's visual context outlives the
+            # share and gets described as if it were still up.
+            _clear_visual_context(source=channel)
 
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
@@ -2910,29 +2610,15 @@ async def entrypoint(ctx: agents.JobContext):
                         source="webcam",
                     ),
                 )
-            if channel in ("google_meet", "teams_meet") and _meet_latest_screenshot:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=_meet_latest_screenshot,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source=channel,
-                    ),
-                )
+            if channel in ("google_meet", "teams_meet"):
+                _push_meet_frame(utterance=text)
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
-                # Drain in-flight embedding work so resolution reflects this
-                # utterance's own segment (clustered into the right voice),
-                # not the previous one — the STT-filter path only schedules it.
-                if speaker_tracker is not None:
-                    await speaker_tracker.await_pending()
                 (
                     resolved_contact,
                     speaker_label,
                     dia_sid,
-                    voice_verified,
-                    speaker_engaged,
                     speaker_label_source,
                 ) = _resolve_speaker()
                 _meet_last_speaker_id = None
@@ -2947,9 +2633,7 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
-                        engaged=speaker_engaged,
                     )
                 elif channel == "teams_meet":
                     event = InboundTeamsMeetUtterance(
@@ -2959,9 +2643,7 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
-                        engaged=speaker_engaged,
                     )
                 elif channel == "unify_meet":
                     names, cids = _unify_meet_stamp(
@@ -2973,9 +2655,7 @@ async def entrypoint(ctx: agents.JobContext):
                         turn_id=turn_id,
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
-                        engaged=speaker_engaged,
                         participant_names=names,
                         participant_contact_ids=cids,
                     )
@@ -2986,10 +2666,9 @@ async def entrypoint(ctx: agents.JobContext):
                         turn_id=turn_id,
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
-                        engaged=speaker_engaged,
                     )
+                event.speech_started_at = _consume_speech_start(assistant_side=False)
                 await event_broker.publish(
                     f"app:comms:{channel}_utterance",
                     event.to_json(),
@@ -3005,25 +2684,26 @@ async def entrypoint(ctx: agents.JobContext):
         else:
             asyncio.create_task(_publish_assistant_utterance(text))
 
-    audio_bridge: MeetAudioBridge | None = None
-    if channel in ("google_meet", "teams_meet"):
-        audio_bridge = MeetAudioBridge()
-        audio_bridge.start(asyncio.get_event_loop())
-
+    # Browser meets reach this process one of two ways.
+    #
+    # agent_service: the browser is a sibling process in this pod with no way
+    # into the LiveKit room, so audio is shuttled through PulseAudio null sinks
+    # and the bridge below pumps them.
+    #
+    # recall: the bot renders our bridge page, which joins the room as an
+    # ordinary participant. Audio is then plain LiveKit tracks, exactly as for
+    # phone, whatsapp_call and unify_meet -- so no bridge, and none of
+    # PortAudio's thread affinity or ring-buffer leak to work around. Opening
+    # one anyway would capture silence from an unconnected sink while the real
+    # audio sat unheard on the room's tracks.
     assistant = Assistant(
         contact=contact,
         boss=boss,
         channel=channel,
         instructions=system_prompt,
         outbound=outbound,
-        audio_bridge=audio_bridge,
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
         speaker_tracker=speaker_tracker,
-        engaged_speakers=engaged_speakers,
-        realtime_scorer=realtime_scorer,
-    )
-    assistant._turn_engaged_provider = lambda: _speaker_is_engaged(
-        _meet_last_speaker_id,
     )
 
     # --- Multi-assistant speaking floor (org meets only) ---
@@ -3077,6 +2757,93 @@ async def entrypoint(ctx: agents.JobContext):
                 return
             if assistant.meet_floor is not None:
                 assistant.meet_floor.handle_message(bytes(packet.data))
+
+    if channel in ("google_meet", "teams_meet"):
+        # The relay republishes the meeting platform's participant events into
+        # this room. Roster changes are applied from here as well as from the
+        # CM's ten-second poll: the poll is what proves who is present, but a
+        # join or leave is worth acting on the moment it happens, and the
+        # join/leave publish downstream diffs against the previous set, so the
+        # poll re-reporting the same person emits nothing a second time.
+        @ctx.room.on("data_received")
+        def _on_recall_event(packet) -> None:
+            nonlocal _meet_cached_active_speaker
+            if getattr(packet, "topic", "") != RECALL_EVENT_TOPIC:
+                return
+            try:
+                message = json.loads(bytes(packet.data).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return
+
+            event = parse_relayed_event(message)
+            if event is None or event.participant is None:
+                return
+            participant = event.participant
+
+            # Ahead of the name guard below, and keyed on id rather than name: a
+            # platform that reports a presenter without a display name would
+            # otherwise drop the event, and with it every frame of the share.
+            # The label comes from the frame itself, so only the id is needed.
+            if event.name == EVENT_SCREENSHARE_ON:
+                if participant.id not in _meet_sharing:
+                    _meet_sharing.append(participant.id)
+                _sync_meet_screenshare_poller()
+                return
+            if event.name == EVENT_SCREENSHARE_OFF:
+                if participant.id in _meet_sharing:
+                    _meet_sharing.remove(participant.id)
+                _sync_meet_screenshare_poller()
+                return
+
+            name = participant.name.strip()
+            if not name or name == _meet_display_name:
+                return
+
+            at = prompt_now(as_string=False).timestamp()
+            if event.name in ROSTER_EVENTS:
+                if event.name == EVENT_LEAVE:
+                    _drop_meet_participant(participant.id)
+                else:
+                    _merge_meet_participant(
+                        {
+                            "id": participant.id,
+                            "name": name,
+                            "email": participant.email,
+                            "is_host": participant.is_host,
+                        },
+                    )
+                _publish_meet_roster_changes()
+            elif event.name == EVENT_SPEECH_ON:
+                _meet_cached_active_speaker = name
+                _meet_speech_windows.speech_on(name, at)
+            elif event.name == EVENT_SPEECH_OFF:
+                # Only clear if this speaker is still the one on record, or a
+                # trailing speech_off would blank whoever started next.
+                if _meet_cached_active_speaker == name:
+                    _meet_cached_active_speaker = None
+                _meet_speech_windows.speech_off(name, at)
+            elif event.name == EVENT_CHAT_MESSAGE:
+                text = _strip_chat_html(event.chat_text or "").strip()
+                if not text:
+                    return
+                # Paired with the message, exactly as a spoken turn is: someone
+                # typing "what do you make of this?" is pointing at the screen
+                # they are sharing, and the reply is built from this buffer. A
+                # whole meeting can happen in chat with nobody speaking, which is
+                # how a shared screen went unseen despite being stored.
+                _push_meet_frame(utterance=text)
+                chat_cls = (
+                    TeamsMeetChatMessage
+                    if channel == "teams_meet"
+                    else GoogleMeetChatMessage
+                )
+                evt = chat_cls(
+                    contact=contact,
+                    sender_name=name,
+                    content=text,
+                    sender_email=participant.email,
+                )
+                asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
 
     # The opener hold applies whenever an ``opener`` opening config is present,
     # including inbound-shaped legs of agent-initiated calls (e.g. the WhatsApp
@@ -3221,19 +2988,19 @@ async def entrypoint(ctx: agents.JobContext):
                 _log.info("Hang-up gate disarmed")
         elif event_type in ("meet_session_id", "gmeet_session_id"):
             meet_session_id = data.get("session_id", "")
+        elif event_type == "meet_roster":
+            # Browser-meet roster, pushed by the CM because only it holds the
+            # backend credentials. Publishes join/leave so the brain knows who
+            # is in the room, and feeds _get_meet_participant_names, which is
+            # what names a diarized voice. Realtime join/leave events already
+            # maintain the same cache; this is the reconciliation pass that
+            # corrects it if one was missed.
+            incoming = data.get("participants") or []
+            if isinstance(incoming, list):
+                _reconcile_meet_roster([p for p in incoming if isinstance(p, dict)])
+                _publish_meet_roster_changes()
         elif event_type == "unify_meet_roster":
             incoming = data.get("participants") or []
-            if speaker_tracker is not None:
-                # Late joiners are unpinnable otherwise: profiles are a
-                # snapshot taken at dispatch and this is the only point where
-                # the roster is known to have changed.
-                _profiles: dict[int, list[float]] = {}
-                for _cid, _vec in (data.get("voice_profiles") or {}).items():
-                    try:
-                        _profiles[int(_cid)] = [float(x) for x in _vec]
-                    except (TypeError, ValueError):
-                        continue
-                speaker_tracker.add_enrolled_profiles(_profiles)
             if isinstance(incoming, list):
                 unify_meet_roster.clear()
                 unify_meet_roster.extend(
@@ -3352,66 +3119,6 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     assistant._publish_fast_brain_turn_completed = _publish_fast_brain_turn_completed
-
-    async def _maybe_resume_after_background_bargein() -> None:
-        """Resume a line interrupted by a voice that turned out to be background.
-
-        Ordinarily an interrupted line waits for the fast brain's next turn to
-        decide its fate — but a barge-in whose transcript was gated as
-        non-engaged never produces that turn, so the line would hang until the
-        engaged caller next spoke. When the gated final lands and the floor is
-        genuinely free (no engaged speech, no in-flight generation, nothing
-        playing), the remainder is resumed directly.
-        """
-        # Barge-in vs transcript race: the pending continuation is computed
-        # after playout settles; wait briefly for it, as the claim path does.
-        active = assistant._active_tts
-        if (
-            assistant._pending_continuation is None
-            and active is not None
-            and getattr(active.get("handle"), "interrupted", False)
-        ):
-            for _ in range(6):  # ~300ms
-                await asyncio.sleep(0.05)
-                if assistant._pending_continuation is not None:
-                    break
-        pending = assistant._pending_continuation
-        if not pending or pending.get("consumed"):
-            return
-        # Leave the decision to the fast brain's front door whenever an
-        # engaged turn is (or may be) in flight.
-        if user_is_speaking or assistant.user_turn_generating:
-            return
-        if _queued_speech_block_reason():
-            return
-        pending["consumed"] = True
-        assistant._pending_continuation = None
-        assistant._active_tts = None
-        resume_text = (pending.get("resume_text") or "").strip()
-        if not resume_text:
-            return
-        if (pending.get("spoken_prefix") or "").strip():
-            line = f"{pick_resume_lead_in()} {resume_text}".strip()
-        else:
-            line = resume_text
-        _log.info("Resuming line interrupted by non-engaged background speech")
-        handle = session.say(line, allow_interruptions=True, add_to_chat_ctx=True)
-        _register_interruptible_tts(handle, lambda: line, "continuation")
-
-    def _handle_background_final(text: str, sid: str | None) -> None:
-        """Sink for final transcripts gated out as non-engaged background."""
-        cleaned = (text or "").strip()
-        if not cleaned:
-            return
-        label, label_source = _background_label_for(sid)
-        label = label or "Unknown speaker"
-        _log.info(f"Background speech ({label}): {cleaned}")
-        asyncio.create_task(
-            _publish_background_utterance(cleaned, label, sid, label_source),
-        )
-        asyncio.create_task(_maybe_resume_after_background_bargein())
-
-    assistant._on_background_final = _handle_background_final
 
     def _register_interruptible_tts(
         handle: object,
@@ -3819,7 +3526,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     def on_notification(data: dict) -> None:
         """Handle notifications from conversation manager."""
-        nonlocal assistant_screen_share_active, _agent_service_url, meet_agent_service_url
+        nonlocal assistant_screen_share_active, _agent_service_url
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3837,8 +3544,6 @@ async def entrypoint(ctx: agents.JobContext):
                 _agent_service_url,
                 payload,
             )
-            if _agent_service_url:
-                meet_agent_service_url = _agent_service_url
             low = message.lower()
             if "screen sharing is now on" in low:
                 assistant_screen_share_active = True

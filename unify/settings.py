@@ -102,6 +102,12 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
     UNITY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
+    # Catch-all domain for multiplayer twin alias addresses, and the Workspace
+    # mailbox that receives them. Alias addresses have no Workspace user of
+    # their own: reads and sends delegate to the mailbox while the From header
+    # keeps the alias.
+    UNITY_TWIN_ALIAS_EMAIL_DOMAIN: str = "twins.unify.ai"
+    UNITY_TWIN_ALIAS_MAILBOX: str = "twins@unify.ai"
 
     # ─────────────────────────────────────────────────────────────────────────
     # Builtins Catalogue

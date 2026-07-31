@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-import aiohttp
 from livekit.api import CreateAgentDispatchRequest, LiveKitAPI
 
 from unify.contact_manager.types.contact import UNASSIGNED
@@ -29,7 +28,6 @@ if TYPE_CHECKING:
     from unify.conversation_manager.in_memory_event_broker import InMemoryEventBroker
 
 from unify.conversation_manager.medium_scripts.common import (
-    _POD_LOCAL_AGENT_SERVICE_URL,
     _resolve_agent_service_url,
 )
 
@@ -62,12 +60,13 @@ _BASE_FORWARD_CHANNELS = [
 ]
 
 DISPATCH_ACTIVATION_TIMEOUT_S = 90.0
-# Browser meets rarely activate through the persistent worker (its single
-# prewarmed slot is usually not dispatch-ready this soon after startup), so wait
-# only briefly for the dispatch before self-healing with a subprocess instead of
-# eating the full voice-path timeout of dead air. The subprocess is the proven
-# path for meets and its model-load overlaps the browser cold-start.
-MEET_DISPATCH_ACTIVATION_TIMEOUT_S = 5.0
+
+# How often to ask the meeting backend for its view of the session. Only the
+# roster and a bot that never arrived depend on this cadence -- the fast brain
+# detects a normal end itself, without waiting for a poll -- so it is set for a
+# modest request rate against Recall rather than for latency. Started after
+# dispatch and the join, so it cannot delay the assistant reaching the room.
+MEET_STATE_POLL_INTERVAL_S = 10.0
 # Upper bound on how long we await a freshly prewarmed idle worker process
 # before starting an assistant-initiated outbound call. Prewarm normally
 # completes in well under this; the cap exists so a wedged worker surfaces as a
@@ -80,30 +79,6 @@ OUTBOUND_CALL_READINESS_TIMEOUT_S = 30.0
 # gate, so an unregistered worker should fall back to a per-call subprocess.
 WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 
-# Wall-clock ceiling for a browser-meet (Google Meet / Teams) join request to
-# the agent-service. Joining a browser meeting is far slower than a phone/SMS
-# session: it cold-starts a headless Chromium, runs an LLM-guided click-through
-# of the pre-join screen, and may then sit in the meeting waiting room. Five
-# minutes is a deliberate special case for these browser meets (ordinary comms
-# requests use much tighter timeouts) so a legitimately slow join is given room
-# to reach the lobby rather than being cut off mid-join.
-MEET_JOIN_HTTP_TIMEOUT_S = 300.0
-
-# Before issuing the browser-meet ``/join`` request, wait for the pod-local
-# agent-service to be accepting connections. The CM spawns / restarts that Node
-# process out of band (e.g. on the user's API-key change), and a join that lands
-# in its cold-start window is refused (``ConnectionRefusedError``). Poll a cheap
-# endpoint until it answers rather than failing the join on the first refused
-# connect. Any HTTP response (even 401/404) proves the port is bound.
-AGENT_SERVICE_READY_TIMEOUT_S = 30.0
-AGENT_SERVICE_READY_POLL_INTERVAL_S = 0.5
-# Extra connect attempts for the ``/join`` POST itself, to absorb the residual
-# race where the service was ready at the gate but restarted before the POST.
-# Only connection failures are retried — a slow-but-connected join (the long
-# ``MEET_JOIN_HTTP_TIMEOUT_S`` wait) is never retried, and a real HTTP response
-# is returned as-is.
-MEET_JOIN_CONNECT_RETRIES = 2
-
 # How long the worker may stay alive-but-unwarmed while the manager is fully
 # idle before the watchdog force-restarts it to recover. Post-job re-warm usually
 # completes in seconds, but a cold container prewarm can take the full LiveKit
@@ -112,26 +87,6 @@ MEET_JOIN_CONNECT_RETRIES = 2
 # wedged forever. Keep this aligned with ``initialize_process_timeout`` in
 # ``medium_scripts/worker.py``.
 WORKER_REWARM_STALL_S = 60.0
-
-
-# Cookies Google sets on a signed-in session. A storage state missing all of
-# them is a signed-out (or challenge) context and must never overwrite the
-# durable blob the next join hydrates from.
-GOOGLE_AUTH_COOKIE_NAMES = frozenset({"SID", "__Secure-1PSID", "__Secure-3PSID"})
-
-
-def _state_has_google_auth_cookies(state: str | None) -> bool:
-    if not state:
-        return False
-    try:
-        cookies = json.loads(state).get("cookies") or []
-    except (json.JSONDecodeError, AttributeError):
-        return False
-    return any(
-        cookie.get("name") in GOOGLE_AUTH_COOKIE_NAMES
-        and "google.com" in (cookie.get("domain") or "")
-        for cookie in cookies
-    )
 
 
 def _opener_opening_config(opener: str, *, source: str, briefing: str = "") -> dict:
@@ -223,8 +178,13 @@ class LivekitCallManager:
         # ``self._call_channel`` so per-channel public properties remain stable
         # while the underlying state is consolidated.
         self._meet_session_id: str | None = None
+        # Lazily built by the ``meet_provider`` property and cached for the
+        # session; see that property for why it is not rebuilt per join.
+        self._meet_provider = None
+        # Polls the meeting backend for lifecycle + roster; see
+        # ``_watch_meet_state``.
+        self._meet_state_task: asyncio.Task | None = None
         self._meet_joining: bool = False
-        self._meet_presenting: bool = False
         # True while the browser is admitted-pending: it has knocked on the
         # meeting (clicked "Ask to join") and is sitting in the waiting room
         # for the host to let it in. This is a *successful* join in progress,
@@ -239,36 +199,6 @@ class LivekitCallManager:
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
         self.teams_meet_exchange_id = UNASSIGNED
-        # Parent-side mirror of the voice agent's engaged-speaker set: the
-        # permanently engaged call participants (contact_id -> display name),
-        # labels the slow brain has engaged, and every anonymous speaker label
-        # heard on the call so far (for tool-docstring status rendering).
-        self.engaged_contacts: dict[int, str] = {}
-        self.engaged_labels: set[str] = set()
-        self.known_speaker_labels: set[str] = set()
-
-    def reset_speaker_engagement(
-        self,
-        contact: dict | None,
-        boss: dict | None,
-    ) -> None:
-        """Initialize the per-call engagement mirror at call start."""
-        self.engaged_contacts = {}
-        for cand in (contact, boss):
-            if not cand or cand.get("contact_id") is None:
-                continue
-            name = (
-                f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                or f"contact {cand['contact_id']}"
-            )
-            self.engaged_contacts[int(cand["contact_id"])] = name
-        self.engaged_labels = set()
-        self.known_speaker_labels = set()
-
-    def note_speaker_label(self, label: str | None) -> None:
-        """Record an anonymous speaker label heard on the active call."""
-        if label:
-            self.known_speaker_labels.add(label.strip())
 
     def set_config(self, config: CallConfig):
         self.assistant_id = config.assistant_id
@@ -846,7 +776,6 @@ class LivekitCallManager:
         self.is_outbound = outbound
         self._call_channel = channel
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -1010,7 +939,6 @@ class LivekitCallManager:
         self.is_outbound = outbound
         self._call_channel = "unify_meet"
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -1074,11 +1002,39 @@ class LivekitCallManager:
     # Browser-meet lifecycle (Google Meet / Teams Meet)
     # ------------------------------------------------------------------
 
-    # Per-channel mapping of agent-service URL prefix and short room suffix.
-    _MEET_PATHS: dict[str, dict[str, str]] = {
-        "google_meet": {"path": "googlemeet", "room": "gmeet"},
-        "teams_meet": {"path": "teamsmeet", "room": "teams"},
+    # Short room suffix per channel, used to name the LiveKit room.
+    _MEET_ROOM_SUFFIX: dict[str, str] = {
+        "google_meet": "gmeet",
+        "teams_meet": "teams",
     }
+
+    @property
+    def meet_provider(self):
+        """The backend that joins browser meetings, per ``MEET_PROVIDER``.
+
+        Built once and cached: a provider carries a Recall client and derived
+        configuration, and rebuilding it per call would re-read the environment
+        mid-session. A pod asking for ``recall`` without credentials falls back
+        to the browser rather than refusing to join at all -- during the
+        transition there is still something to fall back to, and a loud log line
+        is more useful than a meeting nobody attends.
+        """
+        if self._meet_provider is None:
+            from unify.conversation_manager.domains.browser_meeting import (
+                build_meet_provider,
+            )
+
+            self._meet_provider = build_meet_provider(self)
+        return self._meet_provider
+
+    @property
+    def meet_session_id(self) -> str:
+        """Backend session id for the active browser meeting.
+
+        Doubles as the call-utterance key for browser meets, so a transcript
+        row can be traced back to the exact bot that produced it.
+        """
+        return self._meet_session_id or ""
 
     def has_active_meet(self, channel: str | None = None) -> bool:
         """Whether a browser meeting is active.
@@ -1112,221 +1068,6 @@ class LivekitCallManager:
         """
         return self._meet_lobby_waiting
 
-    @property
-    def has_meet_presenting(self) -> bool:
-        return self._meet_presenting
-
-    @property
-    def has_gmeet_presenting(self) -> bool:
-        return self._meet_presenting and self._call_channel == "google_meet"
-
-    @property
-    def has_teams_presenting(self) -> bool:
-        return self._meet_presenting and self._call_channel == "teams_meet"
-
-    async def _await_agent_service_ready(
-        self,
-        base_url: str,
-        timeout: float = AGENT_SERVICE_READY_TIMEOUT_S,
-    ) -> bool:
-        """Wait until the agent-service is accepting connections on ``base_url``.
-
-        Returns True as soon as the service answers an HTTP request (any status
-        — even 401/404 proves the port is bound and the process is up), False if
-        it never comes up within ``timeout``. A transport error just means the
-        Node process is still cold-starting (it is spawned/restarted by the CM
-        out of band), so those are retried on a short interval; anything that
-        yields a response is treated as ready.
-        """
-        deadline = time.monotonic() + max(0.0, float(timeout))
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        f"{base_url}/sessions",
-                        timeout=aiohttp.ClientTimeout(total=2.0),
-                    ):
-                        return True
-            except (aiohttp.ClientError, asyncio.TimeoutError):
-                if time.monotonic() >= deadline:
-                    LOGGER.error(
-                        f"{ICONS['ipc']} [LivekitCallManager] agent-service not "
-                        f"ready on {base_url} after {timeout:.0f}s "
-                        f"({attempt} attempts)",
-                    )
-                    return False
-                await asyncio.sleep(AGENT_SERVICE_READY_POLL_INTERVAL_S)
-
-    async def _hydrate_meet_browser_state(
-        self,
-        base_url: str,
-        auth_key: str,
-        storage_state_name: str,
-    ) -> bool:
-        """Push a signed-in browser state to the pod-local agent-service.
-
-        Fetches ``<storage_state_name>.json`` from the durable GCS store
-        (``MEET_BROWSER_STATE_BUCKET``) and uploads it via the agent-service's
-        ``PUT /browser-states/<name>`` transport so the meet browser loads it
-        (cookies + localStorage) before joining, appearing as a signed-in
-        account instead of an anonymous guest. Best-effort: any failure logs a
-        warning and returns False, leaving the browser to join anonymously
-        (surfaced downstream as ``meet_join_blocked`` when no host admits it).
-        """
-        bucket = (os.environ.get("MEET_BROWSER_STATE_BUCKET") or "").strip()
-        if not bucket:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] MEET_GOOGLE_STORAGE_STATE "
-                f"set ({storage_state_name}) but MEET_BROWSER_STATE_BUCKET is "
-                "empty; joining without a signed-in session",
-            )
-            return False
-
-        blob_name = f"{storage_state_name}.json"
-
-        def _download() -> str:
-            from google.cloud import storage
-
-            client = storage.Client()
-            return client.bucket(bucket).blob(blob_name).download_as_text()
-
-        try:
-            state = await asyncio.to_thread(_download)
-        except Exception as exc:  # best-effort: fall back to anonymous join
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] could not fetch browser "
-                f"state gs://{bucket}/{blob_name}: {exc!r}; joining anonymously",
-            )
-            return False
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
-                    f"{base_url}/browser-states/{storage_state_name}",
-                    json={"state": state},
-                    headers={"authorization": f"Bearer {auth_key}"},
-                    timeout=aiohttp.ClientTimeout(total=15.0),
-                ) as put_resp:
-                    if put_resp.status not in (200, 204):
-                        detail = await put_resp.text()
-                        LOGGER.warning(
-                            f"{ICONS['ipc']} [LivekitCallManager] agent-service "
-                            f"rejected browser state {storage_state_name} (HTTP "
-                            f"{put_resp.status}): {detail}; joining anonymously",
-                        )
-                        return False
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] failed to upload browser "
-                f"state {storage_state_name} to agent-service: {exc!r}; joining "
-                "anonymously",
-            )
-            return False
-
-        LOGGER.info(
-            f"{ICONS['ipc']} [LivekitCallManager] hydrated signed-in browser "
-            f"state {storage_state_name} (gs://{bucket}/{blob_name})",
-        )
-        return True
-
-    async def _persist_meet_browser_state(
-        self,
-        base_url: str,
-        auth_key: str,
-        storage_state_name: str,
-        session_id: str,
-    ) -> bool:
-        """Write the live meet browser's refreshed cookies back to GCS.
-
-        Google rotates session cookies on use, so the stored snapshot decays and
-        eventually lands the browser on a re-auth challenge. After a confirmed
-        signed-in join, snapshot the live context via the agent-service
-        (``POST /browser-states/<name>/save`` then ``GET``) and replace the
-        durable blob, keeping the stored session as fresh as the last join. The
-        upload is skipped unless the snapshot still carries Google auth cookies,
-        so a signed-out context can never clobber a good state. Best-effort:
-        failures log a warning and leave the existing blob untouched.
-        """
-        bucket = (os.environ.get("MEET_BROWSER_STATE_BUCKET") or "").strip()
-        if not bucket:
-            return False
-
-        blob_name = f"{storage_state_name}.json"
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                headers = {"authorization": f"Bearer {auth_key}"}
-                async with session.post(
-                    f"{base_url}/browser-states/{storage_state_name}/save",
-                    json={"sessionId": session_id},
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15.0),
-                ) as save_resp:
-                    if save_resp.status not in (200, 204):
-                        detail = await save_resp.text()
-                        LOGGER.warning(
-                            f"{ICONS['ipc']} [LivekitCallManager] agent-service "
-                            f"could not snapshot browser state "
-                            f"{storage_state_name} (HTTP {save_resp.status}): "
-                            f"{detail}; keeping the stored session",
-                        )
-                        return False
-                async with session.get(
-                    f"{base_url}/browser-states/{storage_state_name}",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15.0),
-                ) as get_resp:
-                    if get_resp.status != 200:
-                        detail = await get_resp.text()
-                        LOGGER.warning(
-                            f"{ICONS['ipc']} [LivekitCallManager] could not read "
-                            f"back browser state {storage_state_name} (HTTP "
-                            f"{get_resp.status}): {detail}; keeping the stored "
-                            "session",
-                        )
-                        return False
-                    state = (await get_resp.json()).get("state")
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] failed to snapshot browser "
-                f"state {storage_state_name}: {exc!r}; keeping the stored session",
-            )
-            return False
-
-        if not _state_has_google_auth_cookies(state):
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] snapshot of "
-                f"{storage_state_name} carries no Google auth cookies; keeping "
-                "the stored session",
-            )
-            return False
-
-        def _upload() -> None:
-            from google.cloud import storage
-
-            client = storage.Client()
-            client.bucket(bucket).blob(blob_name).upload_from_string(
-                state,
-                content_type="application/json",
-            )
-
-        try:
-            await asyncio.to_thread(_upload)
-        except Exception as exc:  # best-effort: the stored blob stays valid
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] could not upload refreshed "
-                f"browser state to gs://{bucket}/{blob_name}: {exc!r}",
-            )
-            return False
-
-        LOGGER.info(
-            f"{ICONS['ipc']} [LivekitCallManager] refreshed browser state "
-            f"{storage_state_name} (gs://{bucket}/{blob_name})",
-        )
-        return True
-
     async def _start_meet(
         self,
         channel: str,
@@ -1335,14 +1076,16 @@ class LivekitCallManager:
         boss: dict,
         display_name: str = "",
     ) -> bool:
-        """Join a browser meeting (Google Meet or Teams) via agent-service.
+        """Join a browser meeting (Google Meet or Teams).
 
-        1. POST /{path}/join on agent-service to launch browser + automation.
-        2. Start audio bridge (PulseAudio <-> LiveKit).
-        3. Dispatch a fast brain job into the same LiveKit room.
-        4. Kick off a background monitor that polls /{path}/state and
-           publishes the channel-specific *Ended event when the meeting
-           terminates.
+        1. Pre-create the LiveKit room the conversation lives in.
+        2. Dispatch a fast brain job into it.
+        3. Ask the configured backend (``MEET_PROVIDER``) to join the meeting.
+
+        Only step 3 differs between backends. Teardown is not polled from here:
+        the channel's *Ended event is published when the fast brain's IPC client
+        disconnects (see ``_on_ipc_client_disconnected``), which is why no
+        backend needs to report the meeting ending.
         """
         if self.has_active_call or self.has_active_meet():
             LOGGER.warning(
@@ -1351,15 +1094,12 @@ class LivekitCallManager:
             )
             return False
 
-        path_info = self._MEET_PATHS[channel]
-        meet_path = path_info["path"]
-        room_suffix = path_info["room"]
+        room_suffix = self._MEET_ROOM_SUFFIX[channel]
 
         self._meet_joining = True
         self.meet_join_failure_reason = None
         self._call_channel = channel
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         opener = (self.pending_opener or "").strip()
         meet_opening_config = None
@@ -1372,17 +1112,6 @@ class LivekitCallManager:
         meet_outbound = meet_opening_config is not None
 
         display_name = display_name or self.assistant_name or "Unity Assistant"
-
-        from unify.session_details import SESSION_DETAILS
-
-        # Browser meets must run on the pod-local agent-service: the fast-brain
-        # voice worker and its MeetAudioBridge open the pod's default PulseAudio
-        # devices (meet_mic/agent_sink from device.sh), so the browser has to
-        # share that same PulseAudio server. Resolving to a managed-desktop VM
-        # here splits browser audio from the bridge and the assistant joins deaf
-        # and mute.
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
 
         room_name = make_room_name(self.assistant_id, room_suffix)
         self.room_name = room_name
@@ -1423,44 +1152,47 @@ class LivekitCallManager:
         if contact.get("is_system", False):
             self._start_boss_notification_rendering()
 
+        # ``agent_service_url`` is deliberately absent: meets used to pin it to
+        # the pod-local service so the browser shared this pod's PulseAudio
+        # server. Nothing about a meeting is pod-local now, so the general
+        # dispatch metadata's resolved URL applies like it does for every other
+        # channel.
         meet_extra = {
             "meet_session_id": "",
             "meet_url": meet_url,
             "meet_display_name": display_name,
-            "agent_service_url": _POD_LOCAL_AGENT_SERVICE_URL,
         }
         if meet_opening_config:
             meet_extra["opening_config"] = meet_opening_config
 
         self.is_outbound = meet_outbound
 
-        # Gate on the agent-service being up before we dispatch a worker or POST
-        # the join. It is (re)spawned by the CM out of band (API-key changes),
-        # so a join arriving in its cold-start window would otherwise fail with a
-        # bare ConnectionRefusedError. The poll here is the retry: it waits out
-        # the restart rather than dispatching a worker into a dead service.
-        if not await self._await_agent_service_ready(base_url):
+        # Gate on the backend being able to accept a join before dispatching a
+        # worker. The fast brain is expensive to start and, once in the room,
+        # sits talking to nobody if no browser ever arrives.
+        preflight_failure = await self.meet_provider.preflight()
+        if preflight_failure:
             LOGGER.error(
                 f"{ICONS['ipc']} [LivekitCallManager] {channel} join aborted: "
-                "agent-service never became ready",
+                f"{preflight_failure}",
             )
-            self.meet_join_failure_reason = "agent_service_unavailable"
+            self.meet_join_failure_reason = preflight_failure
             self._meet_joining = False
             self._meet_lobby_waiting = False
             await self._cleanup_meet(channel)
             return False
 
-        # Fast brain into the room using the same convention as voice calls:
-        # prefer the co-located prewarmed worker (no remote comms hop), fall back
-        # to a self-contained subprocess. Browser meets rarely activate through
-        # the worker (its single prewarmed slot is usually not dispatch-ready this
-        # soon after startup), so the dispatch runs under the short
-        # ``MEET_DISPATCH_ACTIVATION_TIMEOUT_S`` — the watchdog self-heals with a
-        # subprocess into the same live room after that brief window instead of
-        # the full voice-path timeout of dead air. The subprocess connects its own
-        # IPC client and always activates; its model-load cost overlaps the
-        # browser cold-start and LLM-guided join, so it is not on the critical
-        # path.
+        # Fast brain into the room on exactly the same terms as voice calls:
+        # prefer the co-located prewarmed worker, fall back to a self-contained
+        # subprocess only if it never activates.
+        #
+        # Meets used to cut the activation wait to five seconds, because a
+        # browser join was slow enough that a subprocess's model load hid inside
+        # it and the prewarmed slot was rarely ready that early. That trade is
+        # gone: audio arrives over LiveKit like every other channel, so there is
+        # no browser cold start to hide behind, and a five-second window is
+        # short enough that the worker activates *after* the fallback has been
+        # spawned -- putting two fast brains in one room, both replying.
         meet_metadata = dict(meet_extra)
         meet_env = dict(meet_extra)
         if meet_opening_config:
@@ -1480,7 +1212,6 @@ class LivekitCallManager:
                 meet_outbound,
                 extra_metadata=meet_metadata,
                 fallback_env=meet_env,
-                activation_timeout=MEET_DISPATCH_ACTIVATION_TIMEOUT_S,
             )
         if not dispatched:
             await self._start_call_subprocess(
@@ -1492,116 +1223,41 @@ class LivekitCallManager:
                 extra_env=meet_env,
             )
 
-        # Browser join runs after dispatch — fast brain initializes in parallel.
-        # The join can be slow (headless-browser cold start + LLM-guided
-        # click-through, then a possible wait in the meeting lobby), so it runs
-        # under a generous ceiling. A timeout or transport error here must not
-        # escape into the event loop: an unhandled exception in the meet-join
-        # handler leaves ``_meet_joining`` stuck True with no teardown and shows
-        # up as "Unhandled error processing GoogleMeetReceived". Catch it, tear
-        # down, and return a clean failure the handler can retry.
-        # Signed-in browser session (Google Meet only for now): pull the twin
-        # account's saved storage state from the durable store and push it to
-        # the pod-local agent-service so the browser joins authenticated rather
-        # than as an anonymous guest — which Google turns away with "You can't
-        # join this video call" when no host is present. Best-effort: a miss
-        # falls back to an anonymous join.
-        storage_state_name: str | None = None
-        if channel == "google_meet":
-            storage_state_name = (
-                os.environ.get("MEET_GOOGLE_STORAGE_STATE") or ""
-            ).strip() or None
-            if storage_state_name:
-                await self._hydrate_meet_browser_state(
-                    base_url,
-                    auth_key,
-                    storage_state_name,
-                )
-
-        join_payload: dict[str, str] = {
-            "meetUrl": meet_url,
-            "displayName": display_name,
-        }
-        if storage_state_name:
-            join_payload["storageStateName"] = storage_state_name
-
-        resp = None
-        body = None
-        for connect_attempt in range(MEET_JOIN_CONNECT_RETRIES + 1):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    resp = await session.post(
-                        f"{base_url}/{meet_path}/join",
-                        json=join_payload,
-                        headers={"authorization": f"Bearer {auth_key}"},
-                        timeout=aiohttp.ClientTimeout(total=MEET_JOIN_HTTP_TIMEOUT_S),
-                    )
-                    body = await resp.json()
-                break
-            except aiohttp.ClientConnectorError as exc:
-                # The service was up at the gate but the socket refused now —
-                # almost always an out-of-band restart. Re-await readiness and
-                # retry the connect (never the slow-join timeout below).
-                if connect_attempt >= MEET_JOIN_CONNECT_RETRIES:
-                    LOGGER.error(
-                        f"{ICONS['ipc']} [LivekitCallManager] {channel} join "
-                        f"connect failed after {connect_attempt + 1} attempts: "
-                        f"{exc!r}",
-                    )
-                    self.meet_join_failure_reason = "agent_service_unavailable"
-                    self._meet_joining = False
-                    self._meet_lobby_waiting = False
-                    await self._cleanup_meet(channel)
-                    return False
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] {channel} join connect "
-                    f"refused (attempt {connect_attempt + 1}); re-checking "
-                    "agent-service readiness and retrying",
-                )
-                await self._await_agent_service_ready(base_url)
-            except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
-                LOGGER.error(
-                    f"{ICONS['ipc']} [LivekitCallManager] {channel} join request "
-                    f"failed: {exc!r}",
-                )
-                self._meet_joining = False
-                self._meet_lobby_waiting = False
-                await self._cleanup_meet(channel)
-                return False
-
-        if resp.status != 200:
+        # The join runs after dispatch so the fast brain initializes in
+        # parallel with it. It can be slow -- a browser cold start and an
+        # LLM-guided click-through, or a hosted bot working through a lobby --
+        # and the backend owns that ceiling. What matters here is that a
+        # failure comes back as a clean False rather than escaping into the
+        # event loop: an unhandled exception in the meet-join handler leaves
+        # ``_meet_joining`` stuck True with no teardown, surfacing as
+        # "Unhandled error processing GoogleMeetReceived".
+        result = await self.meet_provider.join(
+            channel=channel,
+            meeting_url=meet_url,
+            display_name=display_name,
+            room_name=room_name,
+        )
+        if not result.ok:
             LOGGER.error(
-                f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: {body}",
+                f"{ICONS['ipc']} [LivekitCallManager] {channel} join failed: "
+                f"{result.failure_reason}",
             )
-            self.meet_join_failure_reason = body.get("reason") or body.get("message")
+            self.meet_join_failure_reason = result.failure_reason
             self._meet_joining = False
             self._meet_lobby_waiting = False
             await self._cleanup_meet(channel)
             return False
 
-        # The agent-service returns 200 for both ``active`` (already in the
-        # call) and ``lobby`` (knocked, waiting for host admission). Both are
-        # successful joins; only the wording differs downstream, so record
-        # which one so the event handler can say "in the lobby" vs "joined".
-        self._meet_session_id = body.get("sessionId")
-        self._meet_lobby_waiting = body.get("status") == "lobby"
+        # Both shapes of success are recorded: in the call, or knocked and
+        # waiting for a host to admit us. Only the wording differs downstream,
+        # so the event handler can say "in the lobby" rather than "joined".
+        self._meet_session_id = result.session_id
+        self._meet_lobby_waiting = result.lobby
         self._meet_joining = False
         LOGGER.info(
             f"{ICONS['ipc']} [LivekitCallManager] {channel} joined "
-            f"(session={self._meet_session_id}, "
-            f"status={body.get('status')})",
+            f"(session={self._meet_session_id}, lobby={result.lobby})",
         )
-
-        # The join proved the hydrated session is still signed in, and Google
-        # rotated its cookies in the process. Write the refreshed context back
-        # so the stored state never drifts further behind than the last call.
-        if storage_state_name and self._meet_session_id:
-            await self._persist_meet_browser_state(
-                base_url,
-                auth_key,
-                storage_state_name,
-                self._meet_session_id,
-            )
 
         if self._socket_server and self._meet_session_id:
             await self._socket_server.queue_for_clients(
@@ -1617,19 +1273,129 @@ class LivekitCallManager:
                 json.dumps({"type": "call_answered"}),
             )
 
+        # Started last, after dispatch and the join, so it can never delay the
+        # fast brain reaching the room or speaking.
+        self._meet_state_task = asyncio.create_task(self._watch_meet_state(channel))
+
         return True
 
+    async def send_meet_chat(self, text: str, to: str | None = None) -> bool:
+        """Post into the active browser meeting's chat.
+
+        Unlike speech, chat survives the call: a link or a spelling stays
+        readable after the moment it was said, which is the point of offering it
+        alongside the voice channel.
+        """
+        session_id = self._meet_session_id
+        channel = self._call_channel or ""
+        if not session_id or channel not in self._MEET_ROOM_SUFFIX:
+            return False
+        if not (text or "").strip():
+            return False
+        return await self.meet_provider.send_chat(
+            channel=channel,
+            session_id=session_id,
+            text=text,
+            to=to,
+        )
+
+    async def _watch_meet_state(self, channel: str) -> None:
+        """Track the meeting backend's own view of the session.
+
+        The fast brain notices the meeting ending on its own (the bot's bridge
+        page drops out of the LiveKit room), but only once the bot has *been*
+        there. A bot that never arrives -- denied entry, a bad link, or nobody
+        ever joining -- would otherwise leave the session marked active forever,
+        refusing every later call with "session already active".
+
+        Polling covers that, and pays for itself twice over: the same response
+        carries the participant roster, which is the only source of
+        platform-attributed speaker names now that nothing scrapes a DOM.
+        """
+        while True:
+            await asyncio.sleep(MEET_STATE_POLL_INTERVAL_S)
+            session_id = self._meet_session_id
+            if not session_id or self._call_channel != channel:
+                return
+
+            state = await self.meet_provider.state(
+                channel=channel,
+                session_id=session_id,
+            )
+            if state is None:
+                # A failed poll is not evidence the meeting ended.
+                continue
+
+            self._meet_lobby_waiting = state.lobby
+            await self._push_meet_roster(state.participants)
+
+            if state.ended:
+                LOGGER.info(
+                    f"{ICONS['ipc']} [LivekitCallManager] {channel} ended per "
+                    f"backend (status={state.status}, "
+                    f"reason={state.failure_reason})",
+                )
+                if state.failure_reason:
+                    self.meet_join_failure_reason = state.failure_reason
+                await self._publish_meet_ended(channel)
+                return
+
+    async def _push_meet_roster(self, participants) -> None:
+        """Hand the current roster to the fast brain.
+
+        It runs in another process and has no Recall credentials, so the roster
+        can only reach it from here. Same transport as the org-call roster.
+        """
+        if not self._socket_server:
+            return
+        await self._socket_server.queue_for_clients(
+            "app:call:status",
+            json.dumps(
+                {
+                    "type": "meet_roster",
+                    "participants": [
+                        {
+                            "id": p.id,
+                            "name": p.name,
+                            "email": p.email,
+                            "is_host": p.is_host,
+                        }
+                        for p in participants
+                    ],
+                },
+            ),
+        )
+
+    async def _publish_meet_ended(self, channel: str) -> None:
+        """Publish the channel's *Ended event so the normal teardown path runs.
+
+        Idempotent by way of ``has_active_meet``: the fast brain usually gets
+        there first via its own shutdown, and a second event would put the
+        session through cleanup twice.
+        """
+        if not self.has_active_meet(channel):
+            return
+        if self._event_broker is None:
+            return
+        contact = self._disconnect_contact or {}
+        event = (
+            GoogleMeetEnded(contact=contact)
+            if channel == "google_meet"
+            else TeamsMeetEnded(contact=contact)
+        )
+        await self._event_broker.publish(event.topic, event.to_json())
+
     async def _cleanup_meet(self, channel: str) -> None:
-        """Leave the browser meeting and tear down the audio bridge."""
-        path_info = self._MEET_PATHS[channel]
-        meet_path = path_info["path"]
+        """Leave the browser meeting and tear down the LiveKit room."""
+        if self._meet_state_task is not None:
+            self._meet_state_task.cancel()
+            self._meet_state_task = None
 
         session_id = self._meet_session_id
         room_name = self.room_name
         self._meet_session_id = None
         self._meet_joining = False
         self._meet_lobby_waiting = False
-        self._meet_presenting = False
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED
@@ -1638,23 +1404,7 @@ class LivekitCallManager:
             self.teams_meet_exchange_id = UNASSIGNED
 
         if session_id:
-            from unify.session_details import SESSION_DETAILS
-
-            base_url = _POD_LOCAL_AGENT_SERVICE_URL
-            auth_key = SESSION_DETAILS.unify_key
-            try:
-                async with aiohttp.ClientSession() as session:
-                    await session.post(
-                        f"{base_url}/{meet_path}/leave",
-                        json={"sessionId": session_id},
-                        headers={"authorization": f"Bearer {auth_key}"},
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    )
-            except Exception as exc:
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"Error leaving {channel}: {exc}",
-                )
+            await self.meet_provider.leave(channel=channel, session_id=session_id)
 
         if room_name:
             from unify.conversation_manager.medium_scripts.common import (
@@ -1664,86 +1414,6 @@ class LivekitCallManager:
             await delete_livekit_room(room_name)
 
         await self.cleanup_call_proc()
-
-    async def _start_meet_screenshare(self, channel: str) -> bool:
-        """Start presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
-        desktop_url = SESSION_DETAILS.assistant.desktop_url
-        if not desktop_url:
-            return False
-
-        from urllib.parse import urlparse
-
-        parsed = urlparse(desktop_url)
-        liveview_url = (
-            f"{parsed.scheme}://{parsed.netloc}/desktop/custom.html"
-            f"?password={SESSION_DETAILS.unify_key}"
-        )
-
-        meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
-        try:
-            async with aiohttp.ClientSession() as session:
-                resp = await session.post(
-                    f"{base_url}/{meet_path}/present",
-                    json={"sessionId": session_id, "desktopUrl": liveview_url},
-                    headers={"authorization": f"Bearer {auth_key}"},
-                    timeout=aiohttp.ClientTimeout(total=120),
-                )
-                if resp.status == 200:
-                    self._meet_presenting = True
-                    return True
-                body = await resp.json()
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"{channel} present failed: {body}",
-                )
-        except Exception as exc:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] "
-                f"Error starting {channel} screenshare: {exc}",
-            )
-        return False
-
-    async def _stop_meet_screenshare(self, channel: str) -> bool:
-        """Stop presenting the assistant desktop in the active browser meeting."""
-        session_id = self._meet_session_id
-        if not session_id or self._call_channel != channel:
-            return False
-
-        from unify.session_details import SESSION_DETAILS
-
-        meet_path = self._MEET_PATHS[channel]["path"]
-        base_url = _POD_LOCAL_AGENT_SERVICE_URL
-        auth_key = SESSION_DETAILS.unify_key
-        try:
-            async with aiohttp.ClientSession() as session:
-                resp = await session.post(
-                    f"{base_url}/{meet_path}/stop-present",
-                    json={"sessionId": session_id},
-                    headers={"authorization": f"Bearer {auth_key}"},
-                    timeout=aiohttp.ClientTimeout(total=60),
-                )
-                if resp.status == 200:
-                    self._meet_presenting = False
-                    return True
-                body = await resp.json()
-                LOGGER.warning(
-                    f"{ICONS['ipc']} [LivekitCallManager] "
-                    f"{channel} stop-present failed: {body}",
-                )
-        except Exception as exc:
-            LOGGER.warning(
-                f"{ICONS['ipc']} [LivekitCallManager] "
-                f"Error stopping {channel} screenshare: {exc}",
-            )
-        return False
 
     # Channel-specific public wrappers (kept for call-site stability).
 
@@ -1765,12 +1435,6 @@ class LivekitCallManager:
     async def cleanup_google_meet(self) -> None:
         await self._cleanup_meet("google_meet")
 
-    async def start_gmeet_screenshare(self) -> bool:
-        return await self._start_meet_screenshare("google_meet")
-
-    async def stop_gmeet_screenshare(self) -> bool:
-        return await self._stop_meet_screenshare("google_meet")
-
     async def start_teams_meet(
         self,
         meet_url: str,
@@ -1788,12 +1452,6 @@ class LivekitCallManager:
 
     async def cleanup_teams_meet(self) -> None:
         await self._cleanup_meet("teams_meet")
-
-    async def start_teams_meet_screenshare(self) -> bool:
-        return await self._start_meet_screenshare("teams_meet")
-
-    async def stop_teams_meet_screenshare(self) -> bool:
-        return await self._stop_meet_screenshare("teams_meet")
 
     async def _start_call_subprocess(
         self,
@@ -1995,9 +1653,6 @@ class LivekitCallManager:
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
         self.unify_meet_participants = []
-        self.engaged_contacts = {}
-        self.engaged_labels = set()
-        self.known_speaker_labels = set()
 
         if self._boss_notification_task and not self._boss_notification_task.done():
             self._boss_notification_task.cancel()

@@ -3,17 +3,12 @@
 The live voice pipeline stays untouched; everything here runs off the hot
 path. Audio frames are teed into a ring buffer while they stream to STT, and
 each final diarized transcript triggers an embedding computation in a worker
-thread. Embeddings pin Deepgram's per-call anonymous speaker ids (S0, S1, …)
-to enrolled contacts, and accumulate auto-enrollments for single-speaker
-calls.
-
-On top of attribution sits the *engagement* layer: a per-call
-``EngagedSpeakers`` set records who currently has conversational standing
-(may end turns, trigger replies, and interrupt the assistant). Speech from
-everyone else is still transcribed and surfaced as labeled context, but no
-longer steers the conversation loop. ``RealtimeSpeakerScorer`` provides the
-near-realtime "is an engaged speaker talking right now?" signal used for
-floor gating.
+thread. Embeddings accumulate auto-enrollments for single-speaker calls and
+count distinct voices for the enrollment suggestion; they are never matched
+against enrolled profiles to decide who is speaking. Turn attribution comes
+from the meeting roster and platform participant signals alone, and nothing
+here gates the conversation loop — every voice on a call ends turns, triggers
+replies, and may interrupt.
 """
 
 from __future__ import annotations
@@ -25,11 +20,11 @@ import os
 import tempfile
 import time
 import wave
-from collections import Counter, deque
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable
 
 import numpy as np
 
@@ -53,17 +48,12 @@ SPEAKER_MODEL_URL = (
     f"speaker-recongition-models/{SPEAKER_MODEL_NAME}"
 )
 
-# Cosine-similarity acceptance threshold for pinning an anonymous speaker id
-# to an enrolled contact. CAM++ VoxCeleb embeddings of the same speaker across
-# telephone-band audio typically score 0.6-0.8; different speakers < 0.4.
-SPEAKER_MATCH_THRESHOLD = 0.55
-
 # Cosine-similarity threshold for a segment to join an existing within-id voice
 # cluster rather than seed a new one. A single diarization id can carry more
 # than one physically co-located voice (the STT engine under-splits); each such
-# voice becomes its own cluster. Set below SPEAKER_MATCH_THRESHOLD so ordinary
-# within-speaker variation (typically > 0.6) always merges, but well above the
-# different-speaker floor (~0.4) so a genuinely different voice spawns a cluster.
+# voice becomes its own cluster. Ordinary within-speaker variation (typically
+# > 0.6) always merges, while the different-speaker floor (~0.4) stays below,
+# so a genuinely different voice spawns a cluster.
 CLUSTER_JOIN_SIM = 0.5
 
 # Cosine-similarity threshold for treating clusters under *different*
@@ -114,36 +104,6 @@ SEGMENT_MIN_S = 2.0
 ENROLLMENT_SAMPLE_RATE = 16000
 
 RING_BUFFER_S = 120.0
-
-# Realtime floor-gating scorer: rolling window size, inference cadence, and
-# how long a confident non-engaged verdict must persist before it gates the
-# floor (hysteresis against per-window jitter).
-#
-# The window is subject to the same duration floor as ``SEGMENT_MIN_S`` — it is
-# the same extractor. At the previous 1.0s, windows of a speaker's *own* audio
-# scored 0.16-0.35 against their *own* enrolled profile and never once reached
-# the match threshold, so the verdict was permanently "unknown" and the gate
-# never acted. At 2.0s every window clears it. The hop is widened in step to
-# keep inference cost roughly constant.
-REALTIME_WINDOW_S = 2.0
-REALTIME_HOP_S = 0.5
-NON_ENGAGED_HYSTERESIS_S = 1.0
-
-# Acceptance threshold for the realtime scorer, kept separate from
-# SPEAKER_MATCH_THRESHOLD even though they currently agree: the scorer judges
-# short rolling windows rather than a settled cluster centroid, so its
-# operating point has to be free to move without silently retuning who gets
-# pinned on the transcript.
-REALTIME_MATCH_THRESHOLD = 0.55
-
-# Fraction of a full window that must be buffered before scoring. Guards the
-# ramp-up after silence: a partial window is a short segment, with exactly the
-# unusable-embedding problem the window length above exists to avoid.
-REALTIME_MIN_WINDOW_FRACTION = 0.9
-
-# Windows quieter than this int16 RMS are treated as silence and produce an
-# "unknown" verdict instead of a garbage embedding.
-REALTIME_MIN_RMS = 250.0
 
 
 def speaker_model_path() -> Path:
@@ -411,51 +371,24 @@ class AudioRingBuffer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Provenance of a resolved speaker display label — the single documented
-# authority ordering, highest first. A transcript row carries its source so it
-# is self-describing ("is voice fingerprinting actually working?" is answerable
-# from the row alone), and the late-binding Google-Meet transcript reconciler
-# (Orchestra-side, fed by the Workspace-Events ``meet_bridge``) has one place to
-# honour: a lower source must never overwrite a name already set by a higher
-# one. ``anonymous`` is the only source that is a placeholder ("Speaker N")
-# rather than a real name — consumers key off it instead of "no voice match".
-LABEL_SOURCE_VOICE_PIN = "voice_pin"
+# Provenance of a resolved speaker display label. A transcript row carries its
+# source so it is self-describing. Authority ordering is expressed by the order
+# ``_resolve_speaker`` in the call script consumes these, highest first:
+# platform participant, then org-call roster. It is deliberately not also
+# stated as a table here; two statements of one ordering drift apart, and the
+# one nothing executes is the one that goes stale.
+#
+# Stored rows from earlier runtimes carry sources no longer produced --
+# ``voice_pin`` and ``anonymous`` (embedding-matched attribution, retired),
+# ``dom_meet_map`` and ``dom_active_speaker`` (scraped from a meeting UI in a
+# browser we no longer run) and ``google_meet_transcript``. Readers should
+# treat an unrecognised real name as unknown provenance ranked below the ones
+# above, and ``anonymous`` ("Speaker N") as a placeholder rather than a name.
+# The meeting platform's own name for a participant, reported by the meeting
+# backend rather than read off the screen, ranked above ``meet_roster`` because
+# it is the same kind of claim from a better source.
+LABEL_SOURCE_RECALL_PARTICIPANT = "recall_participant"
 LABEL_SOURCE_MEET_ROSTER = "meet_roster"
-LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT = "google_meet_transcript"
-LABEL_SOURCE_DOM_MEET_MAP = "dom_meet_map"
-LABEL_SOURCE_DOM_ACTIVE_SPEAKER = "dom_active_speaker"
-LABEL_SOURCE_ANONYMOUS = "anonymous"
-
-LABEL_SOURCE_PRECEDENCE = (
-    LABEL_SOURCE_VOICE_PIN,
-    LABEL_SOURCE_MEET_ROSTER,
-    LABEL_SOURCE_GOOGLE_MEET_TRANSCRIPT,
-    LABEL_SOURCE_DOM_MEET_MAP,
-    LABEL_SOURCE_DOM_ACTIVE_SPEAKER,
-    LABEL_SOURCE_ANONYMOUS,
-)
-
-
-@dataclass
-class SpeakerResolution:
-    """Resolution of a single diarized utterance.
-
-    Attribution is per *voice cluster*, not per diarization id: when one id
-    carries several co-located voices, the resolution names the cluster the
-    current utterance's audio actually joined. ``provisional`` marks that the
-    id spans more than one voice cluster, so downstream consumers know the
-    diarization id alone is not a reliable speaker key. ``source`` records how
-    the identity was derived (``LABEL_SOURCE_VOICE_PIN`` for an embedding match,
-    ``LABEL_SOURCE_ANONYMOUS`` for a minted "Speaker N"); higher-authority
-    sources (roster, DOM, recorded transcript) are stamped one level up in the
-    call script, not here.
-    """
-
-    contact_id: Optional[int] = None
-    label: Optional[str] = None
-    verified: bool = False
-    provisional: bool = False
-    source: Optional[str] = None
 
 
 @dataclass
@@ -463,27 +396,21 @@ class _VoiceCluster:
     """One acoustic identity within a diarization id.
 
     A diarization id under-split by the STT engine can hold several of these,
-    one per physically co-located voice. Each carries its own centroid and its
-    own resolved identity (an enrolled-contact pin or a minted anonymous label).
+    one per physically co-located voice, each with its own centroid.
     """
 
     accumulator: CentroidAccumulator = field(default_factory=CentroidAccumulator)
-    pinned_contact_id: Optional[int] = None
-    anonymous_label: Optional[str] = None
 
 
 @dataclass
 class _SpeakerState:
     """Per-diarization-id state: a set of voice clusters plus enrollment audio.
 
-    ``last_cluster`` is the cluster the most recently processed segment joined;
-    ``resolve`` reports on it so the answer tracks the voice that just spoke.
     Enrollment audio is accumulated at the id level but only while the id holds
     a single cluster, so a co-located second voice never poisons the voiceprint.
     """
 
     clusters: list[_VoiceCluster] = field(default_factory=list)
-    last_cluster: Optional[_VoiceCluster] = None
     enrollment_audio: list[np.ndarray] = field(default_factory=list)
     enrollment_duration_s: float = 0.0
     enrollment_sample_rate: int = ENROLLMENT_SAMPLE_RATE
@@ -494,27 +421,24 @@ class _SpeakerState:
 
 
 class SpeakerTracker:
-    """Per-call speaker attribution and auto-enrollment.
+    """Per-call voice-enrollment capture.
 
     Feed it raw audio (`add_audio`) and final diarized transcripts
-    (`observe_final_transcript`); query it with `resolve(speaker_id)`.
+    (`observe_final_transcript`). It never attributes turns to people — voice
+    clusters exist only to keep enrollment capture single-voice pure and to
+    count distinct voices for the suggestion callback.
 
     Callbacks fire at most once per call:
     - ``on_enrollment_captured(embedding, wav_path, duration_s)`` when a
       single-voice call has accumulated enough speech to enroll the contact.
     - ``on_enrollment_suggested(num_speakers)`` when multiple voices are heard
-      but the call contact has no enrollment to disambiguate them.
+      but the call contact has no enrollment.
 
-    ``multi_party`` marks a call with many concurrent speakers and no single
-    primary (a meet). It only affects *labeling*: every distinct voice cluster
-    gets a stable anonymous "Speaker N" identity even when nobody is enrolled,
-    so meet transcripts are per-speaker attributable from the voice track alone.
-    Auto-enrollment stays single-voice-gated regardless, so a meet never enrolls
-    an arbitrary participant as the call contact.
-
-    Enrollment gating counts *physically* distinct voices: clusters under
-    different diarization ids whose centroids clear ``cross_id_merge_sim``
-    collapse into one voice, so STT over-splits do not block auto-enrollment.
+    Auto-enrollment is single-voice-gated, so a multi-party meet never enrolls
+    an arbitrary participant as the call contact. Enrollment gating counts
+    *physically* distinct voices: clusters under different diarization ids
+    whose centroids clear ``cross_id_merge_sim`` collapse into one voice, so
+    STT over-splits do not block auto-enrollment.
     """
 
     def __init__(
@@ -524,7 +448,6 @@ class SpeakerTracker:
         enrolled_profiles: dict[int, np.ndarray],
         call_contact_id: int | None,
         multi_party: bool = False,
-        match_threshold: float = SPEAKER_MATCH_THRESHOLD,
         cross_id_merge_sim: float = CROSS_ID_MERGE_SIM,
         enrollment_target_s: float = ENROLLMENT_TARGET_S,
         enrollment_min_s: float = ENROLLMENT_MIN_S,
@@ -540,7 +463,6 @@ class SpeakerTracker:
             int(call_contact_id) if call_contact_id is not None else None
         )
         self._multi_party = multi_party
-        self._match_threshold = match_threshold
         self._cross_id_merge_sim = cross_id_merge_sim
         self._enrollment_target_s = enrollment_target_s
         self._enrollment_min_s = enrollment_min_s
@@ -550,12 +472,6 @@ class SpeakerTracker:
         self._ring = AudioRingBuffer()
         self._speakers: dict[str, _SpeakerState] = {}
         self._last_final_ts: float = 0.0
-        # "Speaker 1" is reserved for the enrolled primary caller only when there
-        # is one (a phone contact who resolves by name, never by ordinal). With
-        # no reserved primary — an unenrolled multi-party meet — the sequence
-        # starts at 1 so the first unidentified voice is "Speaker 1", not a
-        # gap-leaving "Speaker 2".
-        self._next_anonymous_index = 2 if self._call_contact_enrolled else 1
         self._enrollment_fired = False
         self._suggestion_fired = False
         self._pending_tasks: set[asyncio.Task] = set()
@@ -579,37 +495,6 @@ class SpeakerTracker:
             self._call_contact_enrolled,
             self._multi_party,
         )
-
-    def add_enrolled_profiles(self, profiles: dict[int, list[float]]) -> int:
-        """Merge in profiles that were not known when the call started.
-
-        Enrolled profiles are otherwise a snapshot taken at dispatch, so anyone
-        who joins a multi-party call later cannot be voice-pinned however good
-        their enrollment is. Returns the number newly added.
-
-        Only unknown contacts are added: an existing profile is left alone so a
-        late roster push cannot disturb pins already made on this call. Voices
-        already clustered are re-scored against the enlarged set on their next
-        segment, so a late joiner who has already spoken is picked up without
-        replaying anything.
-        """
-        added = 0
-        for contact_id, vector in (profiles or {}).items():
-            try:
-                cid = int(contact_id)
-            except (TypeError, ValueError):
-                continue
-            if cid in self._enrolled:
-                continue
-            self._enrolled[cid] = np.asarray(vector, dtype=np.float32)
-            added += 1
-        if added:
-            _log.info(
-                "SpeakerTracker: +%d enrolled profile(s) mid-call (%d total)",
-                added,
-                len(self._enrolled),
-            )
-        return added
 
     # ── audio ingestion ──────────────────────────────────────────────────
 
@@ -702,9 +587,7 @@ class SpeakerTracker:
             return
         self._segments_embedded += 1
         state = self._speakers.setdefault(speaker_id, _SpeakerState())
-        cluster = self._assign_cluster(state, embedding, duration_s)
-        self._try_pin(cluster)
-        state.last_cluster = cluster
+        self._assign_cluster(state, embedding, duration_s)
         if len(state.clusters) == 1:
             # A second cluster means a co-located voice shares this id; only the
             # sole-voice case is safe to feed into the enrolled voiceprint.
@@ -737,41 +620,6 @@ class SpeakerTracker:
         cluster.accumulator.add(embedding, duration_s)
         state.clusters.append(cluster)
         return cluster
-
-    def _try_pin(self, cluster: _VoiceCluster) -> None:
-        # With no enrolled profiles there is nothing to pin against, but a
-        # multi-party call still needs a per-cluster anonymous label, so fall
-        # through to the minting branch below instead of bailing.
-        if not self._enrolled and not self._multi_party:
-            return
-        centroid = cluster.accumulator.centroid
-        if centroid is None:
-            return
-        best_cid, best_score = None, 0.0
-        for cid, profile in self._enrolled.items():
-            score = cosine_similarity(centroid, profile)
-            if score > best_score:
-                best_cid, best_score = cid, score
-        if best_cid is not None and best_score >= self._match_threshold:
-            # The cluster centroid is re-scored on every segment, so pinning is
-            # not a one-way latch: a pin is revoked below if the cluster's voice
-            # later drifts away from every enrolled profile.
-            cluster.pinned_contact_id = best_cid
-        else:
-            cluster.pinned_contact_id = None
-            if cluster.anonymous_label is None and (
-                self._call_contact_enrolled or self._multi_party
-            ):
-                # This voice does not match an enrolled profile: mint a stable
-                # session-scoped anonymous identity for the cluster. Warranted
-                # either because the call contact is enrolled (so a non-matching
-                # voice is confidently *someone else*) or because this is a
-                # multi-party call (a meet) where every distinct voice needs a
-                # per-speaker label even with nobody enrolled. The label is kept
-                # even if the cluster is later pinned (resolution prefers the
-                # pin), so the ordinal never churns.
-                cluster.anonymous_label = f"Speaker {self._next_anonymous_index}"
-                self._next_anonymous_index += 1
 
     @property
     def _call_contact_enrolled(self) -> bool:
@@ -939,12 +787,7 @@ class SpeakerTracker:
         self._on_enrollment_suggested(distinct)
 
     async def await_pending(self) -> None:
-        """Flush in-flight embedding work.
-
-        Callers that need per-utterance attribution (``resolve`` reports on the
-        last *processed* segment) await this after a final transcript so the
-        current utterance's segment has been clustered before they resolve.
-        """
+        """Flush in-flight embedding work so capture state is current."""
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
@@ -955,18 +798,11 @@ class SpeakerTracker:
         without needing the transcript: no enrolled profiles, every segment
         rejected as too short, or embeddings failing all present as zeros here.
         """
-        pins = sum(
-            1
-            for state in self._speakers.values()
-            for cluster in state.clusters
-            if cluster.pinned_contact_id is not None
-        )
         return {
             "enrolled_profiles": len(self._enrolled),
             "diarization_ids": len(self._speakers),
             "clusters": sum(len(s.clusters) for s in self._speakers.values()),
             "distinct_voices": self._distinct_voice_count(),
-            "pinned_clusters": pins,
             "segments_observed": self._segments_observed,
             "segments_buffered": self._segments_buffered,
             "segments_dropped": self._segments_dropped,
@@ -1019,343 +855,5 @@ class SpeakerTracker:
         stats = self.diagnostics()
         _log.info(
             "speaker attribution summary: %s",
-            " ".join(f"{k}={v}" for k, v in stats.items()),
-        )
-
-    # ── resolution ───────────────────────────────────────────────────────
-
-    def resolve(self, speaker_id: str | None) -> SpeakerResolution | None:
-        """Resolve a diarization id to the identity of the voice that just spoke.
-
-        Attribution is to ``last_cluster`` — the cluster the most recently
-        processed segment joined — so when an id carries several co-located
-        voices the answer names the specific one, not a blurred average.
-        ``provisional`` is set whenever the id spans more than one cluster.
-
-        A provisional pin is still returned — it is the best guess available
-        for routing, and dropping it would lose attribution entirely — but it
-        is **not** reported as verified. ``verified`` is a claim that this
-        utterance's voice was positively matched, and once an id is known to
-        carry more than one voice the tracker cannot make that claim about any
-        single utterance under it.
-        """
-        if not speaker_id:
-            return None
-        state = self._speakers.get(speaker_id)
-        if state is None or state.last_cluster is None:
-            return None
-        cluster = state.last_cluster
-        provisional = len(state.clusters) > 1
-        if cluster.pinned_contact_id is not None:
-            return SpeakerResolution(
-                contact_id=cluster.pinned_contact_id,
-                verified=not provisional,
-                provisional=provisional,
-                source=LABEL_SOURCE_VOICE_PIN,
-            )
-        if cluster.anonymous_label:
-            return SpeakerResolution(
-                label=cluster.anonymous_label,
-                provisional=provisional,
-                source=LABEL_SOURCE_ANONYMOUS,
-            )
-        return None
-
-    def profiles_partition(
-        self,
-        engaged: "EngagedSpeakers",
-    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-        """Split every known voice profile into (engaged, non-engaged) lists.
-
-        Combines enrolled contact embeddings with this call's per-voice-cluster
-        session centroids, so both an engaged-but-unenrolled guest and the
-        enrolled caller on this exact channel/mic are representable. Voices
-        that are not yet confidently resolved contribute to the *engaged*
-        side (fail-open: an unidentified voice must never be gated out).
-        """
-        engaged_profiles: list[np.ndarray] = []
-        other_profiles: list[np.ndarray] = []
-        for cid, vec in self._enrolled.items():
-            target = (
-                engaged_profiles if engaged.is_engaged_contact(cid) else other_profiles
-            )
-            target.append(vec)
-        for state in self._speakers.values():
-            for cluster in state.clusters:
-                centroid = cluster.accumulator.centroid
-                if centroid is None:
-                    continue
-                if cluster.pinned_contact_id is not None:
-                    target = (
-                        engaged_profiles
-                        if engaged.is_engaged_contact(cluster.pinned_contact_id)
-                        else other_profiles
-                    )
-                elif cluster.anonymous_label:
-                    target = (
-                        engaged_profiles
-                        if engaged.is_engaged_label(cluster.anonymous_label)
-                        else other_profiles
-                    )
-                else:
-                    target = engaged_profiles
-                target.append(centroid)
-        return engaged_profiles, other_profiles
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Engagement: who currently has conversational standing
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class EngagedSpeakers:
-    """Per-call attention set consulted by the floor/turn/reply gates.
-
-    Membership is by resolved identity — ``contact_id`` (enrolled voices) or
-    session-scoped anonymous label ("Speaker 2") — never by diarization id. A
-    single diarization id the STT engine under-split carries one cluster per
-    co-located voice, each with its own identity, so co-located voices are
-    engaged and gated independently even when they share an id. The permanent
-    members (call contact and boss) can never be disengaged. All checks fail
-    open: an unresolved or ambiguous speaker is treated as engaged, so the
-    worst failure mode is today's ungated behavior, never a deaf assistant.
-    """
-
-    def __init__(self, *, permanent_contact_ids: Iterable[int] = ()) -> None:
-        self._permanent = {int(cid) for cid in permanent_contact_ids}
-        self._contact_ids: set[int] = set(self._permanent)
-        # lowercase key -> canonical label as first seen
-        self._labels: dict[str, str] = {}
-
-    def engage(
-        self,
-        *,
-        contact_id: int | None = None,
-        label: str | None = None,
-    ) -> bool:
-        """Add a speaker to the engaged set. Returns True if anything changed."""
-        changed = False
-        if contact_id is not None:
-            cid = int(contact_id)
-            if cid not in self._contact_ids:
-                self._contact_ids.add(cid)
-                changed = True
-        if label and label.strip():
-            key = label.strip().lower()
-            if key not in self._labels:
-                self._labels[key] = label.strip()
-                changed = True
-        return changed
-
-    def disengage(
-        self,
-        *,
-        contact_id: int | None = None,
-        label: str | None = None,
-    ) -> bool:
-        """Remove a speaker (permanent members are refused). True if changed."""
-        changed = False
-        if contact_id is not None:
-            cid = int(contact_id)
-            if cid not in self._permanent and cid in self._contact_ids:
-                self._contact_ids.discard(cid)
-                changed = True
-        if label and label.strip():
-            key = label.strip().lower()
-            if key in self._labels:
-                del self._labels[key]
-                changed = True
-        return changed
-
-    def is_engaged_contact(self, contact_id: int | None) -> bool:
-        return contact_id is not None and int(contact_id) in self._contact_ids
-
-    def is_engaged_label(self, label: str | None) -> bool:
-        return bool(label) and label.strip().lower() in self._labels
-
-    def is_engaged(self, resolution: SpeakerResolution | None) -> bool:
-        """Whether a resolved speaker has conversational standing.
-
-        ``None`` (unresolved) is engaged by construction — gating only ever
-        applies to voices the tracker has confidently identified.
-        """
-        if resolution is None:
-            return True
-        if resolution.contact_id is not None:
-            return self.is_engaged_contact(resolution.contact_id)
-        if resolution.label:
-            return self.is_engaged_label(resolution.label)
-        return True
-
-    @property
-    def engaged_contact_ids(self) -> set[int]:
-        return set(self._contact_ids)
-
-    @property
-    def engaged_labels(self) -> list[str]:
-        return list(self._labels.values())
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Realtime scorer: "is an engaged speaker talking right now?"
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class RealtimeSpeakerScorer:
-    """Sliding-window speaker verification for realtime floor gating.
-
-    Audio is accumulated into a rolling ~1s window; every ~250ms of new audio
-    an embedding of the window is scored against the engaged and non-engaged
-    profile sets. The verdict is deliberately conservative:
-
-    - ``engaged``     — the window confidently matches an engaged profile.
-    - ``non_engaged`` — the window confidently matches a *known* non-engaged
-      voice and does not match any engaged profile.
-    - ``unknown``     — everything else (silence, ambiguity, no profiles).
-
-    Only a ``non_engaged`` verdict sustained past the hysteresis window gates
-    the floor; ``unknown`` always fails open.
-    """
-
-    def __init__(
-        self,
-        *,
-        embedder: SpeakerEmbedder,
-        profiles_provider: Callable[[], tuple[list[np.ndarray], list[np.ndarray]]],
-        window_s: float = REALTIME_WINDOW_S,
-        hop_s: float = REALTIME_HOP_S,
-        match_threshold: float = REALTIME_MATCH_THRESHOLD,
-        hysteresis_s: float = NON_ENGAGED_HYSTERESIS_S,
-        min_rms: float = REALTIME_MIN_RMS,
-        min_window_fraction: float = REALTIME_MIN_WINDOW_FRACTION,
-    ) -> None:
-        self._embedder = embedder
-        self._profiles_provider = profiles_provider
-        self._window_s = window_s
-        self._hop_s = hop_s
-        self._match_threshold = match_threshold
-        self._hysteresis_s = hysteresis_s
-        self._min_rms = min_rms
-        self._min_window_fraction = min_window_fraction
-
-        self._window: deque[np.ndarray] = deque()
-        self._window_duration_s = 0.0
-        self._since_infer_s = 0.0
-        self._busy = False
-        self._pending: set[asyncio.Task] = set()
-
-        self.verdict: str = "unknown"
-        self._non_engaged_since: float | None = None
-        # Floor gating fails open, so a scorer that never produces a confident
-        # verdict is indistinguishable from one that is working — the counts
-        # are what tell the two apart.
-        self._verdicts: Counter[str] = Counter()
-        self._infer_failures = 0
-
-    def add_audio(
-        self,
-        data: bytes | np.ndarray,
-        sample_rate: int,
-        num_channels: int = 1,
-    ) -> None:
-        """Feed live audio; schedules a window inference every hop interval."""
-        pcm = (
-            np.frombuffer(data, dtype=np.int16)
-            if isinstance(data, (bytes, bytearray, memoryview))
-            else np.asarray(data, dtype=np.int16)
-        )
-        pcm = downmix_to_mono(pcm, num_channels)
-        pcm = resample_pcm(pcm, sample_rate, ENROLLMENT_SAMPLE_RATE)
-        if len(pcm) == 0:
-            return
-        duration_s = len(pcm) / ENROLLMENT_SAMPLE_RATE
-        self._window.append(pcm)
-        self._window_duration_s += duration_s
-        while self._window_duration_s > self._window_s and len(self._window) > 1:
-            old = self._window.popleft()
-            self._window_duration_s -= len(old) / ENROLLMENT_SAMPLE_RATE
-
-        self._since_infer_s += duration_s
-        if (
-            self._since_infer_s < self._hop_s
-            or self._busy
-            or self._window_duration_s < self._window_s * self._min_window_fraction
-        ):
-            return
-        self._since_infer_s = 0.0
-        snapshot = np.concatenate(list(self._window))
-        rms = float(np.sqrt(np.mean(snapshot.astype(np.float32) ** 2)))
-        if rms < self._min_rms:
-            self.verdict = "unknown"
-            self._non_engaged_since = None
-            return
-        self._busy = True
-        task = asyncio.create_task(self._infer(snapshot))
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
-
-    async def _infer(self, pcm: np.ndarray) -> None:
-        try:
-            embedding = await self._embedder.embed(pcm, ENROLLMENT_SAMPLE_RATE)
-            engaged_profiles, other_profiles = self._profiles_provider()
-            engaged_score = max(
-                (cosine_similarity(embedding, p) for p in engaged_profiles),
-                default=0.0,
-            )
-            other_score = max(
-                (cosine_similarity(embedding, p) for p in other_profiles),
-                default=0.0,
-            )
-            if engaged_score >= self._match_threshold and engaged_score >= other_score:
-                self.verdict = "engaged"
-                self._non_engaged_since = None
-            elif (
-                other_score >= self._match_threshold
-                and engaged_score < self._match_threshold
-            ):
-                self.verdict = "non_engaged"
-                if self._non_engaged_since is None:
-                    self._non_engaged_since = time.time()
-            else:
-                self.verdict = "unknown"
-                self._non_engaged_since = None
-        except Exception:
-            self._infer_failures += 1
-            self.verdict = "unknown"
-            self._non_engaged_since = None
-            # Logged once per failure rather than swallowed: a broken extractor
-            # here silently reverts the call to ungated behaviour.
-            _log.exception("realtime speaker scoring failed; floor gate open")
-        finally:
-            self._verdicts[self.verdict] += 1
-            self._busy = False
-
-    @property
-    def confidently_non_engaged(self) -> bool:
-        """True when only non-engaged voices have held the mic past hysteresis."""
-        return (
-            self._non_engaged_since is not None
-            and (time.time() - self._non_engaged_since) >= self._hysteresis_s
-        )
-
-    def diagnostics(self) -> dict:
-        """Verdict tally for the end-of-call summary.
-
-        An all-``unknown`` tally means the gate never acted: every window was
-        silence, ambiguous, or below threshold.
-        """
-        return {
-            "windows_scored": sum(self._verdicts.values()),
-            "engaged": self._verdicts["engaged"],
-            "non_engaged": self._verdicts["non_engaged"],
-            "unknown": self._verdicts["unknown"],
-            "infer_failures": self._infer_failures,
-        }
-
-    def log_summary(self) -> None:
-        """Emit the end-of-call verdict tally (call-side lifecycle hook)."""
-        stats = self.diagnostics()
-        _log.info(
-            "speaker floor gate summary: %s",
             " ".join(f"{k}={v}" for k, v in stats.items()),
         )

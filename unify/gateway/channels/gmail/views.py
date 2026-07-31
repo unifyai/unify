@@ -189,6 +189,26 @@ def _workspace_admin_subject(credentials: CredentialStore) -> str:
     return credentials.get_optional("WORKSPACE_ADMIN_SUBJECT", "dan@unify.ai")
 
 
+def is_twin_alias_address(address: str | None) -> bool:
+    """Whether an address lives on the multiplayer twin alias domain."""
+    domain = (SETTINGS.UNITY_TWIN_ALIAS_EMAIL_DOMAIN or "").strip().lower()
+    if not domain or not address:
+        return False
+    return address.strip().lower().endswith(f"@{domain}")
+
+
+def _delegation_subject(sender_email: str) -> str:
+    """Workspace user impersonated for Gmail operations on this address.
+
+    Twin alias addresses have no Workspace user behind them — they are
+    catch-all deliveries into the shared alias mailbox — so delegation
+    targets that mailbox while the From header keeps the alias.
+    """
+    if is_twin_alias_address(sender_email):
+        return SETTINGS.UNITY_TWIN_ALIAS_MAILBOX
+    return sender_email
+
+
 def _gmail_topic_path(topic_name: str | None = None) -> str:
     """Fully qualified Pub/Sub topic path for Gmail watches.
 
@@ -216,13 +236,21 @@ def _gmail_service_from_assistant(
     assistant: dict,
     credentials: CredentialStore,
 ) -> Any:
-    access_token = assistant.get("secrets", {}).get("GOOGLE_ACCESS_TOKEN")
-    if access_token:
-        return build("gmail", "v1", credentials=OAuthCredentials(token=access_token))
+    # Alias senders never use BYOD tokens: a multiplayer twin's stored
+    # GOOGLE_ACCESS_TOKEN belongs to its boss's workspace, and sending the
+    # twin's own mail through the boss's Gmail would be identity bleed.
+    if not is_twin_alias_address(sender_email):
+        access_token = assistant.get("secrets", {}).get("GOOGLE_ACCESS_TOKEN")
+        if access_token:
+            return build(
+                "gmail",
+                "v1",
+                credentials=OAuthCredentials(token=access_token),
+            )
 
     creds = _service_account_credentials(
         scopes=_GMAIL_SCOPES,
-        subject=sender_email,
+        subject=_delegation_subject(sender_email),
         credentials=credentials,
     )
     return build("gmail", "v1", credentials=creds)
@@ -264,7 +292,7 @@ async def get_gmail_service_async(
         )
         creds = _service_account_credentials(
             scopes=_GMAIL_SCOPES,
-            subject=sender_email,
+            subject=_delegation_subject(sender_email),
             credentials=credentials,
         )
         return build("gmail", "v1", credentials=creds)
@@ -275,7 +303,7 @@ async def get_gmail_service_async(
         )
         creds = _service_account_credentials(
             scopes=_GMAIL_SCOPES,
-            subject=sender_email,
+            subject=_delegation_subject(sender_email),
             credentials=credentials,
         )
         return build("gmail", "v1", credentials=creds)
@@ -296,7 +324,7 @@ def get_gmail_service(
     credentials = credentials or EnvCredentialStore()
     creds = _service_account_credentials(
         scopes=_GMAIL_SCOPES,
-        subject=sender_email,
+        subject=_delegation_subject(sender_email),
         credentials=credentials,
     )
     return build("gmail", "v1", credentials=creds)

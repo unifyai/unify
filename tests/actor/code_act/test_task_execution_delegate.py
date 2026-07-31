@@ -25,7 +25,6 @@ from unify.function_manager.function_manager import FunctionManager
 from unify.function_manager.primitives import PrimitiveScope, Primitives
 from unify.manager_registry import ManagerRegistry
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 
 
 def _certification_evidence():
@@ -273,7 +272,8 @@ async def test_codeact_task_primitive_delegates_execution_without_fallback_actor
         assert scheduler.__dict__.get("_TaskScheduler__actor") is None
         assert "_actor" not in scheduler.__dict__
         task = scheduler._get_task_or_raise(task_id)
-        assert task.status == Status.completed
+        # A one-shot that has run is disarmed; the run itself is on the ledger.
+        assert task.enabled is False
     finally:
         ManagerRegistry.clear()
 

@@ -2,41 +2,26 @@
 # One filename per line; blank lines and #-comments ignored.
 # Order is set by the submodule's manifest.txt, not by this file.
 #
-# The assistant runtime: every manager, the actor, the LLM call path, and the
-# tests. Currently the whole shared set — this repo touches Orchestra data,
-# hosted infra, tasks and provider credentials, so nothing in the catalogue is
-# inapplicable. Prune deliberately rather than by omission.
+# Runtime that drives Orchestra through DataManager, runs in the local stack, and defines CURSOR_DEBUG_LOG.
 
-# --- Engineering stance ---
+# --- included by every repo ---
 aggressive-refactoring.md
 no-temporal-comments.md
 no-test-info-in-production-code.md
-
-# --- Git ---
 git-commit-safety.md
 worktree-direct-commits.md
 git-history-for-context.md
-
-# --- Toolchain ---
-python-formatting-and-pre-commit.md
-temporary-debug-logging.md
-
-# --- Local development ---
-full-local-stack-first.md
-local-stack-logs.md
-
-# --- Team memory ---
 shared-agent-context.md
 
-# --- Providers ---
-# This repo owns the LLM call path, so the routing rule applies here first.
 openrouter-only-llm-access.md
 
-# --- Data access and infra invariants ---
+# --- specific to this repo ---
+python-formatting-and-pre-commit.md
+full-local-stack-first.md
 orchestra-server-side-queries.md
 infra-command-safety.md
 deployed-system-topology.md
+local-stack-logs.md
 orchestra-admin-vs-user-api-access.md
-scopes-mirror.md
-fleet-audit-auth-no-user-keys.md
 taskscheduler-surgery.md
+temporary-debug-logging.md

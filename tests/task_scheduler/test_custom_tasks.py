@@ -11,10 +11,8 @@ from unify.task_scheduler.custom_tasks import (
     collect_custom_tasks,
     collect_tasks_from_directories,
     compute_custom_tasks_hash,
-    derive_initial_task_status,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from tests.helpers import _handle_project
 
 _EXAMPLE_TASK_LINES = [
@@ -23,6 +21,7 @@ _EXAMPLE_TASK_LINES = [
         "name": "Daily check",
         "description": "Run the daily operational check.",
         "repeat": [{"frequency": "daily"}],
+        "tags": ["ops", "daily"],
     },
     {
         "key": "ops/on-event",
@@ -92,30 +91,6 @@ def test_collect_custom_tasks_preserves_destination(custom_tasks_dir):
     tasks = collect_custom_tasks(path=custom_tasks_dir)
     assert tasks["ops/on-event"]["destination"] == "team:42"
     assert tasks["ops/daily-check"]["destination"] == "personal"
-
-
-def test_derive_initial_task_status():
-    assert (
-        derive_initial_task_status(
-            schedule=None,
-            trigger={"medium": "email"},
-        )
-        == Status.triggerable
-    )
-    assert (
-        derive_initial_task_status(
-            schedule={"start_at": "2026-01-01T09:00:00Z"},
-            trigger=None,
-        )
-        == Status.scheduled
-    )
-    assert (
-        derive_initial_task_status(
-            schedule=None,
-            trigger=None,
-        )
-        == Status.scheduled
-    )
 
 
 def test_compute_custom_tasks_hash_is_deterministic(custom_tasks_dir):
@@ -207,7 +182,7 @@ async def test_sync_custom_tasks_sets_triggerable_status(
         limit=1,
     )
     assert len(rows) == 1
-    assert rows[0].status == Status.triggerable
+    assert rows[0].trigger is not None
 
 
 @_handle_project
@@ -229,3 +204,86 @@ async def test_sync_custom_tasks_deletes_removed_entries(
     names = {row.name for row in rows}
     assert "Daily check" not in names
     assert "On inbound email" in names
+
+
+def test_collect_custom_tasks_carries_tags(custom_tasks_dir):
+    """Tags declared in tasks.jsonl reach the planted definition row.
+
+    Tags are labels only — no scheduling semantics — but they must survive the
+    jsonl → reconcile → Tasks row path or the console has nothing to filter on.
+    A task without tags stays tagless rather than growing an empty list.
+    """
+
+    tasks = collect_custom_tasks(str(custom_tasks_dir))
+    assert tasks["ops/daily-check"]["tags"] == ["ops", "daily"]
+    assert tasks["ops/on-event"]["tags"] is None
+
+
+def test_tags_participate_in_the_sync_hash(custom_tasks_dir, tmp_path):
+    """Editing only a task's tags must count as a change reconcile applies."""
+
+    retagged = tmp_path / "retagged"
+    retagged.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = dict(row)
+        if row["key"] == "ops/daily-check":
+            row["tags"] = ["ops", "weekly"]
+        lines.append(json.dumps(row))
+    (retagged / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+
+    original = collect_custom_tasks(str(custom_tasks_dir))["ops/daily-check"]
+    changed = collect_custom_tasks(str(retagged))["ops/daily-check"]
+    assert original["custom_hash"] != changed["custom_hash"]
+
+
+@_handle_project
+@pytest.mark.asyncio
+@pytest.mark.requires_orchestra
+async def test_sync_writes_tags_onto_the_row_and_clears_them_on_removal(
+    task_scheduler_factory,
+    custom_tasks_dir,
+    tmp_path,
+):
+    """The hash carrying tags is not enough — the row writers must carry them too.
+
+    The first shipped version added tags to the sync hash but not to the insert
+    or update entry builders, so reconcile stamped the new hash while writing
+    ``tags: None`` — and every later sync then skipped the row as up to date.
+    The tags could never arrive without a manual backfill.
+    """
+
+    scheduler = task_scheduler_factory()
+    source = collect_custom_tasks(path=custom_tasks_dir)
+    scheduler.sync_custom_tasks(source_tasks=source)
+
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert rows[0].tags == ["ops", "daily"]
+
+    # An edit that only changes tags must update the row.
+    retagged_dir = tmp_path / "retagged"
+    retagged_dir.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = dict(row)
+        if row["key"] == "ops/daily-check":
+            row["tags"] = ["ops", "weekly"]
+        lines.append(json.dumps(row))
+    (retagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+    scheduler._custom_tasks_synced = False
+    scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=retagged_dir))
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert rows[0].tags == ["ops", "weekly"]
+
+    # Removing every tag untags the row rather than leaving the stale list.
+    untagged_dir = tmp_path / "untagged"
+    untagged_dir.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = {k: v for k, v in row.items() if k != "tags"}
+        lines.append(json.dumps(row))
+    (untagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+    scheduler._custom_tasks_synced = False
+    scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=untagged_dir))
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert not rows[0].tags

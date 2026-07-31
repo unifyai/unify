@@ -74,6 +74,7 @@ class LiveProviderEventDispatchOutcome:
     adopted_only: bool
     launch_identity: str | None = None
     terminal_reason: str | None = None
+    description: str | None = None
 
 
 def validate_provider_event_dispatch_request(

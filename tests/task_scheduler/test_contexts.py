@@ -4,7 +4,6 @@ import asyncio, pytest, re, json
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from tests.assertion_helpers import assertion_failed
 from tests.helpers import _handle_project
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.priority import Priority
 
 pytestmark = pytest.mark.llm_call
@@ -144,7 +143,7 @@ async def test_update_uses_parent_context():
     ).result()
 
     row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
-    assert row.status == Status.completed, assertion_failed(
+    assert row.enabled is False, assertion_failed(
         "Task status 'completed'",
         json.dumps(row, indent=2),
         "Parent-context nickname not respected by update()",

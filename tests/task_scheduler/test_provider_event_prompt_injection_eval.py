@@ -17,10 +17,8 @@ from unify.task_scheduler.types.trigger import parse_task_trigger
 def _provider_task(*, destination: str | None = None) -> Task:
     return Task(
         task_id=42,
-        instance_id=1,
         name="Summarize issue",
         description="Summarize the GitHub issue for the boss.",
-        status="triggerable",
         priority="normal",
         destination=destination,
         trigger=parse_task_trigger(

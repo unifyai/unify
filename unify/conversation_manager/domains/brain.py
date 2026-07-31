@@ -59,16 +59,18 @@ class BrainSpec:
             )
         elif "google_meet" in sources:
             header = (
-                "The following screenshots were captured from the Google Meet "
-                "call, showing the meeting view as you see it. They are paired "
-                "with what was said at each moment and are in chronological order."
+                "The following screenshots are the screen a participant is "
+                "sharing in the Google Meet call -- their machine, not yours, "
+                "and not the meeting's own gallery view. They are paired with "
+                "what was said at each moment and are in chronological order."
             )
         elif "teams_meet" in sources:
             header = (
-                "The following screenshots were captured from the Microsoft "
-                "Teams meeting, showing the meeting view as you see it. They "
-                "are paired with what was said at each moment and are in "
-                "chronological order."
+                "The following screenshots are the screen a participant is "
+                "sharing in the Microsoft Teams meeting -- their machine, not "
+                "yours, and not the meeting's own gallery view. They are paired "
+                "with what was said at each moment and are in chronological "
+                "order."
             )
         elif "user" in sources:
             header = (
@@ -103,11 +105,15 @@ class BrainSpec:
             "assistant": "Assistant's Screen",
             "user": "User's Screen",
             "webcam": "User's Webcam",
-            "google_meet": "Google Meet",
-            "teams_meet": "Microsoft Teams",
+            "google_meet": "Google Meet Shared Screen",
+            "teams_meet": "Microsoft Teams Shared Screen",
         }
         for i, entry in enumerate(self.screenshots, 1):
             label = source_labels.get(entry.source, "Screenshot")
+            # A meeting has many people in it, so a shared screen belongs to one
+            # of them by name -- without that the model can only say "a screen".
+            if entry.attribution:
+                label = f"{label} - shared by {entry.attribution}"
             path_suffix = ""
             if i <= len(self.screenshot_paths):
                 path_suffix = f" -- {self.screenshot_paths[i - 1]}"
@@ -241,6 +247,8 @@ def build_brain_spec(
         runtime_setup_note=runtime_setup_note,
         team_summaries=getattr(cm, "team_summaries", []),
         is_coordinator=SESSION_DETAILS.is_coordinator,
+        is_multiplayer=SESSION_DETAILS.is_multiplayer,
+        twin_name=SESSION_DETAILS.assistant.name,
         authorized_humans=authorized_humans,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,

@@ -16,7 +16,6 @@ from unify.task_scheduler.provider_event_dispatch import (
     ProviderEventDispatchValidationError,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "task_trigger_contract"
@@ -41,10 +40,8 @@ def _seed_provider_event_definition(
     next_task_id = int(scheduler._store.get_metric_max(key="task_id") or 0) + 1
     payload = {
         "task_id": next_task_id,
-        "instance_id": 0,
         "name": "GitHub issue triage",
         "description": "Triage new GitHub issues.",
-        "status": Status.triggerable.value,
         "trigger": _provider_event_trigger(),
         "enabled": enabled,
         "task_revision": task_revision,
@@ -80,8 +77,7 @@ async def test_provider_event_start_leaves_definition_unarmed():
     scheduler = TaskScheduler(actor=SimulatedActor(steps=None, duration=None))
     task_id = _seed_provider_event_definition(scheduler, task_revision=5)
     definition_before = scheduler._get_task_or_raise(task_id)
-    assert definition_before.instance_id == 0
-    assert definition_before.status == Status.triggerable
+    assert definition_before.trigger is not None
 
     untrusted = {"kind": "provider_event_context", "trust": "untrusted_data"}
     with patch(
@@ -97,15 +93,14 @@ async def test_provider_event_start_leaves_definition_unarmed():
         assert updates["captured_task_revision"] == 5
         assert updates["revision"] == "rev-accepted-1"
         assert updates["state"] == "running"
+        assert datetime.fromisoformat(updates["started_at"])
 
     await handle.stop(reason="test cleanup")
 
     rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
     assert len(rows) == 1
     definition_after = rows[0]
-    assert definition_after.instance_id == 0
-    assert definition_after.status == Status.triggerable
-    assert definition_after.activated_by is None
+    assert definition_after.trigger is not None
 
 
 @pytest.mark.asyncio

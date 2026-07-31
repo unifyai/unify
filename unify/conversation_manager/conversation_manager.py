@@ -970,9 +970,32 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 datetime.fromisoformat(ts_str) if ts_str else datetime.now(timezone.utc)
             )
             if b64:
-                self._screenshot_buffer.append(
-                    ScreenshotEntry(b64, utterance, ts, source, filepath=filepath),
+                entry = ScreenshotEntry(
+                    b64,
+                    utterance,
+                    ts,
+                    source,
+                    filepath=filepath,
+                    attribution=data.get("attribution"),
                 )
+                # An unpaired frame is "what this source shows now", so only the
+                # newest is worth holding: a shared screen left up while nobody
+                # speaks arrives every few seconds, and appending each one would
+                # put a reel of near-identical images in one state message. Frames
+                # paired with an utterance always append -- those are evidence for
+                # a specific thing somebody said.
+                previous = (
+                    self._screenshot_buffer[-1] if self._screenshot_buffer else None
+                )
+                if (
+                    not utterance
+                    and previous is not None
+                    and previous.source == source
+                    and not previous.utterance
+                ):
+                    self._screenshot_buffer[-1] = entry
+                else:
+                    self._screenshot_buffer.append(entry)
                 self._session_logger.debug(
                     "screenshot_capture",
                     f"Buffered {source} screenshot #{len(self._screenshot_buffer)} "
@@ -1417,72 +1440,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "app:comms:assistant_notification",
             event_json,
         )
-
-    async def set_speaker_engagement(
-        self,
-        *,
-        speaker: str,
-        engaged: bool,
-    ) -> dict[str, Any]:
-        """Promote or demote a call voice's conversational standing.
-
-        Resolves ``speaker`` against the permanently engaged call participants
-        (by name — engaging them is a no-op, demoting them is refused) and
-        otherwise treats it as a session speaker label ("Speaker 2"). The
-        update is mirrored locally for prompt/tool rendering and pushed to the
-        voice agent over IPC, where it takes effect on the floor/turn/reply
-        gates immediately.
-        """
-        cmgr = self.call_manager
-        if not self.in_voice_session:
-            return {"status": "no_active_call"}
-        name = (speaker or "").strip()
-        if not name:
-            return {
-                "status": "error",
-                "reason": "speaker must be a non-empty name or label",
-            }
-        low = name.lower()
-
-        for cid, cname in cmgr.engaged_contacts.items():
-            cname_low = cname.lower()
-            if low == cname_low or low == cname_low.split()[0]:
-                if not engaged:
-                    return {
-                        "status": "refused",
-                        "reason": (
-                            f"{cname} is a primary call participant and always "
-                            "remains engaged."
-                        ),
-                    }
-                return {"status": "already_engaged", "speaker": cname}
-
-        # Anonymous session label: use the canonical casing if already heard.
-        canonical = next(
-            (lbl for lbl in cmgr.known_speaker_labels if lbl.lower() == low),
-            name,
-        )
-        if engaged:
-            cmgr.engaged_labels.add(canonical)
-        else:
-            cmgr.engaged_labels.discard(canonical)
-        await self.event_broker.publish(
-            "app:call:speaker_engagement",
-            json.dumps(
-                {
-                    "action": "engage" if engaged else "disengage",
-                    "label": canonical,
-                },
-            ),
-        )
-        self._session_logger.info(
-            "speaker_engagement",
-            f"{'Engaged' if engaged else 'Disengaged'} speaker: {canonical}",
-        )
-        return {
-            "status": "engaged" if engaged else "disengaged",
-            "speaker": canonical,
-        }
 
     async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
         """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
@@ -2761,6 +2718,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         team_summaries = payload.get("team_summaries") or []
         self.owner_team_id: int | None = payload.get("owner_team_id")
         is_coordinator = bool(payload.get("is_coordinator", False))
+        is_multiplayer = bool(payload.get("is_multiplayer", False))
         # Set API key on SESSION_DETAILS for runtime access
         if payload.get("api_key"):
             SESSION_DETAILS.unify_key = payload["api_key"]
@@ -2806,6 +2764,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             managed_desktop_status=self.managed_desktop_status,
             user_desktops=self.user_desktops,
             is_coordinator=is_coordinator,
+            is_multiplayer=is_multiplayer,
         )
         self.team_summaries = SESSION_DETAILS.team_summaries
         # Export to env vars for subprocess inheritance
@@ -3602,10 +3561,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     "assistant": "Assistant's Screen",
                     "user": "User's Screen",
                     "webcam": "User's Webcam",
+                    "google_meet": "Google Meet Shared Screen",
+                    "teams_meet": "Microsoft Teams Shared Screen",
                 }
                 content_parts: list[dict] = []
                 for source, entry in latest_by_source.items():
                     label = source_labels.get(source, "Screenshot")
+                    if entry.attribution:
+                        label = f"{label} - shared by {entry.attribution}"
                     content_parts.append(
                         {
                             "type": "text",

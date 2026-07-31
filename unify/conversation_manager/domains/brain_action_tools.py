@@ -1070,6 +1070,51 @@ class ConversationManagerBrainActionTools:
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": f"Joining Google Meet at {meet_url}"}
 
+    async def send_meet_chat(self, message: str) -> dict[str, Any]:
+        """Post a message into the meeting chat of the active call.
+
+        Use this for anything a participant will want to read rather than hear:
+        a link, an address, a spelling, a list of steps. Speech is gone the
+        moment it is said; chat stays in the meeting for people to scroll back
+        to and copy from.
+
+        Not a substitute for speaking. Say what matters out loud and put the
+        copyable detail in chat.
+        """
+        result = await self._cm.call_manager.send_meet_chat(message)
+        if result:
+            # Recorded only on success, so a failed post cannot leave a reply in
+            # the transcript that no participant ever saw.
+            from unify.conversation_manager.events import (
+                GoogleMeetChatSent,
+                TeamsMeetChatSent,
+            )
+
+            sent_cls = (
+                TeamsMeetChatSent
+                if self._cm.call_manager.has_active_teams_meet
+                else GoogleMeetChatSent
+            )
+            boss = (
+                self._cm.contact_index.get_contact(
+                    contact_id=SESSION_DETAILS.boss_contact_id,
+                )
+                or {}
+            )
+            sent = sent_cls(contact=boss, content=message)
+            await self._event_broker.publish(sent.topic, sent.to_json())
+            return {"status": "ok", "message": "Posted to the meeting chat."}
+        return {
+            "status": "error",
+            # Chat is genuinely unavailable in some meetings (Teams channel
+            # meetings have no bot-writable chat), so tell the brain to say it
+            # out loud rather than let it retry a send that cannot succeed.
+            "message": (
+                "Could not post to the meeting chat. This meeting may not "
+                "support it -- say the information out loud instead."
+            ),
+        }
+
     async def _leave_google_meet(self) -> dict[str, Any]:
         """Disconnect the assistant from the active Google Meet session.
 
@@ -1084,49 +1129,12 @@ class ConversationManagerBrainActionTools:
 
         # Stop the browser agent immediately so the assistant disappears
         # from the Meet before the event handler's full cleanup pipeline.
-        await self._notify_browser_meet_leave("googlemeet")
-
         from unify.conversation_manager.events import GoogleMeetEnded
 
         contact = self._cm.call_manager._disconnect_contact or {}
         event = GoogleMeetEnded(contact=contact)
         await self._event_broker.publish(event.topic, event.to_json())
         return {"status": "ok", "message": "Leaving Google Meet"}
-
-    async def start_google_meet_screenshare(self) -> dict[str, Any]:
-        """Share the assistant's desktop screen in the active Google Meet call.
-
-        Opens a live view of the assistant's desktop and presents it to all
-        meeting participants. Use this when participants need to see what the
-        assistant is doing on its computer.
-        """
-        result = await self._cm.call_manager.start_gmeet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Now presenting desktop in Google Meet.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to start screen sharing.",
-        }
-
-    async def stop_google_meet_screenshare(self) -> dict[str, Any]:
-        """Stop sharing the assistant's desktop screen in Google Meet.
-
-        Ends the current screen presentation. Meeting participants will no
-        longer see the assistant's desktop.
-        """
-        result = await self._cm.call_manager.stop_gmeet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Stopped presenting in Google Meet.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to stop screen sharing.",
-        }
 
     async def join_teams_meet(
         self,
@@ -1193,8 +1201,6 @@ class ConversationManagerBrainActionTools:
                 "status": "error",
                 "message": "No active Teams meeting session to leave.",
             }
-
-        await self._notify_browser_meet_leave("teamsmeet")
 
         from unify.conversation_manager.events import TeamsMeetEnded
 
@@ -1392,72 +1398,6 @@ class ConversationManagerBrainActionTools:
             "ready_for_outbound_call": ready,
         }
 
-    async def start_teams_meet_screenshare(self) -> dict[str, Any]:
-        """Share the assistant's desktop screen in the active Teams meeting.
-
-        Opens a live view of the assistant's desktop and presents it to all
-        meeting participants. Use this when participants need to see what the
-        assistant is doing on its computer.
-        """
-        result = await self._cm.call_manager.start_teams_meet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Now presenting desktop in Teams meeting.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to start screen sharing.",
-        }
-
-    async def stop_teams_meet_screenshare(self) -> dict[str, Any]:
-        """Stop sharing the assistant's desktop screen in Teams meeting.
-
-        Ends the current screen presentation. Meeting participants will no
-        longer see the assistant's desktop.
-        """
-        result = await self._cm.call_manager.stop_teams_meet_screenshare()
-        if result:
-            return {
-                "status": "ok",
-                "message": "Stopped presenting in Teams meeting.",
-            }
-        return {
-            "status": "error",
-            "message": "Failed to stop screen sharing.",
-        }
-
-    async def _notify_browser_meet_leave(self, path_prefix: str) -> None:
-        """Best-effort notify the agent-service to leave the active browser meet.
-
-        ``path_prefix`` is the agent-service URL prefix (``"googlemeet"`` or
-        ``"teamsmeet"``).  Failures are silently ignored — the event handler's
-        cleanup pipeline still tears down the session even if this call fails.
-        """
-        session_id = self._cm.call_manager._meet_session_id
-        if not session_id:
-            return
-
-        import aiohttp
-
-        from unify.conversation_manager.medium_scripts.common import (
-            _resolve_agent_service_url,
-        )
-        from unify.session_details import SESSION_DETAILS
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                await session.post(
-                    f"{_resolve_agent_service_url()}/{path_prefix}/leave",
-                    json={"sessionId": session_id},
-                    headers={
-                        "authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-        except Exception:
-            pass
-
     async def act(
         self,
         *,
@@ -1486,11 +1426,8 @@ class ConversationManagerBrainActionTools:
         **Excluded:** Do not use ``act`` for Google Meet or Microsoft Teams
         meeting operations — use the dedicated tools instead:
         ``join_google_meet`` / ``join_teams_meet`` to join, ``hang_up`` to leave
-        the current meeting or call,
-        ``start_google_meet_screenshare`` / ``start_teams_meet_screenshare`` to
-        present the assistant's desktop, and
-        ``stop_google_meet_screenshare`` / ``stop_teams_meet_screenshare`` to
-        stop presenting.
+        the current meeting or call, and ``send_meet_chat`` to post in the
+        meeting chat.
 
         **When uncertain, call ``act``**: If you need information you don't have (like
         a contact's email address), call ``act`` to search for it. If ``act`` can't find
@@ -2372,96 +2309,6 @@ class ConversationManagerBrainActionTools:
         """
         return {"status": "guidance_noted"}
 
-    async def engage_speaker(self, *, speaker: str) -> dict[str, Any]:
-        """
-        Give another voice on the call full conversational standing.
-
-        During calls, transcript lines are attributed by voice: my primary call
-        participants appear by name, while other voices in the room appear as
-        anonymous labels like "Speaker 2". Those background voices are heard
-        and transcribed, but they cannot end turns, trigger my replies, or
-        interrupt my speech — I treat them as context only.
-
-        I call this when a background voice becomes a legitimate conversation
-        partner: my caller hands the conversation over ("talk to my friend for
-        a moment", "my colleague has a question"), or a background speaker
-        clearly addresses me directly and my caller would want me to respond.
-        Once engaged, that voice holds the floor like any participant. My
-        caller always remains engaged regardless — engaging a guest never
-        demotes anyone.
-
-        Args:
-            speaker: The transcript label of the voice to engage (e.g.
-                "Speaker 2"), exactly as it appears in the conversation.
-        """
-        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=True)
-
-    async def disengage_speaker(self, *, speaker: str) -> dict[str, Any]:
-        """
-        Return a previously engaged voice to background (context-only) status.
-
-        I call this when a guest's turn in the conversation is over — the
-        caller takes back the conversation ("thanks, I'm back", "that's all
-        from him"), the guest says goodbye, or the caller asks me to stop
-        responding to them. Their speech is still transcribed as labeled
-        context; they simply stop holding the floor. Primary call participants
-        can never be disengaged.
-
-        Args:
-            speaker: The transcript label of the engaged voice to demote
-                (e.g. "Speaker 2").
-        """
-        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=False)
-
-    def _speaker_engagement_doc_suffix(self) -> str:
-        """Live engagement status appendix for the engage/disengage docstrings.
-
-        Rendered per turn (``as_tools`` runs each turn) so the slow brain sees
-        the current engaged set and which anonymous voices have been heard.
-        Returns ``""`` when no anonymous voice has surfaced yet.
-        """
-        cmgr = self._cm.call_manager
-        if not cmgr.known_speaker_labels and not cmgr.engaged_labels:
-            return ""
-        engaged_names = sorted(cmgr.engaged_contacts.values()) + sorted(
-            cmgr.engaged_labels,
-        )
-        lines = [
-            "",
-            f"Currently engaged: {', '.join(engaged_names)}.",
-        ]
-        background = sorted(cmgr.known_speaker_labels - cmgr.engaged_labels)
-        if background:
-            lines.append(
-                f"Background voices heard so far (not engaged): {', '.join(background)}.",
-            )
-        return "\n".join(lines)
-
-    def _with_doc_suffix(
-        self,
-        base: "Callable[..., Any]",
-        suffix: str,
-    ) -> "Callable[..., Any]":
-        """Return ``base`` with ``suffix`` appended to its docstring.
-
-        Rebuilt per turn (``as_tools`` runs each turn) so dynamic status stays
-        current. Returns ``base`` unchanged for an empty suffix.
-        """
-        if not suffix:
-            return base
-
-        @wraps(base)
-        async def _with_suffix(**kwargs: Any) -> Any:
-            return await base(**kwargs)
-
-        # Pin the schema signature to the bound method's (which already
-        # excludes ``self``); without this, ``inspect.signature`` would unwrap
-        # past the bound method and re-expose ``self``.
-        _with_suffix.__signature__ = inspect.signature(base)
-        base_doc = inspect.getdoc(base) or ""
-        _with_suffix.__doc__ = f"{base_doc}\n{suffix}"
-        return _with_suffix
-
     def _whatsapp_contact_label(self, contact_id: int) -> str:
         """Human-friendly name for a contact in the window-status appendix."""
         contact = None
@@ -2551,10 +2398,16 @@ class ConversationManagerBrainActionTools:
         return _send_whatsapp_window_aware
 
     def as_tools(self) -> dict[str, "Callable[..., Any]"]:
-        """Return the static tools dict for start_async_tool_loop."""
+        """Return the static tools dict for start_async_tool_loop.
+
+        The comms surface is decided by ``is_private_coordinator``, not
+        ``is_coordinator``: a single-player twin is boss-only on every
+        channel and cannot enter browser meetings at all, while a
+        multiplayer twin communicates like any hired teammate.
+        """
         from unify.settings import SETTINGS
 
-        is_coordinator = SESSION_DETAILS.is_coordinator
+        is_coordinator = SESSION_DETAILS.is_private_coordinator
         tools: dict[str, Callable[..., Any]] = {
             "send_unify_message": (
                 self.send_unify_message_to_boss
@@ -2578,8 +2431,12 @@ class ConversationManagerBrainActionTools:
             and self._cm.call_manager.is_ready_for_outbound_call
         )
         if not call_or_meet_in_progress:
-            tools["join_google_meet"] = self.join_google_meet
-            tools["join_teams_meet"] = self.join_teams_meet
+            # Browser meetings are multi-party rooms, so a single-player
+            # twin never gets the join tools — not even for a meeting its
+            # boss hosts.
+            if not is_coordinator:
+                tools["join_google_meet"] = self.join_google_meet
+                tools["join_teams_meet"] = self.join_teams_meet
             # Ringing the in-app Meet only signals the Console (the owner answers
             # in-browser), so unlike telephony call-start it needs no prewarmed
             # worker; expose it whenever no other voice session is live.
@@ -2594,35 +2451,11 @@ class ConversationManagerBrainActionTools:
                 tools["allow_hang_up"] = self.allow_hang_up
             else:
                 tools["withdraw_hang_up"] = self.withdraw_hang_up
-            engagement_suffix = self._speaker_engagement_doc_suffix()
-            tools["engage_speaker"] = self._with_doc_suffix(
-                self.engage_speaker,
-                engagement_suffix,
-            )
-            tools["disengage_speaker"] = self._with_doc_suffix(
-                self.disengage_speaker,
-                engagement_suffix,
-            )
-        if self._cm.call_manager.has_active_google_meet:
-            if SESSION_DETAILS.assistant.desktop_url:
-                if not self._cm.call_manager.has_gmeet_presenting:
-                    tools["start_google_meet_screenshare"] = (
-                        self.start_google_meet_screenshare
-                    )
-                else:
-                    tools["stop_google_meet_screenshare"] = (
-                        self.stop_google_meet_screenshare
-                    )
-        if self._cm.call_manager.has_active_teams_meet:
-            if SESSION_DETAILS.assistant.desktop_url:
-                if not self._cm.call_manager.has_teams_presenting:
-                    tools["start_teams_meet_screenshare"] = (
-                        self.start_teams_meet_screenshare
-                    )
-                else:
-                    tools["stop_teams_meet_screenshare"] = (
-                        self.stop_teams_meet_screenshare
-                    )
+        if (
+            self._cm.call_manager.has_active_google_meet
+            or self._cm.call_manager.has_active_teams_meet
+        ):
+            tools["send_meet_chat"] = self.send_meet_chat
         if self._cm.assistant_number:
             tools["send_sms"] = (
                 self.send_sms_to_boss if is_coordinator else self.send_sms

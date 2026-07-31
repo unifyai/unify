@@ -1,7 +1,5 @@
-import pytest
 from datetime import datetime, timezone, timedelta
 from tests.helpers import _handle_project
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import RepeatPattern, Frequency, Weekday
@@ -57,10 +55,9 @@ def test_update_task_description():
 
 
 @_handle_project
-def test_update_task_status():
+def test_set_task_arming():
     task_scheduler = TaskScheduler()
 
-    # create
     task_scheduler._create_task(
         name="Promote Jeff Smith",
         description="Send an email to Jeff Smith, kindly congratulating him and explaining that he has been promoted from sales rep to sales manager.",
@@ -70,19 +67,15 @@ def test_update_task_status():
         task_list[0].description
         == "Send an email to Jeff Smith, kindly congratulating him and explaining that he has been promoted from sales rep to sales manager."
     )
+    assert task_list[0].enabled is True
 
-    # update status
-    task_scheduler._update_task(
-        task_id=0,
-        status=Status.cancelled,
-    )
-    task_list = task_scheduler._filter_tasks()
-    assert task_list[0].status == Status.cancelled
+    task_scheduler._set_tasks_enabled(task_ids=0, enabled=False)
+    assert task_scheduler._filter_tasks()[0].enabled is False
 
 
 @_handle_project
-def test_scheduled_task_cannot_be_forced_active():
-    """A scheduled task cannot be directly moved to 'active' via update."""
+def test_scheduled_task_is_armed_on_its_schedule():
+    """A scheduled definition carries arming intent and a start time, nothing else."""
 
     ts = TaskScheduler()
 
@@ -96,10 +89,8 @@ def test_scheduled_task_cannot_be_forced_active():
     )["details"]["task_id"]
 
     task_row = ts._filter_tasks(filter=f"task_id == {tid}", limit=1)[0]
-    assert task_row.status == Status.scheduled
-
-    with pytest.raises(ValueError):
-        ts._update_task(task_id=tid, status="active")
+    assert task_row.enabled is True
+    assert task_row.schedule_start_at is not None
 
 
 @_handle_project

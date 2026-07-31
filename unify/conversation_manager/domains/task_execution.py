@@ -98,6 +98,7 @@ async def _register_live_task_handle(
     *,
     handle: "SteerableToolHandle",
     query: str,
+    task_description: str | None = None,
 ) -> int:
     """Register a deterministically started task with CM steering state."""
 
@@ -118,6 +119,8 @@ async def _register_live_task_handle(
         "initial_snapshot_state": getattr(cm, "_current_snapshot_state", None),
         "context_opted_in": False,
     }
+    if task_description:
+        cm.in_flight_actions[handle_id]["task_description"] = task_description
     asyncio.create_task(
         managers_utils.actor_watch_result(
             handle_id,
@@ -165,7 +168,12 @@ async def _start_live_task_due_execution(
         f"Scheduled task due now: '{_task_due_label(event, activation)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=activation.task_description,
+    )
 
 
 async def _start_live_task_trigger_execution(
@@ -180,6 +188,11 @@ async def _start_live_task_trigger_execution(
         )
 
     scheduler = ManagerRegistry.get_task_scheduler()
+    task_description: str | None = None
+    try:
+        task_description = scheduler._get_task_or_raise(event.task_id).description
+    except ValueError:
+        task_description = None
     delegate = _ConversationTaskExecutionDelegate(cm.actor)
     delegate_token = current_task_execution_delegate.set(delegate)
     try:
@@ -194,7 +207,12 @@ async def _start_live_task_trigger_execution(
         f"Task triggered via REST API: '{_task_trigger_label(event)}' "
         f"(task_id={event.task_id})."
     )
-    return await _register_live_task_handle(cm, handle=handle, query=query)
+    return await _register_live_task_handle(
+        cm,
+        handle=handle,
+        query=query,
+        task_description=task_description,
+    )
 
 
 def _current_task_assistant_id() -> str | None:
@@ -792,7 +810,12 @@ async def _handle_provider_event_dispatch_requested_event(
             f"Provider event started task {event.task_id} "
             f"(operation {event.operation_id})."
         )
-        await _register_live_task_handle(cm, handle=handle, query=query)
+        await _register_live_task_handle(
+            cm,
+            handle=handle,
+            query=query,
+            task_description=outcome.description,
+        )
         cm.notifications_bar.push_notif("Tasks", query, event.timestamp)
     return False
 
@@ -949,6 +972,56 @@ async def _dispatch_offline_explicit_candidate_local(
     }
 
 
+def _multiplayer_flipped_wake_reason(reason: object) -> dict | None:
+    """Return the flip payload when the wake reason announces multiplayer."""
+    if (
+        not isinstance(reason, dict)
+        or reason.get("type") != "coordinator_multiplayer_flipped"
+    ):
+        return None
+    return reason
+
+
+async def _handle_multiplayer_flipped_wake_reason(
+    reason: dict,
+    cm: "ConversationManager",
+) -> None:
+    """Surface the multiplayer transition so the brain announces it.
+
+    The flip retires the shared pool contact details out from under the
+    boss's address book, so the very first act of the multiplayer twin is
+    telling them where it now lives. The notification carries every fact
+    the message needs; the brain composes it in its own voice.
+    """
+    from unify.common.prompt_helpers import now as prompt_now
+    from unify.session_details import SESSION_DETAILS
+
+    alias_email = str(reason.get("alias_email") or "") or (
+        SESSION_DETAILS.assistant.email or ""
+    )
+    address_line = (
+        f"My new dedicated email address is {alias_email}. " if alias_email else ""
+    )
+    cm.notifications_bar.push_notif(
+        "System",
+        (
+            "Multiplayer mode is now active. "
+            f"{address_line}"
+            "The shared T-W1N contact details (the old shared email address, "
+            "phone number, and WhatsApp) no longer reach me. I must message "
+            "my boss RIGHT NOW with: my new email address, a heads-up that "
+            "the old shared contact details no longer work, and a pointer to "
+            "my Contact Details page in the Console if they want to add a "
+            "dedicated phone or WhatsApp number for me."
+        ),
+        prompt_now(),
+    )
+    await cm.request_llm_run(
+        delay=0,
+        triggering_contact_id=SESSION_DETAILS.boss_contact_id,
+    )
+
+
 async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
     """Replay startup wake reasons once managers are initialized."""
 
@@ -981,6 +1054,11 @@ async def _consume_startup_wake_reasons(cm: "ConversationManager") -> None:
         )
         if coordinator_delegate_event is not None:
             await _handle_coordinator_delegate_event(coordinator_delegate_event, cm)
+            continue
+
+        flipped_reason = _multiplayer_flipped_wake_reason(wake_reason)
+        if flipped_reason is not None:
+            await _handle_multiplayer_flipped_wake_reason(flipped_reason, cm)
             continue
 
         cm._session_logger.info(
