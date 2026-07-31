@@ -929,11 +929,26 @@ async def actor_watch_notifications(
 
     Each type is published as a distinct CM event so the brain can tell
     them apart.
+
+    Drain guarantee: a notification enqueued in the instant before
+    ``handle.done()`` flips to ``True`` must still be observed -- the
+    producer side always enqueues before signalling completion, but the
+    ``while not handle.done()`` check races that signal. Once ``done()``
+    is observed ``True``, keep polling with a short timeout (instead of
+    exiting immediately) until the queue is actually empty.
     """
-    while not handle.done():
+    _DRAIN_TIMEOUT = 0.1
+
+    while True:
+        already_done = handle.done()
         try:
-            notif = await asyncio.wait_for(handle.next_notification(), timeout=30)
+            notif = await asyncio.wait_for(
+                handle.next_notification(),
+                timeout=_DRAIN_TIMEOUT if already_done else 30,
+            )
         except asyncio.TimeoutError:
+            if already_done:
+                break
             continue
 
         # Determine whether this is a turn-complete response or a progress
@@ -982,12 +997,14 @@ async def actor_watch_notifications(
                 if isinstance(notif, dict)
                 else False
             )
+            kind = notif.get("type", "") if isinstance(notif, dict) else ""
             await event_broker.publish(
                 "app:actor:notification",
                 ActorNotification(
                     handle_id=handle_id,
                     response=msg,
                     completed=completed,
+                    kind=kind,
                 ).to_json(),
             )
 

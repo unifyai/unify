@@ -1770,6 +1770,7 @@ class ActorNotification(Event):
     handle_id: int
     response: str
     completed: bool = False
+    kind: str = ""
 
 
 @dataclass

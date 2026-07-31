@@ -1958,9 +1958,14 @@ class _StorageCheckHandle(SteerableToolHandle):
                     )
                 else:
                     self._storage_handle = storage_handle
+                    storage_success = True
                     try:
-                        await self._storage_handle.result()
+                        storage_summary = await self._storage_handle.result()
                     except Exception as exc:
+                        storage_success = False
+                        storage_summary = (
+                            f"StorageCheck failed: {type(exc).__name__}: {exc}"
+                        )
                         logger.warning(
                             f"StorageCheck failed: {type(exc).__name__}: {exc}",
                         )
@@ -1972,6 +1977,17 @@ class _StorageCheckHandle(SteerableToolHandle):
                         phase="outgoing",
                         display_label=review_display_label,
                         hierarchy=_sc_hierarchy,
+                    )
+
+                    # ponytail: single-consumer signal — see event_handlers.py
+                    # ActorNotification handler for the wake gate. Upgrade to
+                    # a dedicated event class if a second consumer appears.
+                    await self._notification_q.put(
+                        {
+                            "type": "storage_review_complete",
+                            "message": storage_summary,
+                            "success": storage_success,
+                        },
                     )
             finally:
                 _PENDING_LOOP_SUFFIX.reset(_sc_suffix_token)
