@@ -54,6 +54,11 @@ VIEWS_TABLE = "Canvas/Views"
 ACTIONS_TABLE = "Canvas/Actions"
 INVOCATIONS_TABLE = "Canvas/Invocations"
 
+# Age past which a `running` invocation's claim is presumed dead and may be
+# taken over. Long enough that a slow bulk action is not stolen mid-send;
+# short enough that a crashed runner does not wedge the run for a day.
+STALE_CLAIM_SECONDS = 900
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -356,6 +361,38 @@ class CanvasManager(BaseCanvasManager):
                 error=f"Canvas failed to render: {review_report.error}",
             )
 
+        # Registered before the row exists, so a token that turns out to belong
+        # to another canvas can be replaced with a fresh one instead of leaving
+        # a stored canvas behind a URL that resolves to somebody else's view.
+        registration = "collision"
+        for _ in range(3):
+            registration = token_ops.register_token(
+                token,
+                context_name=views_context,
+                project_name=token_ops.active_project(),
+                visibility=visibility,
+            )
+            if registration != "collision":
+                break
+            token = token_ops.generate_token()
+        if registration == "collision":
+            return CanvasResult(
+                title=title,
+                build=build,
+                review=review_report,
+                error=(
+                    "A canvas URL could not be allocated after several "
+                    "attempts; nothing was stored. Try again."
+                ),
+            )
+        warning = (
+            "The canvas was stored, but its URL could not be registered with "
+            "the backend, so the link will not resolve yet. Publishing it "
+            "again once the backend is reachable will register it."
+            if registration == "unreachable"
+            else None
+        )
+
         now = _now()
         row = CanvasViewRow(
             token=token,
@@ -388,13 +425,6 @@ class CanvasManager(BaseCanvasManager):
             context=self._write_table(ACTIONS_TABLE, destination),
         )
 
-        token_ops.register_token(
-            token,
-            context_name=views_context,
-            project_name=token_ops.active_project(),
-            visibility=visibility,
-        )
-
         self._announce(token, title, "published")
 
         return CanvasResult(
@@ -404,6 +434,7 @@ class CanvasManager(BaseCanvasManager):
             status="published",
             build=build,
             review=review_report,
+            warning=warning,
         )
 
     def update_view(
@@ -667,10 +698,21 @@ class CanvasManager(BaseCanvasManager):
 
         record = CanvasInvocationRecord.model_validate(row)
 
-        # Already settled. A redelivered event or a manual retry of a completed
+        # Already done. A redelivered event or a manual retry of a completed
         # send must not send again; returning what happened is the honest answer.
-        if record.status in ("succeeded", "running"):
+        if record.status == "succeeded":
             return record
+
+        if record.status == "running" and not self._claim_is_stale(record):
+            # Someone is executing it right now; their result will land on the
+            # row. Reporting the current state is all a second delivery may do.
+            return record
+
+        claimed = self._claim_invocation(context, record)
+        if claimed is None:
+            # Lost the race to another delivery -- the winner runs it.
+            fresh, _ = self._find_invocation(token, invocation_id)
+            return CanvasInvocationRecord.model_validate(fresh or row)
 
         action = self._find_action(token, record.action_name)
         if action is None:
@@ -685,12 +727,6 @@ class CanvasManager(BaseCanvasManager):
                     f"{record.action_name!r}."
                 ),
             )
-
-        self._get_dm().update_rows(
-            context,
-            {"status": "running"},
-            filter=f"invocation_id == {invocation_id}",
-        )
 
         args = json.loads(record.args_json or "{}")
         try:
@@ -710,6 +746,55 @@ class CanvasManager(BaseCanvasManager):
             status="succeeded",
             result=result,
         )
+
+    def _claim_is_stale(self, record: CanvasInvocationRecord) -> bool:
+        """Whether a `running` claim's holder can be presumed dead.
+
+        A run whose claim is younger than the window is someone else's live
+        work. Past the window with no terminal state written, the holder died
+        mid-run -- the one condition under which taking the run over does not
+        risk executing it twice, because the original can no longer finish.
+        """
+        if not record.claimed_at:
+            # A running row with no claim predates claims; age is unknowable,
+            # so treat it as stale rather than stuck forever.
+            return True
+        claimed = datetime.fromisoformat(record.claimed_at)
+        age = (datetime.now(timezone.utc) - claimed).total_seconds()
+        return age >= STALE_CLAIM_SECONDS
+
+    def _claim_invocation(
+        self,
+        context: str,
+        record: CanvasInvocationRecord,
+    ) -> Optional[str]:
+        """Take exclusive execution of one run, or None when another won.
+
+        An atomic compare-and-set on the state this caller just observed, so
+        two deliveries racing produce exactly one winner. This is what keeps
+        at-least-once event delivery from sending an email twice. Expecting
+        the observed ``claim_key`` on a stale takeover fences out the dead
+        holder: if it somehow wrote again in between, the expectation no
+        longer matches and nobody double-runs.
+        """
+        import uuid
+
+        nonce = uuid.uuid4().hex
+        expect: Dict[str, Any] = {
+            "canvas_token": record.canvas_token,
+            "invocation_id": record.invocation_id,
+            "status": record.status,
+        }
+        if record.claim_key:
+            expect["claim_key"] = record.claim_key
+
+        claimed = self._get_dm().claim(
+            context,
+            expect=expect,
+            updates={"status": "running", "claim_key": nonce, "claimed_at": _now()},
+            limit=1,
+        )
+        return nonce if claimed else None
 
     def _find_invocation(
         self,

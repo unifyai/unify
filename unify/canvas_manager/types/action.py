@@ -131,6 +131,14 @@ class CanvasInvocationRow(AuthoredRow):
     run_key: str = ""
     requested_by_user_id: Optional[str] = None
 
+    # Execution claim. Delivery of the dispatch event is at-least-once, so two
+    # deliveries can race to execute one run; the claim is what makes exactly
+    # one of them proceed. `claim_key` is the winner's nonce, `claimed_at` is
+    # when it took the run -- and what lets a claim whose holder died be told
+    # apart from one that is merely slow.
+    claim_key: str = ""
+    claimed_at: Optional[str] = None
+
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
 
