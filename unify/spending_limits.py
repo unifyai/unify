@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 LIMIT_CHECK_TIMEOUT = 5.0
 
 _spend_client: Optional[AsyncSpendClient] = None
+_spend_client_key: Optional[str] = None
 
 
 def _charges_billing() -> bool:
@@ -55,14 +56,19 @@ def _get_api_key() -> Optional[str]:
 
 
 def _get_spend_client() -> AsyncSpendClient:
-    """Get or create the shared AsyncSpendClient for limit checks."""
-    global _spend_client
+    """Get or create the shared AsyncSpendClient for limit checks.
+
+    Recreated when ``UNIFY_KEY`` changes so a client cached under a stale
+    key never authenticates later checks.
+    """
+    global _spend_client, _spend_client_key
     api_key = _get_api_key()
-    if _spend_client is None or _spend_client.closed:
+    if _spend_client is None or _spend_client.closed or _spend_client_key != api_key:
         _spend_client = AsyncSpendClient(
             api_key=api_key,
             timeout=LIMIT_CHECK_TIMEOUT,
         )
+        _spend_client_key = api_key
     return _spend_client
 
 
@@ -85,6 +91,12 @@ class _LimitCheckResult:
     # endpoint didn't surface the field — older Orchestra builds — in
     # which case we fall back to the legacy CREDITS-mode behaviour.
     billing_mode: Optional[str] = None
+    # Account frozen server-side (admin freeze, card gate, abuse sweep).
+    account_suspended: bool = False
+    # Trial daily-burn ceiling: populated by Orchestra only for accounts
+    # with no real payment history.
+    trial_daily_spend: Optional[float] = None
+    trial_daily_cap: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -120,12 +132,18 @@ def _parse_spend_result(
     limit_set_at = data.get("limit_set_at")
     credit_balance = data.get("credit_balance")
     billing_mode = data.get("billing_mode")
+    gate_fields = {
+        "account_suspended": bool(data.get("account_suspended", False)),
+        "trial_daily_spend": data.get("trial_daily_spend"),
+        "trial_daily_cap": data.get("trial_daily_cap"),
+    }
 
     if limit is None:
         return _LimitCheckResult(
             exceeded=False,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
+            **gate_fields,
         )
 
     return _LimitCheckResult(
@@ -139,6 +157,7 @@ def _parse_spend_result(
         organization_id=organization_id,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **gate_fields,
     )
 
 
@@ -382,22 +401,24 @@ async def check_spending_limits_callback(
     if SESSION_DETAILS.assistant:
         timezone = SESSION_DETAILS.assistant.timezone or "UTC"
 
-    if not agent_id or not user_id:
-        logger.debug("Spending limit check skipped: missing context")
-        return LimitCheckResponse(allowed=True)
-
     month = _get_current_month(timezone)
 
     checks: List[asyncio.Task] = []
 
-    checks.append(
-        asyncio.create_task(
-            _check_assistant_limit(agent_id, month),
-        ),
-    )
+    # The raw-API path (gateway/CLI usage with a bare UNIFY_KEY) carries no
+    # assistant session, but the ``/user/spend`` endpoint resolves the key
+    # owner's wallet server-side, so the balance/cap gates always apply.
+    # Skipping the check when session context is missing would fail open —
+    # exactly the channel free-credit farmers extract through.
+    if agent_id:
+        checks.append(
+            asyncio.create_task(
+                _check_assistant_limit(agent_id, month),
+            ),
+        )
 
     is_org_context = org_id is not None
-    if is_org_context:
+    if is_org_context and user_id:
         checks.append(
             asyncio.create_task(
                 _check_member_limit(user_id, org_id, month),
@@ -411,7 +432,7 @@ async def check_spending_limits_callback(
     else:
         checks.append(
             asyncio.create_task(
-                _check_user_limit(user_id, month),
+                _check_user_limit(user_id or "api-key-owner", month),
             ),
         )
 
@@ -427,6 +448,9 @@ async def check_spending_limits_callback(
 
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
+    account_suspended = False
+    trial_daily_spend: Optional[float] = None
+    trial_daily_cap: Optional[float] = None
 
     for result in results:
         if isinstance(result, Exception):
@@ -437,6 +461,11 @@ async def check_spending_limits_callback(
             credit_balance = result.credit_balance
         if billing_mode is None and result.billing_mode is not None:
             billing_mode = result.billing_mode
+        account_suspended = account_suspended or result.account_suspended
+        if trial_daily_spend is None and result.trial_daily_spend is not None:
+            trial_daily_spend = result.trial_daily_spend
+        if trial_daily_cap is None and result.trial_daily_cap is not None:
+            trial_daily_cap = result.trial_daily_cap
 
         if result.exceeded:
             current = (
@@ -458,6 +487,33 @@ async def check_spending_limits_callback(
                 entity_id=result.entity_id,
                 entity_name=result.entity_name,
             )
+
+    # Hard deny for server-side frozen accounts (admin freeze, card-gate
+    # sweep, abuse-fingerprint sweep).
+    if account_suspended:
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                "This account is suspended. Add a payment method or "
+                "contact support to restore access."
+            ),
+        )
+
+    # Trial daily-burn ceiling (never-paid accounts only): bounds how fast
+    # trial credits can be extracted regardless of remaining balance.
+    if (
+        trial_daily_cap is not None
+        and trial_daily_spend is not None
+        and trial_daily_spend >= trial_daily_cap
+    ):
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                f"Daily trial spend limit reached (${trial_daily_spend:.2f} "
+                f"of ${trial_daily_cap:.2f} today). It resets at midnight "
+                "UTC; subscribe with a payment method to lift it."
+            ),
+        )
 
     # Credit-balance gate. METERED accounts pay by monthly invoice via
     # ``monthly_metered_invoicer`` and intentionally have a zero wallet
