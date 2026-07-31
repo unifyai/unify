@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
-from .types.status import Status
 from .types.trigger import Trigger
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,7 @@ TASK_SYNC_FIELDS = (
     "max_runtime_seconds",
     "repeat",
     "priority",
+    "tags",
     "response_policy",
     "entrypoint_function",
     "offline",
@@ -52,6 +52,7 @@ class CustomTaskSourceEntry(BaseModel):
     max_runtime_seconds: Optional[int] = None
     repeat: Optional[List[Dict[str, Any]]] = None
     priority: str = "normal"
+    tags: Optional[List[str]] = None
     response_policy: Optional[str] = None
     entrypoint_function: Optional[str] = None
     offline: bool = False
@@ -65,19 +66,6 @@ def _stable_json(value: Any) -> str:
     if value is None:
         return ""
     return json.dumps(value, sort_keys=True, default=str)
-
-
-def derive_initial_task_status(
-    *,
-    schedule: Optional[Dict[str, Any]],
-    trigger: Optional[Dict[str, Any]],
-) -> Status:
-    """Return the initial status for a newly inserted source-defined task."""
-    if trigger is not None:
-        return Status.triggerable
-    if schedule is not None and schedule.get("start_at") is not None:
-        return Status.scheduled
-    return Status.scheduled
 
 
 def _compute_task_hash(
@@ -201,6 +189,7 @@ def collect_custom_tasks(
             "max_runtime_seconds": entry.max_runtime_seconds,
             "repeat": entry.repeat,
             "priority": entry.priority,
+            "tags": entry.tags,
             "response_policy": entry.response_policy,
             "entrypoint_function": entry.entrypoint_function,
             "offline": entry.offline,

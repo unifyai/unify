@@ -41,6 +41,10 @@ def _clean_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def _is_trigger_facade(row: dict[str, Any]) -> bool:
+    return row.get("credential_storage") == "assistant_workspace_secrets"
+
+
 def _execution_descriptor_from_row(row: dict[str, Any]) -> dict[str, Any]:
     metadata = integration_metadata(row)
     labels = metadata.get("labels") if isinstance(metadata.get("labels"), dict) else {}
@@ -357,9 +361,23 @@ class IntegrationPrimitives:
                 if isinstance(app_slug, str)
                 else []
             )
-            connection_row = next(
-                (row for row in connection_rows if row.get("status") == "connected"),
-                connection_rows[0] if connection_rows else None,
+            tool_connection_rows = [
+                row
+                for row in connection_rows
+                if isinstance(row, dict) and not _is_trigger_facade(row)
+            ]
+            facade_rows = [
+                row
+                for row in connection_rows
+                if isinstance(row, dict) and _is_trigger_facade(row)
+            ]
+            tool_connection_row = next(
+                (
+                    row
+                    for row in tool_connection_rows
+                    if row.get("status") == "connected"
+                ),
+                tool_connection_rows[0] if tool_connection_rows else None,
             )
             materialized_rows = (
                 self._materialized_function_rows_for_native_app(manifest_row)
@@ -368,8 +386,8 @@ class IntegrationPrimitives:
                     self._materialized_tool_rows_for_app(
                         app_slug,
                         backend_id=(
-                            connection_row.get("backend_id")
-                            if isinstance(connection_row, dict)
+                            tool_connection_row.get("backend_id")
+                            if isinstance(tool_connection_row, dict)
                             else None
                         ),
                     )
@@ -387,15 +405,28 @@ class IntegrationPrimitives:
                 self._native_connection_status(manifest_row)
                 if source_type == "native"
                 else (
-                    connection_row.get("status")
-                    if isinstance(connection_row, dict)
-                    else "not_connected"
+                    "connected"
+                    if any(row.get("status") == "connected" for row in connection_rows)
+                    else (
+                        connection_rows[0].get("status")
+                        if connection_rows
+                        else "not_connected"
+                    )
                 )
+            )
+            tools_available = any(
+                row.get("status") == "connected" for row in tool_connection_rows
+            )
+            trigger_support = (
+                "connected"
+                if any(row.get("status") == "connected" for row in facade_rows)
+                else "not_connected"
             )
             sync_status = self._sync_status_for_result(
                 source_type,
                 connection_status,
                 materialized_function_count,
+                tools_available,
             )
             item = {
                 "canonical_app_slug": app_slug,
@@ -405,14 +436,16 @@ class IntegrationPrimitives:
                 "supported": app.get("supported", True),
                 "deployment_status": deployment_status,
                 "connection_status": connection_status or "not_connected",
+                "tools_available": tools_available if source_type != "native" else True,
+                "trigger_support": trigger_support,
                 "connection_id": (
-                    connection_row.get("connection_id")
-                    if isinstance(connection_row, dict)
+                    tool_connection_row.get("connection_id")
+                    if isinstance(tool_connection_row, dict)
                     else None
                 ),
                 "external_account_label": (
-                    connection_row.get("external_account_label")
-                    if isinstance(connection_row, dict)
+                    tool_connection_row.get("external_account_label")
+                    if isinstance(tool_connection_row, dict)
                     else None
                 ),
                 "connections": [
@@ -422,6 +455,8 @@ class IntegrationPrimitives:
                         "external_account_label": row.get("external_account_label"),
                         "backend_id": row.get("backend_id"),
                         "provider_connection_id": row.get("provider_connection_id"),
+                        "granted_scopes": row.get("granted_scopes"),
+                        "trigger_only": _is_trigger_facade(row),
                     }
                     for row in connection_rows
                     if isinstance(row, dict)
@@ -458,13 +493,17 @@ class IntegrationPrimitives:
         source_type: str,
         connection_status: Any,
         materialized_function_count: int,
+        tools_available: bool,
     ) -> str:
         if source_type == "native" and connection_status == "not_enabled":
             return "not_enabled"
         if source_type == "native" and connection_status == "missing_required_secrets":
             return "missing_required_secrets"
-        if source_type != "native" and connection_status != "connected":
-            return "not_connected"
+        if source_type != "native":
+            if connection_status != "connected":
+                return "not_connected"
+            if not tools_available:
+                return "tools_not_connected"
         if materialized_function_count > 0:
             return "materialized"
         return "not_yet_synced"
@@ -486,6 +525,12 @@ class IntegrationPrimitives:
             return "Tell the user the native integration is enabled and functions are still syncing."
         if connection_status != "connected":
             return "Ask the user to connect this integration in Console Integrations."
+        if sync_status == "tools_not_connected":
+            return (
+                "Tell the user provider-event triggers are available via the existing "
+                "workspace connection; to use this app's tools, ask them to add a "
+                "Composio/Pipedream account in Console Integrations."
+            )
         if sync_status == "materialized":
             return (
                 "Search FunctionManager for executable materialized integration tools."

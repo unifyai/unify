@@ -491,6 +491,7 @@ class _WebSessionFactory:
         storage_state_name: str | None = None,
         headless: bool | None = None,
         stealth: bool | None = None,
+        egress: dict | None = None,
     ) -> WebSessionHandle:
         """Create a new independent browser session.
 
@@ -548,6 +549,7 @@ class _WebSessionFactory:
             storage_state_name=storage_state_name,
             headless=headless,
             stealth=stealth,
+            egress=egress,
         )
         handle = WebSessionHandle(session, self._owner, session_id=sid)
         self._handles.append(handle)

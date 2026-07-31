@@ -214,7 +214,12 @@ def _load_config_from_env() -> OfflineTaskConfig:
             or "Execute dashboard action"
         )
     else:
-        revision = _require_env("UNITY_OFFLINE_TASK_REVISION")
+        # Empty is a legitimate revision, not a missing one: the machine-state
+        # contract stores ``str(revision or "")`` and digests that exact value
+        # into ``run_key``, and a task with no authored ``task_revision`` (every
+        # deployment-reconciled definition) projects its occurrences with "".
+        # Requiring non-empty here boot-crashed each of those runs at dispatch.
+        revision = os.environ.get("UNITY_OFFLINE_TASK_REVISION", "").strip()
         request = _require_env("UNITY_OFFLINE_TASK_REQUEST")
     return OfflineTaskConfig(
         assistant_id=_require_env("ASSISTANT_ID"),
@@ -312,13 +317,12 @@ def _update_task_run(
 
 
 def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None:
-    """Terminalize the source task row when scheduler finalization did not run.
+    """Disarm a one-shot definition whose runner crashed before finalizing.
 
-    One-shot definitions are marked ``failed``. Recurring/triggerable
-    definitions are restored to their open slot (``scheduled`` /
-    ``triggerable``) instead — a single crashed, killed, or timed-out
-    occurrence must never disarm the schedule (the failure itself is
-    recorded on the Tasks/Executions run row).
+    Recurring and triggerable definitions are left completely untouched: a
+    crashed, killed, or timed-out occurrence says nothing about the series.
+    The failure itself is recorded on the Tasks/Executions row by the caller,
+    which is the only place a run outcome belongs.
     """
 
     if config.mode == "function" or config.source_task_log_id <= 0:
@@ -334,25 +338,11 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
             return
         row = rows[0]
         entries = dict(row.entries or {})
-        if str(entries.get("status") or "") != "active":
+        if entries.get("repeat") is not None or entries.get("trigger") is not None:
             return
-        is_recurring = entries.get("repeat") is not None
-        is_triggerable = entries.get("trigger") is not None and not is_recurring
-        if is_recurring:
-            new_status = "scheduled"
-        elif is_triggerable:
-            new_status = "triggerable"
-        else:
-            new_status = "failed"
         scheduler._write_log_entries(  # type: ignore[attr-defined]
             logs=config.source_task_log_id,
-            entries={
-                "status": new_status,
-                "info": _truncate_text(
-                    "Offline task runner failed before task lifecycle finalization "
-                    f"completed: {error_text}",
-                ),
-            },
+            entries={"enabled": False},
         )
     except Exception:
         LOGGER.exception(
@@ -569,11 +559,11 @@ class _OfflineTaskExecutionDelegate:
                 f"activation requested {self._config.function_id}, "
                 f"task row provides {entrypoint}.",
             )
-        if not requested_symbolic and entrypoint is not None:
-            raise RuntimeError(
-                "Offline task entrypoint mismatch: activation requested "
-                "agentic execution, task row provides a symbolic entrypoint.",
-            )
+        # An activation with no function id is not a request for agentic
+        # execution — it is an activation with no opinion. The definition is
+        # the authored intent, so its entrypoint governs. Refusing here failed
+        # every projected successor of a symbolic recurring task, because those
+        # occurrences historically materialized without an entrypoint.
 
         task_guidelines = kwargs.pop("guidelines", None)
         entrypoint_kwargs = dict(kwargs.pop("entrypoint_kwargs", {}) or {})

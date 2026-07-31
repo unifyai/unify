@@ -18,7 +18,6 @@ import pytest
 pytestmark = [pytest.mark.eval, pytest.mark.llm_call]
 
 from unify.task_scheduler.task_scheduler import TaskScheduler
-from unify.task_scheduler.types.status import Status
 from unify.common.llm_helpers import _dumps
 from unify.common.llm_client import new_llm_client
 from tests.assertion_helpers import assertion_failed
@@ -30,18 +29,18 @@ def _answer_semantic(ts: TaskScheduler, question: str) -> str:
     q = question.lower()
     tasks = ts._filter_tasks()
 
-    if "how many scheduled" in q:
-        return str(sum(1 for t in tasks if t.status == Status.scheduled))
+    if "how many enabled" in q:
+        return str(sum(1 for t in tasks if t.enabled is True))
 
-    if "cancelled" in q and "how many" in q:
-        return str(sum(1 for t in tasks if t.status == Status.cancelled))
+    if "how many disabled" in q:
+        return str(sum(1 for t in tasks if t.enabled is False))
 
     return "N/A"
 
 
 QUESTIONS = [
-    "How many scheduled tasks are there?",
-    "How many cancelled tasks are there?",
+    "How many enabled tasks are there?",
+    "How many disabled tasks are there?",
 ]
 
 
@@ -116,32 +115,32 @@ async def test_ask_with_interjection(
     """Ask a question, interject with a follow-up, and ensure the final answer covers both."""
     ts, _ = task_scheduler_read_scenario
     try:
-        # 1) Initial question ⇢ scheduled task count
+        # 1) Initial question ⇢ enabled task count
         handle = await ts.ask(
-            text="How many scheduled tasks are there?",
+            text=QUESTIONS[0],
             _return_reasoning_steps=True,
         )
 
-        # 2) Mid-conversation interjection ⇢ cancelled task count
-        await handle.interject("Also, how many cancelled tasks are there?")
+        # 2) Mid-conversation interjection ⇢ disabled task count
+        await handle.interject("Also, how many disabled tasks are there?")
 
         # 3) Await combined answer
         answer, steps = await handle.result()
-        scheduled_cnt = _answer_semantic(ts, QUESTIONS[0])
-        cancelled_cnt = _answer_semantic(ts, QUESTIONS[1])
+        enabled_cnt = _answer_semantic(ts, QUESTIONS[0])
+        disabled_cnt = _answer_semantic(ts, QUESTIONS[1])
 
         # 4) Assert presence of both pieces of information
-        assert scheduled_cnt in answer, assertion_failed(
-            f"Answer containing scheduled count '{scheduled_cnt}'",
+        assert enabled_cnt in answer, assertion_failed(
+            f"Answer containing enabled count '{enabled_cnt}'",
             answer,
             steps,
-            "Scheduled count not mentioned in combined answer",
+            "Enabled count not mentioned in combined answer",
         )
-        assert cancelled_cnt in answer, assertion_failed(
-            f"Answer containing cancelled count '{cancelled_cnt}'",
+        assert disabled_cnt in answer, assertion_failed(
+            f"Answer containing disabled count '{disabled_cnt}'",
             answer,
             steps,
-            "Cancelled count not mentioned in combined answer",
+            "Disabled count not mentioned in combined answer",
         )
     except Exception as exc:
         raise exc

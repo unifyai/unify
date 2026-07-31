@@ -184,7 +184,12 @@ def build_provider_event_run_key(
     event_identity_hmac: str,
     delivery: Literal["live", "offline"] = "offline",
 ) -> str:
-    """Build the deterministic provider-event run key."""
+    """Build the deterministic provider-event run key.
+
+    Unlike communication-trigger keys, the provider event identity digest is
+    included in full so two identities that share a 12-hex prefix cannot
+    collide through truncation.
+    """
 
     revision_digest = hashlib.sha256(
         str(revision or "").encode("utf-8"),

@@ -74,7 +74,7 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
     Scope and positioning (LLM‑facing)
     ----------------------------------
     Use this interface for activities that should be represented as durable
-    Tasks with names, descriptions, scheduling fields and completion status.
+    Tasks with names, descriptions, scheduling fields and an arming flag.
     It returns a steerable execution handle when starting such tasks.
     """
 
@@ -104,9 +104,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         Purpose
         -------
         Use this method to locate and inspect tasks that already exist in the
-        table: find task ids, check statuses, schedules, deadlines, triggers,
-        or summarise/compare existing entries. This call must never create,
-        modify, or delete tasks.
+        table: find task ids, check whether a task is armed, inspect schedules,
+        deadlines and triggers, or summarise/compare existing entries. This
+        call must never create, modify, or delete tasks.
 
         Clarifications
         --------------
@@ -301,9 +301,9 @@ class BaseTaskScheduler(BaseStateManager, metaclass=SingletonABCMeta):
         execution requires an explicitly configured actor; otherwise execution
         fails loudly instead of silently using a simulated fallback.
 
-        Symbolic entrypoints receive opt-in kwargs such as ``task_id``,
-        ``instance_id``, and ``task_execution_context`` so they can apply their
-        own concurrency or skip logic when desired.
+        Symbolic entrypoints receive opt-in kwargs such as ``task_id`` and
+        ``task_execution_context`` so they can apply their own concurrency or
+        skip logic when desired.
 
         Returns
         -------

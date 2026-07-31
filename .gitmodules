@@ -2,7 +2,3 @@
 	path = .agents/global-rules
 	url = https://github.com/unifyai/global-agent-rules.git
 	branch = staging
-[submodule "shared_context"]
-	path = shared_context
-	url = git@github.com:unifyai/shared_context.git
-	branch = main

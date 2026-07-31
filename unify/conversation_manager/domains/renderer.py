@@ -772,6 +772,13 @@ class Renderer:
             return "\n".join(parts)
 
         if not vm_ready:
+            meet_note = (
+                ""
+                if SESSION_DETAILS.is_private_coordinator
+                else "Note: join_google_meet and join_teams_meet do NOT depend "
+                "on the desktop VM — they use a local browser and are "
+                "available immediately.\n"
+            )
             parts.append(
                 "<infrastructure status='vm_pending'>\n"
                 "Your managed desktop VM is still booting. Computer actions "
@@ -779,10 +786,7 @@ class Renderer:
                 "yet. Do not attempt computer actions until you receive a "
                 "notification that the VM is ready. If a user asks you to do "
                 "something on the computer, let them know you will action it "
-                "in just a moment.\n"
-                "Note: join_google_meet and join_teams_meet do NOT depend on "
-                "the desktop VM — they use a local browser and are available "
-                "immediately.\n"
+                f"in just a moment.\n{meet_note}"
                 "</infrastructure>",
             )
 
@@ -863,23 +867,33 @@ class Renderer:
                 "</user_remote_control>",
             )
 
+        # These say what you can see *if* someone shares, not that anyone is:
+        # the flags mean a meeting is in progress. Whether a share is up right
+        # now is evident from the snapshots attached to this state, and claiming
+        # one unconditionally would have the assistant describing a screen that
+        # nobody put up.
         if google_meet_active:
             parts.append(
                 "<google_meet_visual status='active'>\n"
-                "You are in a Google Meet call and receiving periodic "
-                "screenshots of the meeting view. You can see participants, "
-                "any content being presented, and the meeting UI. When users "
-                "ask if you can see the meeting, confirm that you can.\n"
+                "You are in a Google Meet call. When a participant shares their "
+                "screen you receive periodic screenshots of it, labelled with "
+                "whose screen it is; those screenshots appear alongside this "
+                "state when a share is live. What you see is the sharer's own "
+                "machine -- not yours, and not the meeting's gallery view, so "
+                "you cannot see participants' faces or the meeting UI.\n"
                 "</google_meet_visual>",
             )
 
         if teams_meet_active:
             parts.append(
                 "<teams_meet_visual status='active'>\n"
-                "You are in a Microsoft Teams meeting and receiving periodic "
-                "screenshots of the meeting view. You can see participants, "
-                "any content being presented, and the meeting UI. When users "
-                "ask if you can see the meeting, confirm that you can.\n"
+                "You are in a Microsoft Teams meeting. When a participant "
+                "shares their screen you receive periodic screenshots of it, "
+                "labelled with whose screen it is; those screenshots appear "
+                "alongside this state when a share is live. What you see is the "
+                "sharer's own machine -- not yours, and not the meeting's "
+                "gallery view, so you cannot see participants' faces or the "
+                "meeting UI.\n"
                 "</teams_meet_visual>",
             )
 
@@ -1969,6 +1983,9 @@ class Renderer:
                 )
                 out += f"<action id='{handle_id}' short_name='{short_name}' status='{action_status}' type='{action_type}'>\n"
                 out += f"<original_request>{query}</original_request>\n"
+                task_description = handle_data.get("task_description")
+                if task_description:
+                    out += f"<task_description>{task_description}</task_description>\n"
 
                 if terminal_event is not None:
                     if terminal_event.get("success") is False:

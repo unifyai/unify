@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from tests.helpers import _handle_project
+from tests.task_scheduler.test_task_revision_cas import _provider_event_task
 import pytest
 import unisdk
 
@@ -8,10 +10,10 @@ from unify.common.context_registry import ContextRegistry
 from unify.common.tool_outcome import ToolErrorException
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.task_scheduler import TaskScheduler
+from unify.task_scheduler import typed_tasks_client
 from unify.task_scheduler.types.priority import Priority
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
-from unify.task_scheduler.types.status import Status
 
 
 @_handle_project
@@ -31,18 +33,16 @@ def test_create_task():
         row.description
         == "Send an email to Jeff Smith, kindly congratulating him and explaining that he has been promoted from sales rep to sales manager."
     )
-    assert row.status == Status.scheduled
+    assert row.enabled is True
     assert row.trigger is None
     assert row.schedule is None
     assert row.deadline is None
     assert row.repeat is None
     assert row.priority == Priority.normal
     assert row.task_id == 0
-    assert row.instance_id == 0
     assert row.response_policy is None
     assert row.entrypoint == 101
     assert row.enabled is True
-    assert row.activated_by is None
 
 
 @_handle_project
@@ -61,6 +61,46 @@ def test_delete_task():
     task_scheduler._delete_task(task_id=0)
     task_list = task_scheduler._filter_tasks()
     assert task_list == []
+
+
+def test_delete_task_provider_event_skips_redundant_log_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider-event branch of ``_delete_task`` must delete the task's
+    row exactly once, via the typed API's revision-CAS delete, and must not
+    attempt a second, redundant ``self._store.delete(logs=...)`` over the
+    same row (that path 404s under the collapsed task-identity data model).
+
+    Built via ``__new__`` (bypassing ``__init__``) so this exercises the
+    real ``_delete_task`` control flow without provisioning a live backend.
+    """
+    scheduler = TaskScheduler.__new__(TaskScheduler)
+    scheduler._num_tasks_cached = None
+    task = _provider_event_task(task_revision=5)
+
+    store_delete_calls: list[list[int]] = []
+    scheduler._store = SimpleNamespace(
+        get_rows=lambda *, filter, return_ids_only: [999],
+        delete=lambda *, logs: store_delete_calls.append(logs),
+    )
+    monkeypatch.setattr(scheduler, "_ensure_not_active_task", lambda task_ids: None)
+    monkeypatch.setattr(scheduler, "_resolve_task_for_mutation", lambda task_id: task)
+
+    typed_delete_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        typed_tasks_client,
+        "delete_task",
+        lambda *, task_id, expected_task_revision: typed_delete_calls.append(
+            (task_id, expected_task_revision),
+        ),
+    )
+
+    result = scheduler._delete_task(task_id=task.task_id, _root_applied=True)
+
+    assert typed_delete_calls == [(task.task_id, 5)]
+    assert store_delete_calls == []
+    assert result["outcome"] == "task deleted"
+    assert result["details"]["task_id"] == task.task_id
 
 
 @_handle_project
@@ -139,7 +179,6 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         out = ts._create_task(
             name="Daily shared alert",
             description="Check KPI thresholds for the patch team.",
-            status=Status.scheduled,
             schedule=Schedule(start_at=initial_start.isoformat()),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
             destination=f"team:{team_id}",
@@ -148,12 +187,13 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         current = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
         assert current.destination == f"team:{team_id}"
 
-        ts._rearm_task_definition(current)
+        ts._project_next_occurrence(current)
 
         rows = ts._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
         assert rows[0].destination == f"team:{team_id}"
-        assert rows[0].schedule_start_at == initial_start + timedelta(days=1)
+        # The anchor is immutable; the next occurrence lives on the ledger.
+        assert rows[0].schedule_start_at == initial_start
     finally:
         try:
             unisdk.delete_context(f"Teams/{team_id}/Tasks")
@@ -212,7 +252,7 @@ def test_create_tasks_batch_returns_ordered_ids():
     assert out["details"]["task_ids"] == [0, 1, 2]
     rows = sorted(ts._filter_tasks(), key=lambda task: task.task_id)
     assert [row.name for row in rows] == ["A", "B", "C"]
-    assert all(row.status == Status.scheduled for row in rows)
+    assert all(row.enabled for row in rows)
 
 
 @_handle_project
@@ -230,7 +270,7 @@ def test_create_tasks_preserves_offline_delivery_flag():
     rows = sorted(ts._filter_tasks(), key=lambda task: task.task_id)
     assert [row.offline for row in rows] == [True, True]
     assert [row.entrypoint for row in rows] == [None, None]
-    assert rows[0].status == Status.scheduled
+    assert rows[0].enabled is True
 
 
 @_handle_project
@@ -273,7 +313,6 @@ def test_sanitize_activation_drops_orchestra_nulls_for_bool_defaults():
     ts = TaskScheduler.__new__(TaskScheduler)
     row = {
         "task_id": 1,
-        "instance_id": 0,
         "name": "Integration scheduled task",
         "description": "Quietly start this work when it becomes due.",
         "status": "scheduled",

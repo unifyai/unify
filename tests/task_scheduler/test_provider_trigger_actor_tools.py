@@ -26,7 +26,6 @@ from unify.task_scheduler.provider_trigger_actor import (
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.priority import Priority
-from unify.task_scheduler.types.status import Status
 
 _FIXTURE_DIR = (
     Path(__file__).resolve().parents[1] / "fixtures" / "task_trigger_contract"
@@ -155,7 +154,7 @@ def test_provider_trigger_lifecycle_mutations_use_typed_api_and_surface_revision
     task_id = int(created["details"]["task_id"])
     seeded = scheduler._get_provider_event_task_or_raise(task_id)
     assert int(seeded.task_revision) == 1
-    assert seeded.status == Status.triggerable
+    assert seeded.trigger is not None
     assert seeded.provider_event_binding_id
 
     scheduler._retry_provider_trigger(task_id=task_id)

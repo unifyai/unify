@@ -15,7 +15,7 @@ ADMIN_CONTACT_LOOKUP_FROM_FIELDS = (
     "agent_id,api_key,secrets,email,email_provider,phone,user_id,user_email,"
     "user_first_name,user_last_name,user_phone,user_whatsapp_number,"
     "assistant_whatsapp_number,self_contact_id,boss_contact_id,team_ids,"
-    "is_coordinator,organization_id,voice_id,voice_provider,first_name,"
+    "is_coordinator,is_multiplayer,organization_id,voice_id,voice_provider,first_name,"
     "surname,deploy_env,desktop_mode,managed_desktop_status,user_desktops,is_local,"
     "assistant_discord_bot_id,assistant_slack_bot_user_id,assistant_slack_team_id,"
     "age,nationality,"
@@ -120,6 +120,7 @@ def _local_assistant_data(assistant_id: str | None = None) -> dict[str, Any]:
         "self_contact_id": 0,
         "boss_contact_id": 1,
         "is_coordinator": False,
+        "is_multiplayer": False,
     }
 
 
@@ -168,6 +169,7 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "self_contact_id": assistant.get("self_contact_id", 0),
         "boss_contact_id": assistant.get("boss_contact_id", 1),
         "is_coordinator": assistant.get("is_coordinator", False),
+        "is_multiplayer": assistant.get("is_multiplayer", False),
         "org_id": assistant.get("organization_id"),
     }
 

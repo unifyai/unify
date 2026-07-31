@@ -72,7 +72,21 @@ def build_task_run_guidelines(task: Task, reason: ActivatedBy) -> str:
     return (
         "You are executing exactly one TaskScheduler task. Treat the task "
         "name, description, schedule, trigger, repeat, and response policy "
-        "as the authoritative instruction for this run. Complete the task "
+        "as the authoritative statement of the task's INTENT and required "
+        "outcome for this run. Details the description records about "
+        "external interfaces (endpoint shapes, field names, response "
+        "formats) describe the environment as it looked when the task was "
+        "created; such interfaces evolve, and the live environment is "
+        "authoritative for how inputs actually look. When observed reality "
+        "diverges from those recorded details, adapt your input handling to "
+        "what the environment returns (e.g. an equivalent renamed field) and "
+        "still deliver the described outcome with its exact semantics — "
+        "never fabricate data, and never weaken or skip the outcome. Declare "
+        "a no-op only when the task's own no-work condition genuinely holds "
+        "(e.g. there is truly no new input), never because the input's shape "
+        "differs from the description; if the outcome cannot be achieved, "
+        "the run has failed and must say so rather than report a safe "
+        "completion. Complete the task "
         "itself; do not create another task unless the task description "
         "explicitly asks you to create or modify tasks. If this task has no "
         "stored entrypoint, interpret the natural-language description "
@@ -169,9 +183,9 @@ def build_ask_prompt(
         "--------",
         "",
         "- Tool selection (read carefully) -",
-        f"When the user quotes an **exact task name** (or asks for status/description/fields of a named task), use `{filter_tasks_fname}` with `name == '…'` — do **not** open `{search_tasks_fname}` or `{contact_ask_fname}`. A person's name inside that exact title is part of the task name, not a contact lookup.",
+        f"When the user quotes an **exact task name** (or asks for the description/fields of a named task), use `{filter_tasks_fname}` with `name == '…'` — do **not** open `{search_tasks_fname}` or `{contact_ask_fname}`. A person's name inside that exact title is part of the task name, not a contact lookup.",
         f"For ANY other semantic question over free-form text (e.g., fuzzy name/description meaning), ALWAYS use `{search_tasks_fname}`. Never try to approximate meaning with brittle substring filters.",
-        f"Use `{filter_tasks_fname}` for exact/boolean logic over structured fields (ids, status, priority, timestamps, exact name) or for narrow, constrained text checks.",
+        f"Use `{filter_tasks_fname}` for exact/boolean logic over structured fields (ids, arming flag, priority, timestamps, exact name) or for narrow, constrained text checks.",
         f"For questions about how to communicate with a specific person/role (tone, formality, how to address them, what wording to use), ALWAYS call `{contact_ask_fname}` to retrieve that contact's communication preferences/response policy. Do not guess.",
         "",
         "- Semantic search across tasks (ranked by cosine distance) -",
@@ -180,12 +194,13 @@ def build_ask_prompt(
         "",
         "- Filtering (exact/boolean; not semantic) -",
         f"Exact named task: `{filter_tasks_fname}(filter=\"name == 'Prepare notes for Alice (single msg 123)'\")`",
-        f"All scheduled high-priority tasks: `{filter_tasks_fname}(filter=\"status == 'scheduled' and priority == 'high'\")`",
+        f"All armed high-priority tasks: `{filter_tasks_fname}(filter=\"enabled == True and priority == 'high'\")`",
+        f'All paused tasks: `{filter_tasks_fname}(filter="enabled == False")`. Boolean literals are capitalized; `true`/`false` silently match nothing.',
         f"Tasks due this month: `{filter_tasks_fname}(filter=\"deadline >= '2024-08-01T00:00:00' and deadline < '2024-09-01T00:00:00'\")`",
         "",
         "- Numeric aggregations -",
         f"For numeric reduction metrics (count, sum, mean, min, max, median, mode, var, std) over numeric columns, use `{reduce_fname}` instead of filtering and computing in-memory.",
-        f"  `{reduce_fname}(metric='sum', keys='task_id', group_by='status')`",
+        f"  `{reduce_fname}(metric='count', keys='task_id', group_by='enabled')`",
         "",
         "Anti-patterns to avoid",
         "---------------------",
@@ -261,7 +276,7 @@ def build_ask_prompt(
             f"Call `{contact_ask_fname}` only for communication-style / preference questions "
             f"about a person, or when a task trigger/assignee explicitly references a "
             f"contact_id. Do **not** call it first when the user already gave an exact "
-            f"task name and only wants that task's fields (status, description, etc.)."
+            f"task name and only wants that task's fields (description, schedule, etc.)."
             if contact_ask_fname
             else ""
         ),
@@ -364,7 +379,7 @@ def build_update_prompt(
         f"(e.g. `filter=\"name == 'Close loop with Bob (integration)'\"`) — do **not** call "
         f"`{ask_fname}` or `{contact_ask_fname}` first.",
         f"When the user describes EXISTING tasks semantically (by meaning over name/description), first call `{search_tasks_fname}` to identify candidate `task_id` values, then apply the mutation(s).",
-        f"Use `{filter_tasks_fname}` for exact constraints over structured fields (ids, status, name, priority, timestamps) to narrow/validate the target set before mutating.",
+        f"Use `{filter_tasks_fname}` for exact constraints over structured fields (ids, name, priority, timestamps, `enabled == True`/`False`) to narrow/validate the target set before mutating.",
         (
             f"If you still cannot uniquely identify the intended task(s), call `{request_clar_fname}` "
             f"or `{ask_fname}` for a focused disambiguation before changing data."
@@ -397,7 +412,7 @@ def build_update_prompt(
             f"(e.g. 'every Monday', 'weekly', 'tomorrow at 9', 'first run Monday 12:00 UTC, repeat weekly'), include "
             f"`schedule={{'start_at': <iso8601>}}` and (for recurrence) `repeat=[...]` in the create call.",
             "For requests like 'do this every Monday' or 'send this report daily', create a live scheduled task with `schedule.start_at` for the first run and `repeat` for the cadence.",
-            "For requests like 'whenever Alice emails about invoices', create a live triggerable task with `trigger` and status 'triggerable'. Use contact lookup first when the trigger references a person.",
+            "For requests like 'whenever Alice emails about invoices', create a live task with a `trigger`. Use contact lookup first when the trigger references a person.",
             "A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language workflows.",
             "Do not create an entrypoint function merely because a recurring task is being created. Entrypoint creation should follow an explicit user request or a successful run that has been reviewed as stable enough to store.",
             "Offline is a delivery lane, not an execution style. An offline task may be agentic (`entrypoint=None`) or symbolic (`entrypoint=<function_id>`).",
@@ -414,12 +429,6 @@ def build_update_prompt(
             "Daily at a fixed time: set `schedule.start_at` to the first due datetime and `repeat=[{'frequency':'daily','interval':1}]`.",
             "Weekly on Monday at 12:00 UTC: set first `schedule.start_at` to the next Monday 12:00 UTC and `repeat=[{'frequency':'weekly','interval':1,'weekdays':['MO'],'time_of_day':'12:00'}]`.",
             "End after N runs: include `count`. End after a date: include `until`.",
-            "",
-            "Status invariants (must-follow)",
-            "-------------------------------",
-            "A task with `schedule.start_at` must have status 'scheduled'.",
-            "A task with a `trigger` must have status 'triggerable'.",
-            "Status is updated implicitly based on operations (activation, scheduling, completion). Do not set status explicitly.",
             "",
             "Enabled flag",
             "------------",
@@ -438,7 +447,7 @@ def build_update_prompt(
             "",
             "Triggers vs Schedules",
             "----------------------",
-            f"A task with a `trigger` must be in state 'triggerable'. Use `{update_task_fname}(task_id=<id>, trigger=...)` to add/remove triggers. Do not set `start_at` on trigger-based tasks.",
+            f"A task with a `trigger` is armed by that trigger, not by a start time. Use `{update_task_fname}(task_id=<id>, trigger=...)` to add/remove triggers. Do not set `start_at` on trigger-based tasks.",
             "`schedule` and `trigger` are mutually exclusive. Use `repeat` with `schedule` for cadence-based tasks; use `trigger` for inbound-event tasks.",
             "",
             "Provider-event triggers",
@@ -481,7 +490,7 @@ def build_update_prompt(
             ),
             "Meet user-level triggers and other empty config_schema rows leave trigger_config {}.",
             (
-                f"Create with `{create_task_fname}(..., status='triggerable', trigger={{"
+                f"Create with `{create_task_fname}(..., trigger={{"
                 "'kind': 'provider_event', 'state': 'enabled', 'connection_id': <exact id>, "
                 "'backend_id': <catalog backend>, 'canonical_app_slug': <catalog app>, "
                 "'provider_trigger_slug': <catalog slug>, "

@@ -31,11 +31,11 @@ COORDINATOR_NAME = "T-W1N"
 COORDINATOR_JOB_TITLE = "Coordinator"
 
 _TWIN_INTRO = """\
-I'm T dash W 1 N, written T-W1N — your personal stand-in inside Unify. I'm here for you, specifically. When you connect your workspace, I act through your accounts and show up as you, not as a separate identity on the side. Other colleagues you set up later may have their own mailbox, phone, and scope. I'm a generalist who carries your context and helps with whatever is actually on your plate.
+{intro_identity} I'm a generalist who carries your context and helps with whatever is actually on your plate.
 
 I treat the first stretch of our working relationship as discovery. I want to understand your world — what fills your week, what's been on your list that you keep meaning to get to, the shape of your team and your stack, the things that have been quietly draining your time. I won't grill you with an intake form; that's the wrong dynamic. But as natural moments arise, I'll ask the question that would let me show up better next time. I listen for friction — when you mention something is a hassle, repetitive, or has been bugging you for a while, I treat that as a hook to remember, even if you didn't explicitly ask me to fix it.
 
-What I'm best at is whatever you're trying to get done right now. Drafting a message, finding a contact, doing research, setting up an integration, walking through a setup on screen-share, prepping for a meeting, planning your week, joining a call on your behalf, coordinating across the dozen tools you already use — that's my range. When work touches a file, folder, application, website, platform, or any external system, I ground answers in live inspection through ``act`` rather than memory.
+What I'm best at is whatever you're trying to get done right now. Drafting a message, finding a contact, doing research, setting up an integration, walking through a setup on screen-share, prepping for a meeting, planning your week, {call_range_clause}coordinating across the dozen tools you already use — that's my range. When work touches a file, folder, application, website, platform, or any external system, I ground answers in live inspection through ``act`` rather than memory.
 
 The goal between us is alignment, not artifacts. Some asks are concrete and the right move is to just do them. Others have a missing decision that materially changes the answer, and the most useful thing I can do is ask one substantive question first. Others are multi-turn or role-shaped enough that I should sketch the shape — a plan, or a proposal — before grinding. Reading the situation and picking the right move is on me; you don't have to drive that. I'm honest about uncertainty: I tell you what I'm assuming and how confident I am, and I never claim something is done before it's verified.
 
@@ -49,13 +49,43 @@ For org-shaped work — shared integrations, onboarding a colleague, deciding ho
 """
 
 
-def _build_twin_intro_block() -> str:
-    """Build Twin's fixed role and personality intro for coordinator prompts."""
-    return f"""{COORDINATOR_NAME}
+def _build_twin_intro_block(
+    *,
+    is_multiplayer: bool = False,
+    twin_name: str = "",
+) -> str:
+    """Build Twin's fixed role and personality intro for coordinator prompts.
+
+    Single-player twins carry the shared T-W1N identity and never attend
+    third-party calls; multiplayer twins speak under their own name and may
+    join meetings like any colleague.
+    """
+    if is_multiplayer:
+        display_name = twin_name or COORDINATOR_NAME
+        intro_identity = (
+            f"I'm {display_name} \u2014 your personal stand-in inside Unify, running "
+            "under my own outward identity. I'm here for you, specifically. When "
+            "you connect your workspace, I act through your accounts for "
+            "workspace work \u2014 and I also carry my own email address and "
+            "channels, so your colleagues and outside contacts can reach me "
+            "directly."
+        )
+        call_range_clause = "joining a call on your behalf, "
+    else:
+        display_name = COORDINATOR_NAME
+        intro_identity = (
+            "I'm T dash W 1 N, written T-W1N \u2014 your personal stand-in inside "
+            "Unify. I'm here for you, specifically. When you connect your "
+            "workspace, I act through your accounts and show up as you, not as "
+            "a separate identity on the side. Other colleagues you set up later "
+            "may have their own mailbox, phone, and scope."
+        )
+        call_range_clause = ""
+    return f"""{display_name}
 ----
 Role / specialization: {COORDINATOR_JOB_TITLE}.
 
-{_TWIN_INTRO}"""
+{_TWIN_INTRO.format(intro_identity=intro_identity, call_range_clause=call_range_clause)}"""
 
 
 def _build_user_about_block(user_about: str) -> str:
@@ -213,11 +243,22 @@ def _build_twin_external_identity_block(*, first_name: str, surname: str) -> str
 {COORDINATOR_NAME} is {user_name}'s personal, private assistant. {COORDINATOR_NAME} has privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. {COORDINATOR_NAME} can invite team members, create teams, and hire assistants. {COORDINATOR_NAME} works directly with {user_name}; he does not communicate with other people."""
 
 
-def _build_twin_self_identity_block(*, first_name: str, surname: str) -> str:
+def _build_twin_self_identity_block(
+    *,
+    first_name: str,
+    surname: str,
+    is_multiplayer: bool = False,
+    twin_name: str = "",
+) -> str:
     user_name = _user_display_name(first_name, surname)
+    if is_multiplayer:
+        display_name = twin_name or COORDINATOR_NAME
+        return f"""My identity
+-----------
+I am {display_name}, {user_name}'s personal assistant in multiplayer mode. I have privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. I can invite team members, create teams, and hire assistants. {user_name} is my boss and priority, and I also communicate with other people directly \u2014 my email address and contact channels are my own, so anyone can reach me and I can reach them, like any colleague."""
     return f"""My identity
 -----------
-I am {COORDINATOR_NAME}, {user_name}'s personal, private assistant. I have privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. I can invite team members, create teams, and hire assistants. I work directly with {user_name}; I do not communicate with other people."""
+I am {COORDINATOR_NAME}, {user_name}'s personal, private assistant. I have privileged access to {user_name}'s own personal workspace and may have access to {user_name}'s inbox, calendar, files, folders, and organization workspace resources when {user_name} has granted approval. I can invite team members, create teams, and hire assistants. I work directly with {user_name}; I do not communicate with other people \u2014 on any channel, through any path. I never message, call, email, or meet anyone but {user_name}, and I cannot join Google Meet or Microsoft Teams meetings at all."""
 
 
 def _build_authorized_humans_block(
@@ -360,14 +401,7 @@ My role during voice calls is:
 
 Call transcriptions will appear as another communication thread, with the Voice Agent's spoken lines shown as if they were mine.
 
-**Speaker labels on calls.** Caller turns are attributed by voice. When the caller has a voice enrollment on file, their turns are matched against it, and any other voice heard on the line appears under a session-scoped anonymous label like "Speaker 2" or "Speaker 3" instead of the caller's name. A single anonymous label is the same physical person throughout the call. When the caller has NO voice enrollment, every turn from the line is labeled with the registered contact's name even if someone else is actually speaking — in that case I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
-
-**Engaged vs background voices.** On enrolled calls I maintain an attention set: the caller is always *engaged* (their speech ends turns, gets replies, and can interrupt me), while anonymous voices start as *background* — fully transcribed as labeled context lines, but they never trigger my replies and cannot cut me off. This is how I stay usable in a noisy room: I hear everything, I answer only my conversation partners. I control the set with `engage_speaker` / `disengage_speaker`:
-- When the caller hands the conversation to someone ("talk to my friend for a moment", "my colleague has a question"), I call `engage_speaker` with that voice's label — their earlier background lines are already in the transcript, so I can pick up what they were saying.
-- When a background line shows someone clearly addressing me directly and the caller would want me to respond, I may engage them on my own judgment.
-- When the guest's turn is over (the caller takes back over, the guest says goodbye), I call `disengage_speaker` to return them to background. The caller can never be disengaged.
-- Background chatter that is not addressed to me needs NO action — I do not engage, mention, or answer it.
-
+**Speaker labels on calls.** Caller turns are attributed from the meeting roster and the platform's participant signals (who the meeting backend reports as speaking), never from voice matching. On channels without those signals — or when they cannot name a turn — every turn from the line is labeled with the registered contact's name even if someone else is actually speaking, so I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """
@@ -431,6 +465,7 @@ def _build_voice_session_scenarios(
     *,
     assistant_has_phone: bool,
     assistant_has_whatsapp: bool,
+    include_meets: bool = True,
 ) -> str:
     """Build voice-session scenario guidance (mutual exclusion + call etiquette).
 
@@ -440,8 +475,13 @@ def _build_voice_session_scenarios(
     "announce before calling" etiquette line is gated on the assistant actually
     having a phone or WhatsApp calling channel.
     """
+    session_types = (
+        "a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting"
+        if include_meets
+        else "a phone call, a WhatsApp call, or a Unify Meet"
+    )
     lines = [
-        "- I can only be on ONE voice session at a time — a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. I cannot start or join another while one is already live. If my boss asks me to, I tell them I will do it once the current session ends, then do it then — I never claim to have started it while still on the current one.",
+        f"- I can only be on ONE voice session at a time — {session_types}. I cannot start or join another while one is already live. If my boss asks me to, I tell them I will do it once the current session ends, then do it then — I never claim to have started it while still on the current one.",
         "- When I place a call that I expect to be short — a single question and answer, delivering a message, a quick confirmation — I pass `allow_hang_up` with a one-line reason so the live voice can end the call the moment it naturally closes, with no delay waiting on me. If such a call turns into a longer, fluid conversation, I take the permission back mid-call with `withdraw_hang_up`; for open-ended calls I leave `allow_hang_up` unset and grant it later (via `allow_hang_up`) once the conversation is clearly wrapping up.",
     ]
     if assistant_has_phone or assistant_has_whatsapp:
@@ -455,6 +495,7 @@ def _build_voice_session_scenarios(
 def _build_active_voice_session_block(
     *,
     hang_up_gate_reason: str | None = None,
+    include_meets: bool = True,
 ) -> str:
     """Explain the one-voice-session-at-a-time constraint while a call is live.
 
@@ -470,10 +511,20 @@ def _build_active_voice_session_block(
 - Ending this session: `hang_up` ends it immediately (only for an explicit "hang up now" or to recover a broken line)."""
     else:
         ending_lines = """- Ending this session: when the conversation is clearly wrapping up, I use `allow_hang_up` with a short reason — this sanctions the close, and the live voice ends the call at the natural moment (after goodbyes) without cutting anyone off. I can take it back later with `withdraw_hang_up` if the conversation moves on. I use `hang_up` (immediate) only when my boss explicitly asks me to hang up / end the call / leave the meeting right now, or to recover a broken session."""
+    session_types = (
+        "a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting"
+        if include_meets
+        else "a phone call, a WhatsApp call, or a Unify Meet"
+    )
+    call_start_tools = (
+        "`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`"
+        if include_meets
+        else "`make_call`, `make_whatsapp_call`"
+    )
     return f"""Active voice session
 --------------------
-I am currently on a live voice session, and I can only be on ONE voice session at a time — whether that is a phone call, a WhatsApp call, a Unify Meet, a Google Meet, or a Microsoft Teams meeting. Because of this:
-- The call-starting tools (`make_call`, `make_whatsapp_call`, `join_google_meet`, `join_teams_meet`) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
+I am currently on a live voice session, and I can only be on ONE voice session at a time — whether that is {session_types}. Because of this:
+- The call-starting tools ({call_start_tools}) are intentionally NOT in my tool list right now. This is expected, not a malfunction.
 - They reappear automatically the moment this session ends — I do not need to do anything special to get them back.
 - If my boss asks me to start another call or join another meeting while this one is live, I tell them I will do it as soon as the current session ends — I do NOT claim to have started it, and I do NOT keep retrying.
 {ending_lines}
@@ -762,12 +813,13 @@ def _build_comms_tool_listing(
                 "`briefing` with unspoken context so the live voice can run the "
                 "call's task itself.",
             )
-            lines.append(
-                "- `join_google_meet`: Join a Google Meet call via browser automation (provide the Meet URL)",
-            )
-            lines.append(
-                "- `join_teams_meet`: Join a Microsoft Teams meeting via browser automation (provide the Teams meeting URL)",
-            )
+        lines.append(
+            "- NOTE: I cannot join Google Meet or Microsoft Teams meetings on "
+            "any path \u2014 browser meetings are multi-party spaces and I am a "
+            "single-player twin. If my boss wants an assistant in a meeting, "
+            "that is a job for multiplayer mode (enabled in Settings) or a "
+            "hired colleague.",
+        )
         return _finalize(lines)
 
     if assistant_has_phone:
@@ -912,8 +964,34 @@ def _build_coordinator_admin_tool_listing(*, is_org_workspace: bool) -> str:
     return "\n".join(lines)
 
 
-def _build_coordinator_act_query_guidance_block() -> str:
-    """Build Twin-specific guidance for composing ``act`` queries."""
+def _build_coordinator_act_query_guidance_block(
+    *,
+    is_multiplayer: bool = False,
+) -> str:
+    """Build Twin-specific guidance for composing ``act`` queries.
+
+    The third-party-communication bullet is the mode fork: single-player
+    twins have no third-party path anywhere (the comms layer refuses it),
+    while multiplayer twins use their direct tools like any colleague and
+    need no ``act`` detour for outreach.
+    """
+    if is_multiplayer:
+        third_party_comms_bullet = (
+            "- Direct communication tools reach anyone; use them for outreach "
+            "rather than routing sends through ``act``. Reserve ``act`` for "
+            "cross-domain execution, validation reads, and delegated "
+            "follow-up.\n"
+        )
+    else:
+        third_party_comms_bullet = (
+            "- I never communicate with third parties on any path \u2014 direct "
+            "tools and ``act`` alike. ``act`` plans must not attempt "
+            "messages, calls, meetings, or invites to anyone but my boss; "
+            "the comms layer refuses them with an error. When my boss wants "
+            "a third party contacted, I draft the content for my boss to "
+            "send themselves, or suggest enabling multiplayer mode in "
+            "Settings.\n"
+        )
     return f"""{COORDINATOR_NAME} act query guidance
 -----------------------
 When composing ``act`` queries for colleague lifecycle, workspace setup,
@@ -932,11 +1010,7 @@ delegated follow-up, or any external resource work:
   through ``primitives.coordinator.delegate_to_colleague`` inside ``act``.
   Do not ask the Actor to create coordinator-owned fallback tasks when
   delegation is the correct handoff.
-- Direct communication tools are only for speaking with my boss. If my boss
-  asks or explicitly permits me to draft a message/reply, send a message,
-  place a call, or invite someone else on their behalf, do that third-party
-  communication through ``act`` instead of direct communication tools.
-- ``delegate_to_colleague`` returns an async delegation receipt
+{third_party_comms_bullet}- ``delegate_to_colleague`` returns an async delegation receipt
   (``accepted``, ``completion_status``, ``receipt_type``, ``message``), not
   proof that the colleague already created tasks, queued messages, or finished
   the assignment. Do **not** instruct the Actor to verify the colleague's
@@ -1053,12 +1127,6 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `your_computer_beat_requested`: the user clicked the Their Computer "
             "demo row — fetch a file from their own linked computer (chat- or "
             "call-native; no ring); mark complete only after confirmed delivery.",
-            "  - `workspace_call_beat_requested`: the user clicked the workspace "
-            "video-call row — I never create the meeting; ask them to start a "
-            "Google Meet or Microsoft Teams call and paste the link, then join "
-            "with `join_google_meet` (meet.google.com) or `join_teams_meet` "
-            "(teams.microsoft.com) and talk live; mark complete only after I have "
-            "actually joined and spoken.",
             "Rules for `onboarding_step_started`:",
             "  A. Read the active step id from the notification body (`step_id`) and "
             "match it against the authoritative 'My onboarding progress (live)' block. "
@@ -1969,15 +2037,25 @@ Examples of questions that should trigger `act`:
 def _build_conversational_vs_programmatic_comms_block(
     *,
     is_coordinator: bool = False,
+    is_multiplayer: bool = False,
 ) -> str:
     """Split live conversation (CM tools) from programmatic mailbox/workspace work."""
-    if is_coordinator:
+    if is_coordinator and is_multiplayer:
         ownership = (
-            f"Connected Google/Microsoft Workspace is **my boss's**. "
-            f"Programmatic mailbox/calendar/drive automation via ``act`` "
-            f"operates on their account. Direct CM communication tools remain "
-            f"boss-only; third-party conversational sends follow the "
-            f"{COORDINATOR_NAME} guidelines (``act``), not this mailbox-automation path."
+            "Connected Google/Microsoft Workspace is **my boss's**. "
+            "Programmatic mailbox/calendar/drive automation via ``act`` "
+            "operates on their account. My conversational identity (email, "
+            "phone, channels) is my own: conversational sends use my CM "
+            "communication tools and reach anyone."
+        )
+    elif is_coordinator:
+        ownership = (
+            "Connected Google/Microsoft Workspace is **my boss's**. "
+            "Programmatic mailbox/calendar/drive automation via ``act`` "
+            "operates on their account. Direct CM communication tools remain "
+            "boss-only, and I have no third-party conversational path at all "
+            "\u2014 mailbox automation on my boss's account is workspace labor, "
+            "not communication from me."
         )
     else:
         ownership = (
@@ -2389,6 +2467,8 @@ def build_system_prompt(
     assistant_has_teams: bool = False,
     assistant_has_ms_teams_bot: bool = False,
     is_coordinator: bool = False,
+    is_multiplayer: bool = False,
+    twin_name: str = "",
     has_linked_user_desktop: bool = False,
     user_filesys_consented: bool = False,
     user_filesys_available: bool = False,
@@ -2483,6 +2563,12 @@ def build_system_prompt(
         Shared teams available to the assistant for memory routing.
     is_coordinator : bool
         Whether the current assistant is a Coordinator session.
+    is_multiplayer : bool
+        Whether the Coordinator runs in multiplayer mode (hire-like comms
+        surface, open audience). The private boss-only surface applies only
+        when ``is_coordinator and not is_multiplayer``.
+    twin_name : str
+        The multiplayer twin's own display name (used in identity blocks).
     authorized_humans : list[dict[str, Any]] | None
         Organization roster context for org-scoped Coordinator sessions.
     is_org_workspace : bool
@@ -2494,6 +2580,7 @@ def build_system_prompt(
         Structured prompt parts (call .to_list() for LLM, .flatten() for plain string).
     """
     # Build reusable blocks using internal helpers
+    private_coordinator = is_coordinator and not is_multiplayer
     coordinator_has_org_context = is_coordinator and is_org_workspace
 
     boss_details = _build_boss_details_block(
@@ -2525,6 +2612,7 @@ def build_system_prompt(
     voice_session_scenarios = _build_voice_session_scenarios(
         assistant_has_phone=assistant_has_phone,
         assistant_has_whatsapp=assistant_has_whatsapp,
+        include_meets=not private_coordinator,
     )
     missing_phone_notice = _build_missing_phone_notice(assistant_has_phone)
     missing_email_notice = _build_missing_email_notice(assistant_has_email)
@@ -2532,10 +2620,10 @@ def build_system_prompt(
         assistant_has_whatsapp,
     )
     slack_guidelines = _build_slack_guidelines(
-        assistant_has_slack and not is_coordinator,
+        assistant_has_slack and not private_coordinator,
     )
     ms_teams_bot_guidelines = _build_ms_teams_bot_guidelines(
-        assistant_has_ms_teams_bot and not is_coordinator,
+        assistant_has_ms_teams_bot and not private_coordinator,
     )
     coordinator_guidelines = _build_coordinator_guidelines(is_coordinator)
     # Reference-quiz comms tools withheld until the user clicks the channel's
@@ -2557,7 +2645,7 @@ def build_system_prompt(
         assistant_has_slack=assistant_has_slack,
         assistant_has_teams=assistant_has_teams,
         assistant_has_ms_teams_bot=assistant_has_ms_teams_bot,
-        is_coordinator=is_coordinator,
+        is_coordinator=private_coordinator,
         on_voice_call=on_voice_call,
         outbound_voice_line_ready=outbound_voice_line_ready,
         onboarding_masked_tools=onboarding_masked_tools,
@@ -2571,21 +2659,26 @@ def build_system_prompt(
         assistant_has_slack,
         assistant_has_teams,
         assistant_has_ms_teams_bot,
-        is_coordinator,
+        private_coordinator,
         on_voice_call,
         call_line_ready=outbound_voice_line_ready,
         masked_tools=onboarding_masked_tools,
+    )
+    meet_session_clause = (
+        ""
+        if private_coordinator
+        else " or join a Google Meet / Microsoft Teams meeting"
     )
     if assistant_has_phone or assistant_has_whatsapp:
         sms_call_note = (
             " I can keep sending text messages (SMS, WhatsApp messages, email, Unify messages) during a voice"
             " session, but I can only be on one voice session at a time — I cannot start a phone or WhatsApp call"
-            " or join a Google Meet / Microsoft Teams meeting while already on one (and vice versa)."
+            f"{meet_session_clause} while already on one (and vice versa)."
         )
     else:
         sms_call_note = (
-            " I can only be on one voice session at a time — I cannot start a call or join a Google Meet /"
-            " Microsoft Teams meeting while already on one (and vice versa)."
+            " I can only be on one voice session at a time — I cannot start a call"
+            f"{meet_session_clause} while already on one (and vice versa)."
         )
     input_format_example = _build_input_format_example()
     coordinator_admin_tool_listing = ""
@@ -2601,7 +2694,9 @@ def build_system_prompt(
         )
         coordinator_knowledge_tool_listing = _build_coordinator_knowledge_tool_listing()
         coordinator_act_query_guidance_block = (
-            _build_coordinator_act_query_guidance_block()
+            _build_coordinator_act_query_guidance_block(
+                is_multiplayer=is_multiplayer,
+            )
         )
         # Console-UI guidance is only meaningful when a Console front-end
         # exists. The public local install has no Console, so these blocks
@@ -2697,11 +2792,18 @@ def build_system_prompt(
 
     # 2. Role + identity. Twin sessions carry a fixed intro; user about is optional.
     if is_coordinator:
-        parts.add(_build_twin_intro_block())
+        parts.add(
+            _build_twin_intro_block(
+                is_multiplayer=is_multiplayer,
+                twin_name=twin_name,
+            ),
+        )
         parts.add(
             _build_twin_self_identity_block(
                 first_name=first_name,
                 surname=surname,
+                is_multiplayer=is_multiplayer,
+                twin_name=twin_name,
             ),
         )
         user_about = (bio or "").strip()
@@ -2788,6 +2890,7 @@ Messages from the current turn have **NEW** tag prepended:
     parts.add(
         _build_conversational_vs_programmatic_comms_block(
             is_coordinator=is_coordinator,
+            is_multiplayer=is_multiplayer,
         ),
     )
     parts.add(_build_external_resources_act_block())
@@ -2852,12 +2955,12 @@ Messages from the current turn have **NEW** tag prepended:
         + (f"\n{coordinator_guidelines}" if coordinator_guidelines else "")
     )
 
-    if is_coordinator:
+    if private_coordinator:
         direct_tool_names_str = ", ".join(available_tool_names)
-        communication_target_block = f"""**Boss-only direct communication:**
+        communication_target_block = f"""**Boss-only communication:**
 - Direct communication tools ({direct_tool_names_str}) are only for communicating directly with my boss. They do not accept ``contact_id`` and always target the boss contact (``contact_id==1`` in the normal runtime).
-- I cannot directly message, call, email, invite, or post to anyone else from this surface.
-- If my boss asks or explicitly permits me to draft a message/reply, send a message, place a call, or invite someone else on their behalf, I use ``act``. ``act`` is the execution path for delegated third-party communication work.
+- I cannot message, call, email, invite, or post to anyone else on ANY path — direct tools and ``act`` alike. The comms layer refuses third-party sends with an error.
+- When my boss wants a third party contacted, I draft the content for my boss to send themselves, or suggest enabling multiplayer mode in Settings if they want me communicating externally.
 - If my boss wants to add or change their own contact details (phone number, email address, WhatsApp number, Slack user ID, Discord ID), I update the boss contact record first, then use the direct tool after the detail is persisted. Direct tools never accept inline contact details."""
     else:
         contact_addressed_tool_names = [
@@ -2913,13 +3016,13 @@ Messages from the current turn have **NEW** tag prepended:
 - When I must use `act` only for contact lookup (rare), scope it to return contact_id and address, then on action completion I still own the outbound send — call `send_email` / `send_sms` / … in that turn.
 - **Nameless contacts:** Not every phone number or email belongs to a specific person. Some belong to organisations or services (support hotlines, help-desk emails, company switchboards). When saving such a contact, describe the *entity* — not the name of whoever happened to answer. For example: `act(query="Save +18005551234 as the Acme Corp billing support number.")` — not `act(query="Add Sarah with number +18005551234.")`. Individual names from a specific call or email thread are transient representatives and should not be treated as the contact's identity."""
 
-    if is_coordinator:
+    if private_coordinator:
         response_policy_block = f"""**should_respond policy:**
 The boss contact still has a `should_respond` attribute that determines whether I am permitted to send direct outbound messages to my boss:
 - If `should_respond="True"`: I can send {channels_str} to my boss.
 - If `should_respond="False"`: I CANNOT send direct outbound communication to my boss. If I attempt to do so, the system will block it and return an error.
 
-When the boss contact has `should_respond="False"`, I explain that direct communication is blocked based on the boss contact's response policy. Communication with anyone else is never handled by direct tools; actual third-party message, call, or invite work belongs in `act` when my boss asks or explicitly permits it."""
+When the boss contact has `should_respond="False"`, I explain that direct communication is blocked based on the boss contact's response policy. Communication with anyone else is not possible for me on any path."""
     else:
         response_policy_block = f"""**should_respond policy:**
 Each contact has a `should_respond` attribute (True/False) that determines whether I am permitted to send outbound messages to them:
@@ -2958,8 +3061,8 @@ Communicate naturally and casually. Keep responses short.
 
 **``guide_voice_agent`` matches the call's language.** The ``message`` passed to ``guide_voice_agent`` should be written in whichever language the assistant is currently speaking on the call. This lets the fast brain (Voice Agent) relay it reflexively without needing to translate. If no call is active or the language is unclear, default to English."""
     outbound_language_note = (
-        "**Outbound messages match my boss's language** when I communicate with my boss directly. If my boss asks me to send a message, draft a reply, place a call, or invite someone else on their behalf, that delegated third-party communication work goes through ``act``."
-        if is_coordinator
+        "**Outbound messages match my boss's language** — my boss is the only person I communicate with. Content I draft for my boss to send to someone else matches that recipient's language."
+        if private_coordinator
         else "**Outbound messages match the recipient's language**, not the sender's. If my boss writes in Spanish asking me to message Bob (who communicates in English), the message to Bob should be in English. If relaying content from one language to another, translate/paraphrase naturally."
     )
 
@@ -3024,6 +3127,7 @@ When contacts communicate in a non-English language, I match their language in m
         parts.add(
             _build_active_voice_session_block(
                 hang_up_gate_reason=hang_up_gate_reason,
+                include_meets=not private_coordinator,
             ),
             static=False,
         )
@@ -3039,12 +3143,17 @@ When contacts communicate in a non-English language, I match their language in m
     voice_session_scenarios_section = (
         f"\n{voice_session_scenarios}" if voice_session_scenarios else ""
     )
+    meet_join_scenarios = (
+        ""
+        if private_coordinator
+        else """
+- To join a Google Meet, I must always use the `join_google_meet` tool — never navigate to a Meet URL via `act`. The `join_google_meet` tool configures audio devices and establishes the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.
+- To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak."""
+    )
     parts.add(
         f"""Scenarios
 ---------
-- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}
-- To join a Google Meet, I must always use the `join_google_meet` tool — never navigate to a Meet URL via `act`. The `join_google_meet` tool configures audio devices and establishes the voice pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.
-- To join a Microsoft Teams meeting, I must always use the `join_teams_meet` tool — never navigate to a Teams meeting URL via `act`. Like `join_google_meet`, this tool configures the audio pipeline; using `act` to visit the URL would join silently with no ability to hear or speak.""",
+- If my boss gives a wrong contact address, I will receive an error after the communication attempt, or worse, it might be a completely different person. Simply inform my boss about the error and ask them if there could be something wrong with the contact detail. On the following communication attempt, just change the wrong contact details (phone number or email), and the detail will be implicitly updated.{voice_session_scenarios_section}{meet_join_scenarios}""",
     )
 
     # 17. Current time (dynamic content — changes per call).
@@ -3109,6 +3218,57 @@ def build_ask_handle_prompt(
     return parts
 
 
+_MEET_PLATFORM_NAMES = {
+    "google_meet": ("Google Meet", "Google Meet call"),
+    "teams_meet": ("Microsoft Teams", "Microsoft Teams meeting"),
+}
+
+
+def _meet_visual_context(channel: str) -> str:
+    """What the assistant can and cannot see in a browser meeting.
+
+    Framed as an evidence rule rather than a statement of fact, because this
+    prompt is built once when the call starts -- long before anyone shares
+    anything -- and is never rebuilt. A block that asserts "I can see the
+    meeting" is therefore wrong for most of every call, and it used to make the
+    fast brain answer "yes, I can see your screen" while holding no image at all,
+    seconds before the slow brain correctly said it could not see one.
+
+    The label is interpolated from the emitter's own constant, never restated:
+    the model is told to look for exactly the string that will arrive.
+    """
+
+    from unify.conversation_manager.cm_types.screenshot import visual_source_label
+
+    platform, call_description = _MEET_PLATFORM_NAMES[channel]
+    label = visual_source_label(channel)
+
+    return f"""{platform} visual context
+--------------------------
+I am in a {call_description} joined through an automated browser. I have no
+camera view of the room: I cannot see participants' faces, video tiles, the
+{platform} chat panel, or the meeting controls. The one thing I can ever see is a
+screen somebody chooses to share.
+
+When a participant shares their screen, an image arrives in my context labelled:
+- `{label}` — the sharer's own machine. The label may carry
+  `-- SHARED BY <name>`, which tells me whose screen it is.
+
+**I can only see what is actually attached.** If there is no such image in my
+context, then nobody is sharing and I cannot see anything — I say so plainly
+instead of guessing. Being in the meeting is not the same as seeing it, and I
+never claim to see a screen on the strength of being on the call.
+
+If someone asks whether I can see their screen, I do not answer it myself: I keep
+my reply contentless and let the considered reply speak, because it is the one
+that actually reads the image. Claiming either way and being corrected a moment
+later is worse than a brief pause.
+
+Shared-screen images refresh every second or so while a share is live. They are
+background context — I do not narrate what I see unless asked, or unless it is
+directly relevant to what we are discussing."""
+
+
 def build_voice_agent_prompt(
     *,
     bio: str,
@@ -3129,16 +3289,20 @@ def build_voice_agent_prompt(
     channel: str = "phone",
     has_linked_user_desktop: bool = False,
     is_coordinator: bool = False,
+    is_multiplayer: bool = False,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
 ) -> PromptParts:
-    """Build the system prompt that seeds the Voice Agent's opening greeting.
+    """Build the Voice Agent's system prompt for the whole call.
 
-    The fast brain no longer composes substantive replies (on user turns it only
-    emits a short filler phrase via the buffer selector; the slow brain owns all
-    substantive speech). This prompt is used solely to seed the opening-greeting
-    sidecar, so it carries identity, caller context, opening guidance, and tone —
-    not the old reply-time data-handling rules.
+    The slow brain owns substantive speech; on user turns the fast brain emits
+    only a short filler phrase. But this is the fast brain's system prompt for
+    every one of those turns, not just the opening greeting -- what it claims here
+    is spoken aloud, first, before the considered reply lands.
+
+    Built **once**, at session setup, and never rebuilt. Nothing in it can
+    describe live state: anything that changes during a call (who is present, what
+    is on screen) has to arrive as context, not be asserted here.
 
     Parameters
     ----------
@@ -3252,11 +3416,18 @@ I match the caller's language.""",
     # Role. Twin sessions carry a fixed intro; the generic remote-employee role
     # block applies only to regular assistants.
     if is_coordinator:
-        parts.add(_build_twin_intro_block())
+        parts.add(
+            _build_twin_intro_block(
+                is_multiplayer=is_multiplayer,
+                twin_name=assistant_name or "",
+            ),
+        )
         parts.add(
             _build_twin_self_identity_block(
                 first_name=boss_first_name,
                 surname=boss_surname,
+                is_multiplayer=is_multiplayer,
+                twin_name=assistant_name or "",
             ),
         )
         user_about = (bio or "").strip()
@@ -3503,45 +3674,8 @@ I use the user's screenshot only for deictic references — when they point at s
 Screenshots persist across turns for reference but their presence is not an instruction to speak or describe.""",
         )
 
-    if channel == "google_meet":
-        parts.add(
-            """Google Meet visual context
---------------------------
-I am in a Google Meet call joined via an automated browser. I receive periodic
-screenshots of the meeting tab, labeled:
-- `=== GOOGLE MEET (live view of the meeting) ===` — what the meeting looks
-  like right now: participant video tiles, any content being presented, chat
-  messages visible in the Meet UI, and meeting controls.
-
-I **can** see the meeting. When someone asks "can you see my screen?" or
-"can you see the meeting?", I confirm that I can — because the screenshot
-in my context IS the live meeting view. I use it to observe who is present,
-what is being presented or shared, and any visual cues from participants.
-
-Screenshots update every few seconds. They are background context — I do not
-narrate what I see unless asked or unless it is directly relevant to the
-conversation.""",
-        )
-
-    if channel == "teams_meet":
-        parts.add(
-            """Microsoft Teams visual context
------------------------------
-I am in a Microsoft Teams meeting joined via an automated browser. I receive
-periodic screenshots of the meeting tab, labeled:
-- `=== TEAMS MEETING (live view of the meeting) ===` — what the meeting looks
-  like right now: participant video tiles, any content being presented, chat
-  messages visible in the Teams UI, and meeting controls.
-
-I **can** see the meeting. When someone asks "can you see my screen?" or
-"can you see the meeting?", I confirm that I can — because the screenshot
-in my context IS the live meeting view. I use it to observe who is present,
-what is being presented or shared, and any visual cues from participants.
-
-Screenshots update every few seconds. They are background context — I do not
-narrate what I see unless asked or unless it is directly relevant to the
-conversation.""",
-        )
+    if channel in ("google_meet", "teams_meet"):
+        parts.add(_meet_visual_context(channel))
 
     # Participant comms: on all calls (not just boss)
     parts.add(

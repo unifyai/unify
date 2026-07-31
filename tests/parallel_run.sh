@@ -113,7 +113,18 @@ report_completed_sessions() {
               cost=$(cat "$cost_file" 2>/dev/null | tr -d '[:space:]')
               rm -f "$cost_file"
             fi
-            echo "$duration|pass|$hits|$misses|$cost|$base" >> "$RESULTS_FILE"
+            # pytest exits 0 when every test skips, so a green session may have
+            # run nothing. Report those as skipped rather than passed.
+            local status="pass" outcome_passed outcome_skipped
+            local outcome_file="/tmp/parallel_run_outcome_${sid}.txt"
+            if [[ -f "$outcome_file" ]]; then
+              IFS='|' read -r outcome_passed outcome_skipped < "$outcome_file" 2>/dev/null || true
+              rm -f "$outcome_file"
+              if [[ "${outcome_passed:-0}" == "0" && "${outcome_skipped:-0}" != "0" ]]; then
+                status="skip"
+              fi
+            fi
+            echo "$duration|$status|$hits|$misses|$cost|$base" >> "$RESULTS_FILE"
           fi
         fi
         ;;
@@ -1615,8 +1626,9 @@ echo "========================================================================"
 echo "TEST STATS: DURATION, CACHE & COST (fastest → slowest)"
 echo "========================================================================"
 
-# Count passed and failed (use { grep || true; } to handle no-match case with pipefail)
+# Count passed, skipped and failed (use { grep || true; } to handle no-match case with pipefail)
 pass_count=$( { grep '|pass|' "$RESULTS_FILE" || true; } 2>/dev/null | wc -l | tr -d ' ')
+skip_count=$( { grep '|skip|' "$RESULTS_FILE" || true; } 2>/dev/null | wc -l | tr -d ' ')
 fail_count=$( { grep '|fail|' "$RESULTS_FILE" || true; } 2>/dev/null | wc -l | tr -d ' ')
 
 # Build duration summary for both stdout and file output
@@ -1659,6 +1671,20 @@ if (( pass_count > 0 )); then
   done
 fi
 
+# Print skipped sessions — every test in these ran nothing, so the coverage
+# they normally provide is absent from this run.
+if (( skip_count > 0 )); then
+  print_duration_line ""
+  print_duration_line "⏭️  SKIPPED ($skip_count tests — no coverage from these):"
+  print_duration_line "$(printf "  %6s  %6s  %10s  %s" "time" "cache" "cost" "test")"
+  print_duration_line "$(printf "  %6s  %6s  %10s  %s" "----" "-----" "----" "----")"
+  { grep '|skip|' "$RESULTS_FILE" || true; } | sort -t'|' -k1 -n | while IFS='|' read -r dur status hits misses cost name; do
+    cache_rate=$(format_cache_rate "$hits" "$misses")
+    formatted_cost=$(printf '$%.6f' "$cost")
+    print_duration_line "$(printf "  %5ds  %6s  %10s  %s" "$dur" "$cache_rate" "$formatted_cost" "$name")"
+  done
+fi
+
 # Print failed tests sorted by duration (fastest first, slowest last)
 if (( fail_count > 0 )); then
   print_duration_line ""
@@ -1684,7 +1710,7 @@ while IFS='|' read -r dur status hits misses cost name; do
   total_cost=$(awk "BEGIN {printf \"%.6g\", $total_cost + $cost}")
 done < "$RESULTS_FILE"
 
-total_tests=$((pass_count + fail_count))
+total_tests=$((pass_count + skip_count + fail_count))
 if (( total_tests > 0 )); then
   print_duration_line ""
   print_duration_line "========================================================================"

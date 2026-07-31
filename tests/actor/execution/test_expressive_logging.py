@@ -14,7 +14,6 @@ from unify.task_scheduler.base import BaseTaskScheduler
 from unify.task_scheduler.prompt_builders import build_task_run_guidelines
 from unify.task_scheduler.types.activated_by import ActivatedBy
 from unify.task_scheduler.types.priority import Priority
-from unify.task_scheduler.types.status import Status
 from unify.task_scheduler.types.task import Task
 
 
@@ -107,10 +106,8 @@ def test_task_execute_doc_has_logging_antipatterns():
 def test_build_task_run_guidelines_point_at_logged_functions():
     task = Task(
         task_id=3,
-        instance_id=1,
         name="Invoice follow-up",
         description="Draft an invoice reply.",
-        status=Status.triggerable,
         priority=Priority.normal,
     )
     guidelines = build_task_run_guidelines(task, ActivatedBy.trigger)

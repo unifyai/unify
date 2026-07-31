@@ -1,14 +1,24 @@
 """
 Schema describing how a task repeats over time. The model serializes to and
 from JSON for storage and transport.
+
+The recurrence subset (pattern schema, normalization, next-occurrence
+projection, deterministic dispatch jitter) is deliberately mirrored into
+``orchestra/services/task_repetition.py`` so Orchestra can re-project a future
+head for a repeating series whose worker died before dispatch. Any change to
+those semantics MUST be applied to both files in the same changeset; the two
+copies are pinned against each other by the shared
+``repeat_projection_vectors.json`` checked into each repo's test tree with
+byte-identical content.
 """
 
 from __future__ import annotations
 
 import calendar
+import hashlib
 from enum import Enum
 from typing import List, Optional
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -250,6 +260,23 @@ def max_jitter_seconds(patterns) -> int:
     return best
 
 
+def _fixed_stride(pattern: RepeatPattern) -> timedelta | None:
+    """Exact step size for frequencies whose occurrences are evenly spaced.
+
+    Only minutely and hourly qualify: every other frequency re-derives its
+    candidates from the calendar (weekday scans, month and leap-day clamping,
+    time-of-day anchoring), where stepping k times is not the same as jumping
+    k steps at once. They are also the only frequencies whose slots are dense
+    enough to exhaust the iteration bound below within a plausible outage.
+    """
+
+    if pattern.frequency == Frequency.MINUTELY:
+        return timedelta(minutes=pattern.interval)
+    if pattern.frequency == Frequency.HOURLY:
+        return timedelta(hours=pattern.interval)
+    return None
+
+
 def _next_pattern_occurrence(
     *,
     previous_start: datetime,
@@ -263,6 +290,18 @@ def _next_pattern_occurrence(
     if pattern.count is not None and occurrence_count >= pattern.count:
         return None
     candidate = previous_start
+    # A pattern can be asked for its next slot long after the series stopped
+    # firing (a crashed worker released weeks later). Stepping one occurrence
+    # at a time from the last consumed slot would exhaust the iteration bound,
+    # so evenly spaced frequencies jump straight to the last slot at or before
+    # *now* and let the loop advance from there. The jump is exact (timedelta
+    # floor division) and a no-op unless *now* is ahead of the previous
+    # occurrence, which keeps dispatch-time projection — where the caller
+    # passes now=previous_start — byte-identical. `count` is unaffected: it is
+    # accounted against the occurrence index, never against steps taken here.
+    stride = _fixed_stride(pattern)
+    if stride is not None and reference_now > candidate:
+        candidate += stride * ((reference_now - candidate) // stride)
     for _ in range(2048):
         candidate = _advance_one_occurrence(candidate, pattern)
         if pattern.until is not None and candidate > _normalize_until(
@@ -383,3 +422,32 @@ def _normalize_until(until: datetime, reference: datetime) -> datetime:
     if until.tzinfo is not None and reference.tzinfo is None:
         return until.replace(tzinfo=None)
     return until
+
+
+def deterministic_jitter_seconds(
+    *,
+    task_id: int,
+    slot: datetime,
+    patterns: list[RepeatPattern] | None,
+) -> float:
+    """Jitter for one occurrence, identical for every caller that computes it.
+
+    Jitter spreads *dispatch*; it does not redefine the occurrence. The ledger
+    records the canonical slot, and this offset is applied when that slot is
+    dispatched, so the recorded time stays the anchor for computing the next
+    one and the series cannot drift.
+
+    It must also not be random per writer: concurrent runs derive the same
+    occurrence independently, and seeding on ``(task_id, slot)`` makes every
+    caller agree on the offset for a given slot.
+    """
+
+    budget = max_jitter_seconds(patterns)
+    if budget <= 0:
+        return 0.0
+    digest = hashlib.sha256(
+        f"{int(task_id)}:{slot.astimezone(timezone.utc).isoformat()}".encode("utf-8"),
+    ).digest()
+    # 53 bits keeps the ratio exactly representable as a float.
+    fraction = int.from_bytes(digest[:7], "big") / float(1 << 56)
+    return round(fraction * float(budget), 6)

@@ -2088,6 +2088,87 @@ class TestMeetInteractionEventHandlers:
         assert entry.utterance == "Look at this part of my screen"
         assert isinstance(entry.timestamp, datetime)
 
+    def _buffer(self, mock_cm):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm._screenshot_buffer = []
+        mock_cm._session_logger = MagicMock()
+        return ConversationManager._buffer_screenshot.__get__(mock_cm)
+
+    def test_unpaired_frames_from_one_source_collapse(self, mock_cm):
+        """A shared screen left up must not pile a reel of frames into one turn.
+
+        Unpaired frames arrive every few seconds for as long as somebody presents,
+        and each one appended would land in the same state message and be
+        registered as its own image. Only the newest describes what is on screen.
+        """
+        import json
+
+        method = self._buffer(mock_cm)
+        for i in range(5):
+            method(
+                json.dumps(
+                    {
+                        "b64": f"frame-{i}",
+                        "utterance": "",
+                        "source": "google_meet",
+                        "attribution": "Ada",
+                    },
+                ),
+            )
+
+        assert len(mock_cm._screenshot_buffer) == 1
+        assert mock_cm._screenshot_buffer[0].b64 == "frame-4"
+        assert mock_cm._screenshot_buffer[0].attribution == "Ada"
+
+    def test_frames_paired_with_speech_always_accumulate(self, mock_cm):
+        """Those are evidence for a specific thing somebody said, not "now"."""
+        import json
+
+        method = self._buffer(mock_cm)
+        for text in ("what is this?", "and this bit?"):
+            method(
+                json.dumps(
+                    {
+                        "b64": f"frame-{text}",
+                        "utterance": text,
+                        "source": "google_meet",
+                    },
+                ),
+            )
+
+        assert [e.utterance for e in mock_cm._screenshot_buffer] == [
+            "what is this?",
+            "and this bit?",
+        ]
+
+    def test_collapsing_does_not_cross_sources(self, mock_cm):
+        """The assistant's screen and a shared screen are different pictures."""
+        import json
+
+        method = self._buffer(mock_cm)
+        method(json.dumps({"b64": "meet", "utterance": "", "source": "google_meet"}))
+        method(json.dumps({"b64": "desk", "utterance": "", "source": "assistant"}))
+
+        assert [e.source for e in mock_cm._screenshot_buffer] == [
+            "google_meet",
+            "assistant",
+        ]
+
+    def test_an_unpaired_frame_does_not_overwrite_a_paired_one(self, mock_cm):
+        """Losing the frame tied to a question would lose the question's answer."""
+        import json
+
+        method = self._buffer(mock_cm)
+        method(
+            json.dumps(
+                {"b64": "asked", "utterance": "what is this?", "source": "google_meet"},
+            ),
+        )
+        method(json.dumps({"b64": "ambient", "utterance": "", "source": "google_meet"}))
+
+        assert [e.b64 for e in mock_cm._screenshot_buffer] == ["asked", "ambient"]
+
     # --------------------------------------------------------------------- #
     # Two-phase screenshot buffer (peek + commit)
     # --------------------------------------------------------------------- #
@@ -2648,6 +2729,7 @@ class TestTaskDueEventHandlers:
             source_task_log_id=555,
             revision="rev-1",
             task_name="Morning briefing",
+            task_description="Deliver the overnight briefing summary unprompted.",
         )
         mock_cm.actor = MagicMock()
         captured: dict[str, object] = {}
@@ -2688,6 +2770,10 @@ class TestTaskDueEventHandlers:
         assert captured["task_id"] == 101
         assert captured["_activated_by"] == ActivatedBy.schedule
         assert captured["delegate"] is not None
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver the overnight briefing summary unprompted."
+        )
 
     @pytest.mark.asyncio
     @_handle_project
@@ -2711,7 +2797,6 @@ class TestTaskDueEventHandlers:
         from unify.task_scheduler.task_scheduler import TaskScheduler
         from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
         from unify.task_scheduler.types.schedule import Schedule
-        from unify.task_scheduler.types.status import Status
 
         calls: list[dict] = []
         actor = SimulatedActor(steps=0)
@@ -2726,7 +2811,6 @@ class TestTaskDueEventHandlers:
         task_id = scheduler._create_task(
             name="Scheduled integration report",
             description="Prepare the scheduled report.",
-            status=Status.scheduled,
             schedule=Schedule(start_at="2026-04-10T09:00:00+00:00"),
             repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         )["details"]["task_id"]
@@ -2759,6 +2843,7 @@ class TestTaskDueEventHandlers:
             source_task_log_id=source_task_log_id,
             revision="rev-1",
             task_name="Scheduled integration report",
+            task_description="Prepare the scheduled report.",
         )
         mock_cm.actor = actor
 
@@ -2819,11 +2904,21 @@ class TestTaskDueEventHandlers:
         assert calls
         assert calls[0]["guidelines"] is not None
         assert calls[0]["persist"] is False
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Prepare the scheduled report."
+        )
 
+        # ``Tasks`` is definition-only: one row per ``task_id`` for the whole
+        # series, with run state living in ``Tasks/Executions``. Starting an
+        # occurrence must therefore leave exactly one definition row, still armed
+        # -- a run that disarmed its own series would silently stop recurring.
+        # This previously asserted a ``status`` field, which the arming-flag
+        # migration removed from the model altogether.
         rows = scheduler._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
-        assert rows[0].instance_id == 0
-        assert rows[0].status == Status.active
+        assert rows[0].task_id == task_id
+        assert rows[0].enabled is True
 
     @pytest.mark.asyncio
     async def test_task_due_start_failure_surfaces_error_without_llm_prompt(
@@ -3186,6 +3281,145 @@ class TestTriggeredTaskNotifications:
         mock_cm.request_llm_run.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_rest_task_trigger_start_passes_task_description_through(
+        self,
+        mock_cm,
+    ):
+        """REST-triggered task registration must carry the authored task
+        description through to completed-actions rendering, so the brain
+        sees delivery intent (e.g. "deliver unprompted") next to the result.
+        """
+
+        from types import SimpleNamespace
+
+        from unify.conversation_manager.domains.renderer import Renderer
+        from unify.conversation_manager.domains.task_execution import (
+            _start_live_task_trigger_execution,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_task = SimpleNamespace(
+            description=(
+                "Deliver this summary unprompted to Yusha via task "
+                "completion delivery."
+            ),
+        )
+        fake_scheduler = MagicMock()
+        fake_scheduler.execute = AsyncMock(return_value=MagicMock())
+        fake_scheduler._get_task_or_raise = MagicMock(return_value=fake_task)
+
+        event = TaskTriggerRequested(
+            task_id=301,
+            source_task_log_id=9001,
+            source_ref="req-abc",
+            task_label="Review report",
+            task_summary="Review the weekly report.",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
+                return_value=fake_scheduler,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            handle_id = await _start_live_task_trigger_execution(event, mock_cm)
+
+        fake_scheduler._get_task_or_raise.assert_called_once_with(301)
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver this summary unprompted to Yusha via task completion delivery."
+        )
+
+        # Simulate the handle reaching completion and confirm the rendered
+        # <completed_actions> block carries both tags the brain relies on.
+        completed_actions = {
+            handle_id: {
+                **mock_cm.in_flight_actions[handle_id],
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Report reviewed.",
+                        "success": True,
+                        "result": "Report reviewed.",
+                    },
+                ],
+            },
+        }
+        rendered = Renderer().render_completed_actions(completed_actions)
+        assert "<original_request>" in rendered
+        assert (
+            "<task_description>Deliver this summary unprompted to Yusha via "
+            "task completion delivery.</task_description>" in rendered
+        )
+
+    @pytest.mark.asyncio
+    async def test_rest_task_trigger_start_tolerates_missing_task_lookup(
+        self,
+        mock_cm,
+    ):
+        """A failed description lookup must not block task-trigger startup."""
+
+        from unify.conversation_manager.domains.task_execution import (
+            _start_live_task_trigger_execution,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_scheduler = MagicMock()
+        fake_scheduler.execute = AsyncMock(return_value=MagicMock())
+        fake_scheduler._get_task_or_raise = MagicMock(
+            side_effect=ValueError("No task found with id=301"),
+        )
+
+        event = TaskTriggerRequested(
+            task_id=301,
+            source_task_log_id=9001,
+            source_ref="req-abc",
+            task_label="Review report",
+            task_summary="Review the weekly report.",
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.task_execution.ManagerRegistry.get_task_scheduler",
+                return_value=fake_scheduler,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            handle_id = await _start_live_task_trigger_execution(event, mock_cm)
+
+        assert handle_id in mock_cm.in_flight_actions
+        assert "task_description" not in mock_cm.in_flight_actions[handle_id]
+
+    @pytest.mark.asyncio
     async def test_inbound_message_surfaces_trigger_candidates(self, mock_cm):
         """Inbound user messages should surface only live matching trigger tasks."""
 
@@ -3409,6 +3643,176 @@ class TestTriggeredTaskNotifications:
         assert "Handle VIP caller" in guidance.message
         assert "Prioritize urgent inbound calls from Alice" in guidance.message
         assert "Do not mention the task unless it naturally helps" in guidance.message
+
+
+class TestProviderEventDispatchNotifications:
+    """Tests for the live provider-event dispatch call site.
+
+    This is the exact path behind the incident where a live task completed
+    correctly but the reactive brain never saw the task's own authored
+    description (only a generic dispatch string) next to the result.
+    """
+
+    @pytest.mark.asyncio
+    async def test_provider_event_dispatch_registers_task_description(
+        self,
+        mock_cm,
+    ):
+        """A successful live start must carry outcome.description through to
+        the registered handle so completed-actions rendering surfaces it.
+        """
+
+        from datetime import datetime, timezone
+
+        from unify.conversation_manager.domains.renderer import Renderer
+        from unify.conversation_manager.domains.task_execution import (
+            _handle_provider_event_dispatch_requested_event,
+        )
+        from unify.conversation_manager.events import ProviderEventDispatchRequested
+        from unify.task_scheduler.provider_event_dispatch import (
+            LiveProviderEventDispatchOutcome,
+        )
+
+        mock_cm.actor = MagicMock()
+        fake_handle = MagicMock()
+        outcome = LiveProviderEventDispatchOutcome(
+            operation_id="op-1",
+            run_id=4242,
+            run_key="run-key-1",
+            captured_task_revision=3,
+            status="started",
+            fencing_token=7,
+            adopted_only=False,
+            description=(
+                "Deliver this summary unprompted to Yusha via task "
+                "completion delivery."
+            ),
+        )
+
+        event = ProviderEventDispatchRequested(
+            operation_id="op-1",
+            run_id=4242,
+            run_key="run-key-1",
+            assistant_id="assistant-123",
+            task_id=101,
+            binding_id="binding-1",
+            receipt_id="receipt-1",
+            accepted_revision="rev-123",
+            event_context_ref="blob://binding-1/receipt-1",
+            issued_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        async def _noop(*args, **kwargs):
+            return None
+
+        with (
+            patch(
+                "unify.task_scheduler.provider_event_execution.handle_provider_event_live_dispatch",
+                new=AsyncMock(return_value=(outcome, fake_handle)),
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_result",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_notifications",
+                new=_noop,
+            ),
+            patch(
+                "unify.conversation_manager.domains.task_execution.managers_utils.actor_watch_clarifications",
+                new=_noop,
+            ),
+        ):
+            should_request_llm = await _handle_provider_event_dispatch_requested_event(
+                event,
+                mock_cm,
+            )
+
+        assert should_request_llm is False
+        assert len(mock_cm.in_flight_actions) == 1
+        handle_id = next(iter(mock_cm.in_flight_actions))
+        assert (
+            mock_cm.in_flight_actions[handle_id]["task_description"]
+            == "Deliver this summary unprompted to Yusha via task completion delivery."
+        )
+
+        # Simulate the handle reaching completion and confirm the rendered
+        # <completed_actions> block carries both tags the brain relies on.
+        completed_actions = {
+            handle_id: {
+                **mock_cm.in_flight_actions[handle_id],
+                "handle_actions": [
+                    {
+                        "action_name": "act_completed",
+                        "query": "Provider event completed.",
+                        "success": True,
+                        "result": "Provider event completed.",
+                    },
+                ],
+            },
+        }
+        rendered = Renderer().render_completed_actions(completed_actions)
+        assert "<original_request>" in rendered
+        assert (
+            "<task_description>Deliver this summary unprompted to Yusha via "
+            "task completion delivery.</task_description>" in rendered
+        )
+
+    @pytest.mark.asyncio
+    async def test_provider_event_dispatch_adopted_only_skips_handle_registration(
+        self,
+        mock_cm,
+    ):
+        """Adopt-only / already-terminal claims return handle=None and must
+        never reach _register_live_task_handle, regardless of description.
+        """
+
+        from datetime import datetime, timezone
+
+        from unify.conversation_manager.domains.task_execution import (
+            _handle_provider_event_dispatch_requested_event,
+        )
+        from unify.conversation_manager.events import ProviderEventDispatchRequested
+        from unify.task_scheduler.provider_event_dispatch import (
+            LiveProviderEventDispatchOutcome,
+        )
+
+        mock_cm.actor = MagicMock()
+        outcome = LiveProviderEventDispatchOutcome(
+            operation_id="op-2",
+            run_id=4243,
+            run_key="run-key-2",
+            captured_task_revision=3,
+            status="adopted",
+            fencing_token=7,
+            adopted_only=True,
+            description="Some other task's authored description.",
+        )
+
+        event = ProviderEventDispatchRequested(
+            operation_id="op-2",
+            run_id=4243,
+            run_key="run-key-2",
+            assistant_id="assistant-123",
+            task_id=102,
+            binding_id="binding-2",
+            receipt_id="receipt-2",
+            accepted_revision="rev-124",
+            event_context_ref="blob://binding-2/receipt-2",
+            issued_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        with patch(
+            "unify.task_scheduler.provider_event_execution.handle_provider_event_live_dispatch",
+            new=AsyncMock(return_value=(outcome, None)),
+        ):
+            should_request_llm = await _handle_provider_event_dispatch_requested_event(
+                event,
+                mock_cm,
+            )
+
+        assert should_request_llm is False
+        assert mock_cm.in_flight_actions == {}
 
 
 # =============================================================================

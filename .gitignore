@@ -92,5 +92,4 @@ logs/ci/*
 .livekit-playground/
 # Legacy rename leftovers (never re-track)
 droid/
-benchmarks/
 .cache.ndjson.idx

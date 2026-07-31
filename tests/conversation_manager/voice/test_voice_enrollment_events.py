@@ -147,9 +147,9 @@ async def test_enrollment_suggested_non_boss_no_guidance(initialized_cm):
 
 
 @pytest.mark.asyncio
-async def test_speaker_labelled_utterance_uses_anonymous_label(initialized_cm):
-    """An inbound phone utterance carrying a speaker_label is attributed to
-    that label in the conversation thread, not the registered contact name."""
+async def test_speaker_labelled_utterance_uses_label(initialized_cm):
+    """An inbound utterance carrying a platform-provided speaker_label is
+    attributed to that label in the thread, not the registered contact name."""
     cm = initialized_cm
 
     await cm.step(PhoneCallStarted(contact=BOSS), run_llm=False)
@@ -159,7 +159,6 @@ async def test_speaker_labelled_utterance_uses_anonymous_label(initialized_cm):
             content="Hi, I run a logistics company and need help with invoicing.",
             speaker_label="Speaker 2",
             diarization_speaker_id="S1",
-            voice_verified=False,
         ),
         run_llm=False,
     )
@@ -174,9 +173,9 @@ async def test_speaker_labelled_utterance_uses_anonymous_label(initialized_cm):
 
 
 @pytest.mark.asyncio
-async def test_verified_utterance_keeps_contact_name(initialized_cm):
-    """A voice-verified utterance without a speaker label keeps the contact's
-    registered name."""
+async def test_unlabelled_utterance_keeps_contact_name(initialized_cm):
+    """An utterance without a speaker label keeps the contact's registered
+    name."""
     cm = initialized_cm
 
     await cm.step(PhoneCallStarted(contact=BOSS), run_llm=False)
@@ -186,7 +185,6 @@ async def test_verified_utterance_keeps_contact_name(initialized_cm):
             content="Please move my dentist appointment to Friday.",
             speaker_label=None,
             diarization_speaker_id="S0",
-            voice_verified=True,
         ),
         run_llm=False,
     )

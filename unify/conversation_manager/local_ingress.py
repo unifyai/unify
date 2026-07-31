@@ -5,6 +5,7 @@ import json
 import secrets
 import time
 import uuid
+from datetime import datetime, timezone
 
 from aiohttp import ClientSession, web
 
@@ -980,6 +981,15 @@ class LocalCommsIngress:
                         egress_info.room_name,
                     ),
                     "recording_url": recording_url,
+                    # t=0 of the audio file, for time-aligning utterances.
+                    "recording_started_at": (
+                        datetime.fromtimestamp(
+                            egress_info.started_at / 1_000_000_000,
+                            tz=timezone.utc,
+                        ).isoformat()
+                        if egress_info.started_at
+                        else ""
+                    ),
                 },
             },
         )

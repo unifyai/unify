@@ -137,6 +137,26 @@ class Event:
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(kw_only=True)
+class CallUtteranceEvent(Event):
+    """Shared shape for a line spoken aloud on a live call.
+
+    ``timestamp`` marks when the turn was committed, which for both speakers is
+    when the line *finished*: the user's arrives on STT finalisation, the
+    assistant's when the reply item lands in the chat context. Anything placing
+    an utterance inside a recording therefore overshoots by the length of the
+    line itself, so the audible start is carried separately.
+
+    Deliberately a string rather than a ``datetime``: ``custom_dict_factory``
+    ISO-encodes datetimes on the way out, but ``from_dict`` only decodes
+    ``timestamp`` back, so a datetime field would silently arrive as a string on
+    the far side of the voice-agent IPC hop. Being a string makes that explicit.
+    """
+
+    # ISO instant the speech became audible, when the agent could observe it.
+    speech_started_at: str | None = None
+
+
 @dataclass
 class PhoneCallReceived(Event):
     topic: ClassVar[str | None] = "app:comms:call_received"
@@ -206,7 +226,7 @@ class UnifyMeetStarted(Event):
 
 
 @dataclass
-class InboundPhoneUtterance(Event):
+class InboundPhoneUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a phone call."""
 
     topic: ClassVar[str | None] = "app:comms:phone_utterance"
@@ -216,25 +236,18 @@ class InboundPhoneUtterance(Event):
     # Per-turn id from the voice agent, correlated with the slow-brain run that
     # starts after the fast brain completes this user turn.
     turn_id: int | None = None
-    # Voice-derived speaker attribution: an anonymous session-scoped label
-    # (e.g. "Speaker 2") when the voice does not match the contact's enrolled
-    # profile, the diarization id from STT, and whether the utterance's voice
-    # was positively matched to the contact's enrollment.
+    # Speaker attribution from the meeting roster or platform participant
+    # signals (never voice matching), plus the raw diarization id from STT.
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     # Provenance of ``speaker_label`` (see speaker_id.LABEL_SOURCE_*): lets the
     # transcript row be self-describing and downstream reconcilers honour the
-    # authority ordering. ``"anonymous"`` marks a "Speaker N" placeholder.
+    # authority ordering.
     speaker_label_source: str | None = None
-    # Whether the speaker holds conversational standing on the call. False for
-    # background voices: the line is context only — it triggered no fast-brain
-    # reply and no slow-brain user turn.
-    engaged: bool = True
 
 
 @dataclass
-class InboundUnifyMeetUtterance(Event):
+class InboundUnifyMeetUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a web-based voice/video meeting."""
 
     topic: ClassVar[str | None] = "app:comms:unify_utterance"
@@ -244,15 +257,13 @@ class InboundUnifyMeetUtterance(Event):
     turn_id: int | None = None
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
-    engaged: bool = True
     participant_names: list[str] | None = None
     participant_contact_ids: list[int] | None = None
 
 
 @dataclass
-class InboundWhatsAppCallUtterance(Event):
+class InboundWhatsAppCallUtterance(CallUtteranceEvent):
     """Utterance received from the other party during a WhatsApp voice call."""
 
     topic: ClassVar[str | None] = "app:comms:whatsapp_call_utterance"
@@ -262,9 +273,7 @@ class InboundWhatsAppCallUtterance(Event):
     turn_id: int | None = None
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
-    engaged: bool = True
 
 
 @dataclass
@@ -415,7 +424,7 @@ class GoogleMeetEnded(Event):
 
 
 @dataclass
-class InboundGoogleMeetUtterance(Event):
+class InboundGoogleMeetUtterance(CallUtteranceEvent):
     """Utterance received from a participant during a Google Meet call."""
 
     topic: ClassVar[str | None] = "app:comms:googlemeet_utterance"
@@ -426,13 +435,11 @@ class InboundGoogleMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
-    engaged: bool = True
 
 
 @dataclass
-class OutboundGoogleMeetUtterance(Event):
+class OutboundGoogleMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a Google Meet call."""
 
     topic: ClassVar[str | None] = "app:comms:googlemeet_utterance"
@@ -460,6 +467,38 @@ class GoogleMeetParticipantLeft(Event):
 
     contact: dict
     participant_name: str
+
+
+@dataclass
+class GoogleMeetChatMessage(Event):
+    """A participant posted in the Google Meet chat.
+
+    Kept distinct from an utterance because it is typed, not spoken. It is still
+    recorded on the call, tagged ``kind="chat"`` so a reader can tell it from
+    something said out loud rather than having it read as speech.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
+
+
+@dataclass
+class GoogleMeetChatSent(Event):
+    """The assistant posted in the Google Meet chat.
+
+    The outbound half of ``GoogleMeetChatMessage``. Without it a transcript
+    shows a question someone typed and no answer, because the assistant's reply
+    went to chat and nothing recorded it.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_chat_sent"
+
+    contact: dict
+    content: str
 
 
 @dataclass
@@ -509,7 +548,7 @@ class TeamsMeetEnded(Event):
 
 
 @dataclass
-class InboundTeamsMeetUtterance(Event):
+class InboundTeamsMeetUtterance(CallUtteranceEvent):
     """Utterance received from a participant during a Teams meeting."""
 
     topic: ClassVar[str | None] = "app:comms:teamsmeet_utterance"
@@ -520,13 +559,11 @@ class InboundTeamsMeetUtterance(Event):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
-    engaged: bool = True
 
 
 @dataclass
-class OutboundTeamsMeetUtterance(Event):
+class OutboundTeamsMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a Teams meeting."""
 
     topic: ClassVar[str | None] = "app:comms:teamsmeet_utterance"
@@ -557,6 +594,35 @@ class TeamsMeetParticipantLeft(Event):
 
 
 @dataclass
+class TeamsMeetChatMessage(Event):
+    """A participant posted in the Teams meeting chat.
+
+    Unavailable in channel meetings, where the platform exposes no bot-readable
+    chat at all.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_chat"
+
+    contact: dict
+    sender_name: str
+    content: str
+    sender_email: str | None = None
+
+
+@dataclass
+class TeamsMeetChatSent(Event):
+    """The assistant posted in the Teams meeting chat.
+
+    The outbound half of ``TeamsMeetChatMessage``.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_chat_sent"
+
+    contact: dict
+    content: str
+
+
+@dataclass
 class TeamsMeetAlone(Event):
     """The assistant is the only remaining participant in the Teams meeting.
 
@@ -582,6 +648,10 @@ class RecordingReady(Event):
     call_session_id: str | None = None
     provider_call_sid: str | None = None
     room_name: str | None = None
+    # ISO8601 instant the egress compositor began writing, i.e. t=0 of the audio
+    # file. Consumers time-align transcript utterances against this rather than
+    # against the call-started event, which precedes it by a few seconds.
+    recording_started_at: str | None = None
 
 
 @dataclass
@@ -1148,7 +1218,7 @@ class PhoneCallSent(Event):
 
 
 @dataclass
-class OutboundPhoneUtterance(Event):
+class OutboundPhoneUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a phone call."""
 
     topic: ClassVar[str | None] = "app:comms:phone_utterance"
@@ -1158,7 +1228,7 @@ class OutboundPhoneUtterance(Event):
 
 
 @dataclass
-class OutboundUnifyMeetUtterance(Event):
+class OutboundUnifyMeetUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a web-based voice/video meeting."""
 
     topic: ClassVar[str | None] = "app:comms:unify_utterance"
@@ -1170,7 +1240,7 @@ class OutboundUnifyMeetUtterance(Event):
 
 
 @dataclass
-class OutboundWhatsAppCallUtterance(Event):
+class OutboundWhatsAppCallUtterance(CallUtteranceEvent):
     """Utterance sent by the assistant during a WhatsApp voice call."""
 
     topic: ClassVar[str | None] = "app:comms:whatsapp_call_utterance"
@@ -1472,6 +1542,7 @@ class _SessionConfigBase(Event):
     # Owning team for team-owned assistants (None = user-owned).
     owner_team_id: int | None = None
     is_coordinator: bool = False
+    is_multiplayer: bool = False
     update_kind: str = "general"
     wake_reasons: list[dict[str, Any]] = field(default_factory=list)
 

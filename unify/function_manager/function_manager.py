@@ -3158,8 +3158,21 @@ class FunctionManager(BaseFunctionManager):
             limit=limit,
         )
 
+        from unify.integrations.provider_resolution import (
+            PREFERRED_BACKEND_ORDER,
+            WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE,
+        )
+
         connected_backend_by_app: dict[str, str | None] = {}
         for connection in active_connections:
+            if (
+                connection.get("credential_storage")
+                == WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE
+            ):
+                # Workspace trigger facade: presents workspace OAuth credentials
+                # as a trigger backend only. It must never register an app as
+                # tool-connected or claim a tool-execution backend.
+                continue
             raw_conn_app = connection.get("canonical_app_slug")
             conn_app = (
                 normalize_app_slug(raw_conn_app)
@@ -3178,9 +3191,6 @@ class FunctionManager(BaseFunctionManager):
                     connected_backend_by_app[conn_app] = None
                 continue
             if existing and existing != backend:
-                from unify.integrations.provider_resolution import (
-                    PREFERRED_BACKEND_ORDER,
-                )
 
                 def _rank(value: str) -> int:
                     try:
@@ -3247,19 +3257,38 @@ class FunctionManager(BaseFunctionManager):
 
         for key, rows in rows_by_key.items():
             expected_hash = self._hash_integration_rows(rows)
+            backend_id, item_app = key_to_app[key]
             if current_hashes.get(key) == expected_hash:
-                unchanged_apps.append({"key": key, "rows": len(rows)})
+                observed_rows = self._count_provider_integration_rows_for_app(
+                    backend_id=backend_id,
+                    app_slug=item_app,
+                    expected_rows=len(rows),
+                )
+                if observed_rows is not None and observed_rows == len(rows):
+                    unchanged_apps.append({"key": key, "rows": len(rows)})
+                    log_staging_diagnostic(
+                        logger,
+                        (
+                            "Provider integration sync hash decision key=%s "
+                            "decision=unchanged rows=%d"
+                        ),
+                        key,
+                        len(rows),
+                    )
+                    continue
                 log_staging_diagnostic(
                     logger,
                     (
-                        "Provider integration sync hash decision key=%s "
-                        "decision=unchanged rows=%d"
+                        "Provider integration sync unchanged-hash verification "
+                        "mismatch key=%s expected_rows=%d observed_rows=%s; "
+                        "hash is a hint, not a guarantee -- falling through to "
+                        "the changed path to rematerialize"
                     ),
                     key,
                     len(rows),
+                    observed_rows,
+                    level=logging.WARNING,
                 )
-                continue
-            backend_id, item_app = key_to_app[key]
             deleted = self._delete_provider_integration_rows_for_apps(
                 [(backend_id, item_app)],
             )
@@ -3280,7 +3309,7 @@ class FunctionManager(BaseFunctionManager):
                 len(rows),
             )
             try:
-                self._insert_primitives(rows)
+                fully_inserted = self._insert_primitives(rows)
             except Exception as exc:
                 logger.error(
                     "Provider integration sync insert failed key=%s rows=%d error=%s",
@@ -3318,9 +3347,30 @@ class FunctionManager(BaseFunctionManager):
                     },
                 )
                 continue
-            new_hashes[key] = expected_hash
+            if fully_inserted:
+                # Only cache "synced" when this call actually wrote every row
+                # itself. When some rows were already catalogued (skipped),
+                # this session never confirmed their content is current, so
+                # leaving the hash unset means the next sync re-checks
+                # instead of silently trusting a row it didn't write.
+                new_hashes[key] = expected_hash
+            else:
+                log_staging_diagnostic(
+                    logger,
+                    (
+                        "Provider integration sync key=%s: rows already "
+                        "catalogued, not caching hash so a future sync "
+                        "retries if the definition changes"
+                    ),
+                    key,
+                )
             changed_apps.append(
-                {"key": key, "rows": len(rows), "rows_deleted": deleted},
+                {
+                    "key": key,
+                    "rows": len(rows),
+                    "rows_deleted": deleted,
+                    "fully_inserted": fully_inserted,
+                },
             )
 
         if not normalized_app:
@@ -3399,10 +3449,30 @@ class FunctionManager(BaseFunctionManager):
                 logs=[log.id for log in logs],
             )
 
-    def _insert_primitives(self, primitives: List[Dict[str, Any]]) -> None:
-        """Insert primitive rows into the Primitives context with explicit IDs."""
+    def _insert_primitives(self, primitives: List[Dict[str, Any]]) -> bool:
+        """Insert primitive rows into the Primitives context with explicit IDs.
+
+        Provider-backed primitive rows are connection-agnostic catalogue
+        entries (see ``sync_provider_integration_tools``): the same tool
+        definition is shared, not duplicated per assistant, so it may already
+        exist (e.g. seeded once system-wide) even on an assistant's first
+        sync. The delete above can't remove a row this session doesn't own,
+        so re-inserting it would otherwise collide on the ``function_id``
+        unique key. ``on_duplicate="skip"`` inserts whichever rows are
+        genuinely new and leaves already-catalogued rows alone instead of
+        failing the whole batch on the first collision.
+
+        Returns ``True`` only when every row was freshly written by this
+        call. ``False`` means one or more rows already existed under their
+        ``function_id`` and were left untouched -- this session can't
+        confirm their content still matches what was requested (it may be
+        stale, or two distinct tools may have collided on the same
+        function_id hash), so callers must not cache "fully synced" state
+        for a ``False`` result; a future sync should keep retrying instead
+        of silently trusting a row it never actually wrote.
+        """
         if not primitives:
-            return
+            return True
 
         entries = [
             Function.model_validate(data).model_dump(include=set(data.keys()))
@@ -3417,14 +3487,44 @@ class FunctionManager(BaseFunctionManager):
                     if isinstance(entry.get("function_id"), int)
                 ],
             )
-            unity_create_logs(
+            created = unity_create_logs(
                 context=self._primitives_ctx,
                 entries=entries,
                 stamp_authoring=True,
                 batched=True,
                 recompute_derived=True,
+                on_duplicate="skip",
             )
-            logger.debug(f"Inserted {len(entries)} primitives")
+            written_ids = (
+                {log.entries.get("function_id") for log in created}
+                if isinstance(created, list)
+                else {entry.get("function_id") for entry in entries}
+            )
+            skipped = [
+                (entry.get("function_id"), entry.get("name"))
+                for entry in entries
+                if entry.get("function_id") not in written_ids
+            ]
+            if skipped:
+                # Routine and expected: a non-owning assistant's first sync
+                # of an app the shared catalogue already has (see docstring)
+                # skips every time, forever, since the hash below is
+                # deliberately never cached for it -- info, not warning, to
+                # avoid paging on the steady-state case. A genuine
+                # function_id collision between two *different* tools would
+                # show up here as the same function_id recurring under a
+                # different name across log lines -- greppable, unlike a
+                # bare count.
+                logger.info(
+                    "Provider primitive insert: %d/%d already catalogued "
+                    "under an existing function_id, left in place: %s",
+                    len(skipped),
+                    len(entries),
+                    sorted(skipped),
+                )
+            else:
+                logger.debug(f"Inserted {len(entries)} primitives")
+            return not skipped
         except Exception as e:
             logger.error(f"Failed to insert primitives: {e}")
             raise
@@ -7966,7 +8066,11 @@ def _wrap_venv_write(method_name: str) -> None:
 
 
 def _signature_with_destination(method: Callable[..., Any]) -> inspect.Signature:
-    signature = inspect.signature(method)
+    # follow_wrapped=False: the concrete methods carry @functools.wraps(Base...),
+    # and following the chain would resolve to the abstract signature, silently
+    # dropping concrete-only parameters (e.g. add_functions' ``overwrite``) from
+    # the LLM-visible tool schema.
+    signature = inspect.signature(method, follow_wrapped=False)
     if "destination" in signature.parameters:
         return signature
     parameters = list(signature.parameters.values())
