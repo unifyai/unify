@@ -1123,13 +1123,63 @@ def test_materialization_hash_match_skips_delete_and_insert(monkeypatch) -> None
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": current_hash,
     }
+    # Rows already materialized from a prior sync -- the unchanged-hash
+    # verification (_count_provider_integration_rows_for_app) must see them
+    # present so it doesn't mistake a cached hash for the real thing.
+    fm._inserted_rows = [expected_row]
 
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
 
     assert result["status"] == "unchanged"
     assert result["apps"] == []
     assert result["unchanged_apps"] == [{"key": "composio:hubspot", "rows": 1}]
-    assert fm._inserted_rows == []
+    assert fm._inserted_rows == [expected_row]
+    assert not hasattr(fm, "_deleted_apps")
+
+
+def test_zombie_unchanged_hash_with_zero_rows_falls_through_to_changed(
+    monkeypatch,
+) -> None:
+    """A cached hash match is a hint, not a guarantee -- if the rows behind
+    it were deleted out-of-band (bulk cleanup, --full reset, retention), the
+    unchanged branch must notice they're actually gone and rematerialize
+    instead of trusting the hash forever.
+    """
+    client = FakeIntegrationOps()
+    expected_row = FunctionManager.__new__(
+        FunctionManager,
+    )._integration_tool_to_function_row(MOCK_TOOL)
+    current_hash = FunctionManager._hash_integration_rows([expected_row])
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    fm._get_stored_integration_tool_hash_by_app = lambda: {
+        "composio:hubspot": current_hash,
+    }
+    # No rows actually materialized (the zombie scenario): hash claims
+    # synced, but the context has zero rows for this app.
+
+    result = fm.sync_provider_integration_tools(app_slug="hubspot")
+
+    assert result["status"] == "synced"
+    assert result["unchanged_apps"] == []
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
+    ]
+    assert fm._deleted_apps == [("composio", "hubspot")]
+    assert fm._inserted_rows == [expected_row]
+    assert fm._stored_hashes == {"composio:hubspot": current_hash}
 
 
 def test_materialization_does_not_cache_hash_when_rows_already_catalogued(
