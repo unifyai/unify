@@ -970,16 +970,32 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 datetime.fromisoformat(ts_str) if ts_str else datetime.now(timezone.utc)
             )
             if b64:
-                self._screenshot_buffer.append(
-                    ScreenshotEntry(
-                        b64,
-                        utterance,
-                        ts,
-                        source,
-                        filepath=filepath,
-                        attribution=data.get("attribution"),
-                    ),
+                entry = ScreenshotEntry(
+                    b64,
+                    utterance,
+                    ts,
+                    source,
+                    filepath=filepath,
+                    attribution=data.get("attribution"),
                 )
+                # An unpaired frame is "what this source shows now", so only the
+                # newest is worth holding: a shared screen left up while nobody
+                # speaks arrives every few seconds, and appending each one would
+                # put a reel of near-identical images in one state message. Frames
+                # paired with an utterance always append -- those are evidence for
+                # a specific thing somebody said.
+                previous = (
+                    self._screenshot_buffer[-1] if self._screenshot_buffer else None
+                )
+                if (
+                    not utterance
+                    and previous is not None
+                    and previous.source == source
+                    and not previous.utterance
+                ):
+                    self._screenshot_buffer[-1] = entry
+                else:
+                    self._screenshot_buffer.append(entry)
                 self._session_logger.debug(
                     "screenshot_capture",
                     f"Buffered {source} screenshot #{len(self._screenshot_buffer)} "
