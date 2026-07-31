@@ -2004,10 +2004,10 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   `run_key` (the idempotency key). Occurrence and attempt are the same row.
   Recurrence creates the *next* Execution when the current one **starts** — it
   does **not** clone the Tasks row.
-- **`instance_id` is vestigial.** It is a legacy occurrence counter kept only so
-  pre-migration rows still read back. It is not unique, not auto-counted, and
-  not part of identity; new rows get `0`. Treat any non-zero `instance_id` as a
-  pre-migration artefact, not as a thing to allocate, increment, or reason about.
+- **`instance_id` no longer exists.** The legacy occurrence counter was purged
+  (July 2026): no code writes or reads it, and there is no field to set. A
+  stored `instance_id` entry on an old row is inert junk — never a lookup key,
+  never identity.
 - Concurrency is normal now: several Executions can be in flight against one
   definition, so a definition sitting in `active` is not a zombie by itself.
 
@@ -2020,8 +2020,6 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   Executions.
 - Do **not** invent a Tasks row by hand with an explicit `task_id` — go through
   TaskScheduler APIs and let Orchestra allocate it.
-- Do **not** write `instance_id` at all. It buys nothing on the current model,
-  and a non-zero value pushes reads down the legacy compat path (see below).
 
 ## Allowed ops
 
@@ -2029,24 +2027,16 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
 |---|---|
 | Arm a planted custom task | Set **`enabled=True`** on the definition row (the single `task_id` row, `custom_key` set). TaskScheduler schedules the next Execution. |
 | Pause | `enabled=False` on the definition row; optionally cancel open Executions. |
-| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). It takes no `instance_id`. |
+| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). |
 | Change cadence | Edit `tasks.jsonl` + deploy reconcile, or TaskScheduler APIs that own the schedule — not ad-hoc DM patches. |
 | Stuck `active` zombie | `POST /admin/task-source/release-active` with the source task log id. |
 
-## Legacy compat path
+## Pre-migration remnants
 
-`_get_task_row(task_id, instance_id)` addresses by `task_id` alone when
-`instance_id == 0`, and only falls back to the old
-`task_id AND instance_id` filter when it is non-zero
-(`unify/task_scheduler/task_scheduler.py`, the `if instance_id != 0:` branch).
-That fallback exists to read surviving pre-migration rows. Do not lean on it
-for new work, and do not pass a non-zero `instance_id` to make a lookup
-"more specific" — on a post-migration task it just fails to match.
-
-If a `task_id` genuinely resolves to more than one Tasks row, that is a
-pre-migration remnant (or a bad hand-write), not a counter desync. Delete the
-stale duplicate, or leave it terminal and do not re-trigger until the health
-check is clean.
+If a `task_id` resolves to more than one Tasks row, that is a pre-migration
+remnant (or a bad hand-write), not a counter desync. Delete the stale
+duplicate, or leave it terminal and do not re-trigger until the health check
+is clean.
 
 ## Break-glass
 

@@ -3626,7 +3626,6 @@ def apply_per_task_simulation_patch(
                 clarification_up_q: Optional[asyncio.Queue[str]] = None,
                 clarification_down_q: Optional[asyncio.Queue[str]] = None,
                 task_id: Optional[int] = None,
-                instance_id: Optional[int] = None,
                 scheduler: Optional["TaskScheduler"] = None,  # type: ignore[name-defined]
             ):
                 # Snapshot per-call state without holding the lock for long
@@ -3693,7 +3692,6 @@ def apply_per_task_simulation_patch(
                     clarification_up_q=clarification_up_q,
                     clarification_down_q=clarification_down_q,
                     task_id=task_id,
-                    instance_id=instance_id,
                     scheduler=scheduler,
                 )
 

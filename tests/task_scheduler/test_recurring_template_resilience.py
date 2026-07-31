@@ -147,7 +147,6 @@ def _active_task(scheduler: _FakeScheduler) -> ActiveTask:
     task._was_stopped = False
     task._scheduler = scheduler
     task._task_id = 10
-    task._instance_id = 0
     task._preserve_definition_status = False
     task._summary_scheduled = True
 

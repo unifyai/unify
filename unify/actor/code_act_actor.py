@@ -1191,7 +1191,6 @@ def _build_storage_tools(
         )
         metadata = dict(task_entrypoint_review.get("metadata") or {})
         task_id = metadata.get("task_id")
-        instance_id = metadata.get("instance_id")
         task_name = metadata.get("task_name") or metadata.get("name") or "the task"
 
         async def attach_entrypoint_to_recurring_task(
@@ -1252,8 +1251,7 @@ def _build_storage_tools(
             )
 
         attach_entrypoint_to_recurring_task.__doc__ += (
-            f"\n\nCurrent task: {task_name} "
-            f"(task_id={task_id}, completed instance_id={instance_id}). "
+            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
             "The tool only patches future non-terminal instances; it never "
             "rewrites the completed run or flips delivery to offline."
         )
@@ -1371,7 +1369,6 @@ def _build_storage_tools(
                     {
                         "outcome": "certification_revision_attempts_exhausted",
                         "task_id": task_id,
-                        "completed_instance_id": instance_id,
                         "function_id": int(function_id),
                         "max_revision_attempts": (
                             MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
@@ -1421,8 +1418,7 @@ def _build_storage_tools(
             return str(outcome)
 
         submit_offline_certification_evidence.__doc__ += (
-            f"\n\nCurrent task: {task_name} "
-            f"(task_id={task_id}, completed instance_id={instance_id}). "
+            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
             "This tool may patch future non-terminal instances to offline "
             "delivery only after evidence-based certification passes."
         )
