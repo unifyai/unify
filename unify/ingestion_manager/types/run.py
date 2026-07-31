@@ -20,7 +20,7 @@ read that costs more than the answer is worth.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -142,7 +142,6 @@ class IngestionRunRecord(AuthoredRow):
     rows_written: int = 0
     files_processed: int = 0
 
-    stages_json: Optional[str] = None
     error: Optional[str] = None
     # Items parked after exhausting retries -- the depth `retry(only="dlq")` clears.
     parked: int = 0
@@ -239,10 +238,3 @@ class IngestionSummary(BaseModel):
     parked: int = 0
     created_at: Optional[str] = None
     finished_at: Optional[str] = None
-
-
-def stage_list(stages: Optional[Dict[str, Any]]) -> List[StageProgress]:
-    """Coerce a stored stage map into ordered progress entries."""
-    if not stages:
-        return []
-    return [StageProgress.model_validate(entry) for entry in stages.values()]

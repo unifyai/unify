@@ -28,6 +28,7 @@ what happened.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import threading
 import time
@@ -46,6 +47,7 @@ from unify.common.pipeline import (
     LocalArtifactStore,
     TableWork,
 )
+from unify.common.pipeline.work_queue import PipelineCancelled, RetryWorkItem
 from unify.data_manager.types.ingest import PostIngestConfig
 from unify.ingestion_manager.base import BaseIngestionManager
 from unify.ingestion_manager.policy import choose_tier, next_step, stages_from_events
@@ -88,6 +90,19 @@ def _run_key() -> str:
     return secrets.token_urlsafe(9)
 
 
+# Identifiers a caller may look a run up by: a token_urlsafe run key or a
+# numeric row id. Anything else cannot match a run, and rejecting it here keeps
+# the value out of the filter expression it would otherwise be spliced into.
+_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _safe_id(value: str) -> str:
+    """A path reduced to a stable identifier fragment for checkpoint keys."""
+    return "".join(
+        char if char.isalnum() or char in ("-", "_") else "_" for char in value
+    )[-48:]
+
+
 class IngestionManager(BaseIngestionManager):
     """Ingestion over Unify contexts, the shared ingest core and the fleet."""
 
@@ -128,6 +143,11 @@ class IngestionManager(BaseIngestionManager):
         )
         self._lock = threading.RLock()
         self._store = self._build_artifact_store()
+        # Control flags for runs executing in this process, keyed by run key.
+        # In-process is the one tier where cancel and pause can act between
+        # chunks immediately rather than through a queue -- and an inline run
+        # dies with the process anyway, so nothing durable is needed to steer it.
+        self._inline_control: Dict[str, Dict[str, bool]] = {}
         logger.debug("IngestionManager initialized")
 
     # ── plumbing ──────────────────────────────────────────────────────────
@@ -142,7 +162,16 @@ class IngestionManager(BaseIngestionManager):
         """
         from unify.session_details import SESSION_DETAILS
 
-        root = Path(getattr(SESSION_DETAILS, "local_dir", None) or ".") / "Ingestion"
+        local_dir = getattr(SESSION_DETAILS, "local_dir", None)
+        # Never fall back to the working directory: a CWD-relative store
+        # scatters staged requests and checkpoints wherever the process was
+        # launched from -- a repo checkout, a pod entrypoint's directory --
+        # and a resume from a different CWD then finds nothing.
+        root = (
+            Path(local_dir) / "Ingestion"
+            if local_dir
+            else Path.home() / ".unity" / "ingestion"
+        )
         return LocalArtifactStore(root_dir=root)
 
     def _get_dm(self):
@@ -169,6 +198,10 @@ class IngestionManager(BaseIngestionManager):
 
     def _find_run(self, run_id: str) -> tuple[Optional[Dict[str, Any]], str]:
         """Locate a run by its id or its key, and the context holding it."""
+        if not _RUN_ID_PATTERN.fullmatch(str(run_id)):
+            # Not a shape any run identifier can take. Answering "not found"
+            # also keeps the value out of the filter expressions below.
+            return None, ""
         dm = self._get_dm()
         for context in self._read_tables(RUNS_TABLE):
             # Accepts either identifier: the actor holds whichever `submit` handed
@@ -319,6 +352,10 @@ class IngestionManager(BaseIngestionManager):
         declared: Optional[int],
     ) -> None:
         if tier == "inline":
+            # Registered before the pool picks the run up, so a cancel that
+            # arrives while it is still queued is seen at the very first check.
+            with self._lock:
+                self._inline_control[run_key] = {"cancel": False, "pause": False}
             self._pool.submit(
                 self._execute,
                 run_key,
@@ -331,6 +368,13 @@ class IngestionManager(BaseIngestionManager):
 
     # ── execution ─────────────────────────────────────────────────────────
 
+    def _control(self, run_key: str) -> Dict[str, bool]:
+        with self._lock:
+            return self._inline_control.setdefault(
+                run_key,
+                {"cancel": False, "pause": False},
+            )
+
     def _execute(
         self,
         run_key: str,
@@ -340,100 +384,160 @@ class IngestionManager(BaseIngestionManager):
     ) -> None:
         """Run a request in this process, recording progress as it commits.
 
-        Every exit path writes a terminal state. A run left at ``running`` after
-        its thread died is indistinguishable from one still working, and that is
-        the single failure that makes the whole ledger untrustworthy.
+        Every exit path settles the ledger. A run left at ``running`` after its
+        thread died is indistinguishable from one still working, and that is
+        the single failure that makes the whole ledger untrustworthy. A
+        cancellation or pause observed mid-run exits without writing -- the
+        verb that requested it already wrote the state, and overwriting a
+        terminal ``cancelled`` with ``succeeded`` would erase what happened.
         """
         destination = request.destination
-        self._update_run(
-            run_key,
-            runs_context,
-            {"state": "running", "started_at": _now()},
-        )
-        self._record_event(
-            run_key,
-            destination=destination,
-            stage="ingest",
-            state="running",
-            total=declared,
-            message=f"Storing from {request.source.kind} into {request.target.kind}.",
-        )
+        control = self._control(run_key)
 
         try:
-            outcome = self._ingest_rows(run_key, request, declared=declared)
-        except IncompleteIngest as shortfall:
-            # Distinct from an ordinary failure: rows did land, and the run is
-            # resumable from its checkpoint. Saying so is what turns a silent
-            # under-ingest into something recoverable.
-            logger.error("Ingestion run %s incomplete: %s", run_key, shortfall.detail)
+            # A cancel or pause that lands while the run is still queued takes
+            # effect before any work: the state the verb wrote stands.
+            if control["cancel"] or control["pause"]:
+                return
+
+            self._update_run(
+                run_key,
+                runs_context,
+                {"state": "running", "started_at": _now()},
+            )
             self._record_event(
                 run_key,
                 destination=destination,
                 stage="ingest",
-                level="error",
-                state="failed",
+                state="running",
+                total=declared,
                 message=(
-                    f"Committed less than the source declared ({shortfall.detail}). "
-                    "Resume to continue from the last checkpoint."
+                    f"Storing from {request.source.kind} into {request.target.kind}."
                 ),
             )
-            self._update_run(
-                run_key,
-                runs_context,
-                {
-                    "state": "failed",
-                    "error": str(shortfall),
-                    "parked": len(shortfall.shortfalls),
-                    "finished_at": _now(),
-                },
-            )
-            return
-        except DuplicateLiveAttempt:
-            # Another attempt owns the work. Leaving the run alone is correct --
-            # the holder will finish it and write the terminal state.
-            logger.info(
-                "Ingestion run %s is already being executed; standing down",
-                run_key,
-            )
-            return
-        except Exception as error:  # noqa: BLE001 -- see docstring
-            logger.exception("Ingestion run %s failed", run_key)
+
+            try:
+                if request.source.kind in {"files", "folder"}:
+                    rows, contexts, files = self._ingest_files_inline(
+                        run_key,
+                        request,
+                        control=control,
+                    )
+                else:
+                    outcome = self._ingest_rows(
+                        run_key,
+                        request,
+                        declared=declared,
+                        control=control,
+                    )
+                    rows, contexts, files = (
+                        outcome.rows_committed,
+                        outcome.contexts,
+                        0,
+                    )
+            except PipelineCancelled:
+                # `cancel()` already wrote the terminal state; this records how
+                # far the work got before it stopped.
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="ingest",
+                    state="cancelled",
+                    message="Stopped at a chunk boundary; committed work kept.",
+                )
+                return
+            except RetryWorkItem:
+                # A pause surrendered the in-flight work at a checkpoint.
+                # `pause()` wrote the state; resume continues from the mark.
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="ingest",
+                    state="paused",
+                    message="Paused at a checkpoint; resume() continues from it.",
+                )
+                return
+            except IncompleteIngest as shortfall:
+                # Distinct from an ordinary failure: rows did land, and the run
+                # is resumable from its checkpoint. Saying so is what turns a
+                # silent under-ingest into something recoverable.
+                logger.error(
+                    "Ingestion run %s incomplete: %s",
+                    run_key,
+                    shortfall.detail,
+                )
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="ingest",
+                    level="error",
+                    state="failed",
+                    message=(
+                        f"Committed less than the source declared "
+                        f"({shortfall.detail}). Resume to continue from the "
+                        "last checkpoint."
+                    ),
+                )
+                self._update_run(
+                    run_key,
+                    runs_context,
+                    {
+                        "state": "failed",
+                        "error": str(shortfall),
+                        "parked": len(shortfall.shortfalls),
+                        "finished_at": _now(),
+                    },
+                )
+                return
+            except DuplicateLiveAttempt:
+                # Another attempt owns the work. Leaving the run alone is
+                # correct -- the holder will finish it and write the terminal
+                # state.
+                logger.info(
+                    "Ingestion run %s is already being executed; standing down",
+                    run_key,
+                )
+                return
+            except Exception as error:  # noqa: BLE001 -- see docstring
+                logger.exception("Ingestion run %s failed", run_key)
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="ingest",
+                    level="error",
+                    state="failed",
+                    message=str(error),
+                )
+                self._update_run(
+                    run_key,
+                    runs_context,
+                    {"state": "failed", "error": str(error), "finished_at": _now()},
+                )
+                return
+
             self._record_event(
                 run_key,
                 destination=destination,
                 stage="ingest",
-                level="error",
-                state="failed",
-                message=str(error),
+                state="succeeded",
+                done=rows,
+                total=declared or rows,
+                message=(
+                    f"Committed {rows} row(s) to {', '.join(contexts) or 'no context'}."
+                ),
             )
-            self._update_run(
-                run_key,
-                runs_context,
-                {"state": "failed", "error": str(error), "finished_at": _now()},
-            )
-            return
-
-        rows = outcome.rows_committed
-        contexts = outcome.contexts
-        self._record_event(
-            run_key,
-            destination=destination,
-            stage="ingest",
-            state="succeeded",
-            done=rows,
-            total=declared or rows,
-            message=f"Committed {rows} row(s) to {', '.join(contexts) or 'no context'}.",
-        )
-        self._update_run(
-            run_key,
-            runs_context,
-            {
+            updates: Dict[str, Any] = {
                 "state": "succeeded",
                 "contexts": contexts,
                 "rows_written": rows,
                 "finished_at": _now(),
-            },
-        )
+            }
+            if files:
+                updates["files_processed"] = files
+            self._update_run(run_key, runs_context, updates)
+        finally:
+            with self._lock:
+                self._inline_control.pop(run_key, None)
 
     def _ingest_rows(
         self,
@@ -441,20 +545,11 @@ class IngestionManager(BaseIngestionManager):
         request: IngestionRequest,
         *,
         declared: Optional[int],
+        control: Dict[str, bool],
     ) -> Any:
-        """Ingest a rows or table source through the shared checkpointed core.
-
-        Files never reach here: they are dispatched, because parsing loads the
-        file and its model into whatever process runs it and a thread shares this
-        one's memory limit.
-        """
+        """Ingest a rows or table source through the shared checkpointed core."""
         source = request.source
         target = request.target
-        if source.kind not in {"rows", "table"}:
-            raise RuntimeError(
-                f"A {source.kind} source is dispatched work and is not executed in "
-                "process; this run should not have been started here.",
-            )
 
         handle = (
             InlineRowsHandle(
@@ -466,22 +561,57 @@ class IngestionManager(BaseIngestionManager):
             else self._handle_for_table(source, declared=int(declared or 0))
         )
 
-        embed = request.embed
-        work = TableWork(
+        work = self._table_work(
             table_id=f"run-{run_key}",
             label=target.context,
+            handle=handle,
+            declared=int(declared or handle.row_count or 0),
+            request=request,
+        )
+        return self._run_engine(run_key, [work], request=request, control=control)
+
+    def _table_work(
+        self,
+        *,
+        table_id: str,
+        label: str,
+        handle: Any,
+        declared: int,
+        request: IngestionRequest,
+    ) -> TableWork:
+        """One unit of engine work, carrying the target's declared identity.
+
+        ``unique_keys`` and ``fields`` come from the target because they are
+        statements about the *destination table*, not about any one batch: the
+        keys are what make a re-run an upsert instead of an append.
+        """
+        target = request.target
+        embed = request.embed
+        return TableWork(
+            table_id=table_id,
+            label=label,
             context=target.context,
             handle=handle,
-            declared_rows=int(declared or handle.row_count or 0),
+            declared_rows=declared,
             columns=list(handle.columns or []),
             chunk_size=500,
             description=target.description,
+            unique_keys=target.unique_keys,
+            fields=target.fields,
             embed_columns=embed.columns if embed else None,
             embed_strategy=embed.strategy if embed else "off",
             post_ingest=request.post_ingest,
             infer_untyped_fields=target.infer_untyped_fields,
         )
 
+    def _run_engine(
+        self,
+        run_key: str,
+        work: List[TableWork],
+        *,
+        request: IngestionRequest,
+        control: Dict[str, bool],
+    ) -> Any:
         engine = CheckpointedIngest(
             artifact_store=self._store,
             job_id=run_key,
@@ -489,10 +619,14 @@ class IngestionManager(BaseIngestionManager):
             lease_steal_after_seconds=self._settings.LEASE_STEAL_AFTER_SECONDS,
         )
         return engine.run(
-            [work],
+            work,
             dm=self._get_dm(),
             destination=request.destination,
             source_path=run_key,
+            # Checked between chunks. Cancel abandons the rest; pause surrenders
+            # at the checkpoint so resume() re-does at most one chunk.
+            is_cancelled=lambda: control["cancel"],
+            should_surrender=lambda: control["pause"],
             on_progress=lambda table_id, done, total: self._record_event(
                 run_key,
                 destination=request.destination,
@@ -503,6 +637,186 @@ class IngestionManager(BaseIngestionManager):
                 message=f"Committed {done} row(s).",
             ),
         )
+
+    def _ingest_files_inline(
+        self,
+        run_key: str,
+        request: IngestionRequest,
+        *,
+        control: Dict[str, bool],
+    ) -> tuple[int, List[str], int]:
+        """Parse and store files in this process.
+
+        Only reachable when no worker fleet is configured -- with one, files
+        always dispatch, because parsing shares this process's memory limit.
+        Accepting that risk here is deliberate: a deployment without workers
+        (local development, a bare self-host) still has to be able to store an
+        attachment, and refusing would fail every file it receives.
+
+        A table target goes through the shared checkpointed engine, so it is
+        resumable chunk by chunk like any rows ingestion. A collection target
+        runs the file pipeline, whose unit of recovery is the file: a retry
+        re-stores whole files, and ``replace_existing`` keeps that idempotent.
+        """
+        paths = self._resolve_paths(request.source)
+        if not paths:
+            raise RuntimeError(
+                "No files matched this source; nothing was stored.",
+            )
+
+        destination = request.destination
+        if request.target.kind == "table":
+            return self._files_into_table(
+                run_key,
+                paths,
+                request=request,
+                control=control,
+            )
+
+        from unify.file_manager.types.config import (
+            EmbeddingsConfig,
+            FilePipelineConfig,
+            IngestConfig,
+        )
+
+        target = request.target
+        config = FilePipelineConfig(
+            ingest=IngestConfig(
+                storage_id=target.name,
+                table_ingest=target.extract_tables,
+            ),
+            embed=EmbeddingsConfig(
+                strategy=request.embed.strategy if request.embed else "after",
+            ),
+        )
+
+        result = self._get_fm().ingest_files(
+            list(paths),
+            config=config,
+            destination=destination,
+        )
+
+        contexts: List[str] = []
+        rows = 0
+        succeeded = 0
+        failures: List[str] = []
+        for path, entry in result.files.items():
+            if entry.status != "success":
+                failures.append(f"{path}: {entry.error or 'failed'}")
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="parse",
+                    level="error",
+                    message=f"{path}: {entry.error or 'failed'}",
+                )
+                continue
+            succeeded += 1
+            content = getattr(entry, "content_ref", None)
+            if content is not None and content.context:
+                contexts.append(content.context)
+                rows += content.record_count
+            for table in getattr(entry, "tables_ref", None) or []:
+                contexts.append(table.context)
+                rows += table.row_count
+            self._record_event(
+                run_key,
+                destination=destination,
+                stage="ingest",
+                state="running",
+                done=succeeded,
+                total=len(paths),
+                message=f"Stored {path}.",
+            )
+
+        if failures and not succeeded:
+            raise RuntimeError(
+                f"Every file failed to store: {'; '.join(failures)}",
+            )
+        return rows, list(dict.fromkeys(contexts)), succeeded
+
+    def _files_into_table(
+        self,
+        run_key: str,
+        paths: List[str],
+        *,
+        request: IngestionRequest,
+        control: Dict[str, bool],
+    ) -> tuple[int, List[str], int]:
+        """Merge the tables found in *paths* into one queryable context.
+
+        Parsing is per file and never raises -- a per-file failure is recorded
+        and the rest proceed. The extracted rows then flow through the shared
+        engine, one work unit per extracted table, so the write half is
+        checkpointed and verified exactly like any other ingestion.
+        """
+        from unify.file_manager.file_parsers.file_parser import FileParser
+        from unify.file_manager.file_parsers.types.contracts import FileParseRequest
+
+        destination = request.destination
+        parser = FileParser()
+        work: List[TableWork] = []
+        parsed = 0
+        failures: List[str] = []
+
+        for path in paths:
+            if control["cancel"]:
+                raise PipelineCancelled(f"Run {run_key} cancelled during parse")
+            result = parser.parse(
+                FileParseRequest(logical_path=path, source_local_path=path),
+            )
+            if result.status != "success":
+                failures.append(f"{path}: {result.error or 'parse failed'}")
+                self._record_event(
+                    run_key,
+                    destination=destination,
+                    stage="parse",
+                    level="error",
+                    message=f"{path}: {result.error or 'parse failed'}",
+                )
+                continue
+            parsed += 1
+            self._record_event(
+                run_key,
+                destination=destination,
+                stage="parse",
+                state="running",
+                done=parsed,
+                total=len(paths),
+                message=f"Parsed {path} ({len(result.tables)} table(s)).",
+            )
+            for table in result.tables:
+                rows = [dict(row) for row in table.rows]
+                if not rows:
+                    continue
+                work.append(
+                    self._table_work(
+                        # Stable per source table, so a resume of this run finds
+                        # the same checkpoint whatever order parsing returned.
+                        table_id=f"run-{run_key}-{_safe_id(path)}-{table.table_id}",
+                        label=table.label or path,
+                        handle=InlineRowsHandle(
+                            rows=rows,
+                            columns=list(table.columns or rows[0].keys()),
+                            row_count=len(rows),
+                        ),
+                        declared=len(rows),
+                        request=request,
+                    ),
+                )
+
+        if not parsed:
+            raise RuntimeError(
+                f"Every file failed to parse: {'; '.join(failures)}",
+            )
+        if not work:
+            raise RuntimeError(
+                "Parsing found no tables to store. A table target needs tabular "
+                "content; use CollectionTarget to keep these documents whole.",
+            )
+
+        outcome = self._run_engine(run_key, work, request=request, control=control)
+        return outcome.rows_committed, outcome.contexts, parsed
 
     def _handle_for_table(self, source: Any, *, declared: int) -> Any:
         """Read a stored table into a handle the engine can stream from.
@@ -604,10 +918,11 @@ class IngestionManager(BaseIngestionManager):
     # ── observing ─────────────────────────────────────────────────────────
 
     def get_status(self, run_id: str) -> RunStatus:
-        row, _ = self._find_run(run_id)
+        row, runs_context = self._find_run(run_id)
         if row is None:
             raise ValueError(f"No ingestion run {run_id!r}.")
 
+        row = self._fold_fleet_status(row, runs_context)
         events = self._events_for(row["run_key"])
         contexts = row.get("contexts") or []
         parked = int(row.get("parked") or 0)
@@ -635,12 +950,81 @@ class IngestionManager(BaseIngestionManager):
             ),
         )
 
-    def _events_for(
+    def _fold_fleet_status(
         self,
-        run_key: str,
-        *,
-        max_rows: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        row: Dict[str, Any],
+        runs_context: str,
+    ) -> Dict[str, Any]:
+        """Reconcile a dispatched run's row with the fleet's view of it.
+
+        The workers own the truth about a dispatched run while it executes, and
+        nothing else updates the row -- so a read is the moment to reconcile.
+        The fleet's answer is advisory until terminal; a terminal answer is
+        written back so later reads need not ask again and `wait` can end.
+
+        An unreachable control plane leaves the row as it stands: a stale
+        answer that says so via `next_step` beats an exception on a read path.
+        """
+        dispatch_id = row.get("dispatch_id")
+        if not dispatch_id or row.get("state") in TERMINAL_STATES:
+            return row
+        if not self._settings.PIPELINE_URL:
+            return row
+
+        from unify.ingestion_manager.dispatch import fetch_status
+
+        try:
+            fleet = fetch_status(
+                base_url=self._settings.PIPELINE_URL,
+                dispatch_id=str(dispatch_id),
+            )
+        except Exception as error:  # noqa: BLE001 -- read path stays readable
+            logger.warning(
+                "Pipeline control plane unreachable for %s: %s",
+                dispatch_id,
+                error,
+            )
+            return row
+
+        state = fleet.get("state")
+        if not state or state == row.get("state"):
+            merged = dict(row)
+        else:
+            merged = dict(row)
+            merged["state"] = state
+        for field in ("rows_written", "files_processed", "parked"):
+            value = fleet.get(field)
+            if isinstance(value, int):
+                merged[field] = value
+        contexts = fleet.get("contexts")
+        if isinstance(contexts, list) and contexts:
+            merged["contexts"] = contexts
+        error_text = fleet.get("error")
+        if error_text:
+            merged["error"] = error_text
+
+        if merged.get("state") in TERMINAL_STATES:
+            merged.setdefault("finished_at", _now())
+            self._update_run(
+                row["run_key"],
+                runs_context,
+                {
+                    key: merged.get(key)
+                    for key in (
+                        "state",
+                        "rows_written",
+                        "files_processed",
+                        "parked",
+                        "contexts",
+                        "error",
+                        "finished_at",
+                    )
+                    if merged.get(key) is not None
+                },
+            )
+        return merged
+
+    def _events_for(self, run_key: str) -> List[Dict[str, Any]]:
         """Read a run's events, paging until they are exhausted.
 
         Paged rather than fetched with a large limit because the backend serves at
@@ -665,8 +1049,6 @@ class IngestionManager(BaseIngestionManager):
                 events.extend(batch)
                 offset += len(batch)
                 if len(batch) < page:
-                    break
-                if max_rows is not None and len(events) >= max_rows:
                     break
         return sorted(events, key=lambda event: event.get("at") or "")
 
@@ -751,6 +1133,21 @@ class IngestionManager(BaseIngestionManager):
         if row is None:
             raise ValueError(f"No ingestion run {run_id!r}.")
 
+        state = row.get("state") or "queued"
+        if state not in TERMINAL_STATES:
+            # A live run already has an attempt working; starting a second one
+            # contends for the lease at best, and a scope of "all" would clear
+            # the checkpoints out from under the live writer. Paused runs have
+            # their own verb.
+            action = "resume()" if state == "paused" else "wait for it, or cancel()"
+            return RetryResult(
+                run_id=run_id,
+                scope=only,
+                requeued=0,
+                state=state,  # type: ignore[arg-type]
+                detail=f"This run is {state}; to continue it, {action}.",
+            )
+
         parked = int(row.get("parked") or 0)
         if only == "dlq" and parked == 0:
             # Zero is an answer, not a failure. Saying so plainly stops a caller
@@ -764,12 +1161,14 @@ class IngestionManager(BaseIngestionManager):
             )
 
         request = self._load_request(row)
-        if only == "all":
+        if only == "all" and not row.get("dispatch_id"):
             # The checkpoints are what make a resume skip committed work, so
             # re-attempting everything means discarding them. Done explicitly
             # here rather than left implicit, because it is the one scope that
-            # rewrites rows that were already correct.
-            self._clear_checkpoints(row["run_key"])
+            # rewrites rows that were already correct. A dispatched run's
+            # checkpoints live on the fleet's store; the control plane owns
+            # clearing those as part of the retry it serialises.
+            self._store.delete_checkpoints(row["run_key"])
 
         self._update_run(
             row["run_key"],
@@ -792,7 +1191,7 @@ class IngestionManager(BaseIngestionManager):
             from unify.ingestion_manager.dispatch import request_retry
 
             request_retry(
-                base_url=self._settings.PIPELINE_URL,
+                base_url=self._require_pipeline_url(dispatch_id),
                 dispatch_id=dispatch_id,
                 scope=only,
             )
@@ -812,8 +1211,22 @@ class IngestionManager(BaseIngestionManager):
             state="queued",
         )
 
-    def _clear_checkpoints(self, run_key: str) -> None:
-        self._store.delete(f"jobs/{run_key}/checkpoints/run-{run_key}")
+    def _require_pipeline_url(self, dispatch_id: Any) -> str:
+        """The control plane URL, or a plain refusal when none is configured.
+
+        A dispatched run's work lives on the fleet, so a recovery verb without
+        a reachable control plane cannot act on it -- and an empty base URL
+        would otherwise surface as an obscure malformed-request error.
+        """
+        url = self._settings.PIPELINE_URL
+        if not url:
+            raise RuntimeError(
+                f"Run {dispatch_id} was dispatched to the worker fleet, but no "
+                "pipeline control plane is configured "
+                "(UNITY_INGESTION_PIPELINE_URL is unset), so it cannot be "
+                "steered from here.",
+            )
+        return url
 
     def cancel(self, run_id: str) -> bool:
         return self._transition(run_id, "cancelled", "Cancelled by request.")
@@ -841,7 +1254,7 @@ class IngestionManager(BaseIngestionManager):
             from unify.ingestion_manager.dispatch import request_resume
 
             request_resume(
-                base_url=self._settings.PIPELINE_URL,
+                base_url=self._require_pipeline_url(dispatch_id),
                 dispatch_id=dispatch_id,
             )
         else:
@@ -874,13 +1287,33 @@ class IngestionManager(BaseIngestionManager):
             )
 
             ask = request_cancel if state == "cancelled" else request_pause
-            ask(base_url=self._settings.PIPELINE_URL, dispatch_id=dispatch_id)
+            ask(
+                base_url=self._require_pipeline_url(dispatch_id),
+                dispatch_id=dispatch_id,
+            )
+        else:
+            if (
+                row.get("state") == "running"
+                and row.get("source_kind") in ("files", "folder")
+                and row.get("target_kind") == "collection"
+            ):
+                # The document pipeline has no chunk boundaries to stop at, so
+                # a running collection ingest cannot be steered mid-flight.
+                # Refusing is honest; recording "cancelled" while the work
+                # completes anyway would make the ledger lie either way.
+                return False
+            # An in-process run is steered through its control flags, checked
+            # between chunks. Cancel abandons the rest; pause surrenders at the
+            # checkpoint so resume() re-does at most one chunk.
+            with self._lock:
+                control = self._inline_control.get(row["run_key"])
+                if control is not None:
+                    control["cancel" if state == "cancelled" else "pause"] = True
 
-        self._update_run(
-            row["run_key"],
-            runs_context,
-            {"state": state, "finished_at": _now() if state == "cancelled" else None},
-        )
+        updates: Dict[str, Any] = {"state": state}
+        if state == "cancelled":
+            updates["finished_at"] = _now()
+        self._update_run(row["run_key"], runs_context, updates)
         self._record_event(
             row["run_key"],
             destination=request.destination,
