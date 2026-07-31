@@ -1194,7 +1194,6 @@ class TaskScheduler(BaseTaskScheduler):
                 ),
                 destination=task.destination,
                 task_name=task.name,
-                task_description=task.description,
                 attempt_token=trigger_attempt_token,
             )
         if task_run_provenance and task_run_provenance.source_task_log_id is not None:
@@ -1339,7 +1338,6 @@ class TaskScheduler(BaseTaskScheduler):
             source_ref=request.receipt_id,
             attempt_token=request.operation_id,
             task_name=definition.name,
-            task_description=definition.description,
         )
         remember_live_task_run_provenance(provenance)
 
