@@ -29,10 +29,12 @@ there genuinely is not.
 ## Where work runs is not a parameter
 
 There is no mode or tier argument, and adding one would be a mistake rather than a
-convenience. Files are always parsed away from the assistant's own process, because
-parsing loads the file and its model into whatever process does it and no number
-predicts that cost in advance. Rows and stored tables run in process only under a
-*measured* row ceiling, where queue round-trip would cost more than the work.
+convenience. Files are parsed away from the assistant's own process whenever a
+worker fleet is reachable, because parsing loads the file and its model into
+whatever process does it and no number predicts that cost in advance; a deployment
+without a fleet parses in process rather than refusing the file. Rows and stored
+tables run in process only under a *measured* row ceiling, where queue round-trip
+would cost more than the work.
 
 Both paths write the same artifacts and the same checkpoints, so the choice affects
 latency and nothing else. A run has the same id, the same states and the same
@@ -225,6 +227,10 @@ class BaseIngestionManager(ABC):
         ``only="all"`` re-attempts everything, including items that succeeded. Only
         appropriate when the target was emptied or the way the data is parsed
         changed, since it will re-write rows that were already correct.
+
+        Only a finished run can be retried. A queued or running run already has a
+        live attempt, and a paused one is continued with ``resume`` — asking here
+        returns zero requeued items and says which verb applies.
 
         A result of zero requeued items is an answer, not a failure: there was
         nothing in that scope to retry.
