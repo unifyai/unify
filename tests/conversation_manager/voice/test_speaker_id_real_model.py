@@ -14,9 +14,9 @@ module covers what the stub cannot.
 Two classes of test, with very different corpus requirements:
 
 *Self-comparison* — how much audio the model needs before an embedding of a
-speaker resembles another embedding of that same speaker (``SEGMENT_MIN_S``,
-``REALTIME_WINDOW_S``). Synthesiser artifacts are constant within one voice,
-so these are sound on any corpus, including the generated one.
+speaker resembles another embedding of that same speaker (``SEGMENT_MIN_S``).
+Synthesiser artifacts are constant within one voice, so these are sound on
+any corpus, including the generated one.
 
 *Cross-speaker* — whether each threshold separates different people
 (``SPEAKER_MATCH_THRESHOLD``, ``CLUSTER_JOIN_SIM``, ``CROSS_ID_MERGE_SIM``)
@@ -50,8 +50,6 @@ from unify.conversation_manager import speaker_id
 from unify.conversation_manager.speaker_id import (
     CLUSTER_JOIN_SIM,
     CROSS_ID_MERGE_SIM,
-    REALTIME_MATCH_THRESHOLD,
-    REALTIME_WINDOW_S,
     SEGMENT_MIN_S,
     SPEAKER_MATCH_THRESHOLD,
     CentroidAccumulator,
@@ -398,42 +396,6 @@ def test_centroid_of_shortest_segments_converges_on_its_speaker(
     assert score >= SPEAKER_MATCH_THRESHOLD, (
         f"{name}: centroid of {count} x {SEGMENT_MIN_S}s segments scored "
         f"{score:.3f} against its own profile"
-    )
-
-
-def test_realtime_window_can_reach_the_match_threshold(embedder, corpus, profiles):
-    """A realtime window must be able to match its speaker, or gating is inert.
-
-    The scorer only ever gates on a *confident* verdict, so if no window of a
-    speaker's own audio can clear the threshold the verdict is permanently
-    "unknown" and ``EngagedGateVAD`` silently does nothing. That is the failure
-    the window length guards against, and it is invisible in production because
-    the gate fails open.
-    """
-    matched = {
-        name
-        for name, passages in corpus.items()
-        if any(
-            cosine_similarity(
-                embedder.embed_sync(
-                    _slice(passages[_SEGMENT_PASSAGE], REALTIME_WINDOW_S, i),
-                    SAMPLE_RATE,
-                ),
-                profiles[name],
-            )
-            >= REALTIME_MATCH_THRESHOLD
-            for i in range(
-                int(
-                    (len(passages[_SEGMENT_PASSAGE]) / SAMPLE_RATE - 1.0)
-                    // REALTIME_WINDOW_S,
-                ),
-            )
-        )
-    }
-    assert len(matched) >= len(corpus) / 2, (
-        f"only {len(matched)}/{len(corpus)} speakers had any "
-        f"{REALTIME_WINDOW_S}s window reach {REALTIME_MATCH_THRESHOLD} — "
-        f"the floor gate cannot act"
     )
 
 
