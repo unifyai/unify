@@ -746,6 +746,115 @@ def test_sync_materializes_only_connected_backend_tools(monkeypatch) -> None:
     assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "pipedream"
 
 
+def test_workspace_trigger_facade_only_connection_materializes_nothing(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+
+    result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+
+    assert result["status"] == "unchanged"
+    assert result["apps"] == []
+    assert result["unchanged_apps"] == []
+    assert fm._inserted_rows == []
+    assert not hasattr(fm, "_deleted_apps")
+    assert not hasattr(fm, "_stored_hashes")
+
+
+def test_workspace_trigger_facade_with_composio_resolves_composio_without_warning(
+    monkeypatch,
+    caplog,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+        {
+            "connection_id": "conn-composio",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "composio",
+            "status": "connected",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    sync_logger = logging.getLogger("unify.function_manager.function_manager")
+    sync_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="unify.function_manager.function_manager")
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "synced"
+    assert len(fm._inserted_rows) == 1
+    assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "composio"
+    assert "Multiple connected backends" not in caplog.text
+
+
 def test_insert_primitives_preserves_validated_integration_metadata(
     monkeypatch,
 ) -> None:

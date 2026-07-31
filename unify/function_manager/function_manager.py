@@ -3158,8 +3158,21 @@ class FunctionManager(BaseFunctionManager):
             limit=limit,
         )
 
+        from unify.integrations.provider_resolution import (
+            PREFERRED_BACKEND_ORDER,
+            WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE,
+        )
+
         connected_backend_by_app: dict[str, str | None] = {}
         for connection in active_connections:
+            if (
+                connection.get("credential_storage")
+                == WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE
+            ):
+                # Workspace trigger facade: presents workspace OAuth credentials
+                # as a trigger backend only. It must never register an app as
+                # tool-connected or claim a tool-execution backend.
+                continue
             raw_conn_app = connection.get("canonical_app_slug")
             conn_app = (
                 normalize_app_slug(raw_conn_app)
@@ -3178,9 +3191,6 @@ class FunctionManager(BaseFunctionManager):
                     connected_backend_by_app[conn_app] = None
                 continue
             if existing and existing != backend:
-                from unify.integrations.provider_resolution import (
-                    PREFERRED_BACKEND_ORDER,
-                )
 
                 def _rank(value: str) -> int:
                     try:
