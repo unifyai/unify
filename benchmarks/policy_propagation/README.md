@@ -21,33 +21,33 @@ post-change scoring window contains at least one item whose priority flips.
 
 ![policy propagation](results/policy_propagation.svg)
 
-| | Unify | hermes |
+| | Unify (factored guidance) | hermes |
 |---|---|---|
 | correctness (15 fires, both epochs) | **15/15** | **15/15** |
-| change propagated to all three automations | yes (3 function edits) | yes (3 prompt edits) |
-| change-application cost | 2.63M tokens / $10.13 | **1.14M tokens** |
-| steady state, whole family per round | **~2.5k tokens** | ~57k tokens |
-| payback of the change-cost gap | from ~round 28 after the change | — |
+| change propagated to all three automations | yes — guidance canon + 3 linked functions | yes (3 prompt edits) |
+| change-application cost | **1.02M tokens / $2.72** | 1.14M tokens |
+| steady state, whole family per round | **~2.2k tokens** | ~57k tokens |
+| payback of the change-cost gap | none needed — cheaper from the change itself | — |
 
-An honestly mixed result. Both architectures found and updated every copy
-of the policy — at three automations, propagation correctness tied.
-hermes's change session was ~2.3× cheaper. Unify's steady state is ~23×
-cheaper for the family (one focused `query_llm` call per automation per
-round vs an agent boot each), which repays the change-cost gap within ~28
-rounds and diverges linearly after.
+Correctness tied at 15/15; unify wins both cost axes. The storage reviews
+factored the policy into **one guidance entry** ("Customer inquiry triage
+and escalation policy") linked via `function_ids` to all three functions —
+reviews 2 and 3 linked into the first review's entry instead of
+duplicating it — and the change session used those links as its impact
+set, updating the canon and every linked function and verifying no stale
+threshold remained.
 
-**The product finding:** this run did not produce the design's intended
-many-to-many shape. The storage reviews embedded the policy *inside each of
-the three functions* (three copies) rather than factoring it into one
-guidance entry linked to the three functions — so the change session had to
-discover and rewrite three functions, which is exactly why it cost more
-than editing three prompts. (The calibration round showed the factoring is
-*reachable* — that run spontaneously created a shared
-`_run_customer_inquiry_policy_job` helper — but it is not reliably chosen.)
-Making the review recognize repeated policy text across tasks and factor it
-into linked guidance is the next prompt-engineering target; the linkage
-would then make change application a guidance edit plus mechanical
-regeneration of the linked functions.
+This shape did not emerge on the first attempt. The pre-factoring baseline
+(`2026-07-31T18-14-10Z-unify/NOTE.md`) embedded the policy in each
+function (change: 2.63M tokens / $10.13, ~2.3× *more* than hermes) —
+the storage prompts framed guidance solely as compositional recipes.
+Unify commit `9f54cf012` made shared rules a first-class guidance concern
+(fully general wording: durable rules/policies get one canonical linked
+entry; updates treat `function_ids` as the authoritative impact set),
+validated first on a one-automation slice (`slice_check.py`), then
+confirmed here. Storage-time reviews cost ~230k tokens more each (the
+search-and-link work); the change dropped 1.6M — net positive after one
+change, and every future change of the same rule is cheap.
 
 ## Notes
 

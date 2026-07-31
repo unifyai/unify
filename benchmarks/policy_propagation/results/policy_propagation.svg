@@ -14,13 +14,13 @@
 <rect x="270.3" y="128.2" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="460.7" y="113.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="651.0" y="132.1" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
-<polyline points="84.0,277.4 274.3,279.3 464.7,279.1 655.0,278.9" fill="none" stroke="#2a78d6" stroke-width="2"/>
-<circle cx="84.0" cy="277.4" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
-<circle cx="274.3" cy="279.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
-<circle cx="464.7" cy="279.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
-<circle cx="655.0" cy="278.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
-<rect x="663" y="273.9" width="10" height="10" fill="#2a78d6"/>
-<text x="678" y="282.9" fill="#1a1a19" font-size="12">Unify · 2.5k/round</text>
+<polyline points="84.0,280.1 274.3,283.3 464.7,284.7 655.0,283.3" fill="none" stroke="#2a78d6" stroke-width="2"/>
+<circle cx="84.0" cy="280.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="274.3" cy="283.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="464.7" cy="284.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="655.0" cy="283.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="663" y="278.3" width="10" height="10" fill="#2a78d6"/>
+<text x="678" y="287.3" fill="#1a1a19" font-size="12">Unify · 2.2k/round</text>
 <rect x="663" y="131.1" width="10" height="10" fill="#eb6834"/>
 <text x="678" y="140.1" fill="#1a1a19" font-size="12">hermes · 57k/round</text>
 <text x="84.0" y="339.0" fill="#6f6e6a" font-size="11" text-anchor="middle">round 2</text>
@@ -41,14 +41,12 @@
 <text x="132.8" y="399" fill="#6f6e6a" font-size="11">measured | projected</text>
 <polyline points="84.0,546.2 98.3,542.8 112.5,538.0 126.8,534.8" fill="none" stroke="#eb6834" stroke-width="2"/>
 <polyline points="126.8,534.8 141.1,531.2 155.4,527.6 169.6,523.9 183.9,520.3 198.2,516.7 212.5,513.1 226.8,509.5 241.0,505.9 255.3,502.3 269.6,498.6 283.9,495.0 298.1,491.4 312.4,487.8 326.7,484.2 340.9,480.6 355.2,476.9 369.5,473.3 383.8,469.7 398.1,466.1 412.3,462.5 426.6,458.9 440.9,455.2 455.2,451.6 469.4,448.0 483.7,444.4 498.0,440.8 512.2,437.2 526.5,433.5 540.8,429.9 555.1,426.3 569.3,422.7 583.6,419.1 597.9,415.5 612.2,411.8 626.4,408.2 640.7,404.6 655.0,401.0" fill="none" stroke="#eb6834" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
-<polyline points="84.0,452.1 98.3,451.9 112.5,451.8 126.8,451.6" fill="none" stroke="#2a78d6" stroke-width="2"/>
-<polyline points="126.8,451.6 141.1,451.5 155.4,451.3 169.6,451.2 183.9,451.0 198.2,450.8 212.5,450.7 226.8,450.5 241.0,450.4 255.3,450.2 269.6,450.1 283.9,449.9 298.1,449.8 312.4,449.6 326.7,449.4 340.9,449.3 355.2,449.1 369.5,449.0 383.8,448.8 398.1,448.7 412.3,448.5 426.6,448.4 440.9,448.2 455.2,448.1 469.4,447.9 483.7,447.7 498.0,447.6 512.2,447.4 526.5,447.3 540.8,447.1 555.1,447.0 569.3,446.8 583.6,446.7 597.9,446.5 612.2,446.4 626.4,446.2 640.7,446.0 655.0,445.9" fill="none" stroke="#2a78d6" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
-<rect x="663" y="440.9" width="10" height="10" fill="#2a78d6"/>
-<text x="678" y="449.9" fill="#1a1a19" font-size="12">Unify · 2.73M</text>
+<polyline points="84.0,553.8 98.3,553.7 112.5,553.5 126.8,553.4" fill="none" stroke="#2a78d6" stroke-width="2"/>
+<polyline points="126.8,553.4 141.1,553.2 155.4,553.1 169.6,553.0 183.9,552.8 198.2,552.7 212.5,552.5 226.8,552.4 241.0,552.2 255.3,552.1 269.6,552.0 283.9,551.8 298.1,551.7 312.4,551.5 326.7,551.4 340.9,551.3 355.2,551.1 369.5,551.0 383.8,550.8 398.1,550.7 412.3,550.5 426.6,550.4 440.9,550.3 455.2,550.1 469.4,550.0 483.7,549.8 498.0,549.7 512.2,549.6 526.5,549.4 540.8,549.3 555.1,549.1 569.3,549.0 583.6,548.8 597.9,548.7 612.2,548.6 626.4,548.4 640.7,548.3 655.0,548.1" fill="none" stroke="#2a78d6" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
+<rect x="663" y="543.1" width="10" height="10" fill="#2a78d6"/>
+<text x="678" y="552.1" fill="#1a1a19" font-size="12">Unify · 1.11M</text>
 <rect x="663" y="396.0" width="10" height="10" fill="#eb6834"/>
 <text x="678" y="405.0" fill="#1a1a19" font-size="12">hermes · 3.44M</text>
-<circle cx="483.7" cy="447.7" r="5" fill="none" stroke="#1a1a19" stroke-width="1.5"/>
-<text x="483.7" y="437.7" fill="#1a1a19" font-size="11" text-anchor="middle">Unify cheaper from round 28 after the change</text>
 <text x="84.0" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">change</text>
 <text x="126.8" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">3</text>
 <text x="255.3" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">12</text>
