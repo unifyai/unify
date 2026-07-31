@@ -421,7 +421,7 @@ def scrub_state_archive(state_dir: Path) -> None:
             config = json.loads(config_path.read_text(encoding="utf-8"))
             (config.get("gateway") or {}).pop("auth", None)
             config_path.write_text(
-                json.dumps(config, indent=2),
+                json.dumps(config, indent=2) + "\n",
                 encoding="utf-8",
             )
         except (ValueError, OSError):
