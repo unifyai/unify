@@ -130,6 +130,14 @@ Determinate progress bar.
 - `showValue?: boolean` — Show the percentage to the right of the track.
 - plus standard element attributes except children
 
+### `<Freshness>`
+How old a materialised value is, stated instead of implied.
+
+- `synced: string | number` — When the data was produced — ISO-8601 string or epoch milliseconds.
+- `label?: string` — Prefix label; defaults to "Updated".
+- `staleAfterMinutes?: number` — Minutes after which the age renders in the warning tone.
+- plus standard element attributes except children
+
 ## Tables
 
 ### `<Table>`
@@ -319,4 +327,4 @@ Outcome of an action's most recent run.
 ### `useCanvasAction(canvas, name)`
 Look up one declared action and its latest run.
 
-<!-- 44 components -->
+<!-- 45 components -->
