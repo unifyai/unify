@@ -13,7 +13,6 @@ from unify.contact_manager.types.contact import UNASSIGNED
 from unify.common.context_registry import ContextRegistry
 from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
-from unify.conversation_manager import speaker_id
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.comms_utils import (
@@ -1752,18 +1751,6 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     ):
         sender_name = event.speaker_label
 
-    # Track anonymous voice labels for the engagement tools' status appendix.
-    # Keyed on provenance, not "no voice match": a roster/DOM-resolved *real*
-    # name is also unverified, but it is not a "Speaker N" placeholder and must
-    # not pollute the anonymous-label roster.
-    if (
-        role == "user"
-        and getattr(event, "speaker_label", None)
-        and getattr(event, "speaker_label_source", None)
-        == speaker_id.LABEL_SOURCE_ANONYMOUS
-    ):
-        cm.call_manager.note_speaker_label(event.speaker_label)
-
     message_id = cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
@@ -1850,18 +1837,6 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     [utterance],
                 ),
             )
-
-    # A non-engaged (background) utterance is context, not a turn: the fast
-    # brain emitted no reply and scheduled no slow-brain user run for it. A
-    # debounced non-user-origin run lets the slow brain notice a background
-    # voice addressing the assistant and engage it; bursts collapse in the
-    # debouncer.
-    if role == "user" and getattr(event, "engaged", True) is False:
-        await cm.request_llm_run(
-            delay=2,
-            triggering_contact_id=contact_id,
-        )
-        return
 
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
@@ -3716,17 +3691,31 @@ async def _(event: ActorNotification, cm: "ConversationManager", *args, **kwargs
 
     The fast brain receives actor progress via ``_render_boss_notifications``
     and the ``NotificationReplyEvaluator`` decides whether to speak.
-    """
-    if event.handle_id in cm.in_flight_actions:
-        from unify.common.prompt_helpers import now as prompt_now
 
-        cm.in_flight_actions[event.handle_id]["handle_actions"].append(
-            {
-                "action_name": "progress",
-                "query": event.response,
-                "timestamp": prompt_now(),
-            },
-        )
+    A notification can also arrive *late* -- after the handle has already
+    moved from ``in_flight_actions`` to ``completed_actions`` (e.g. the
+    StorageCheck phase finishing well after ``ActorResult`` resolved the
+    action). Record those too instead of silently dropping them, so the
+    handle's history reflects everything that actually happened.
+    """
+    from unify.common.prompt_helpers import now as prompt_now
+
+    entry = {
+        "action_name": "progress",
+        "query": event.response,
+        "timestamp": prompt_now(),
+    }
+    action_data = cm.in_flight_actions.get(event.handle_id) or cm.completed_actions.get(
+        event.handle_id,
+    )
+    if action_data and "handle_actions" in action_data:
+        action_data["handle_actions"].append(entry)
+
+    # ponytail: single-consumer wake gate. If a second consumer needs to
+    # react to a distinct notification `kind`, upgrade this to a dedicated
+    # event class instead of growing this branch.
+    if event.kind == "storage_review_complete" and cm.learning_demo_storage_wake_armed:
+        await cm.request_llm_run()
 
 
 @EventHandler.register(ComputerActCompleted)

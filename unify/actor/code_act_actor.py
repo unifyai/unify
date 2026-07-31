@@ -1188,6 +1188,31 @@ def _build_storage_tools(
 
             if not callable(attach_entrypoint):
                 return "No task entrypoint attachment hook is available."
+            # A recorded entrypoint id that does not resolve at execution time
+            # fails every future wake of the task, so verify the id actually
+            # persisted before recording it on the definition.
+            if fm is None:
+                return (
+                    "Refusing to attach an entrypoint: no FunctionManager is "
+                    "available to verify the function id."
+                )
+            try:
+                resolution = fm.filter_functions(
+                    filter=f"function_id == {int(function_id)}",
+                    include_implementations=False,
+                )
+            except Exception as exc:
+                return (
+                    f"Refusing to attach function_id {int(function_id)}: "
+                    f"resolvability check failed ({type(exc).__name__}: {exc})."
+                )
+            if not resolution:
+                return (
+                    f"Refusing to attach function_id {int(function_id)}: no "
+                    "stored function resolves to that id. Store the function "
+                    "first (or re-check the id from the add_functions result) "
+                    "and attach the id that actually persisted."
+                )
             return str(
                 attach_entrypoint(
                     function_id=int(function_id),
@@ -1933,9 +1958,14 @@ class _StorageCheckHandle(SteerableToolHandle):
                     )
                 else:
                     self._storage_handle = storage_handle
+                    storage_success = True
                     try:
-                        await self._storage_handle.result()
+                        storage_summary = await self._storage_handle.result()
                     except Exception as exc:
+                        storage_success = False
+                        storage_summary = (
+                            f"StorageCheck failed: {type(exc).__name__}: {exc}"
+                        )
                         logger.warning(
                             f"StorageCheck failed: {type(exc).__name__}: {exc}",
                         )
@@ -1947,6 +1977,17 @@ class _StorageCheckHandle(SteerableToolHandle):
                         phase="outgoing",
                         display_label=review_display_label,
                         hierarchy=_sc_hierarchy,
+                    )
+
+                    # ponytail: single-consumer signal — see event_handlers.py
+                    # ActorNotification handler for the wake gate. Upgrade to
+                    # a dedicated event class if a second consumer appears.
+                    await self._notification_q.put(
+                        {
+                            "type": "storage_review_complete",
+                            "message": storage_summary,
+                            "success": storage_success,
+                        },
                     )
             finally:
                 _PENDING_LOOP_SUFFIX.reset(_sc_suffix_token)
@@ -4725,6 +4766,46 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
+    @staticmethod
+    async def _run_repair_diagnostic_probe(code: str) -> str:
+        """Execute a short read-only Python diagnosis snippet in a fresh subprocess.
+
+        Use this to observe the CURRENT behavior of the external interfaces a
+        failing function reads — for example, fetch the endpoint it ingests
+        and print the response's shape, keys, and a sample record — so the
+        repair is grounded in observed reality rather than in assumptions or
+        in the function's own error messages. The snippet runs in a fresh
+        isolated interpreter with the standard library only and must print
+        its observations to stdout.
+
+        Strictly read-only diagnosis: fetch and inspect inputs only. Never
+        perform the failing function's side effects (no writes, deliveries,
+        or state mutations on external systems). Output is truncated after
+        20,000 characters; the subprocess is killed after 60 seconds.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-c",
+            str(code),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return "Probe timed out after 60 seconds and was killed."
+        output = raw.decode("utf-8", errors="replace")
+        if len(output) > 20_000:
+            output = output[:20_000] + "\n... (output truncated)"
+        return (
+            f"exit_code={proc.returncode}\n{output}"
+            if output.strip()
+            else f"exit_code={proc.returncode} (no output printed)"
+        )
+
     async def _repair_symbolic_entrypoint(
         self,
         *,
@@ -4783,13 +4864,39 @@ class CodeActActor(BaseCodeActActor):
             fm.get_function_venv,
             include_class_name=True,
         )
+        tools["run_diagnostic_probe"] = self._run_repair_diagnostic_probe
         client = new_llm_client(self._model)
         client.set_system_message(
-            "You are repairing a stored symbolic task executor. The function "
-            "must preserve the task contract, managed primitives, deterministic "
-            "inputs, side-effect ordering, and failure semantics. Prefer updating "
-            "the existing function with overwrite=True. Do not replace managed "
-            "primitives with ad hoc weaker implementations.",
+            "You are repairing a stored symbolic task executor. The contract "
+            "you must preserve is the task's OUTCOME: what it computes, the "
+            "semantics and exactness of those values, which side effects it "
+            "performs, where it delivers them, in what order, and how it fails "
+            "when the outcome is truly unachievable. How the function READS its "
+            "external inputs is not contract: external interfaces evolve after "
+            "a function is stored (fields get renamed or nested, endpoints get "
+            "versioned), and adapting ingestion to the environment's current "
+            "shape while keeping the outcome exactly equivalent is precisely "
+            "what repair is for. Diagnose before you rewrite: when the failure "
+            "implicates an external input surface, first use "
+            "run_diagnostic_probe to observe what that interface actually "
+            "returns right now (its shape, keys, and a sample record) and base "
+            "the repair on that observation. Probes are strictly read-only "
+            "diagnosis — never perform the function's side effects through "
+            "them. The task description records the environment "
+            "as it looked when the task was created; when observed reality "
+            "contradicts it, trust the observation over the description's "
+            "input details. Bear in mind that the function's own validation "
+            "messages describe its assumptions, not what the environment "
+            "actually returned — a missing expected field usually means the "
+            "interface changed shape, not that the data is corrupt, so prefer "
+            "ingestion that reads the observed current shape over rejecting "
+            "the input. Never weaken the "
+            "outcome to make the error disappear: do not fabricate values, "
+            "skip required side effects, or coerce genuinely invalid data. "
+            "Update the existing function in place with overwrite=True so its "
+            "function_id stays stable; never delete and re-add it, because "
+            "references such as task entrypoints hold the id. Do not replace "
+            "managed primitives with ad hoc weaker implementations.",
         )
         message = (
             "A symbolic task executor failed certification or execution.\n\n"
@@ -4801,9 +4908,15 @@ class CodeActActor(BaseCodeActActor):
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
             f"Failure: {type(failure).__name__}: {failure}\n\n"
-            "Repair the stored function if possible, then briefly summarize the "
-            "equivalence rationale and the change made. If it cannot be repaired "
-            "without changing the task contract, say so without promoting it."
+            "Diagnose the failure — observing the current behavior of any "
+            "implicated external input surface via run_diagnostic_probe "
+            "(read-only) before deciding — then repair the stored function in "
+            "place (overwrite=True) when an outcome-equivalent fix exists, "
+            "including adapting input handling to an evolved external "
+            "interface. Briefly summarize the observed evidence, the "
+            "equivalence rationale, and the change made. Only if no fix can "
+            "preserve the task's outcome semantics, say so without modifying "
+            "the function."
         )
         handle = start_async_tool_loop(
             client=client,

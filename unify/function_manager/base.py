@@ -50,6 +50,7 @@ class BaseFunctionManager(BaseStateManager):
         language: FunctionLanguage = "python",
         preconditions: Optional[Dict[str, Dict]] = None,
         verify: Optional[Dict[str, bool]] = None,
+        overwrite: bool = False,
         raise_on_error: bool = True,
         venv_id: Optional[int] = None,
     ) -> Dict[str, str]:
@@ -64,6 +65,7 @@ class BaseFunctionManager(BaseStateManager):
             language: Literal["python", "bash", "zsh", "sh", "powershell"] = "python",
             preconditions: dict[str, dict] | None = None,
             verify: dict[str, bool] | None = None,
+            overwrite: bool = False,
             raise_on_error: bool = True,
             venv_id: int | None = None,
         ) -> dict[str, str]
@@ -87,6 +89,13 @@ class BaseFunctionManager(BaseStateManager):
             Optional mapping from function name → verification requirement.
             If a function name is present and mapped to ``True`` (default) or ``False``,
             it sets the ``verify`` field on the ``Function`` record.
+        overwrite : bool, default ``False``
+            If ``True``, a function whose name already exists is updated in
+            place, keeping its ``function_id`` stable so existing references
+            (e.g. task entrypoints, guidance links) keep resolving. If
+            ``False``, functions whose names already exist are skipped and
+            reported as duplicates. Always prefer ``overwrite=True`` over
+            delete-and-re-add when revising an existing function.
         raise_on_error : bool, default ``True``
             If ``True``, raises ``ValueError`` when any function fails to add
             (parse error, validation error, etc.). If ``False``, errors are

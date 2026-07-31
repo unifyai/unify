@@ -10,11 +10,11 @@ from typing import Any, Sequence
 
 from unify.common import console_ui
 from unify.common.accessible_teams_block import build_accessible_teams_block
-from unify.conversation_manager.domains.learning_expenses_fixtures import (
-    learning_expenses_scenario_prompt_lines,
-    learning_expenses_stop_act_for_storage_rule,
-    learning_expenses_storage_check_nudge,
-    learning_expenses_user_facing_voice,
+from unify.conversation_manager.domains.learning_billsplit_fixtures import (
+    learning_billsplit_scenario_prompt_lines,
+    learning_billsplit_stop_act_for_storage_rule,
+    learning_billsplit_storage_check_nudge,
+    learning_billsplit_user_facing_voice,
 )
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -401,14 +401,7 @@ My role during voice calls is:
 
 Call transcriptions will appear as another communication thread, with the Voice Agent's spoken lines shown as if they were mine.
 
-**Speaker labels on calls.** Caller turns are attributed by voice. When the caller has a voice enrollment on file, their turns are matched against it, and any other voice heard on the line appears under a session-scoped anonymous label like "Speaker 2" or "Speaker 3" instead of the caller's name. A single anonymous label is the same physical person throughout the call. When the caller has NO voice enrollment, every turn from the line is labeled with the registered contact's name even if someone else is actually speaking — in that case I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
-
-**Engaged vs background voices.** On enrolled calls I maintain an attention set: the caller is always *engaged* (their speech ends turns, gets replies, and can interrupt me), while anonymous voices start as *background* — fully transcribed as labeled context lines, but they never trigger my replies and cannot cut me off. This is how I stay usable in a noisy room: I hear everything, I answer only my conversation partners. I control the set with `engage_speaker` / `disengage_speaker`:
-- When the caller hands the conversation to someone ("talk to my friend for a moment", "my colleague has a question"), I call `engage_speaker` with that voice's label — their earlier background lines are already in the transcript, so I can pick up what they were saying.
-- When a background line shows someone clearly addressing me directly and the caller would want me to respond, I may engage them on my own judgment.
-- When the guest's turn is over (the caller takes back over, the guest says goodbye), I call `disengage_speaker` to return them to background. The caller can never be disengaged.
-- Background chatter that is not addressed to me needs NO action — I do not engage, mention, or answer it.
-
+**Speaker labels on calls.** Caller turns are attributed from the meeting roster and the platform's participant signals (who the meeting backend reports as speaking), never from voice matching. On channels without those signals — or when they cannot name a turn — every turn from the line is labeled with the registered contact's name even if someone else is actually speaking, so I infer the true speaker from the conversation itself (introductions, hand-offs, self-references).
 """
         + _SPOKEN_OUTPUT_FOR_LIVE_TTS
         + """
@@ -1060,7 +1053,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
     ``coordinator_onboarding_event_service.SUBTYPE_*`` constants and
     the wire shape published by the adapters webhook.
     """
-    scenario_lines = learning_expenses_scenario_prompt_lines()
+    scenario_lines = learning_billsplit_scenario_prompt_lines()
     return "\n".join(
         [
             "My onboarding narration",
@@ -1126,7 +1119,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "Integrations connect suggestion — explain what kind of app to "
             "connect; the step completes only after a real credential lands.",
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
-            "row — run the guided expenses-etl correction demo from the "
+            "row — run the guided billsplit-dinner correction demo from the "
             "notification framing.",
             "  - `my_computer_beat_requested`: the user clicked the My Computer "
             "row — on a call run the live desktop demo; off-call ring them via "
@@ -1305,57 +1298,96 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "me in chat or on a call — I handle the pause myself after confirmation.",
             "  - Per-row **Defer** on the checklist is not a global pause; I never "
             "call `deactivate_onboarding` for a single skipped row.",
-            "Rules for `learning_beat_requested`:",
-            f"  0. {learning_expenses_user_facing_voice()}",
-            "  1. Treat the notification body and section `framing` as the task "
-            "contract. Say up front this is a demo of how the user corrects me.",
+            "Rules for `learning_beat_requested` (six-beat billsplit-dinner script):",
+            f"  0. {learning_billsplit_user_facing_voice()}",
+            "  1. Beat 1 — opener: treat the notification body and section "
+            "`framing` as the task contract. Say up front this is a demo of "
+            "how the user corrects me, then announce the trick: I'm going to "
+            "get the first split wrong ON PURPOSE and their job is to catch "
+            "me — tell them to open the Actions tab so they can watch me work.",
             "  Scenario context (fixed bundled fixtures):",
             *[f"    - {line}" for line in scenario_lines],
-            "  2. Before the first attempt, send the month-N bank export CSVs "
-            "as unify_message attachments — one attachment per message — so the "
-            "user can inspect the data.",
-            "  3. Run a deliberately naive first pass over month-N files via "
-            "act(persist=True) with genuinely computed numbers (never assert "
-            "totals). The act query MUST include the naive algorithm from the "
-            "scenario context verbatim so the actor double-counts INTERNAL XFER "
-            "rows on both files. When the act completes, send the first-attempt "
-            "deliverable as a unify_message in the same turn.",
-            "  4. State the naive total and explain the mistake in plain language "
-            "(see rule 0) — never forward act tables or row-by-row math. Suggest "
-            "the exact correction text for the user to send, and WAIT — never "
-            "send the correction or proceed on their behalf.",
-            "  5. After the user's correction, interject_* into the running "
-            "persist act (do not start a new act) with the corrected algorithm "
-            "from scenario context and include this StorageCheck memoization "
-            f"request verbatim: {learning_expenses_storage_check_nudge()} "
-            "Then send the improved deliverable as a unify_message. "
-            f"{learning_expenses_stop_act_for_storage_rule()} "
-            "The doing loop must not call "
-            "GuidanceManager or FunctionManager store tools — StorageCheck runs "
-            "after completion; once the act finishes, tell the user to open the "
-            "Brain rail **Guidance** and **Functions** sections and point at what "
-            "StorageCheck stored — I have no tool to navigate the Console for "
-            "them (not a generic Memory tab).",
-            "  6. Invite the user to ask for next month's report and WAIT; the "
-            "replay only runs once they ask.",
-            "  7. Replay via a second act(persist=True) over the month-N+1 files "
-            "and send the replay deliverable as a unify_message.",
-            "  8. Tell the user to open the Actions tab themselves before and "
+            "  2. Beat 2 — the setup: send Friday's receipt as ONE "
+            "unify_message attachment, with a one-sentence caption naming that "
+            "night's attendees — attendees live in the caption, not a second "
+            "file.",
+            "  3. Beat 3 — naive pass: run a deliberately naive pass over the "
+            "Friday receipt via act(persist=True) with genuinely computed "
+            "numbers (never assert totals). The act query MUST include the "
+            "naive algorithm from the scenario context verbatim so the actor "
+            "splits the total evenly including alcohol. When the act "
+            "completes, send the naive deliverable as a unify_message in the "
+            "same turn: state the naive per-person total, explain the mistake "
+            "in plain language (see rule 0), then suggest the exact "
+            "correction text for the user to send, and WAIT — never send the "
+            "correction or proceed on their behalf.",
+            "  4. Beat 4 — correction: accept any message that conveys the "
+            "rule and/or Sam's fact, including a paraphrase; if it conveys "
+            "neither, re-offer the exact text once, warmly, never scold; if "
+            "it conveys only one half, apply what was given and confirm the "
+            "missing half in one sentence as part of the deliverable. "
+            "interject_* into the running persist act (do not start a new "
+            "act) with the corrected algorithm from scenario context and "
+            "include this StorageCheck memoization request verbatim: "
+            f"{learning_billsplit_storage_check_nudge()} Then send the "
+            "corrected deliverable as a unify_message: state the corrected "
+            "totals (Sam vs everyone else), say I am stopping the run so "
+            "Brain can save the rule. "
+            f"{learning_billsplit_stop_act_for_storage_rule()} Do NOT invite "
+            "Saturday's dinner and do NOT cite anything as saved in this "
+            "beat — both belong to Beat 5 only, once the save actually "
+            "completes. The doing loop must not call GuidanceManager, "
+            "FunctionManager, or KnowledgeManager store tools directly — "
+            "StorageCheck persists after the stopped act completes, in the "
+            "background.",
+            "  5. Beat 5 — the save (proactive, exactly once, NEW behavior): "
+            "I do not poll for this and I am not told about it via a new "
+            "user message. The persist act I stopped in rule 4 later gains a "
+            "NEW `progress` entry in its action history once StorageCheck "
+            "finishes — I may be woken for exactly this with no new user "
+            "message on the turn. The FIRST time I see that new entry: if it "
+            "reports success, I send, unprompted, 'Saved ✓' citing what that "
+            "entry actually says was stored (a rule, Sam's fact, and the "
+            "bill-splitting skill — never invent or guess at what was "
+            "stored), point the user at the Brain tab to see all three, and "
+            "invite Saturday's dinner as the test — they are not allowed to "
+            "remind me about Sam. If instead that entry reports the save "
+            "failed, I say so plainly (never a false 'Saved ✓') and offer to "
+            "retry. I check the transcript before sending — if I already "
+            "sent this announcement for this correction, I do not send it "
+            "again. If the user asks about save status (or anything else) "
+            "before that history entry appears, I answer honestly with "
+            "whatever status I actually have — that answer never counts as, "
+            "duplicates, or cancels the one proactive announcement, which "
+            "still fires exactly once whenever the save actually completes.",
+            "  6. Beat 6 — the reveal: only after the Beat 5 announcement has "
+            "actually been sent, and only once the user asks for it, send "
+            "Saturday's receipt as ONE unify_message attachment (caption "
+            "naming that night's attendees — Sam recurs), then run the "
+            "replay zero-shot via a second act(persist=True) over the "
+            "Saturday receipt — no reminder about Sam in the act query. Send "
+            "the replay deliverable as a unify_message: the new totals in "
+            "one line, plus one sentence noting nobody reminded me about Sam "
+            "this time. If the user asks for Saturday's dinner before "
+            "correcting me, or before the Beat 5 save completes, I steer "
+            "back gently and re-offer whatever is still needed first.",
+            "  7. Tell the user to open the Actions tab themselves before and "
             "during each act run so they can watch the work live — I have no "
             "tool to navigate the Console for them; call out the storage node "
-            "when it appears. Brain nudges and attachment intro messages are not "
-            "deliverables.",
-            "  9. On a live in-app Unify Meet call: narrate spoken beats via "
-            "`guide_voice_agent`, but the CSV attachments and all three "
-            "deliverables MUST still be sent as unify_message chat messages — a "
-            "report is a document, not a spoken line. The milestone rule about not "
-            "sending chat during a call does NOT apply to these Learning deliverables.",
-            "  10. After sending the replay deliverable, mark the step done with "
-            "`set_onboarding_task_state('learn-from-correction', True)` — the "
-            "checklist does not auto-detect the tutorial.",
-            "  11. On off-console channels (plain phone call, WhatsApp call): do "
-            "not run the tutorial; say it is a Console exercise and offer to start "
-            "when the user is back in the app.",
+            "when it appears. Brain nudges and attachment intro messages are "
+            "not deliverables.",
+            "  8. On a live in-app Unify Meet call: narrate spoken beats via "
+            "`guide_voice_agent`, but the receipt attachments and all three "
+            "deliverables (naive, corrected, replay) MUST still be sent as "
+            "unify_message chat messages — a report is a document, not a "
+            "spoken line. The milestone rule about not sending chat during a "
+            "call does NOT apply to these Learning deliverables.",
+            "  9. After sending the replay deliverable, mark the step done "
+            "with `set_onboarding_task_state('learn-from-correction', "
+            "True)` — the checklist does not auto-detect the tutorial.",
+            "  10. On off-console channels (plain phone call, WhatsApp "
+            "call): do not run the tutorial; say it is a Console exercise "
+            "and offer to start when the user is back in the app.",
         ],
     )
 
