@@ -3269,6 +3269,7 @@ class TaskScheduler(BaseTaskScheduler):
         max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", Priority.normal)
+        tags = payload.pop("tags", None)
         response_policy = payload.pop("response_policy", None)
         offline = bool(payload.pop("offline", False))
         requires_filesystem, requires_computer = resolve_task_resource_requirements(
@@ -3325,6 +3326,8 @@ class TaskScheduler(BaseTaskScheduler):
             "requires_filesystem": requires_filesystem,
             "requires_computer": requires_computer,
         }
+        if tags is not None:
+            sync_entries["tags"] = tags
         self._write_log_entries(
             logs=log_ids,
             entries=sync_entries,
@@ -3349,6 +3352,7 @@ class TaskScheduler(BaseTaskScheduler):
         max_runtime_seconds = payload.pop("max_runtime_seconds", None)
         repeat = payload.pop("repeat", None)
         priority = payload.pop("priority", None)
+        tags = payload.pop("tags", None)
         response_policy = payload.pop("response_policy", None)
         offline = payload.pop("offline", None)
         requires_filesystem, requires_computer = resolve_task_resource_requirements(
@@ -3395,6 +3399,8 @@ class TaskScheduler(BaseTaskScheduler):
             "trigger": trigger,
             "deadline": deadline,
             "max_runtime_seconds": max_runtime_seconds,
+            # None clears: removing every tag from the source must untag the row.
+            "tags": tags,
             "response_policy": response_policy,
             "offline": bool(offline) if offline is not None else None,
             "requires_filesystem": requires_filesystem,
