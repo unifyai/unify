@@ -186,6 +186,26 @@ class GatewayProcess:
         self._proc: subprocess.Popen[bytes] | None = None
 
     def start(self, *, ready_timeout_s: float = 90.0) -> "GatewayProcess":
+        # A previous benchmark run's detached gateway may still hold the
+        # dedicated port (the launcher respawns the real server, so a killed
+        # launcher does not imply a dead gateway). The port is benchmark-only;
+        # clear it before booting.
+        try:
+            stale = subprocess.run(
+                ["lsof", "-tiTCP:%d" % self.gateway_port, "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+            ).stdout.split()
+        except Exception:
+            stale = []
+        for pid in stale:
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except (ProcessLookupError, ValueError):
+                continue
+        if stale:
+            time.sleep(3)
+
         log = open(self.log_path, "a", encoding="utf-8")
         # `gateway run` is a launcher: it respawns the real server as a
         # detached `openclaw-gateway` process and may itself exit 0, so

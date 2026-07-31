@@ -8,14 +8,16 @@ Two stacked panels over a shared x-axis (setup, then fires 1..N):
 
 Never a dual axis: two measures, two panels. Series colors are the validated
 categorical pair from the benchmark suite's palette (blue #2a78d6 = unify,
-orange #eb6834 = hermes) with distinct marker shapes as secondary encoding;
-text wears ink colors, never series colors.
+orange #eb6834 = hermes, green #009E73 = openclaw) with distinct marker
+shapes as secondary encoding; text wears ink colors, never series colors.
 
 Usage:
-    .venv/bin/python -m benchmarks.drift_recovery.plot [unify_results hermes_results]
+    .venv/bin/python -m benchmarks.drift_recovery.plot \
+        [unify_results hermes_results [openclaw_results]]
 
-Defaults to the newest ``results/*-unify`` and ``results/*-hermes`` runs and
-writes ``results/drift_recovery.svg``.
+Defaults to the newest ``results/*-unify``, ``results/*-hermes`` and (when
+present) ``results/*-openclaw`` runs and writes
+``results/drift_recovery.svg``.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ INK_MUTED = "#6f6e6a"
 GRID = "#e8e7e4"
 UNIFY_COLOR = "#2a78d6"
 HERMES_COLOR = "#eb6834"
+OPENCLAW_COLOR = "#009E73"
 
 WIDTH = 860
 PANEL_H = 240
@@ -44,10 +47,16 @@ PANEL_GAP = 56
 MARGIN_BOTTOM = 46
 
 
-def _newest(pattern: str) -> Path:
-    candidates = sorted((EXPERIMENT_DIR / "results").glob(pattern))
+def _newest(pattern: str, *, required: bool = True) -> Path | None:
+    candidates = sorted(
+        d
+        for d in (EXPERIMENT_DIR / "results").glob(pattern)
+        if (d / "results.json").exists()
+    )
     if not candidates:
-        raise SystemExit(f"no results matching {pattern}")
+        if required:
+            raise SystemExit(f"no results matching {pattern}")
+        return None
     return candidates[-1]
 
 
@@ -129,6 +138,12 @@ def _markers(xs: list[float], ys: list[float], color: str, shape: str) -> list[s
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}" '
                 f'stroke="{SURFACE}" stroke-width="2"/>',
             )
+        elif shape == "triangle":
+            out.append(
+                f'<path d="M {x:.1f} {y - 5:.1f} L {x + 4.5:.1f} {y + 4:.1f} '
+                f'L {x - 4.5:.1f} {y + 4:.1f} Z" fill="{color}" '
+                f'stroke="{SURFACE}" stroke-width="2"/>',
+            )
         else:
             out.append(
                 f'<rect x="{x - 4:.1f}" y="{y - 4:.1f}" width="8" height="8" '
@@ -150,14 +165,13 @@ def _panel(
     title: str,
     panel_top: float,
     n: int,
-    unify_vals: list[int],
-    hermes_vals: list[int],
+    series: list[tuple[list[int], str, str, str]],
     fmt,
     drift_after: int,
     annotations: list[tuple[int, str, str]],
     hermes_unattended: list[int] | None = None,
 ) -> list[str]:
-    vmax = max(max(unify_vals), max(hermes_vals), 1)
+    vmax = max(max(max(vals) for vals, _, _, _ in series), 1)
     parts = [
         f'<text x="{MARGIN_L}" y="{panel_top - 10}" fill="{INK}" '
         f'font-size="14" font-weight="600">{html.escape(title)}</text>',
@@ -198,10 +212,7 @@ def _panel(
             f'stroke="{HERMES_COLOR}" stroke-width="2" stroke-dasharray="5 5" '
             f'opacity="0.75"/>',
         )
-    for vals, color, shape in (
-        (hermes_vals, HERMES_COLOR, "square"),
-        (unify_vals, UNIFY_COLOR, "circle"),
-    ):
+    for vals, color, shape, _name in series:
         ys = [_y(v, vmax, panel_top) for v in vals]
         parts.append(
             f'<polyline points="{_polyline(xs, ys)}" fill="none" '
@@ -210,10 +221,7 @@ def _panel(
         parts.extend(_markers(xs, ys, color, shape))
 
     # Direct end labels (identity + final value), ink text with color chip.
-    label_rows = [
-        (unify_vals, UNIFY_COLOR, "Unify"),
-        (hermes_vals, HERMES_COLOR, "hermes + human"),
-    ]
+    label_rows = [(vals, color, name) for vals, color, _shape, name in reversed(series)]
     if hermes_unattended is not None:
         label_rows.append((hermes_unattended, HERMES_COLOR, "hermes alone"))
     used_ys: list[float] = []
@@ -244,11 +252,18 @@ def _panel(
     return parts
 
 
-def render(unify_results: dict[str, Any], hermes_results: dict[str, Any]) -> str:
+def render(
+    unify_results: dict[str, Any],
+    hermes_results: dict[str, Any],
+    openclaw_results: dict[str, Any] | None = None,
+) -> str:
     n = int(unify_results["n_fires"])
     drift_after = int(unify_results["drift_after_fire"])
     u_correct, u_tokens = _series(unify_results)
     h_correct, h_tokens = _series(hermes_results)
+    o_correct = o_tokens = None
+    if openclaw_results is not None:
+        o_correct, o_tokens = _series(openclaw_results)
 
     height = MARGIN_TOP + PANEL_H + PANEL_GAP + PANEL_H + MARGIN_BOTTOM
     parts = [
@@ -265,6 +280,34 @@ def render(unify_results: dict[str, Any], hermes_results: dict[str, Any]) -> str
         f"{drift_after}</text>",
     ]
 
+    def _mk_series(correct_or_tokens: str) -> list[tuple[list[int], str, str, str]]:
+        rows: list[tuple[list[int], str, str, str]] = [
+            (
+                h_correct if correct_or_tokens == "correct" else h_tokens,
+                HERMES_COLOR,
+                "square",
+                "hermes + human",
+            ),
+        ]
+        if o_correct is not None:
+            rows.append(
+                (
+                    o_correct if correct_or_tokens == "correct" else o_tokens,
+                    OPENCLAW_COLOR,
+                    "triangle",
+                    "openclaw",
+                ),
+            )
+        rows.append(
+            (
+                u_correct if correct_or_tokens == "correct" else u_tokens,
+                UNIFY_COLOR,
+                "circle",
+                "Unify",
+            ),
+        )
+        return rows
+
     hermes_unattended = _series_unattended(hermes_results)
     ha_correct = hermes_unattended[0] if hermes_unattended else None
     ha_tokens = hermes_unattended[1] if hermes_unattended else None
@@ -278,8 +321,7 @@ def render(unify_results: dict[str, Any], hermes_results: dict[str, Any]) -> str
         title="Reliability — cumulative correct deliveries",
         panel_top=MARGIN_TOP,
         n=n,
-        unify_vals=u_correct,
-        hermes_vals=h_correct,
+        series=_mk_series("correct"),
         fmt=lambda v: str(v),
         drift_after=drift_after,
         annotations=top_annotations,
@@ -290,8 +332,7 @@ def render(unify_results: dict[str, Any], hermes_results: dict[str, Any]) -> str
         title="Cost — cumulative LLM tokens",
         panel_top=cost_top,
         n=n,
-        unify_vals=u_tokens,
-        hermes_vals=h_tokens,
+        series=_mk_series("tokens"),
         fmt=lambda v: _fmt_tokens(int(v)),
         drift_after=drift_after,
         annotations=cost_annotations,
@@ -310,14 +351,25 @@ def render(unify_results: dict[str, Any], hermes_results: dict[str, Any]) -> str
 
 
 def main() -> None:
-    if len(sys.argv) == 3:
+    openclaw_dir: Path | None
+    if len(sys.argv) >= 3:
         unify_dir, hermes_dir = Path(sys.argv[1]), Path(sys.argv[2])
+        openclaw_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else None
     else:
         unify_dir, hermes_dir = _newest("*-unify"), _newest("*-hermes")
+        openclaw_dir = _newest("*-openclaw", required=False)
     unify_results = json.loads((unify_dir / "results.json").read_text())
     hermes_results = json.loads((hermes_dir / "results.json").read_text())
+    openclaw_results = (
+        json.loads((openclaw_dir / "results.json").read_text())
+        if openclaw_dir is not None
+        else None
+    )
     out = EXPERIMENT_DIR / "results" / "drift_recovery.svg"
-    out.write_text(render(unify_results, hermes_results), encoding="utf-8")
+    out.write_text(
+        render(unify_results, hermes_results, openclaw_results),
+        encoding="utf-8",
+    )
     print(f"wrote {out}")
 
 
