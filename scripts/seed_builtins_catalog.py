@@ -24,6 +24,11 @@ failure:
         UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=direct_worker \
         .venv/bin/python scripts/seed_builtins_catalog.py \
         --integration-bootstrap-manifest <path-to-integration-bootstrap.toml>
+
+Every wait is bounded so a wedged run fails loudly: the ``api`` executor by
+``UNITY_INTEGRATION_BOOTSTRAP_TIMEOUT`` and
+``UNITY_INTEGRATION_BOOTSTRAP_POLL_TIMEOUT``, the ``direct_worker`` executor by
+``UNITY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT`` (seconds, default 5400).
 """
 
 from __future__ import annotations
@@ -607,6 +612,18 @@ def _run_json_command(
     *,
     request_payload: dict[str, Any],
 ) -> dict[str, Any]:
+    """Run an executor subprocess and parse its final JSON line from stdout.
+
+    Bounded like every other wait here, so a wedged executor fails loudly
+    instead of blocking the caller forever. Only stdout is captured, because it
+    carries the result document; the executor's stderr stays attached to this
+    process so its progress is visible while the sync runs rather than being
+    held in a pipe until it exits.
+    """
+
+    timeout = float(
+        os.environ.get("UNITY_INTEGRATION_BOOTSTRAP_WORKER_TIMEOUT", "5400"),
+    )
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
@@ -614,20 +631,24 @@ def _run_json_command(
     ) as request_file:
         json.dump(request_payload, request_file)
         request_file.flush()
-        completed = subprocess.run(
-            [*command, "--request-file", request_file.name],
-            check=False,
-            capture_output=True,
-            encoding="utf-8",
-        )
+        try:
+            completed = subprocess.run(
+                [*command, "--request-file", request_file.name],
+                check=False,
+                stdout=subprocess.PIPE,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"executor timed out after {timeout:.0f}s: {shlex.join(command)}",
+            ) from exc
     if completed.returncode != 0:
         try:
             result = _parse_final_json(completed.stdout)
         except Exception:
             result = {}
-        error = (
-            result.get("error") or completed.stderr.strip() or completed.stdout.strip()
-        )
+        error = result.get("error") or (completed.stdout or "").strip()
         raise RuntimeError(
             error or f"executor failed with exit code {completed.returncode}",
         )
