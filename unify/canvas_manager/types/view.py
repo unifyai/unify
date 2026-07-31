@@ -145,3 +145,7 @@ class CanvasResult(BaseModel):
     review: Optional[ReviewReport] = None
     # Set when the call failed outright; the actor should read this first.
     error: Optional[str] = None
+    # Set when the canvas exists but something around it degraded -- e.g. its
+    # URL routing could not be registered. Worth relaying to the user, because
+    # the difference between "stored" and "reachable" is theirs to feel.
+    warning: Optional[str] = None
