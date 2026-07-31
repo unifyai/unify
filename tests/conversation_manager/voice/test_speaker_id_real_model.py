@@ -51,7 +51,6 @@ from unify.conversation_manager.speaker_id import (
     CLUSTER_JOIN_SIM,
     CROSS_ID_MERGE_SIM,
     SEGMENT_MIN_S,
-    SPEAKER_MATCH_THRESHOLD,
     CentroidAccumulator,
     SpeakerEmbedder,
     SpeakerTracker,
@@ -405,7 +404,7 @@ def test_centroid_of_shortest_segments_converges_on_its_speaker(
 
 
 @pytest.mark.asyncio
-async def test_single_speaker_long_utterances_is_one_pinned_voice(
+async def test_single_speaker_long_utterances_is_one_voice(
     embedder,
     corpus,
     profiles,
@@ -416,16 +415,12 @@ async def test_single_speaker_long_utterances_is_one_pinned_voice(
     sim = _CallSim(tracker)
     pcm = corpus[name][_SEGMENT_PASSAGE]
 
-    resolutions = []
     for _ in range(4):
         await sim.utterance("S0", pcm, 2.5)
-        resolutions.append(tracker.resolve("S0"))
     await tracker.finalize()
 
     assert len(tracker._speakers["S0"].clusters) == 1
     assert tracker._distinct_voice_count() == 1
-    assert all(r is not None and r.contact_id == 42 for r in resolutions)
-    assert not any(r.provisional for r in resolutions)
 
 
 @pytest.mark.asyncio
@@ -446,19 +441,14 @@ async def test_single_speaker_with_backchannels_stays_one_voice(
     sim = _CallSim(tracker)
     pcm = corpus[name][_SEGMENT_PASSAGE]
 
-    resolutions = []
     for seconds in (2.5, 0.9, 2.5, 1.0, 2.5):
         await sim.utterance("S0", pcm, seconds)
-        resolutions.append(tracker.resolve("S0"))
     await tracker.finalize()
 
     assert len(tracker._speakers["S0"].clusters) == 1, (
         "one speaker split into "
         f"{len(tracker._speakers['S0'].clusters)} voice clusters"
     )
-    assert all(
-        r is not None and r.contact_id == 42 for r in resolutions
-    ), f"attributions: {[(r.contact_id, r.label) for r in resolutions]}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -472,7 +462,6 @@ async def test_single_speaker_with_backchannels_stays_one_voice(
 @pytest.mark.parametrize(
     "name,value",
     [
-        ("SPEAKER_MATCH_THRESHOLD", SPEAKER_MATCH_THRESHOLD),
         ("CLUSTER_JOIN_SIM", CLUSTER_JOIN_SIM),
         ("CROSS_ID_MERGE_SIM", CROSS_ID_MERGE_SIM),
     ],
@@ -541,9 +530,8 @@ async def test_two_speakers_count_as_two_distinct_voices(
     reason=(
         "F1: with the voice count collapsed to 1, a two-person call passes "
         "the single-voice gate and auto-enrolls a voiceprint blended from "
-        "both speakers. The stranger then matches the contact's stored "
-        "profile above SPEAKER_MATCH_THRESHOLD on every future call, and "
-        "auto-enrollment is write-once so it never self-corrects."
+        "both speakers. Auto-enrollment is write-once so a contaminated "
+        "capture never self-corrects."
     ),
 )
 async def test_two_speakers_do_not_contaminate_auto_enrollment(
@@ -567,10 +555,12 @@ async def test_two_speakers_do_not_contaminate_auto_enrollment(
     await tracker.finalize()
 
     if captured:
+        own = cosine_similarity(captured["embedding"], profiles[first])
         stranger = cosine_similarity(captured["embedding"], profiles[second])
-        assert (
-            stranger < SPEAKER_MATCH_THRESHOLD
-        ), f"stored voiceprint matches the other speaker at {stranger:.3f}"
+        assert stranger < own, (
+            f"stored voiceprint resembles the other speaker more than its "
+            f"own ({stranger:.3f} >= {own:.3f})"
+        )
 
 
 @pytest.mark.asyncio

@@ -1525,11 +1525,11 @@ async def entrypoint(ctx: agents.JobContext):
         return None
 
     # --- Voice-embedding speaker tracker (all voice channels) ---
-    # Pins Deepgram's per-call anonymous speaker ids to enrolled contact voice
-    # profiles, accumulates an auto-enrollment on single-voice calls, and
-    # suggests manual enrollment when multiple unattributable voices are heard.
-    # Dispatch metadata on the worker path; an env var on the legacy per-call
-    # subprocess path, which has no metadata to carry them.
+    # Voice-enrollment capture only: accumulates an auto-enrollment on
+    # single-voice calls and suggests manual enrollment when multiple voices
+    # are heard. Enrolled profiles arrive as dispatch metadata on the worker
+    # path (an env var on the legacy per-call subprocess path) and gate capture
+    # — they are never matched against live audio to attribute turns.
     _raw_profiles = (meta or {}).get("voice_profiles")
     if not _raw_profiles:
         try:
@@ -1680,55 +1680,30 @@ async def entrypoint(ctx: agents.JobContext):
             _merge_unify_meet_roster_from_identity(identity)
         return (names or None), (ids or None)
 
-    def _resolve_speaker() -> tuple[dict, str | None, str | None, bool, str | None]:
+    def _resolve_speaker() -> tuple[dict, str | None, str | None, str | None]:
         """Resolve the current speaker.
 
-        Returns (contact_dict, display_name, speaker_id, voice_verified,
-        label_source). ``label_source`` is a ``speaker_id.LABEL_SOURCE_*``
-        tag recording which of the signals below produced ``display_name`` (None
-        when no name was resolved). The order these are consumed in *is* the
-        authority ordering — there is no table enforcing it elsewhere:
-        1. Voice-embedding pin against enrolled contact profiles (all channels).
-        2. LiveKit identity → org-call roster (Unify Meet multi-party).
-        3. Diarization speaker_id → name correlation, accumulated by overlapping
+        Returns (contact_dict, display_name, speaker_id, label_source).
+        ``label_source`` is a ``speaker_id.LABEL_SOURCE_*`` tag recording which
+        of the signals below produced ``display_name`` (None when no name was
+        resolved). The order these are consumed in *is* the authority ordering:
+        1. LiveKit identity → org-call roster (Unify Meet multi-party).
+        2. Diarization speaker_id → name correlation, accumulated by overlapping
            finalised utterances with the platform's speaking spans (browser
            meets).
-        4. Platform-reported active speaker (browser meets, relayed in near
-           real time from participant speech events) — weaker than 3 because it
+        3. Platform-reported active speaker (browser meets, relayed in near
+           real time from participant speech events) — weaker than 2 because it
            is a single reading rather than accumulated evidence.
-        5. Voice-embedding anonymous "Speaker N" label (all channels) — a real
-           name from 1-4 always outranks this placeholder, so it is evaluated
-           last even though it comes from the same tracker resolution as 1.
+
+        Voice embeddings are deliberately not consulted: measured on production
+        audio they conflate distinct speakers (including the assistant's own
+        TTS voice) as often as they separate them, so an unresolved turn falls
+        back to the call contact and the slow brain infers the true speaker
+        from the conversation itself.
         """
         sid = _meet_last_speaker_id
 
-        # Resolve once, then consume in the authority order above: the embedding
-        # pin is returned immediately, but the anonymous "Speaker N" fallback is
-        # held to the very end so a real roster or platform name always wins
-        # over a placeholder.
-        resolution = (
-            speaker_tracker.resolve(sid)
-            if sid and speaker_tracker is not None
-            else None
-        )
-
-        # 1. Embedding-pinned enrolled contact (all channels).
-        if resolution is not None and resolution.contact_id is not None:
-            for cand in (contact, boss):
-                if cand.get("contact_id") == resolution.contact_id:
-                    label = f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                    # Not literally True: a provisional (co-located,
-                    # contaminated) id attributes the primary voice for
-                    # routing but cannot certify this utterance.
-                    return (
-                        cand,
-                        label or None,
-                        sid,
-                        resolution.verified,
-                        speaker_id.LABEL_SOURCE_VOICE_PIN,
-                    )
-
-        # 2. Unify-meet roster identity.
+        # 1. Unify-meet roster identity.
         if channel == "unify_meet" and unify_meet_roster:
             identity = _unify_meet_active_identity
             if identity:
@@ -1742,14 +1717,13 @@ async def entrypoint(ctx: agents.JobContext):
                             resolved,
                             label,
                             sid,
-                            False,
                             speaker_id.LABEL_SOURCE_MEET_ROSTER,
                         )
 
-        # 3-4. Browser-meet name resolution, from the meeting platform's own
+        # 2-3. Browser-meet name resolution, from the meeting platform's own
         # participant events rather than anything read off a screen.
         if channel in ("google_meet", "teams_meet"):
-            # 3. Diarization speaker_id → correlated display name.
+            # 2. Diarization speaker_id → correlated display name.
             correlated = _meet_speaker_votes.resolve(sid)
             if correlated:
                 resolved = _resolve_contact_by_name(correlated)
@@ -1759,18 +1733,16 @@ async def entrypoint(ctx: agents.JobContext):
                         resolved,
                         label or None,
                         sid,
-                        False,
                         speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                     )
                 return (
                     contact,
                     correlated,
                     sid,
-                    False,
                     speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                 )
 
-            # 4. Whoever the platform says is speaking right now.
+            # 3. Whoever the platform says is speaking right now.
             active_name = _meet_cached_active_speaker
             if active_name:
                 resolved = _resolve_contact_by_name(active_name)
@@ -1780,30 +1752,16 @@ async def entrypoint(ctx: agents.JobContext):
                         resolved,
                         label or None,
                         sid,
-                        False,
                         speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                     )
                 return (
                     contact,
                     active_name,
                     sid,
-                    False,
                     speaker_id.LABEL_SOURCE_RECALL_PARTICIPANT,
                 )
 
-        # 5. Anonymous "Speaker N" from the voice tracker (lowest authority, all
-        # channels): a confidently distinct but unidentified voice. Keep the call
-        # contact for routing but surface the placeholder label.
-        if resolution is not None and resolution.label:
-            return (
-                contact,
-                resolution.label,
-                sid,
-                False,
-                speaker_id.LABEL_SOURCE_ANONYMOUS,
-            )
-
-        return contact, None, sid, False, None
+        return contact, None, sid, None
 
     def _get_meet_participant_names() -> list[str]:
         """Return display names of all human participants (excluding the assistant)."""
@@ -2657,16 +2615,10 @@ async def entrypoint(ctx: agents.JobContext):
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
-                # Drain in-flight embedding work so resolution reflects this
-                # utterance's own segment (clustered into the right voice),
-                # not the previous one — the STT observer only schedules it.
-                if speaker_tracker is not None:
-                    await speaker_tracker.await_pending()
                 (
                     resolved_contact,
                     speaker_label,
                     dia_sid,
-                    voice_verified,
                     speaker_label_source,
                 ) = _resolve_speaker()
                 _meet_last_speaker_id = None
@@ -2681,7 +2633,6 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
                     )
                 elif channel == "teams_meet":
@@ -2692,7 +2643,6 @@ async def entrypoint(ctx: agents.JobContext):
                         participant_names=_get_meet_participant_names() or None,
                         diarization_speaker_id=dia_sid,
                         turn_id=turn_id,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
                     )
                 elif channel == "unify_meet":
@@ -2705,7 +2655,6 @@ async def entrypoint(ctx: agents.JobContext):
                         turn_id=turn_id,
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
                         participant_names=names,
                         participant_contact_ids=cids,
@@ -2717,7 +2666,6 @@ async def entrypoint(ctx: agents.JobContext):
                         turn_id=turn_id,
                         speaker_label=speaker_label,
                         diarization_speaker_id=dia_sid,
-                        voice_verified=voice_verified,
                         speaker_label_source=speaker_label_source,
                     )
                 event.speech_started_at = _consume_speech_start(assistant_side=False)
@@ -3053,17 +3001,6 @@ async def entrypoint(ctx: agents.JobContext):
                 _publish_meet_roster_changes()
         elif event_type == "unify_meet_roster":
             incoming = data.get("participants") or []
-            if speaker_tracker is not None:
-                # Late joiners are unpinnable otherwise: profiles are a
-                # snapshot taken at dispatch and this is the only point where
-                # the roster is known to have changed.
-                _profiles: dict[int, list[float]] = {}
-                for _cid, _vec in (data.get("voice_profiles") or {}).items():
-                    try:
-                        _profiles[int(_cid)] = [float(x) for x in _vec]
-                    except (TypeError, ValueError):
-                        continue
-                speaker_tracker.add_enrolled_profiles(_profiles)
             if isinstance(incoming, list):
                 unify_meet_roster.clear()
                 unify_meet_roster.extend(

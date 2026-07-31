@@ -1623,9 +1623,6 @@ async def log_message(
             if speaker_label_source:
                 metadata = metadata or {}
                 metadata["speaker_label_source"] = speaker_label_source
-            if getattr(event, "voice_verified", False):
-                metadata = metadata or {}
-                metadata["voice_verified"] = True
             if call_utterance_timestamp:
                 metadata = metadata or {}
                 metadata["call_utterance_timestamp"] = call_utterance_timestamp
