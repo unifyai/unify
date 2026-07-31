@@ -2839,6 +2839,15 @@ class CommsManager:
                     f"{DEFAULT_ICON} StartupEvent published for assistant "
                     f"{event.get('assistant_id')} on {job_name}",
                 )
+                # A pod that cannot construct its slow-brain client can
+                # never reply to anything — signalling ready would route a
+                # user into guaranteed silence (seen with a stale pool
+                # image that predated the assistant's configured endpoint
+                # form). Raise instead so the retry loop logs loudly and
+                # the session never reports ready.
+                from unify.common.llm_client import new_slow_brain_llm_client
+
+                new_slow_brain_llm_client()
                 await asyncio.to_thread(mark_job_container_ready, job_name)
                 LOGGER.info(
                     f"{DEFAULT_ICON} Container-ready signalled for {job_name}",
