@@ -9,7 +9,11 @@ from typing import Any
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
-from unify.common.plain_text import normalize_outbound_plain_text
+from unify.common.plain_text import (
+    PLACEHOLDER_CONTENT_ERROR,
+    is_placeholder_outbound_content,
+    normalize_outbound_plain_text,
+)
 from unify.conversation_manager.settings import local_comms_listener_url
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
@@ -176,6 +180,8 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
         return {"success": False}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -228,6 +234,8 @@ async def send_whatsapp_message(
         return {"success": False}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     payload = {
         "to": to_number,
@@ -622,6 +630,8 @@ async def send_unify_message(
         return {"success": False, "error": destination_error}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     payload: dict = {"content": content}
     if attachment:

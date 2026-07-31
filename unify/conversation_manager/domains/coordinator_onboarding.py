@@ -189,6 +189,13 @@ def _should_deliver_coordinator_chat_intro(cm: "ConversationManager") -> bool:
         cm.coordinator_onboarding_active
         and cm.coordinator_intro_watched
         and cm.coordinator_pending_chat_intro
+        # Process-lifetime latch: once this pod has sent (or claimed) the
+        # intro it never sends again, regardless of what a later durable
+        # state refresh reports. Repeated onboarding_session_started events
+        # re-schedule delivery, and a lost PATCH or a not-yet-hydrated
+        # contact index otherwise makes every re-schedule look like the
+        # first — users received the scripted greeting five times.
+        and not getattr(cm, "_coordinator_chat_intro_claimed", False)
         and not _boss_thread_has_assistant_unify_message(cm)
     )
 
@@ -215,9 +222,22 @@ async def _deliver_coordinator_chat_intro_task(cm: "ConversationManager") -> Non
         await asyncio.sleep(delay)
     if not _should_deliver_coordinator_chat_intro(cm):
         return
+    # Claim before sending (locally and durably). If the durable PATCH is
+    # lost we skip one greeting rather than risk re-greeting on every
+    # subsequent onboarding_session_started event — a missing pleasantry
+    # is recoverable, a five-fold "great to meet you" is not.
+    cm._coordinator_chat_intro_claimed = True
+    cm.coordinator_pending_chat_intro = False
+    patch_result = await cm._patch_coordinator_pending_chat_intro(pending=False)
+    if isinstance(patch_result, dict) and patch_result.get("status") == "error":
+        cm._session_logger.info(
+            "coordinator_onboarding_event",
+            "Chat intro durable claim failed; skipping intro send this "
+            "session (%s)." % patch_result.get("message", "unknown"),
+        )
+        return
     tools = ConversationManagerBrainActionTools(cm)
     await tools.send_unify_message_to_boss(content=COORDINATOR_ONBOARDING_CHAT_INTRO)
-    await cm._patch_coordinator_pending_chat_intro(pending=False)
     cm._session_logger.info(
         "coordinator_onboarding_event",
         "Coordinator onboarding chat intro delivered.",

@@ -54,3 +54,30 @@ def normalize_outbound_plain_text(text: str) -> str:
         if paragraph:
             paragraphs.append(paragraph)
     return "\n\n".join(paragraphs)
+
+
+# Bare OpenAPI/JSON-schema example values. An assistant-authored message
+# whose entire content is one of these is a tool-call misfire (the model
+# echoed the parameter schema's placeholder instead of writing a message),
+# never a real communication — users have received literal "value" and
+# "string" texts from this failure mode.
+_PLACEHOLDER_CONTENTS = frozenset(
+    {"value", "string", "text", "content", "message", "body", "..."},
+)
+
+
+def is_placeholder_outbound_content(text: str | None) -> bool:
+    """Whether ``text`` is empty or a bare schema-placeholder token."""
+    if text is None:
+        return True
+    stripped = text.strip().strip("'\"`")
+    if not stripped:
+        return True
+    return stripped.lower() in _PLACEHOLDER_CONTENTS
+
+
+PLACEHOLDER_CONTENT_ERROR = (
+    "Message not sent: the content is empty or a placeholder token "
+    "(e.g. 'value', 'string'). Write the actual message text in the "
+    "content argument and call the tool again."
+)
