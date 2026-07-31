@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional, Tuple
 import functools
 import logging
 import threading
@@ -10,7 +10,9 @@ import unisdk
 
 from ..common.log_utils import log as unity_log, create_logs as unity_create_logs
 from ..common.authorship import strip_authoring_assistant_id
+from ..common.custom_sync import CustomSyncAdapter, run_custom_sync
 from ..common.embed_utils import list_private_fields
+from ..common.sync_lease import exclusive_sync_lease
 from ..common.data_store import DataStore
 from ..common.model_to_fields import model_to_fields
 from ..common.federated_search import (
@@ -418,18 +420,6 @@ class BlackListManager(BaseBlackListManager):
         except Exception as exc:
             logger.warning("Failed to store custom blacklist hash: %s", exc)
 
-    def _get_custom_blacklist_from_db(self) -> Dict[str, Dict[str, Any]]:
-        logs = unisdk.get_logs(
-            context=self._ctx,
-            filter="custom_hash != None",
-            exclude_fields=list_private_fields(self._ctx),
-        )
-        return {
-            lg.entries.get("custom_key"): lg.entries
-            for lg in logs
-            if lg.entries.get("custom_key")
-        }
-
     def _delete_custom_blacklist_by_key(self, custom_key: str) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
@@ -510,89 +500,33 @@ class BlackListManager(BaseBlackListManager):
             return False
 
         with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
             self._temporary_blacklist_context("_ctx", blacklist_context),
             self._temporary_blacklist_context("_meta_ctx", meta_context),
         ):
-            if source_blacklist is None:
-                source_blacklist = {}
-            expected_hash = compute_custom_blacklist_hash(
-                source_blacklist=source_blacklist,
-            )
-            current_hash = self._get_stored_custom_blacklist_hash()
-            already_synced = (
-                self._custom_blacklist_synced
-                if is_personal
-                else blacklist_context in self._custom_blacklist_synced_contexts
-            )
+            source_blacklist = source_blacklist or {}
 
-            if already_synced and current_hash == expected_hash:
-                return False
-
-            if current_hash == expected_hash:
-                logger.debug("Custom blacklist hash matches, skipping sync")
+            def _mark_synced() -> None:
                 if is_personal:
                     self._custom_blacklist_synced = True
                 else:
                     self._custom_blacklist_synced_contexts.add(blacklist_context)
-                return False
 
-            logger.info(
-                "Custom blacklist hash mismatch "
-                "(current=%s, expected=%s), syncing...",
-                current_hash,
-                expected_hash,
+            return run_custom_sync(
+                adapter=_BlacklistSyncAdapter(self),
+                source=source_blacklist,
+                expected_hash=compute_custom_blacklist_hash(
+                    source_blacklist=source_blacklist,
+                ),
+                stored_hash=self._get_stored_custom_blacklist_hash(),
+                already_synced=(
+                    self._custom_blacklist_synced
+                    if is_personal
+                    else blacklist_context in self._custom_blacklist_synced_contexts
+                ),
+                mark_synced=_mark_synced,
+                store_hash=self._store_custom_blacklist_hash,
             )
-
-            db_blacklist = self._get_custom_blacklist_from_db()
-            processed_keys: Set[str] = set()
-
-            for custom_key, source_data in source_blacklist.items():
-                processed_keys.add(custom_key)
-                blacklist_data = {
-                    k: v for k, v in source_data.items() if k not in {"destination"}
-                }
-
-                if custom_key in db_blacklist:
-                    db_entry = db_blacklist[custom_key]
-                    if db_entry.get("custom_hash") != blacklist_data["custom_hash"]:
-                        logger.info("Updating custom blacklist entry: %s", custom_key)
-                        self._update_custom_blacklist(
-                            blacklist_id=db_entry["blacklist_id"],
-                            data=blacklist_data,
-                        )
-                else:
-                    existing = unisdk.get_logs(
-                        context=self._ctx,
-                        filter=f"custom_key == '{custom_key}'",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(
-                            "Overwriting user-added blacklist entry with custom: %s",
-                            custom_key,
-                        )
-                        unisdk.delete_logs(
-                            context=self._ctx,
-                            logs=[existing[0].id],
-                        )
-
-                    logger.info("Inserting custom blacklist entry: %s", custom_key)
-                    self._insert_custom_blacklist(blacklist_data)
-
-            for custom_key in db_blacklist:
-                if custom_key not in processed_keys:
-                    logger.info(
-                        "Deleting removed custom blacklist entry: %s",
-                        custom_key,
-                    )
-                    self._delete_custom_blacklist_by_key(custom_key)
-
-            self._store_custom_blacklist_hash(expected_hash)
-            if is_personal:
-                self._custom_blacklist_synced = True
-            else:
-                self._custom_blacklist_synced_contexts.add(blacklist_context)
-            return True
 
     def sync_custom(
         self,
@@ -616,3 +550,61 @@ class BlackListManager(BaseBlackListManager):
                 destination=destination_arg,
             )
         return changed
+
+
+class _BlacklistSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom blacklist reconcile."""
+
+    kind = "blacklist"
+
+    def __init__(self, manager: BlackListManager) -> None:
+        self._manager = manager
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._manager._ctx),
+        )
+        return [dict(lg.entries or {}) for lg in logs]
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        fields.pop("destination", None)
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_blacklist(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_blacklist(
+            blacklist_id=live_row["blacklist_id"],
+            data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_blacklist_by_key(key)
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter=f"custom_key == '{key}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        unisdk.delete_logs(
+            context=self._manager._ctx,
+            logs=[live_row["_log_id"]],
+        )

@@ -14,7 +14,7 @@ import functools
 import logging
 from contextlib import contextmanager
 from threading import RLock
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import unisdk
 
@@ -70,9 +70,15 @@ from unify.common.federated_search import (
     reduce_grouped_rows,
     reduce_rows,
 )
+from unify.common.custom_sync import (
+    CustomSyncAdapter,
+    CustomSyncPartialFailure,
+    reconcile_custom_rows,
+)
 from unify.common.embed_utils import list_private_fields
 from unify.common.filter_utils import normalize_filter_expr
 from unify.common.join_utils import rewrite_join_paths
+from unify.common.sync_lease import exclusive_sync_lease
 from unify.data_manager.ops.ingest_ops import run_ingest
 from unify.common.context_registry import (
     TEAM_CONTEXT_PREFIX,
@@ -1621,7 +1627,10 @@ class DataManager(BaseDataManager):
                 exc.payload,
             )
             return False
-        with self._temporary_meta_context(meta_context):
+        with (
+            exclusive_sync_lease(f"{meta_context}:custom_sync"),
+            self._temporary_meta_context(meta_context),
+        ):
             if source_tables is None:
                 source_tables = {}
             expected_hash = compute_custom_data_hash(
@@ -1651,7 +1660,7 @@ class DataManager(BaseDataManager):
                 expected_hash,
             )
 
-            processed_keys_by_context: Dict[str, Set[str]] = {}
+            failures: Dict[str, BaseException] = {}
 
             for context, table_spec in source_tables.items():
                 rows = table_spec.get("rows", [])
@@ -1677,82 +1686,26 @@ class DataManager(BaseDataManager):
                         destination=destination,
                     )
 
-                db_rows = self._get_custom_rows_for_table(context, destination)
-                processed_keys: Set[str] = set()
-                processed_keys_by_context[context] = processed_keys
-
-                for row in rows:
-                    custom_key = str(row.get("custom_key", ""))
-                    if not custom_key:
-                        continue
-                    processed_keys.add(custom_key)
-                    seed_value = str(row.get(seed_key, ""))
-                    row_data = {
-                        k: v for k, v in row.items() if k not in {"destination"}
-                    }
-
-                    if custom_key in db_rows:
-                        db_entry = db_rows[custom_key]
-                        if db_entry.get("custom_hash") != row_data.get("custom_hash"):
-                            logger.info(
-                                "Updating custom data row: %s",
-                                custom_key,
-                            )
-                            self._update_custom_row(
-                                context=context,
-                                row_filter=(
-                                    f"custom_key == {custom_key!r} "
-                                    "and custom_hash != None"
-                                ),
-                                row_data=row_data,
-                                destination=destination,
-                            )
-                    else:
-                        unmanaged = self._find_unmanaged_row_by_seed(
+                source_rows = {
+                    str(row["custom_key"]): row for row in rows if row.get("custom_key")
+                }
+                try:
+                    reconcile_custom_rows(
+                        source=source_rows,
+                        adapter=_DataRowSyncAdapter(
+                            self,
                             context=context,
                             seed_key=seed_key,
-                            seed_value=seed_value,
                             destination=destination,
-                        )
-                        if unmanaged is not None:
-                            logger.info(
-                                "Adopting unmanaged data row: %s",
-                                custom_key,
-                            )
-                            self._update_custom_row(
-                                context=context,
-                                row_filter=(
-                                    f"{seed_key} == {seed_value!r} "
-                                    "and custom_hash == None"
-                                ),
-                                row_data=row_data,
-                                destination=destination,
-                            )
-                        else:
-                            logger.info(
-                                "Inserting custom data row: %s",
-                                custom_key,
-                            )
-                            self._insert_custom_row(
-                                context=context,
-                                row_data=row_data,
-                                destination=destination,
-                            )
+                        ),
+                    )
+                except CustomSyncPartialFailure as exc:
+                    failures.update(
+                        {f"{context}:{key}": err for key, err in exc.failures.items()},
+                    )
 
-            for context in processed_keys_by_context:
-                db_rows = self._get_custom_rows_for_table(context, destination)
-                processed_keys = processed_keys_by_context[context]
-                for custom_key in db_rows:
-                    if custom_key not in processed_keys:
-                        logger.info(
-                            "Deleting removed custom data row: %s",
-                            custom_key,
-                        )
-                        self._delete_custom_row_by_key(
-                            context=context,
-                            custom_key=custom_key,
-                            destination=destination,
-                        )
+            if failures:
+                raise CustomSyncPartialFailure("data", failures)
 
             self._store_custom_data_hash(expected_hash)
             if is_personal:
@@ -1783,3 +1736,91 @@ class DataManager(BaseDataManager):
                 destination=destination_arg,
             )
         return changed
+
+
+class _DataRowSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for one custom data table's row reconcile."""
+
+    kind = "data"
+
+    def __init__(
+        self,
+        manager: DataManager,
+        *,
+        context: str,
+        seed_key: str,
+        destination: str | None,
+    ) -> None:
+        self._manager = manager
+        self._context = context
+        self._seed_key = seed_key
+        self._destination = destination
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        resolved = self._manager._resolve_context_for_write(
+            self._context,
+            destination=self._destination,
+        )
+        return filter_impl(
+            resolved,
+            filter="custom_hash != None",
+            limit=1000,
+        )
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        fields.pop("destination", None)
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_row(
+            context=self._context,
+            row_data=fields,
+            destination=self._destination,
+        )
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_row(
+            context=self._context,
+            row_filter=f"custom_key == {key!r} and custom_hash != None",
+            row_data=fields,
+            destination=self._destination,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_row_by_key(
+            context=self._context,
+            custom_key=key,
+            destination=self._destination,
+        )
+
+    def find_adoptable(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        seed_value = str(fields.get(self._seed_key, ""))
+        return self._manager._find_unmanaged_row_by_seed(
+            context=self._context,
+            seed_key=self._seed_key,
+            seed_value=seed_value,
+            destination=self._destination,
+        )
+
+    def adopt(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        seed_value = str(fields.get(self._seed_key, ""))
+        self._manager._update_custom_row(
+            context=self._context,
+            row_filter=f"{self._seed_key} == {seed_value!r} and custom_hash == None",
+            row_data=fields,
+            destination=self._destination,
+        )

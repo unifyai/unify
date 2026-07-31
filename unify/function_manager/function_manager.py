@@ -43,6 +43,11 @@ from unisdk.utils.http import RequestError as _UnifyRequestError
 from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
+from ..common.custom_sync import (
+    CustomSyncAdapter,
+    CustomSyncPartialFailure,
+    run_custom_sync,
+)
 from ..common.sync_lease import exclusive_sync_lease
 from ..common.federated_search import (
     FederatedSearchContext,
@@ -3812,84 +3817,29 @@ class FunctionManager(BaseFunctionManager):
             ),
             self._temporary_function_context("_meta_ctx", meta_context),
         ):
-            if source_venvs is None:
-                source_venvs = {}
-            expected_hash = compute_custom_venvs_hash(source_venvs=source_venvs)
-            current_hash = self._get_stored_custom_venvs_hash()
-            already_synced = (
-                self._custom_venvs_synced
-                if is_personal
-                else venv_context in self._custom_venvs_synced_contexts
-            )
+            source_venvs = source_venvs or {}
 
-            if already_synced and current_hash == expected_hash:
-                db_venvs = self._get_custom_venvs_from_db()
-                return {name: v["venv_id"] for name, v in db_venvs.items()}
-
-            # Quick check: if aggregate hash matches, skip detailed sync
-            if current_hash == expected_hash:
-                logger.debug("Custom venvs hash matches, skipping sync")
+            def _mark_synced() -> None:
                 if is_personal:
                     self._custom_venvs_synced = True
                 else:
                     self._custom_venvs_synced_contexts.add(venv_context)
-                db_venvs = self._get_custom_venvs_from_db()
-                return {name: v["venv_id"] for name, v in db_venvs.items()}
 
-            logger.info(
-                f"Custom venvs hash mismatch "
-                f"(current={current_hash}, expected={expected_hash}), syncing...",
+            run_custom_sync(
+                adapter=_VenvSyncAdapter(self),
+                source=source_venvs,
+                expected_hash=compute_custom_venvs_hash(source_venvs=source_venvs),
+                stored_hash=self._get_stored_custom_venvs_hash(),
+                already_synced=(
+                    self._custom_venvs_synced
+                    if is_personal
+                    else venv_context in self._custom_venvs_synced_contexts
+                ),
+                mark_synced=_mark_synced,
+                store_hash=self._store_custom_venvs_hash,
             )
-
             db_venvs = self._get_custom_venvs_from_db()
-            processed_names: Set[str] = set()
-            name_to_id: Dict[str, int] = {}
-
-            for name, source_data in source_venvs.items():
-                processed_names.add(name)
-
-                if name in db_venvs:
-                    db_entry = db_venvs[name]
-                    if db_entry.get("custom_hash") != source_data["custom_hash"]:
-                        logger.info(f"Updating custom venv: {name}")
-                        self._update_custom_venv(
-                            venv_id=db_entry["venv_id"],
-                            data=source_data,
-                        )
-                    else:
-                        logger.debug(f"Custom venv unchanged: {name}")
-                    name_to_id[name] = db_entry["venv_id"]
-                else:
-                    # Check for user-added venv with same name
-                    existing = unisdk.get_logs(
-                        context=self._venvs_ctx,
-                        filter=f"name == '{name}'",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(f"Overwriting user-added venv with custom: {name}")
-                        unisdk.delete_logs(
-                            context=self._venvs_ctx,
-                            logs=[existing[0].id],
-                        )
-
-                    logger.info(f"Inserting custom venv: {name}")
-                    new_id = self._insert_custom_venv(source_data)
-                    name_to_id[name] = new_id
-
-            # Delete venvs that are in DB but not in source
-            for name in db_venvs:
-                if name not in processed_names:
-                    logger.info(f"Deleting removed custom venv: {name}")
-                    self._delete_custom_venv_by_name(name)
-
-            self._store_custom_venvs_hash(expected_hash)
-            if is_personal:
-                self._custom_venvs_synced = True
-            else:
-                self._custom_venvs_synced_contexts.add(venv_context)
-
-            return name_to_id
+            return {name: v["venv_id"] for name, v in db_venvs.items()}
 
     def sync_custom_functions(
         self,
@@ -3935,129 +3885,37 @@ class FunctionManager(BaseFunctionManager):
             ),
             self._temporary_function_context("_meta_ctx", meta_context),
         ):
-            if source_functions is None:
-                source_functions = {}
-            expected_hash = compute_custom_functions_hash(
-                source_functions=source_functions,
-            )
-            current_hash = self._get_stored_custom_functions_hash()
-            already_synced = (
-                self._custom_functions_synced
-                if is_personal
-                else function_context in self._custom_functions_synced_contexts
-            )
+            source_functions = source_functions or {}
 
-            if already_synced and current_hash == expected_hash:
-                return False
-
-            # Quick check: if aggregate hash matches, skip detailed sync
-            if current_hash == expected_hash:
-                logger.debug("Custom functions hash matches, skipping sync")
+            def _mark_synced() -> None:
                 if is_personal:
                     self._custom_functions_synced = True
                 else:
                     self._custom_functions_synced_contexts.add(function_context)
-                return False
 
-            logger.info(
-                f"Custom functions hash mismatch "
-                f"(current={current_hash}, expected={expected_hash}), syncing...",
-            )
-
-            venv_name_to_id = venv_name_to_id or {}
-
-            # Get existing custom functions from DB
-            db_functions = self._get_custom_functions_from_db()
-
-            # Track what we've processed
-            processed_names: Set[str] = set()
-            sync_failures: Dict[str, BaseException] = {}
-
-            # Sync each source function. Isolate per-name failures so one
-            # broken deployment function cannot abort the rest of the catalog
-            # (e.g. campaign runtime must still land if storyboards fails).
-            for name, source_data in source_functions.items():
-                processed_names.add(name)
-                try:
-                    function_data = dict(source_data)
-
-                    # Resolve venv_name to venv_id
-                    venv_name = function_data.get("venv_name")
-                    if venv_name and venv_name in venv_name_to_id:
-                        function_data["venv_id"] = venv_name_to_id[venv_name]
-                        logger.debug(
-                            f"Resolved venv_name={venv_name} to "
-                            f"venv_id={function_data['venv_id']} for {name}",
-                        )
-                    # Remove venv_name from persisted data.
-                    function_data.pop("venv_name", None)
-
-                    if name in db_functions:
-                        db_entry = db_functions[name]
-                        # Check if hash changed
-                        if db_entry.get("custom_hash") != function_data["custom_hash"]:
-                            logger.info(f"Updating custom function: {name}")
-                            self._update_custom_function(
-                                function_id=db_entry["function_id"],
-                                data=function_data,
-                            )
-                        else:
-                            logger.debug(f"Custom function unchanged: {name}")
-                    else:
-                        # Check if there's a user-added function with same name
-                        # (no custom_hash) - if so, we need to delete it first
-                        existing = unisdk.get_logs(
-                            context=self._compositional_ctx,
-                            filter=f"name == '{name}'",
-                            limit=1,
-                        )
-                        if existing:
-                            logger.info(
-                                f"Overwriting user-added function with custom: {name}",
-                            )
-                            unisdk.delete_logs(
-                                context=self._compositional_ctx,
-                                logs=[existing[0].id],
-                            )
-
-                        # Insert new custom function
-                        logger.info(f"Inserting custom function: {name}")
-                        self._insert_custom_function(function_data)
-                except Exception as exc:
-                    sync_failures[name] = exc
-                    logger.exception(
-                        "Failed to sync custom function %r; continuing with "
-                        "remaining functions",
-                        name,
-                    )
-
-            # Delete functions that are in DB but not in source
-            for name in db_functions:
-                if name not in processed_names:
-                    try:
-                        logger.info(f"Deleting removed custom function: {name}")
-                        self._delete_custom_function_by_name(name)
-                    except Exception as exc:
-                        sync_failures[name] = exc
-                        logger.exception(
-                            "Failed to delete removed custom function %r; "
-                            "continuing with remaining functions",
-                            name,
-                        )
-
-            if sync_failures:
-                # Do not store the aggregate hash or mark this context synced —
-                # the next reconcile must retry the failed names.
-                raise CustomFunctionSyncPartialFailure(sync_failures)
-
-            # Store the new hash
-            self._store_custom_functions_hash(expected_hash)
-
-            if is_personal:
-                self._custom_functions_synced = True
-            else:
-                self._custom_functions_synced_contexts.add(function_context)
-            return True
+            try:
+                return run_custom_sync(
+                    adapter=_FunctionSyncAdapter(
+                        self,
+                        venv_name_to_id=venv_name_to_id or {},
+                    ),
+                    source=source_functions,
+                    expected_hash=compute_custom_functions_hash(
+                        source_functions=source_functions,
+                    ),
+                    stored_hash=self._get_stored_custom_functions_hash(),
+                    already_synced=(
+                        self._custom_functions_synced
+                        if is_personal
+                        else function_context in self._custom_functions_synced_contexts
+                    ),
+                    mark_synced=_mark_synced,
+                    store_hash=self._store_custom_functions_hash,
+                )
+            except CustomFunctionSyncPartialFailure:
+                raise
+            except CustomSyncPartialFailure as exc:
+                raise CustomFunctionSyncPartialFailure(exc.failures) from exc
 
     def sync_custom(
         self,
@@ -8102,3 +7960,145 @@ for _method_name in (
     "update_venv",
 ):
     _wrap_venv_write(_method_name)
+
+
+class _VenvSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom venvs reconcile.
+
+    Venv identity is the name (``custom_key == name``). Rows written
+    before the ``custom_key`` column existed are matched by name and
+    stamped on their next content change.
+    """
+
+    kind = "venvs"
+
+    def __init__(self, manager: FunctionManager) -> None:
+        self._manager = manager
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._manager._venvs_ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._manager._venvs_ctx),
+        )
+        rows: List[Dict[str, Any]] = []
+        for lg in logs:
+            entries = dict(lg.entries or {})
+            entries.setdefault("custom_key", entries.get("name"))
+            rows.append(entries)
+        return rows
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_venv(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_venv(
+            venv_id=live_row["venv_id"],
+            data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_venv_by_name(str(live_row["name"]))
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._manager._venvs_ctx,
+            filter=f"name == '{fields['name']}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        unisdk.delete_logs(
+            context=self._manager._venvs_ctx,
+            logs=[live_row["_log_id"]],
+        )
+
+
+class _FunctionSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom functions reconcile.
+
+    Function identity is the name (``custom_key == name``) — the
+    call-site contract — so a rename is a delete-and-create by design.
+    Legacy rows without the ``custom_key`` column are matched by name
+    and stamped on their next content change.
+    """
+
+    kind = "functions"
+
+    def __init__(
+        self,
+        manager: FunctionManager,
+        *,
+        venv_name_to_id: Dict[str, int],
+    ) -> None:
+        self._manager = manager
+        self._venv_name_to_id = venv_name_to_id
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._manager._compositional_ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._manager._compositional_ctx),
+        )
+        rows: List[Dict[str, Any]] = []
+        for lg in logs:
+            entries = dict(lg.entries or {})
+            entries.setdefault("custom_key", entries.get("name"))
+            rows.append(entries)
+        return rows
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        venv_name = fields.get("venv_name")
+        if venv_name and venv_name in self._venv_name_to_id:
+            fields["venv_id"] = self._venv_name_to_id[venv_name]
+        fields.pop("venv_name", None)
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_function(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_function(
+            function_id=live_row["function_id"],
+            data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_function_by_name(str(live_row["name"]))
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._manager._compositional_ctx,
+            filter=f"name == '{fields['name']}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        unisdk.delete_logs(
+            context=self._manager._compositional_ctx,
+            logs=[live_row["_log_id"]],
+        )

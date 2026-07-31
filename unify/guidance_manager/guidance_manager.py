@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import FrozenSet, List, Dict, Optional, Any, Tuple, Set
+from typing import FrozenSet, List, Dict, Optional, Any, Tuple
 import base64
 import functools
 import inspect
@@ -37,6 +37,7 @@ from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
 from ..common.stale_reason import StaleReason, merge_stale_reasons
 from ..common.sync_lease import exclusive_sync_lease
+from ..common.custom_sync import CustomSyncAdapter, run_custom_sync
 
 GUIDANCE_TABLE = "Guidance"
 GUIDANCE_META_TABLE = "Guidance/Meta"
@@ -1185,99 +1186,32 @@ class GuidanceManager(BaseGuidanceManager):
             self._temporary_guidance_context("_ctx", guidance_context),
             self._temporary_guidance_context("_meta_ctx", meta_context),
         ):
-            if source_guidance is None:
-                source_guidance = {}
-            expected_hash = compute_custom_guidance_hash(
-                source_guidance=source_guidance,
-            )
-            current_hash = self._get_stored_custom_guidance_hash()
-            already_synced = (
-                self._custom_guidance_synced
-                if is_personal
-                else guidance_context in self._custom_guidance_synced_contexts
-            )
+            source_guidance = source_guidance or {}
 
-            if already_synced and current_hash == expected_hash:
-                return False
-
-            if current_hash == expected_hash:
-                logger.debug("Custom guidance hash matches, skipping sync")
+            def _mark_synced() -> None:
                 if is_personal:
                     self._custom_guidance_synced = True
                 else:
                     self._custom_guidance_synced_contexts.add(guidance_context)
-                return False
 
-            logger.info(
-                "Custom guidance hash mismatch "
-                "(current=%s, expected=%s), syncing...",
-                current_hash,
-                expected_hash,
+            return run_custom_sync(
+                adapter=_GuidanceSyncAdapter(
+                    self,
+                    function_name_to_id=function_name_to_id or {},
+                ),
+                source=source_guidance,
+                expected_hash=compute_custom_guidance_hash(
+                    source_guidance=source_guidance,
+                ),
+                stored_hash=self._get_stored_custom_guidance_hash(),
+                already_synced=(
+                    self._custom_guidance_synced
+                    if is_personal
+                    else guidance_context in self._custom_guidance_synced_contexts
+                ),
+                mark_synced=_mark_synced,
+                store_hash=self._store_custom_guidance_hash,
             )
-
-            function_name_to_id = function_name_to_id or {}
-            db_guidance = self._get_custom_guidance_from_db()
-            processed_keys: Set[str] = set()
-
-            for custom_key, source_data in source_guidance.items():
-                processed_keys.add(custom_key)
-                guidance_data = dict(source_data)
-
-                function_names = guidance_data.pop("function_names", None) or []
-                guidance_data.pop("destination", None)
-                resolved_ids: List[int] = []
-                for function_name in function_names:
-                    function_id = function_name_to_id.get(function_name)
-                    if function_id is None:
-                        logger.warning(
-                            "Could not resolve function_name=%s for guidance key=%s",
-                            function_name,
-                            custom_key,
-                        )
-                        continue
-                    resolved_ids.append(function_id)
-                guidance_data["function_ids"] = resolved_ids
-
-                if custom_key in db_guidance:
-                    db_entry = db_guidance[custom_key]
-                    if db_entry.get("custom_hash") != guidance_data["custom_hash"]:
-                        logger.info("Updating custom guidance: %s", custom_key)
-                        self._update_custom_guidance(
-                            guidance_id=db_entry["guidance_id"],
-                            data=guidance_data,
-                        )
-                    else:
-                        logger.debug("Custom guidance unchanged: %s", custom_key)
-                else:
-                    existing = unisdk.get_logs(
-                        context=self._ctx,
-                        filter=f"custom_key == '{custom_key}'",
-                        limit=1,
-                    )
-                    if existing:
-                        logger.info(
-                            "Overwriting user-added guidance with custom: %s",
-                            custom_key,
-                        )
-                        unisdk.delete_logs(
-                            context=self._ctx,
-                            logs=[existing[0].id],
-                        )
-
-                    logger.info("Inserting custom guidance: %s", custom_key)
-                    self._insert_custom_guidance(guidance_data)
-
-            for custom_key in db_guidance:
-                if custom_key not in processed_keys:
-                    logger.info("Deleting removed custom guidance: %s", custom_key)
-                    self._delete_custom_guidance_by_key(custom_key)
-
-            self._store_custom_guidance_hash(expected_hash)
-            if is_personal:
-                self._custom_guidance_synced = True
-            else:
-                self._custom_guidance_synced_contexts.add(guidance_context)
-            return True
 
     def sync_custom(
         self,
@@ -1307,6 +1241,83 @@ class GuidanceManager(BaseGuidanceManager):
             if isinstance(result, bool):
                 changed |= result
         return changed
+
+
+class _GuidanceSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom guidance reconcile."""
+
+    kind = "guidance"
+
+    def __init__(
+        self,
+        manager: GuidanceManager,
+        *,
+        function_name_to_id: Dict[str, int],
+    ) -> None:
+        self._manager = manager
+        self._function_name_to_id = function_name_to_id
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter="custom_hash != None",
+            exclude_fields=list_private_fields(self._manager._ctx),
+        )
+        return [dict(lg.entries or {}) for lg in logs]
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        function_names = fields.pop("function_names", None) or []
+        fields.pop("destination", None)
+        resolved_ids: List[int] = []
+        for function_name in function_names:
+            function_id = self._function_name_to_id.get(function_name)
+            if function_id is None:
+                logger.warning(
+                    "Could not resolve function_name=%s for guidance key=%s",
+                    function_name,
+                    key,
+                )
+                continue
+            resolved_ids.append(function_id)
+        fields["function_ids"] = resolved_ids
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._manager._insert_custom_guidance(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._manager._update_custom_guidance(
+            guidance_id=live_row["guidance_id"],
+            data=fields,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._manager._delete_custom_guidance_by_key(key)
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._manager._ctx,
+            filter=f"custom_key == '{key}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        unisdk.delete_logs(
+            context=self._manager._ctx,
+            logs=[live_row["_log_id"]],
+        )
 
 
 def _append_destination_guidance(method_name: str) -> None:
