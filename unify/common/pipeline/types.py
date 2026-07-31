@@ -233,6 +233,12 @@ class FmBinding(IngestBinding):
 
     fm_alias: str = "Local"
     logical_path: str
+    # Ownership root the files land under, same vocabulary as ``DmBinding``:
+    # ``None``/``"personal"`` for the dispatching assistant's own root,
+    # ``"team:<id>"`` for a shared team root. Present on both bindings because a
+    # collection of documents is as shareable as a table of rows, and a caller
+    # asking for one should not silently get the other's scope.
+    destination: str | None = None
 
 
 class DmBinding(IngestBinding):

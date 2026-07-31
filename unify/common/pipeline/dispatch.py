@@ -94,6 +94,7 @@ def publish_parse_request(
     dispatch_id: str = "",
     table_config: Optional[dict] = None,
     job_id: Optional[str] = None,
+    observability: Optional[dict] = None,
     pubsub_attributes: Optional[dict[str, str]] = None,
     storage_client: Any | None = None,
     publisher_client: Any | None = None,
@@ -142,6 +143,7 @@ def publish_parse_request(
         fm_binding=fm_binding,
         dm_binding=dm_binding,
         table_config=table_config,
+        observability=observability,
     )
 
     topic_path, message_id = _publish(
