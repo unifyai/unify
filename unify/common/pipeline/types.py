@@ -321,6 +321,11 @@ class ParseRequested(BaseModel):
     fm_binding: Optional[FmBinding] = None
     dm_binding: Optional[DmBinding] = None
     table_config: Optional[Dict[str, Any]] = None
+    # Where this run's observability lives: the run key plus the two
+    # ``Ingestion/*`` context paths the manager recorded the run in. Workers
+    # journal events there so a dispatched run reads back exactly like an
+    # in-process one. Absent on operator-CLI submits, which have no run row.
+    observability: Optional[Dict[str, str]] = None
 
 
 class IngestRequested(BaseModel):
@@ -345,3 +350,6 @@ class IngestRequested(BaseModel):
     ingestion_mode: Literal["dm", "fm"] = "dm"
     fm_binding: Optional[FmBinding] = None
     dm_binding: Optional[DmBinding] = None
+    # Propagated verbatim from ``ParseRequested`` so the ingest stage journals
+    # to the same run the parse stage did.
+    observability: Optional[Dict[str, str]] = None
