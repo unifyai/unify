@@ -794,32 +794,20 @@ class TaskScheduler(BaseTaskScheduler):
                 id_map[int(task_id)] = int(lg.id)
         return id_map
 
-    def _get_log_by_task_instance(
-        self,
-        *,
-        task_id: int,
-        instance_id: int,
-    ) -> unisdk.Log:
-        """Return the physical task row for one logical task instance."""
+    def _get_task_log(self, *, task_id: int) -> unisdk.Log:
+        """Return the physical Tasks definition row for one task_id."""
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
-            row_filter = f"task_id == {task_id}"
-            if instance_id != 0:
-                row_filter = f"task_id == {task_id} and instance_id == {instance_id}"
             log_objs = self._store.get_rows(
-                filter=row_filter,
+                filter=f"task_id == {task_id}",
                 limit=2,
                 return_ids_only=False,
             )
         if not log_objs:
-            raise ValueError(
-                f"No task row found for task_id={task_id}, instance_id={instance_id}.",
-            )
+            raise ValueError(f"No task row found for task_id={task_id}.")
         if len(log_objs) != 1:
-            raise ValueError(
-                f"Ambiguous task rows for task_id={task_id}, instance_id={instance_id}.",
-            )
+            raise ValueError(f"Ambiguous task rows for task_id={task_id}.")
         return log_objs[0]
 
     def _get_task_for_source_log_id(
@@ -1274,7 +1262,6 @@ class TaskScheduler(BaseTaskScheduler):
                 _clarification_up_q=_clarification_up_q,
                 _clarification_down_q=_clarification_down_q,
                 task_id=task_id,
-                instance_id=0,
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
@@ -1337,10 +1324,7 @@ class TaskScheduler(BaseTaskScheduler):
         if not self._task_has_provider_event_trigger(definition):
             raise ProviderEventDispatchValidationError("task_trigger_mismatch")
 
-        source_task_log_id = self._get_log_by_task_instance(
-            task_id=definition.task_id,
-            instance_id=0,
-        ).id
+        source_task_log_id = self._get_task_log(task_id=definition.task_id).id
 
         provenance = TaskRunProvenance(
             assistant_id=str(request.assistant_id),
@@ -1414,7 +1398,6 @@ class TaskScheduler(BaseTaskScheduler):
             fallback_actor,
             task_description=task_request,
             task_id=definition.task_id,
-            instance_id=0,
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,

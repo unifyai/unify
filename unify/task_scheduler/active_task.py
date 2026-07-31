@@ -147,7 +147,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         actor_handle: SteerableToolHandle,
         *,
         task_id: Optional[int] = None,
-        instance_id: Optional[int] = None,
         scheduler: Optional["TaskScheduler"] = None,
         task_run_reference: Optional[TaskRunReference] = None,
     ):
@@ -161,7 +160,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         self._actor_handle = actor_handle
         self._scheduler: Optional["TaskScheduler"] = scheduler
         self._task_id: Optional[int] = task_id
-        self._instance_id: Optional[int] = instance_id
         self._task_run_reference: Optional[TaskRunReference] = task_run_reference
         self._was_stopped: bool = False
         self._last_intent: Optional[str] = None
@@ -181,7 +179,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         _clarification_up_q: Optional["asyncio.Queue[str]"] = None,
         _clarification_down_q: Optional["asyncio.Queue[str]"] = None,
         task_id: Optional[int] = None,
-        instance_id: Optional[int] = None,
         scheduler: Optional["TaskScheduler"] = None,
         entrypoint: Optional[int] = None,
         entrypoint_kwargs: Optional[dict[str, Any]] = None,
@@ -217,11 +214,10 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             except Exception:
                 logger.exception(
                     "Failed to materialize live task run before execution started "
-                    "(task_id=%s, instance_id=%s)",
+                    "(task_id=%s)",
                     task_id,
-                    instance_id,
                 )
-        if task_id is not None and instance_id is not None:
+        if task_id is not None:
             run_key = _resolve_active_task_run_key(
                 task_run_reference=materialized_task_run_reference,
                 task_run_provenance=task_run_provenance,
@@ -232,8 +228,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             ):
                 raise RuntimeError(
                     "ActiveTask EventBus lineage requires a non-empty run_key when a "
-                    f"Tasks/Executions row is adopted or materialized (task_id={task_id}, "
-                    f"instance_id={instance_id}).",
+                    f"Tasks/Executions row is adopted or materialized (task_id={task_id}).",
                 )
             if not run_key:
                 logger.error(
@@ -257,7 +252,7 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
             try:
                 lineage_scope = (
                     task_run_lineage_scope(task_id=int(task_id), run_key=run_key)
-                    if task_id is not None and instance_id is not None
+                    if task_id is not None
                     else nullcontext()
                 )
                 with lineage_scope:
@@ -313,7 +308,6 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
         instance = cls(
             actor_steerable_handle,  # type: ignore[arg-type]
             task_id=task_id,
-            instance_id=instance_id,
             scheduler=scheduler,
             task_run_reference=materialized_task_run_reference,
         )
@@ -518,9 +512,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                 final_status = "failed"
                 ret = f"Task failed with error: {type(e).__name__}({e})"
                 logger.error(
-                    "--- Task %s.%s failed: %s ---",
+                    "--- Task %s failed: %s ---",
                     self._task_id,
-                    self._instance_id,
                     e,
                 )
 
@@ -549,9 +542,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                         if not getattr(self, "_summary_scheduled", False):
                             try:
                                 logger.info(
-                                    "--- Scheduling save_final_summary for %s.%s with status: %s ---",
+                                    "--- Scheduling save_final_summary for %s with status: %s ---",
                                     self._task_id,
-                                    self._instance_id,
                                     final_status,
                                 )
                                 asyncio.create_task(
@@ -565,9 +557,8 @@ class ActiveTask(BaseActiveTask, HandleWrapperMixin):
                                 )
             except Exception:
                 logger.exception(
-                    "Task completion maintenance failed (task_id=%s, instance_id=%s)",
+                    "Task completion maintenance failed (task_id=%s)",
                     self._task_id,
-                    self._instance_id,
                 )
 
         if error and final_status == "failed":

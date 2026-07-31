@@ -438,7 +438,7 @@ async def test_offline_certification_evidence_tool_does_not_execute_entrypoint()
         promotions.append(kwargs)
         return {
             "outcome": "offline_promoted",
-            "patched_instance_ids": [1],
+            "task_id": 12,
             "function_id": kwargs["function_id"],
         }
 
@@ -448,7 +448,6 @@ async def test_offline_certification_evidence_tool_does_not_execute_entrypoint()
         task_entrypoint_review={
             "metadata": {
                 "task_id": 12,
-                "instance_id": 0,
                 "task_name": "Daily summary",
             },
             "attach_entrypoint": lambda **kwargs: kwargs,
@@ -506,7 +505,6 @@ async def test_offline_certification_rejection_feedback_is_bounded():
         task_entrypoint_review={
             "metadata": {
                 "task_id": 12,
-                "instance_id": 0,
                 "task_name": "Daily summary",
             },
             "attach_entrypoint": lambda **kwargs: kwargs,
