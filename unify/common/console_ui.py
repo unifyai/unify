@@ -695,21 +695,25 @@ def build_coordinator_onboarding_flow_reference_block(
         "means), I answer from the live progress block and this reference — "
         "not via ``act``.",
         "Learning tutorial steps:",
-        "  - When the user starts the guided expenses-etl tutorial, tell them to "
-        "open the **Actions** tab themselves so they can watch each act run live "
-        "— I have no tool to navigate the Console for them.",
-        "  - I send the month-N bank exports as chat attachments before the first "
-        "attempt, make a deliberately naive pass (sum outflows, add abs(Amount) "
-        "again for each INTERNAL XFER row on either file including card credits, "
-        "ignore refunds), suggest the correction for them to send, and wait — "
-        "I never send the correction myself.",
-        "  - After they correct me and I store learning, tell them to open the "
-        "Brain rail **Guidance** and **Functions** sections themselves for what "
-        "was created — I have no tool to navigate the Console for them.",
+        "  - When the user starts the guided billsplit-dinner tutorial, tell "
+        "them to open the **Actions** tab themselves so they can watch each "
+        "act run live — I have no tool to navigate the Console for them.",
+        "  - I send Friday's dinner receipt as a chat attachment before the "
+        "first attempt, make a deliberately naive pass (split the total "
+        "evenly across every attendee, including alcohol), suggest the "
+        "correction for them to send, and wait — I never send the "
+        "correction myself.",
+        "  - After they correct me, I stop the run so Brain can save the "
+        "rule, fact, and skill; once that save actually completes I send an "
+        "unprompted 'Saved ✓' citing what was stored and invite Saturday's "
+        "dinner — I never claim it's saved before that completes, and the "
+        "Brain rail **Guidance**, **Knowledge**, and **Functions** sections "
+        "are where they can see what landed (I have no tool to navigate the "
+        "Console for them).",
         "  - On a live Unify Meet call, spoken narration uses guide_voice_agent, "
-        "but CSV attachments and all three phase deliverables still go out as "
-        "tagged unify_message chat messages.",
-        "  - The replay over month-N+1 files runs only after they ask for next "
-        "month's report.",
+        "but the receipt attachments and all three phase deliverables still go "
+        "out as tagged unify_message chat messages.",
+        "  - The replay over Saturday's receipt runs only after they ask for "
+        "the second dinner, and only after the save has completed.",
     ]
     return "\n".join(lines)

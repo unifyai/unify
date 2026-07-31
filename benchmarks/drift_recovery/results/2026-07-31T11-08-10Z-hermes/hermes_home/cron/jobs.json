@@ -1,8 +1,8 @@
 {
   "jobs": [
     {
-      "id": "63ff1dcfddfa",
-      "name": "Weekly orders report (Monday 09:00 UTC)",
+      "id": "4513f2b2ce59",
+      "name": "Process new local orders",
       "prompt": "",
       "skills": [],
       "skill": null,
@@ -11,28 +11,28 @@
       "provider_snapshot": null,
       "model_snapshot": null,
       "base_url": null,
-      "script": "weekly_orders_report.py",
+      "script": "process_orders_batch.py",
       "no_agent": true,
       "context_from": null,
       "schedule": {
-        "kind": "cron",
-        "expr": "0 * * * 1",
-        "display": "0 * * * 1"
+        "kind": "interval",
+        "minutes": 60,
+        "display": "every 60m"
       },
-      "schedule_display": "0 * * * 1",
+      "schedule_display": "every 60m",
       "repeat": {
         "times": null,
-        "completed": 4
+        "completed": 13
       },
       "enabled": false,
       "state": "paused",
       "paused_at": null,
       "paused_reason": "benchmark artifact - defused post-run",
-      "created_at": "2026-07-31T11:23:59.230612+01:00",
-      "next_run_at": "2026-08-03T00:00:00+01:00",
-      "last_run_at": "2026-07-31T11:24:57.636589+01:00",
-      "last_status": "ok",
-      "last_error": null,
+      "created_at": "2026-07-31T12:09:10.105180+01:00",
+      "next_run_at": "2026-07-31T15:12:44.629156+01:00",
+      "last_run_at": "2026-07-31T14:12:44.629156+01:00",
+      "last_status": "error",
+      "last_error": "Script exited with code 1\nstderr:\nOrder batch automation failed: <urlopen error [Errno 61] Connection refused>",
       "last_delivery_error": null,
       "deliver": "local",
       "origin": null,
@@ -41,5 +41,5 @@
       "fire_claim": null
     }
   ],
-  "updated_at": "2026-07-31T11:24:57.636921+01:00"
+  "updated_at": "2026-07-31T14:12:44.629329+01:00"
 }
