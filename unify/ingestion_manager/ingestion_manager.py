@@ -148,6 +148,10 @@ class IngestionManager(BaseIngestionManager):
         # chunks immediately rather than through a queue -- and an inline run
         # dies with the process anyway, so nothing durable is needed to steer it.
         self._inline_control: Dict[str, Dict[str, bool]] = {}
+        # Cached answer to "is the fleet actually reachable", resolved on first
+        # use rather than at construction so a manager can be built in a process
+        # that never ingests without paying for a probe.
+        self._fleet_probe: Optional[bool] = None
         logger.debug("IngestionManager initialized")
 
     # ── plumbing ──────────────────────────────────────────────────────────
@@ -276,7 +280,12 @@ class IngestionManager(BaseIngestionManager):
         # rather than by reading it, which is what keeps the count cheap enough
         # to take before committing to anything.
         declared = self._count_source(request)
-        tier = choose_tier(request, self._settings, row_count=declared)
+        tier = choose_tier(
+            request,
+            self._settings,
+            row_count=declared,
+            has_fleet=self._fleet_reachable(),
+        )
 
         key = _run_key()
         runs_context = self._write_table(RUNS_TABLE, destination)
@@ -367,6 +376,29 @@ class IngestionManager(BaseIngestionManager):
         self._dispatch(run_key, runs_context, request)
 
     # ── execution ─────────────────────────────────────────────────────────
+
+    def _fleet_reachable(self) -> bool:
+        """Whether a worker fleet can actually take work right now.
+
+        Configured is not the same as reachable, and the difference matters in
+        one direction only: dispatching to a plane that cannot publish leaves a
+        run queued forever, while running in process when a fleet exists costs
+        latency and nothing else. So this asks, and a negative answer routes the
+        work here.
+
+        Cached for the process's life. The probe is a network round trip and the
+        tier decision happens on every submit; a plane that appears later is
+        picked up by the next process, and anything it left behind is adoptable
+        because both tiers write the same layout.
+        """
+        if not self._settings.PIPELINE_URL:
+            return False
+        with self._lock:
+            if self._fleet_probe is None:
+                from unify.ingestion_manager.dispatch import probe
+
+                self._fleet_probe = probe(base_url=self._settings.PIPELINE_URL)
+            return self._fleet_probe
 
     def _control(self, run_key: str) -> Dict[str, bool]:
         with self._lock:
@@ -873,6 +905,9 @@ class IngestionManager(BaseIngestionManager):
         re-described here. If no control plane is configured the tier decision
         would not have chosen dispatch, so reaching this without one is a
         misconfiguration rather than a size problem, and it says so.
+        The staged request travels with the run rather than being re-described:
+        the control plane stages it alongside the sources, and the workers read
+        the same document an in-process resume would.
         """
         from unify.ingestion_manager.dispatch import dispatch_run
 
@@ -889,7 +924,19 @@ class IngestionManager(BaseIngestionManager):
             run_key=run_key,
             request=request,
             request_key=f"jobs/{run_key}/request.json",
+            request_payload=request.model_dump(mode="json"),
             paths=self._resolve_paths(request.source),
+            # Where the fleet should journal this run's events: the same two
+            # contexts an in-process run writes, so `get_status` reads one
+            # history whichever tier executed the work.
+            observability={
+                "run_key": run_key,
+                "runs_context": runs_context,
+                "events_context": self._write_table(
+                    EVENTS_TABLE,
+                    request.destination,
+                ),
+            },
         )
         self._update_run(run_key, runs_context, {"dispatch_id": dispatch_id})
         self._record_event(
