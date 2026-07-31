@@ -2088,6 +2088,87 @@ class TestMeetInteractionEventHandlers:
         assert entry.utterance == "Look at this part of my screen"
         assert isinstance(entry.timestamp, datetime)
 
+    def _buffer(self, mock_cm):
+        from unify.conversation_manager.conversation_manager import ConversationManager
+
+        mock_cm._screenshot_buffer = []
+        mock_cm._session_logger = MagicMock()
+        return ConversationManager._buffer_screenshot.__get__(mock_cm)
+
+    def test_unpaired_frames_from_one_source_collapse(self, mock_cm):
+        """A shared screen left up must not pile a reel of frames into one turn.
+
+        Unpaired frames arrive every few seconds for as long as somebody presents,
+        and each one appended would land in the same state message and be
+        registered as its own image. Only the newest describes what is on screen.
+        """
+        import json
+
+        method = self._buffer(mock_cm)
+        for i in range(5):
+            method(
+                json.dumps(
+                    {
+                        "b64": f"frame-{i}",
+                        "utterance": "",
+                        "source": "google_meet",
+                        "attribution": "Ada",
+                    },
+                ),
+            )
+
+        assert len(mock_cm._screenshot_buffer) == 1
+        assert mock_cm._screenshot_buffer[0].b64 == "frame-4"
+        assert mock_cm._screenshot_buffer[0].attribution == "Ada"
+
+    def test_frames_paired_with_speech_always_accumulate(self, mock_cm):
+        """Those are evidence for a specific thing somebody said, not "now"."""
+        import json
+
+        method = self._buffer(mock_cm)
+        for text in ("what is this?", "and this bit?"):
+            method(
+                json.dumps(
+                    {
+                        "b64": f"frame-{text}",
+                        "utterance": text,
+                        "source": "google_meet",
+                    },
+                ),
+            )
+
+        assert [e.utterance for e in mock_cm._screenshot_buffer] == [
+            "what is this?",
+            "and this bit?",
+        ]
+
+    def test_collapsing_does_not_cross_sources(self, mock_cm):
+        """The assistant's screen and a shared screen are different pictures."""
+        import json
+
+        method = self._buffer(mock_cm)
+        method(json.dumps({"b64": "meet", "utterance": "", "source": "google_meet"}))
+        method(json.dumps({"b64": "desk", "utterance": "", "source": "assistant"}))
+
+        assert [e.source for e in mock_cm._screenshot_buffer] == [
+            "google_meet",
+            "assistant",
+        ]
+
+    def test_an_unpaired_frame_does_not_overwrite_a_paired_one(self, mock_cm):
+        """Losing the frame tied to a question would lose the question's answer."""
+        import json
+
+        method = self._buffer(mock_cm)
+        method(
+            json.dumps(
+                {"b64": "asked", "utterance": "what is this?", "source": "google_meet"},
+            ),
+        )
+        method(json.dumps({"b64": "ambient", "utterance": "", "source": "google_meet"}))
+
+        assert [e.b64 for e in mock_cm._screenshot_buffer] == ["asked", "ambient"]
+
     # --------------------------------------------------------------------- #
     # Two-phase screenshot buffer (peek + commit)
     # --------------------------------------------------------------------- #

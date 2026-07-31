@@ -130,6 +130,18 @@ MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
 # it is meant to explain. Runs only while somebody is actually presenting.
 _MEET_SCREENSHARE_POLL_INTERVAL_S = 1.0
 
+# How often a shared screen is fed to the brains while nobody is speaking.
+# Deliberately far slower than the poll: every push is a screenshot written to
+# disk, buffered for the slow brain, and registered as an image downstream, so
+# pushing each polled frame would file hundreds of images per meeting. Ten
+# seconds keeps an idle share current without that.
+_MEET_AMBIENT_PUSH_INTERVAL_S = 10.0
+
+# Consecutive empty polls before saying so. Somebody is presenting whenever this
+# loop runs, so no frame is a fault; a couple of misses is just the first frame
+# not having landed yet.
+_MEET_FETCH_MISS_ALERT_AFTER = 5
+
 DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
@@ -1470,6 +1482,12 @@ async def entrypoint(ctx: agents.JobContext):
     # store has focused. Empty means nobody is sharing and the frame is dropped.
     _meet_sharing: list[str] = []
     _meet_screenshare_task: asyncio.Task | None = None
+    # What was last handed to the brains, and when. A share is mostly static --
+    # somebody's slide sits there for a minute -- so re-filing an identical frame
+    # every few seconds buys nothing and costs a stored image each time.
+    _meet_last_pushed_frame: str | None = None
+    _meet_last_push_at: float = 0.0
+    _meet_fetch_misses: int = 0
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
     _meet_speech_windows = MeetSpeakerWindows()
@@ -2666,6 +2684,33 @@ async def entrypoint(ctx: agents.JobContext):
         if entry.source != "assistant":
             _publish_screenshot(entry, filepath)
 
+    def _push_meet_frame(utterance: str = "") -> None:
+        """Hand the current shared screen to both brains.
+
+        The slot on its own reaches nobody: the fast brain reads it from its
+        visual context and the slow brain from its screenshot buffer, and both are
+        filled here. Without this the frame sits in the slot unseen -- which is
+        exactly what happened in a meeting held entirely over Meet chat, where a
+        screen was shared, stored, and never once looked at.
+        """
+        from datetime import datetime, timezone
+
+        nonlocal _meet_last_pushed_frame, _meet_last_push_at
+
+        if not _meet_latest_screenshot:
+            return
+        _meet_last_pushed_frame = _meet_latest_screenshot
+        _meet_last_push_at = time.monotonic()
+        _handle_screenshot(
+            ScreenshotEntry(
+                b64=_meet_latest_screenshot,
+                utterance=utterance,
+                timestamp=datetime.now(timezone.utc),
+                source=channel,
+                attribution=_meet_screenshare_sharer,
+            ),
+        )
+
     async def _refresh_screenshots() -> None:
         """Capture fresh screenshots from all active sources and update visual context.
 
@@ -2710,28 +2755,26 @@ async def entrypoint(ctx: agents.JobContext):
             if entry and assistant_screen_share_active:
                 _handle_screenshot(entry)
 
-        if channel in ("google_meet", "teams_meet") and _meet_latest_screenshot:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=_meet_latest_screenshot,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source=channel,
-                    attribution=_meet_screenshare_sharer,
-                ),
-            )
+        if channel in ("google_meet", "teams_meet"):
+            _push_meet_frame()
 
     async def _meet_screenshare_poll_loop() -> None:
-        """Keep the shared-screen slot fresh while somebody is presenting.
+        """Keep the shared screen fresh, and keep feeding it to both brains.
 
         Polled rather than pushed: the frames live in comms, and the LiveKit data
         channel that carries participant events is no place for a screenshot. The
-        loop runs only between ``screenshare_on`` and the last ``screenshare_off``
-        so an ordinary meeting costs nothing, and both readers of the slot -- the
-        per-turn refresh and the user-utterance capture -- see a current frame
-        rather than one from whenever the last turn happened.
+        loop runs only between ``screenshare_on`` and the last ``screenshare_off``,
+        so an ordinary meeting costs nothing.
+
+        It also pushes, not just polls. Every other visual source in this file is
+        sampled on a spoken user turn, which silently made a shared screen
+        invisible in any meeting conducted over chat, or with a screen up while
+        nobody happens to be talking. A share is ambient context, so it is fed on
+        its own schedule -- rate-limited, and only when the picture has actually
+        changed, because each push costs a stored and registered image downstream.
         """
         nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
+        nonlocal _meet_fetch_misses
 
         while True:
             frame = await fetch_meet_screenshare_frame(
@@ -2744,9 +2787,36 @@ async def entrypoint(ctx: agents.JobContext):
                 # rather than describing a screen that is no longer up.
                 _meet_latest_screenshot = None
                 _meet_screenshare_sharer = ""
+                _meet_fetch_misses += 1
+                # Somebody is presenting (or this loop would not be running) and
+                # yet no frame arrives: that is a fault, not a quiet meeting.
+                # Logged once per outage because the alternative -- staying silent
+                # -- is indistinguishable from working, which is what made an
+                # unprovisioned bucket invisible from this side for a whole call.
+                if _meet_fetch_misses == _MEET_FETCH_MISS_ALERT_AFTER:
+                    _log.screenshot(
+                        f"Meet screenshare: presenter active but no frame after "
+                        f"{_meet_fetch_misses} polls (room={ctx.room.name}) -- "
+                        f"the relay or its store is not delivering",
+                    )
             else:
+                if _meet_fetch_misses >= _MEET_FETCH_MISS_ALERT_AFTER:
+                    _log.screenshot(
+                        f"Meet screenshare: frames recovered after "
+                        f"{_meet_fetch_misses} missed polls",
+                    )
+                _meet_fetch_misses = 0
                 _meet_latest_screenshot = frame.b64
                 _meet_screenshare_sharer = frame.participant_name
+
+                changed = _meet_latest_screenshot != _meet_last_pushed_frame
+                due = (
+                    time.monotonic() - _meet_last_push_at
+                    >= _MEET_AMBIENT_PUSH_INTERVAL_S
+                )
+                if changed and due:
+                    _push_meet_frame()
+
             await asyncio.sleep(_MEET_SCREENSHARE_POLL_INTERVAL_S)
 
     def _sync_meet_screenshare_poller() -> None:
@@ -2819,16 +2889,8 @@ async def entrypoint(ctx: agents.JobContext):
                         source="webcam",
                     ),
                 )
-            if channel in ("google_meet", "teams_meet") and _meet_latest_screenshot:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=_meet_latest_screenshot,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source=channel,
-                        attribution=_meet_screenshare_sharer,
-                    ),
-                )
+            if channel in ("google_meet", "teams_meet"):
+                _push_meet_frame(utterance=text)
 
             async def _publish_user_utterance(text: str) -> None:
                 nonlocal _meet_last_speaker_id
@@ -3063,6 +3125,12 @@ async def entrypoint(ctx: agents.JobContext):
                 text = _strip_chat_html(event.chat_text or "").strip()
                 if not text:
                     return
+                # Paired with the message, exactly as a spoken turn is: someone
+                # typing "what do you make of this?" is pointing at the screen
+                # they are sharing, and the reply is built from this buffer. A
+                # whole meeting can happen in chat with nobody speaking, which is
+                # how a shared screen went unseen despite being stored.
+                _push_meet_frame(utterance=text)
                 chat_cls = (
                     TeamsMeetChatMessage
                     if channel == "teams_meet"
