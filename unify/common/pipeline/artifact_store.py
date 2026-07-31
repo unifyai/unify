@@ -296,6 +296,19 @@ class ArtifactStore(Protocol):
         """
         ...
 
+    def delete_checkpoints(self, job_id: str) -> None:
+        """Discard every recorded checkpoint for one job (no-op if absent).
+
+        The one legitimate caller is a full re-run: re-attempting everything
+        means the committed marks no longer describe the work, and leaving any
+        of them would make the re-run skip rows it was explicitly asked to
+        rewrite. Job-scoped rather than per-artifact because the caller cannot
+        know which artifacts a previous attempt got as far as checkpointing.
+        Never call this while an attempt may be live -- the lease serialises
+        writers, not this.
+        """
+        ...
+
 
 class LocalArtifactStore:
     """Filesystem-backed artifact store: full port, including resumability.
@@ -639,6 +652,12 @@ class LocalArtifactStore:
         except ArtifactNotFound:
             return None
         return IngestCheckpoint.model_validate(data)
+
+    def delete_checkpoints(self, job_id: str) -> None:
+        import shutil
+
+        directory = self._key_path(f"jobs/{_safe_fragment(job_id)}/checkpoints")
+        shutil.rmtree(directory, ignore_errors=True)
 
     # -- internal helpers ---------------------------------------------------
 
