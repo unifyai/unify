@@ -57,6 +57,7 @@ from unify.conversation_manager.events import (
     ActorHandleStarted,
     ActorHandleResponse,
     ActorResult,
+    ActorNotification,
     ActorClarificationRequest,
     InitializationComplete,
     OpenSlowBrainTurn,
@@ -217,6 +218,7 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.is_coordinator = False
     cm.coordinator_onboarding_active = False
     cm._refresh_coordinator_onboarding_state = AsyncMock()
+    cm.learning_demo_storage_wake_armed = False
 
     return cm
 
@@ -1702,6 +1704,90 @@ class TestActorEventHandlers:
         assert completion["action_type"] == "act"
         assert completion["error"] == "Coordinator role required"
         assert completion["result"] == {"error_kind": "permission_denied"}
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_wakes_brain_when_armed_and_kind_matches(
+        self,
+        mock_cm,
+    ):
+        """storage_review_complete + learning-demo flag armed -> wake the brain."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = True
+        event = ActorNotification(
+            handle_id=1,
+            response="Stored: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_no_wake_when_flag_not_armed(self, mock_cm):
+        """Outside the learning-demo window the wake is gated off, even though
+        the notification kind matches -- global behavior stays unchanged."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = False
+        event = ActorNotification(
+            handle_id=1,
+            response="Stored: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_no_wake_for_other_kinds_even_when_armed(
+        self,
+        mock_cm,
+    ):
+        """The wake is specific to storage_review_complete, not any notification."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = True
+        event = ActorNotification(
+            handle_id=1,
+            response="Still working...",
+            kind="progress",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_records_late_notification_in_completed_actions(
+        self,
+        mock_cm,
+    ):
+        """A notification arriving after the handle moved to completed_actions
+        (e.g. StorageCheck Phase 2 finishing after ActorResult already fired)
+        must be recorded, not silently dropped."""
+        mock_cm.in_flight_actions = {}
+        mock_cm.completed_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        event = ActorNotification(
+            handle_id=1,
+            response="Saved: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        handle_actions = mock_cm.completed_actions[1]["handle_actions"]
+        assert any(
+            a["action_name"] == "progress" and "Saved" in a["query"]
+            for a in handle_actions
+        )
 
     @pytest.mark.asyncio
     async def test_actor_handle_response_updates_matching_pending_action(

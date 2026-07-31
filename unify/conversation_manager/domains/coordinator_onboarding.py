@@ -839,6 +839,9 @@ async def _handle_coordinator_onboarding_event(
             # New session boundary: forget any prior in-session clicks so a
             # stale click can't keep a re-gated channel's tool unlocked.
             cm.clear_onboarding_clicked_trigger_steps()
+            # An abandoned learning demo can't leave the StorageCheck wake
+            # armed across sessions.
+            cm.set_learning_demo_storage_wake_armed(False)
         if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
             trace = getattr(cm, "_current_event_trace", None) or {}
             # Unlock this channel's send tool for the session (the click is
@@ -855,6 +858,9 @@ async def _handle_coordinator_onboarding_event(
             from unify.file_manager.settings import get_local_root
 
             provision_learning_expenses_fixtures(get_local_root())
+            # Arm the StorageCheck-completion wake for the duration of the
+            # demo (see ActorNotification handler in event_handlers.py).
+            cm.set_learning_demo_storage_wake_armed(True)
     if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
         details = event.details if isinstance(event.details, dict) else {}
         if details.get("reason") == "integration_connected" and "apps" in (
@@ -912,5 +918,8 @@ async def _handle_coordinator_onboarding_event(
         # event only exists to push the freshly-derived render; triggering a run
         # here would make the brain acknowledge its own action in a redundant
         # second turn. Refresh only, no run.
+        details = event.details if isinstance(event.details, dict) else {}
+        if details.get("step_id") == "learn-from-correction":
+            cm.set_learning_demo_storage_wake_armed(False)
         return False
     return True
