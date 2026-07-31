@@ -971,7 +971,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
             if b64:
                 self._screenshot_buffer.append(
-                    ScreenshotEntry(b64, utterance, ts, source, filepath=filepath),
+                    ScreenshotEntry(
+                        b64,
+                        utterance,
+                        ts,
+                        source,
+                        filepath=filepath,
+                        attribution=data.get("attribution"),
+                    ),
                 )
                 self._session_logger.debug(
                     "screenshot_capture",
@@ -3604,10 +3611,14 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     "assistant": "Assistant's Screen",
                     "user": "User's Screen",
                     "webcam": "User's Webcam",
+                    "google_meet": "Google Meet Shared Screen",
+                    "teams_meet": "Microsoft Teams Shared Screen",
                 }
                 content_parts: list[dict] = []
                 for source, entry in latest_by_source.items():
                     label = source_labels.get(source, "Screenshot")
+                    if entry.attribution:
+                        label = f"{label} - shared by {entry.attribution}"
                     content_parts.append(
                         {
                             "type": "text",

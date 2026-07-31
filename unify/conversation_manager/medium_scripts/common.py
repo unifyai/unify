@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import fnmatch
 import json
+import os
 import sys
-from typing import TYPE_CHECKING, Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, NamedTuple, Optional
 
 if TYPE_CHECKING:
     from unify.conversation_manager.cm_types.screenshot import ScreenshotEntry
@@ -910,12 +912,14 @@ class ScreenshotHistory:
         for entry, _ in self._entries:
             latest_by_source[entry.source] = entry
 
+        # Inner text only; the ``===`` fencing is applied below so an attribution
+        # can be appended without slicing it back off.
         source_labels = {
-            "assistant": "=== YOUR SCREEN (this is what YOUR machine currently shows) ===",
-            "user": "=== USER'S SCREEN (this is THEIR machine, not yours) ===",
-            "webcam": "=== USER'S WEBCAM ===",
-            "google_meet": "=== GOOGLE MEET (live view of the meeting) ===",
-            "teams_meet": "=== TEAMS MEETING (live view of the meeting) ===",
+            "assistant": "YOUR SCREEN (this is what YOUR machine currently shows)",
+            "user": "USER'S SCREEN (this is THEIR machine, not yours)",
+            "webcam": "USER'S WEBCAM",
+            "google_meet": "SCREEN SHARED IN GOOGLE MEET (a participant's machine, not yours)",
+            "teams_meet": "SCREEN SHARED IN TEAMS MEETING (a participant's machine, not yours)",
         }
 
         parts: list = []
@@ -923,7 +927,12 @@ class ScreenshotHistory:
             entry = latest_by_source.get(source)
             if entry is None:
                 continue
-            parts.append(source_labels.get(source, "=== SCREENSHOT ==="))
+            label = source_labels.get(source, "SCREENSHOT")
+            if entry.attribution:
+                # Named, because in a meeting "whose screen is this" is the first
+                # thing the answer depends on.
+                label = f"{label} -- SHARED BY {entry.attribution}"
+            parts.append(f"=== {label} ===")
             parts.append(
                 ImageContent(image=f"data:image/jpeg;base64,{entry.b64}"),
             )
@@ -1256,6 +1265,73 @@ async def capture_assistant_screenshot(
             f"(url={url}, total={total_ms:.0f}ms, {_phase_str()})",
         )
     return None
+
+
+class MeetScreenshareFrame(NamedTuple):
+    """One shared screen from a browser meeting, and whose it is.
+
+    Attribution is the point: the platform names the person presenting, which is
+    what lets the assistant say "the deck Alice is showing" rather than
+    describing an image from nowhere.
+    """
+
+    b64: str
+    participant_name: str
+    participant_id: str
+
+
+async def fetch_meet_screenshare_frame(
+    room_name: str,
+    *,
+    http_session,
+    fb_logger: FastBrainLogger | None = None,
+) -> MeetScreenshareFrame | None:
+    """Fetch the screen currently shared into a browser meeting.
+
+    Comms holds the frame -- the Recall bot streams it there and it lands in GCS,
+    because the instance receiving it is not this pod. ``None`` means nobody is
+    sharing: comms answers 404 both when there is no frame and when the one it
+    has is too old to be from the meeting in progress, since room names outlive
+    any single meeting.
+    """
+
+    import aiohttp
+
+    from unify.conversation_manager.domains.recall.client import meet_bridge_base_url
+
+    base = meet_bridge_base_url()
+    secret = (os.environ.get("RECALL_RELAY_SECRET") or "").strip()
+    if not base or not secret or not room_name:
+        return None
+
+    url = f"{base}/screenshare/{room_name}/focus.jpg"
+    try:
+        async with http_session.get(
+            url,
+            params={"token": secret},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status == 404:
+                return None
+            if resp.status >= 400:
+                if fb_logger:
+                    fb_logger.screenshot(
+                        f"Meet screenshare fetch failed: HTTP {resp.status}",
+                    )
+                return None
+            raw = await resp.read()
+            return MeetScreenshareFrame(
+                b64=base64.b64encode(raw).decode("ascii"),
+                participant_name=resp.headers.get(
+                    "x-screenshare-participant-name",
+                    "",
+                ),
+                participant_id=resp.headers.get("x-screenshare-participant-id", ""),
+            )
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        if fb_logger:
+            fb_logger.screenshot(f"Meet screenshare fetch error: {exc!r}")
+        return None
 
 
 # -------- Event rendering for boss-on-call mode -------- #

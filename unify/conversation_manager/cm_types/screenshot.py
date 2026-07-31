@@ -15,6 +15,10 @@ class ScreenshotEntry(NamedTuple):
     source: str  # "assistant" | "user" (screen share) | "webcam" | "google_meet" | "teams_meet"
     local_message_id: int | None = None
     filepath: str | None = None
+    # Who the frame belongs to, when the source alone does not say. A meeting has
+    # many people in it, so a shared screen is somebody's in particular; the
+    # single-user sources leave this empty.
+    attribution: str | None = None
 
 
 _SOURCE_SUBFOLDER = {

@@ -70,6 +70,7 @@ from unify.conversation_manager.medium_scripts.common import (
     UserTrackCaptureManager,
     ScreenshotHistory,
     capture_assistant_screenshot,
+    fetch_meet_screenshare_frame,
     render_participant_comms,
     publish_meet_interaction_from_track,
     FastBrainLogger,
@@ -83,6 +84,8 @@ from unify.conversation_manager.domains.recall.client import RECALL_EVENT_TOPIC
 from unify.conversation_manager.domains.recall.events import (
     EVENT_CHAT_MESSAGE,
     EVENT_LEAVE,
+    EVENT_SCREENSHARE_OFF,
+    EVENT_SCREENSHARE_ON,
     EVENT_SPEECH_OFF,
     EVENT_SPEECH_ON,
     ROSTER_EVENTS,
@@ -120,6 +123,12 @@ _log = FastBrainLogger()
 # platform, reached through a hosted bot, whereas Unify Meet is our own room —
 # but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
+
+# How often to re-read the screen a meeting participant is sharing. Recall sends
+# frames at 2fps and the relay stores one a second, so polling faster only costs
+# round trips; polling much slower would leave the frame behind the conversation
+# it is meant to explain. Runs only while somebody is actually presenting.
+_MEET_SCREENSHARE_POLL_INTERVAL_S = 1.0
 
 DEPLETED_CREDITS_FAST_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
@@ -1453,7 +1462,14 @@ async def entrypoint(ctx: agents.JobContext):
     _meet_cached_active_speaker: str | None = None
     _meet_cached_participants: list[dict] = []
     _meet_prev_participant_names: set[str] = set()
+    # The screen somebody is sharing into the meeting, refreshed by
+    # ``_meet_screenshare_poller`` while at least one person is presenting.
     _meet_latest_screenshot: str | None = None
+    _meet_screenshare_sharer: str = ""
+    # Presenter ids in the order they started, so the label follows whoever the
+    # store has focused. Empty means nobody is sharing and the frame is dropped.
+    _meet_sharing: list[str] = []
+    _meet_screenshare_task: asyncio.Task | None = None
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
     _meet_speech_windows = MeetSpeakerWindows()
@@ -2471,6 +2487,8 @@ async def entrypoint(ctx: agents.JobContext):
             await utils.aio.cancel_and_wait(credit_gate_task)
         if hang_up_gate_watcher_task is not None:
             await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
+        if _meet_screenshare_task is not None:
+            await utils.aio.cancel_and_wait(_meet_screenshare_task)
         await screen_capture.close()
         await webcam_capture.close()
         # Unify Meet rooms belong to the call session, never to one agent:
@@ -2633,6 +2651,7 @@ async def entrypoint(ctx: agents.JobContext):
                         "timestamp": entry.timestamp.isoformat(),
                         "source": entry.source,
                         "filepath": filepath,
+                        "attribution": entry.attribution,
                     },
                 ),
             )
@@ -2698,8 +2717,57 @@ async def entrypoint(ctx: agents.JobContext):
                     utterance="",
                     timestamp=datetime.now(timezone.utc),
                     source=channel,
+                    attribution=_meet_screenshare_sharer,
                 ),
             )
+
+    async def _meet_screenshare_poll_loop() -> None:
+        """Keep the shared-screen slot fresh while somebody is presenting.
+
+        Polled rather than pushed: the frames live in comms, and the LiveKit data
+        channel that carries participant events is no place for a screenshot. The
+        loop runs only between ``screenshare_on`` and the last ``screenshare_off``
+        so an ordinary meeting costs nothing, and both readers of the slot -- the
+        per-turn refresh and the user-utterance capture -- see a current frame
+        rather than one from whenever the last turn happened.
+        """
+        nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
+
+        while True:
+            frame = await fetch_meet_screenshare_frame(
+                ctx.room.name,
+                http_session=_screenshot_http_session,
+                fb_logger=_log,
+            )
+            if frame is None:
+                # Nobody sharing yet, or the frame aged out. Drop what we hold
+                # rather than describing a screen that is no longer up.
+                _meet_latest_screenshot = None
+                _meet_screenshare_sharer = ""
+            else:
+                _meet_latest_screenshot = frame.b64
+                _meet_screenshare_sharer = frame.participant_name
+            await asyncio.sleep(_MEET_SCREENSHARE_POLL_INTERVAL_S)
+
+    def _sync_meet_screenshare_poller() -> None:
+        """Start or stop the poller to match whether anyone is presenting."""
+        nonlocal _meet_screenshare_task
+        nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
+
+        if _meet_sharing and _meet_screenshare_task is None:
+            _meet_screenshare_task = asyncio.create_task(
+                _meet_screenshare_poll_loop(),
+            )
+            return
+        if not _meet_sharing and _meet_screenshare_task is not None:
+            _meet_screenshare_task.cancel()
+            _meet_screenshare_task = None
+            _meet_latest_screenshot = None
+            _meet_screenshare_sharer = ""
+            # The shared screen is gone from the prompt as well as from the slot:
+            # a stale snapshot in the fast brain's visual context outlives the
+            # share and gets described as if it were still up.
+            _clear_visual_context(source=channel)
 
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
@@ -2758,6 +2826,7 @@ async def entrypoint(ctx: agents.JobContext):
                         utterance=text,
                         timestamp=datetime.now(timezone.utc),
                         source=channel,
+                        attribution=_meet_screenshare_sharer,
                     ),
                 )
 
@@ -2947,6 +3016,22 @@ async def entrypoint(ctx: agents.JobContext):
             if event is None or event.participant is None:
                 return
             participant = event.participant
+
+            # Ahead of the name guard below, and keyed on id rather than name: a
+            # platform that reports a presenter without a display name would
+            # otherwise drop the event, and with it every frame of the share.
+            # The label comes from the frame itself, so only the id is needed.
+            if event.name == EVENT_SCREENSHARE_ON:
+                if participant.id not in _meet_sharing:
+                    _meet_sharing.append(participant.id)
+                _sync_meet_screenshare_poller()
+                return
+            if event.name == EVENT_SCREENSHARE_OFF:
+                if participant.id in _meet_sharing:
+                    _meet_sharing.remove(participant.id)
+                _sync_meet_screenshare_poller()
+                return
+
             name = participant.name.strip()
             if not name or name == _meet_display_name:
                 return
