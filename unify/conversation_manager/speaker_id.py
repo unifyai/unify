@@ -3,12 +3,12 @@
 The live voice pipeline stays untouched; everything here runs off the hot
 path. Audio frames are teed into a ring buffer while they stream to STT, and
 each final diarized transcript triggers an embedding computation in a worker
-thread. Embeddings pin Deepgram's per-call anonymous speaker ids (S0, S1, …)
-to enrolled contacts, and accumulate auto-enrollments for single-speaker
-calls.
-
-Attribution only: labels and enrollment never gate the conversation loop —
-every voice on a call ends turns, triggers replies, and may interrupt.
+thread. Embeddings accumulate auto-enrollments for single-speaker calls and
+count distinct voices for the enrollment suggestion; they are never matched
+against enrolled profiles to decide who is speaking. Turn attribution comes
+from the meeting roster and platform participant signals alone, and nothing
+here gates the conversation loop — every voice on a call ends turns, triggers
+replies, and may interrupt.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 
@@ -48,17 +48,12 @@ SPEAKER_MODEL_URL = (
     f"speaker-recongition-models/{SPEAKER_MODEL_NAME}"
 )
 
-# Cosine-similarity acceptance threshold for pinning an anonymous speaker id
-# to an enrolled contact. CAM++ VoxCeleb embeddings of the same speaker across
-# telephone-band audio typically score 0.6-0.8; different speakers < 0.4.
-SPEAKER_MATCH_THRESHOLD = 0.55
-
 # Cosine-similarity threshold for a segment to join an existing within-id voice
 # cluster rather than seed a new one. A single diarization id can carry more
 # than one physically co-located voice (the STT engine under-splits); each such
-# voice becomes its own cluster. Set below SPEAKER_MATCH_THRESHOLD so ordinary
-# within-speaker variation (typically > 0.6) always merges, but well above the
-# different-speaker floor (~0.4) so a genuinely different voice spawns a cluster.
+# voice becomes its own cluster. Ordinary within-speaker variation (typically
+# > 0.6) always merges, while the different-speaker floor (~0.4) stays below,
+# so a genuinely different voice spawns a cluster.
 CLUSTER_JOIN_SIM = 0.5
 
 # Cosine-similarity threshold for treating clusters under *different*
@@ -377,52 +372,23 @@ class AudioRingBuffer:
 
 
 # Provenance of a resolved speaker display label. A transcript row carries its
-# source so it is self-describing -- "is voice fingerprinting actually working?"
-# is answerable from the row alone.
-#
-# Authority ordering is expressed by the order ``_resolve_speaker`` in the call
-# script consumes these, highest first: voice pin, then platform participant,
-# then org-call roster, then the anonymous placeholder. It is deliberately not
-# also stated as a table here; two statements of one ordering drift apart, and
-# the one nothing executes is the one that goes stale.
+# source so it is self-describing. Authority ordering is expressed by the order
+# ``_resolve_speaker`` in the call script consumes these, highest first:
+# platform participant, then org-call roster. It is deliberately not also
+# stated as a table here; two statements of one ordering drift apart, and the
+# one nothing executes is the one that goes stale.
 #
 # Stored rows from earlier runtimes carry sources no longer produced --
+# ``voice_pin`` and ``anonymous`` (embedding-matched attribution, retired),
 # ``dom_meet_map`` and ``dom_active_speaker`` (scraped from a meeting UI in a
-# browser we no longer run) and ``google_meet_transcript``. Readers should treat
-# an unrecognised source as a real name of unknown provenance, ranked below the
-# ones above.
-LABEL_SOURCE_VOICE_PIN = "voice_pin"
+# browser we no longer run) and ``google_meet_transcript``. Readers should
+# treat an unrecognised real name as unknown provenance ranked below the ones
+# above, and ``anonymous`` ("Speaker N") as a placeholder rather than a name.
 # The meeting platform's own name for a participant, reported by the meeting
-# backend rather than read off the screen. Ranked above ``meet_roster`` because
-# it is the same kind of claim from a better source, and below ``voice_pin``
-# because an enrolled-voice match additionally resolves to a contact id, which a
-# display name does not.
+# backend rather than read off the screen, ranked above ``meet_roster`` because
+# it is the same kind of claim from a better source.
 LABEL_SOURCE_RECALL_PARTICIPANT = "recall_participant"
 LABEL_SOURCE_MEET_ROSTER = "meet_roster"
-# The only source that is a placeholder ("Speaker N") rather than a real name --
-# consumers key off it instead of "no voice match".
-LABEL_SOURCE_ANONYMOUS = "anonymous"
-
-
-@dataclass
-class SpeakerResolution:
-    """Resolution of a single diarized utterance.
-
-    Attribution is per *voice cluster*, not per diarization id: when one id
-    carries several co-located voices, the resolution names the cluster the
-    current utterance's audio actually joined. ``provisional`` marks that the
-    id spans more than one voice cluster, so downstream consumers know the
-    diarization id alone is not a reliable speaker key. ``source`` records how
-    the identity was derived (``LABEL_SOURCE_VOICE_PIN`` for an embedding match,
-    ``LABEL_SOURCE_ANONYMOUS`` for a minted "Speaker N"); the platform-reported
-    sources are stamped one level up in the call script, not here.
-    """
-
-    contact_id: Optional[int] = None
-    label: Optional[str] = None
-    verified: bool = False
-    provisional: bool = False
-    source: Optional[str] = None
 
 
 @dataclass
@@ -430,27 +396,21 @@ class _VoiceCluster:
     """One acoustic identity within a diarization id.
 
     A diarization id under-split by the STT engine can hold several of these,
-    one per physically co-located voice. Each carries its own centroid and its
-    own resolved identity (an enrolled-contact pin or a minted anonymous label).
+    one per physically co-located voice, each with its own centroid.
     """
 
     accumulator: CentroidAccumulator = field(default_factory=CentroidAccumulator)
-    pinned_contact_id: Optional[int] = None
-    anonymous_label: Optional[str] = None
 
 
 @dataclass
 class _SpeakerState:
     """Per-diarization-id state: a set of voice clusters plus enrollment audio.
 
-    ``last_cluster`` is the cluster the most recently processed segment joined;
-    ``resolve`` reports on it so the answer tracks the voice that just spoke.
     Enrollment audio is accumulated at the id level but only while the id holds
     a single cluster, so a co-located second voice never poisons the voiceprint.
     """
 
     clusters: list[_VoiceCluster] = field(default_factory=list)
-    last_cluster: Optional[_VoiceCluster] = None
     enrollment_audio: list[np.ndarray] = field(default_factory=list)
     enrollment_duration_s: float = 0.0
     enrollment_sample_rate: int = ENROLLMENT_SAMPLE_RATE
@@ -461,27 +421,24 @@ class _SpeakerState:
 
 
 class SpeakerTracker:
-    """Per-call speaker attribution and auto-enrollment.
+    """Per-call voice-enrollment capture.
 
     Feed it raw audio (`add_audio`) and final diarized transcripts
-    (`observe_final_transcript`); query it with `resolve(speaker_id)`.
+    (`observe_final_transcript`). It never attributes turns to people — voice
+    clusters exist only to keep enrollment capture single-voice pure and to
+    count distinct voices for the suggestion callback.
 
     Callbacks fire at most once per call:
     - ``on_enrollment_captured(embedding, wav_path, duration_s)`` when a
       single-voice call has accumulated enough speech to enroll the contact.
     - ``on_enrollment_suggested(num_speakers)`` when multiple voices are heard
-      but the call contact has no enrollment to disambiguate them.
+      but the call contact has no enrollment.
 
-    ``multi_party`` marks a call with many concurrent speakers and no single
-    primary (a meet). It only affects *labeling*: every distinct voice cluster
-    gets a stable anonymous "Speaker N" identity even when nobody is enrolled,
-    so meet transcripts are per-speaker attributable from the voice track alone.
-    Auto-enrollment stays single-voice-gated regardless, so a meet never enrolls
-    an arbitrary participant as the call contact.
-
-    Enrollment gating counts *physically* distinct voices: clusters under
-    different diarization ids whose centroids clear ``cross_id_merge_sim``
-    collapse into one voice, so STT over-splits do not block auto-enrollment.
+    Auto-enrollment is single-voice-gated, so a multi-party meet never enrolls
+    an arbitrary participant as the call contact. Enrollment gating counts
+    *physically* distinct voices: clusters under different diarization ids
+    whose centroids clear ``cross_id_merge_sim`` collapse into one voice, so
+    STT over-splits do not block auto-enrollment.
     """
 
     def __init__(
@@ -491,7 +448,6 @@ class SpeakerTracker:
         enrolled_profiles: dict[int, np.ndarray],
         call_contact_id: int | None,
         multi_party: bool = False,
-        match_threshold: float = SPEAKER_MATCH_THRESHOLD,
         cross_id_merge_sim: float = CROSS_ID_MERGE_SIM,
         enrollment_target_s: float = ENROLLMENT_TARGET_S,
         enrollment_min_s: float = ENROLLMENT_MIN_S,
@@ -507,7 +463,6 @@ class SpeakerTracker:
             int(call_contact_id) if call_contact_id is not None else None
         )
         self._multi_party = multi_party
-        self._match_threshold = match_threshold
         self._cross_id_merge_sim = cross_id_merge_sim
         self._enrollment_target_s = enrollment_target_s
         self._enrollment_min_s = enrollment_min_s
@@ -517,12 +472,6 @@ class SpeakerTracker:
         self._ring = AudioRingBuffer()
         self._speakers: dict[str, _SpeakerState] = {}
         self._last_final_ts: float = 0.0
-        # "Speaker 1" is reserved for the enrolled primary caller only when there
-        # is one (a phone contact who resolves by name, never by ordinal). With
-        # no reserved primary — an unenrolled multi-party meet — the sequence
-        # starts at 1 so the first unidentified voice is "Speaker 1", not a
-        # gap-leaving "Speaker 2".
-        self._next_anonymous_index = 2 if self._call_contact_enrolled else 1
         self._enrollment_fired = False
         self._suggestion_fired = False
         self._pending_tasks: set[asyncio.Task] = set()
@@ -546,37 +495,6 @@ class SpeakerTracker:
             self._call_contact_enrolled,
             self._multi_party,
         )
-
-    def add_enrolled_profiles(self, profiles: dict[int, list[float]]) -> int:
-        """Merge in profiles that were not known when the call started.
-
-        Enrolled profiles are otherwise a snapshot taken at dispatch, so anyone
-        who joins a multi-party call later cannot be voice-pinned however good
-        their enrollment is. Returns the number newly added.
-
-        Only unknown contacts are added: an existing profile is left alone so a
-        late roster push cannot disturb pins already made on this call. Voices
-        already clustered are re-scored against the enlarged set on their next
-        segment, so a late joiner who has already spoken is picked up without
-        replaying anything.
-        """
-        added = 0
-        for contact_id, vector in (profiles or {}).items():
-            try:
-                cid = int(contact_id)
-            except (TypeError, ValueError):
-                continue
-            if cid in self._enrolled:
-                continue
-            self._enrolled[cid] = np.asarray(vector, dtype=np.float32)
-            added += 1
-        if added:
-            _log.info(
-                "SpeakerTracker: +%d enrolled profile(s) mid-call (%d total)",
-                added,
-                len(self._enrolled),
-            )
-        return added
 
     # ── audio ingestion ──────────────────────────────────────────────────
 
@@ -669,9 +587,7 @@ class SpeakerTracker:
             return
         self._segments_embedded += 1
         state = self._speakers.setdefault(speaker_id, _SpeakerState())
-        cluster = self._assign_cluster(state, embedding, duration_s)
-        self._try_pin(cluster)
-        state.last_cluster = cluster
+        self._assign_cluster(state, embedding, duration_s)
         if len(state.clusters) == 1:
             # A second cluster means a co-located voice shares this id; only the
             # sole-voice case is safe to feed into the enrolled voiceprint.
@@ -704,41 +620,6 @@ class SpeakerTracker:
         cluster.accumulator.add(embedding, duration_s)
         state.clusters.append(cluster)
         return cluster
-
-    def _try_pin(self, cluster: _VoiceCluster) -> None:
-        # With no enrolled profiles there is nothing to pin against, but a
-        # multi-party call still needs a per-cluster anonymous label, so fall
-        # through to the minting branch below instead of bailing.
-        if not self._enrolled and not self._multi_party:
-            return
-        centroid = cluster.accumulator.centroid
-        if centroid is None:
-            return
-        best_cid, best_score = None, 0.0
-        for cid, profile in self._enrolled.items():
-            score = cosine_similarity(centroid, profile)
-            if score > best_score:
-                best_cid, best_score = cid, score
-        if best_cid is not None and best_score >= self._match_threshold:
-            # The cluster centroid is re-scored on every segment, so pinning is
-            # not a one-way latch: a pin is revoked below if the cluster's voice
-            # later drifts away from every enrolled profile.
-            cluster.pinned_contact_id = best_cid
-        else:
-            cluster.pinned_contact_id = None
-            if cluster.anonymous_label is None and (
-                self._call_contact_enrolled or self._multi_party
-            ):
-                # This voice does not match an enrolled profile: mint a stable
-                # session-scoped anonymous identity for the cluster. Warranted
-                # either because the call contact is enrolled (so a non-matching
-                # voice is confidently *someone else*) or because this is a
-                # multi-party call (a meet) where every distinct voice needs a
-                # per-speaker label even with nobody enrolled. The label is kept
-                # even if the cluster is later pinned (resolution prefers the
-                # pin), so the ordinal never churns.
-                cluster.anonymous_label = f"Speaker {self._next_anonymous_index}"
-                self._next_anonymous_index += 1
 
     @property
     def _call_contact_enrolled(self) -> bool:
@@ -906,12 +787,7 @@ class SpeakerTracker:
         self._on_enrollment_suggested(distinct)
 
     async def await_pending(self) -> None:
-        """Flush in-flight embedding work.
-
-        Callers that need per-utterance attribution (``resolve`` reports on the
-        last *processed* segment) await this after a final transcript so the
-        current utterance's segment has been clustered before they resolve.
-        """
+        """Flush in-flight embedding work so capture state is current."""
         if self._pending_tasks:
             await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
@@ -922,18 +798,11 @@ class SpeakerTracker:
         without needing the transcript: no enrolled profiles, every segment
         rejected as too short, or embeddings failing all present as zeros here.
         """
-        pins = sum(
-            1
-            for state in self._speakers.values()
-            for cluster in state.clusters
-            if cluster.pinned_contact_id is not None
-        )
         return {
             "enrolled_profiles": len(self._enrolled),
             "diarization_ids": len(self._speakers),
             "clusters": sum(len(s.clusters) for s in self._speakers.values()),
             "distinct_voices": self._distinct_voice_count(),
-            "pinned_clusters": pins,
             "segments_observed": self._segments_observed,
             "segments_buffered": self._segments_buffered,
             "segments_dropped": self._segments_dropped,
@@ -988,42 +857,3 @@ class SpeakerTracker:
             "speaker attribution summary: %s",
             " ".join(f"{k}={v}" for k, v in stats.items()),
         )
-
-    # ── resolution ───────────────────────────────────────────────────────
-
-    def resolve(self, speaker_id: str | None) -> SpeakerResolution | None:
-        """Resolve a diarization id to the identity of the voice that just spoke.
-
-        Attribution is to ``last_cluster`` — the cluster the most recently
-        processed segment joined — so when an id carries several co-located
-        voices the answer names the specific one, not a blurred average.
-        ``provisional`` is set whenever the id spans more than one cluster.
-
-        A provisional pin is still returned — it is the best guess available
-        for routing, and dropping it would lose attribution entirely — but it
-        is **not** reported as verified. ``verified`` is a claim that this
-        utterance's voice was positively matched, and once an id is known to
-        carry more than one voice the tracker cannot make that claim about any
-        single utterance under it.
-        """
-        if not speaker_id:
-            return None
-        state = self._speakers.get(speaker_id)
-        if state is None or state.last_cluster is None:
-            return None
-        cluster = state.last_cluster
-        provisional = len(state.clusters) > 1
-        if cluster.pinned_contact_id is not None:
-            return SpeakerResolution(
-                contact_id=cluster.pinned_contact_id,
-                verified=not provisional,
-                provisional=provisional,
-                source=LABEL_SOURCE_VOICE_PIN,
-            )
-        if cluster.anonymous_label:
-            return SpeakerResolution(
-                label=cluster.anonymous_label,
-                provisional=provisional,
-                source=LABEL_SOURCE_ANONYMOUS,
-            )
-        return None

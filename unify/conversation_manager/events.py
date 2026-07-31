@@ -236,16 +236,13 @@ class InboundPhoneUtterance(CallUtteranceEvent):
     # Per-turn id from the voice agent, correlated with the slow-brain run that
     # starts after the fast brain completes this user turn.
     turn_id: int | None = None
-    # Voice-derived speaker attribution: an anonymous session-scoped label
-    # (e.g. "Speaker 2") when the voice does not match the contact's enrolled
-    # profile, the diarization id from STT, and whether the utterance's voice
-    # was positively matched to the contact's enrollment.
+    # Speaker attribution from the meeting roster or platform participant
+    # signals (never voice matching), plus the raw diarization id from STT.
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     # Provenance of ``speaker_label`` (see speaker_id.LABEL_SOURCE_*): lets the
     # transcript row be self-describing and downstream reconcilers honour the
-    # authority ordering. ``"anonymous"`` marks a "Speaker N" placeholder.
+    # authority ordering.
     speaker_label_source: str | None = None
 
 
@@ -260,7 +257,6 @@ class InboundUnifyMeetUtterance(CallUtteranceEvent):
     turn_id: int | None = None
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
     participant_names: list[str] | None = None
     participant_contact_ids: list[int] | None = None
@@ -277,7 +273,6 @@ class InboundWhatsAppCallUtterance(CallUtteranceEvent):
     turn_id: int | None = None
     speaker_label: str | None = None
     diarization_speaker_id: str | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
 
 
@@ -440,7 +435,6 @@ class InboundGoogleMeetUtterance(CallUtteranceEvent):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
 
 
@@ -565,7 +559,6 @@ class InboundTeamsMeetUtterance(CallUtteranceEvent):
     participant_names: list[str] | None = None
     diarization_speaker_id: str | None = None
     turn_id: int | None = None
-    voice_verified: bool = False
     speaker_label_source: str | None = None
 
 
