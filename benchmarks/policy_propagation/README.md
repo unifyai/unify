@@ -21,13 +21,22 @@ post-change scoring window contains at least one item whose priority flips.
 
 ![policy propagation](results/policy_propagation.svg)
 
-| | Unify (factored guidance) | hermes |
-|---|---|---|
-| correctness (15 fires, both epochs) | **15/15** | **15/15** |
-| change propagated to all three automations | yes — guidance canon + 3 linked functions | yes (3 prompt edits) |
-| change-application cost | **1.02M tokens / $2.72** | 1.14M tokens |
-| steady state, whole family per round | **~2.2k tokens** | ~57k tokens |
-| payback of the change-cost gap | none needed — cheaper from the change itself | — |
+| | Unify (factored guidance) | hermes | openclaw |
+|---|---|---|---|
+| correctness (15 fires, both epochs) | **15/15** | **15/15** | 10/15 fully exact |
+| change propagated to all three automations | yes — guidance canon + 3 linked functions | yes (3 prompt edits) | yes (3 cron payloads rewritten) |
+| change-application cost | 1.02M tokens / $2.72 | 1.14M tokens | **142k tokens** |
+| steady state, whole family per round | **~2.2k tokens** | ~57k tokens | ~80k tokens |
+| payback of the change-cost gap | cheaper than hermes from the change itself | — | change wins outright; steady state repays unify's gap in ~11 rounds |
+
+The openclaw arm (2026-07-31, added later the same day) splits the axes:
+its change session is ~7× cheaper than either other arm (its cron store is
+small and legible to its own agent, which rewrote all three payloads in
+one 54s turn), but it is the only arm that dropped exactness — none of
+the misses are propagation failures; they are per-fire judgment variance
+in the triage automation plus one bootstrap contract miss, detailed in
+the run's NOTE.md — and its steady state is the most expensive of the
+three.
 
 Correctness tied at 15/15; unify wins both cost axes. The storage reviews
 factored the policy into **one guidance entry** ("Customer inquiry triage

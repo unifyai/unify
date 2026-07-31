@@ -29,15 +29,15 @@ EXPERIMENT_DIR = Path(__file__).resolve().parent
 from benchmarks.policy_propagation.fixture import (  # noqa: E402
     DEFAULT_PORT,
     DEFAULT_SEED,
+    INITIAL_THRESHOLD,
+    POLICY_UPDATE_MESSAGE,
+    UPDATED_THRESHOLD,
     PolicyFixtureServer,
 )
 from benchmarks.policy_propagation.protocol import (  # noqa: E402
     AUTOMATIONS,
-    INITIAL_THRESHOLD,
-    POLICY_UPDATE_MESSAGE,
     POST_CHANGE_ROUNDS,
     PRE_CHANGE_ROUNDS,
-    UPDATED_THRESHOLD,
     build_utterance,
     prepare_fire,
     release_round,
