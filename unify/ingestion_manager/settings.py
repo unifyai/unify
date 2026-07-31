@@ -28,12 +28,29 @@ class IngestionSettings(BaseSettings):
 
     IMPL: str = "real"
 
-    # Base URL of the pipeline control plane that dispatches to the worker
-    # fleet. Empty means this deployment has no fleet reachable, and every run
-    # then executes in process -- which is safe rather than merely tolerable,
-    # because both tiers write the same artifacts and checkpoints, so a fleet
-    # configured later can adopt anything an interrupted local run left behind.
+    # Explicit override for the pipeline control plane's base URL. Normally
+    # unset: the control plane is mounted on the communication service this
+    # deployment already talks to, so `resolved_pipeline_url` falls back to that
+    # rather than requiring a second variable to be set in lockstep. Requiring
+    # one was a real hazard -- a hosted pod missing it reads as "no fleet" and
+    # parses files in the assistant's own process, which is the one thing the
+    # tier rule exists to prevent, and it fails silently by doing the work.
     PIPELINE_URL: str = ""
+
+    def resolved_pipeline_url(self) -> str:
+        """Base URL of the control plane, or empty when there is genuinely none.
+
+        Empty means no fleet is reachable and every run executes in process --
+        safe rather than merely tolerable, because both tiers write the same
+        artifacts and checkpoints, so a fleet configured later adopts whatever
+        an interrupted local run left behind.
+        """
+        if self.PIPELINE_URL:
+            return self.PIPELINE_URL
+        # Imported lazily: the root settings module imports this one.
+        from unify.settings import SETTINGS
+
+        return (SETTINGS.conversation.COMMS_URL or "").rstrip("/")
 
     # Row count at or below which a rows or table source runs in process.
     #

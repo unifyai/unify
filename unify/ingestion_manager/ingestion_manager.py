@@ -391,13 +391,15 @@ class IngestionManager(BaseIngestionManager):
         picked up by the next process, and anything it left behind is adoptable
         because both tiers write the same layout.
         """
-        if not self._settings.PIPELINE_URL:
+        if not self._settings.resolved_pipeline_url():
             return False
         with self._lock:
             if self._fleet_probe is None:
                 from unify.ingestion_manager.dispatch import probe
 
-                self._fleet_probe = probe(base_url=self._settings.PIPELINE_URL)
+                self._fleet_probe = probe(
+                    base_url=self._settings.resolved_pipeline_url(),
+                )
             return self._fleet_probe
 
     def _control(self, run_key: str) -> Dict[str, bool]:
@@ -911,16 +913,17 @@ class IngestionManager(BaseIngestionManager):
         """
         from unify.ingestion_manager.dispatch import dispatch_run
 
-        if not self._settings.PIPELINE_URL:
+        if not self._settings.resolved_pipeline_url():
             raise RuntimeError(
                 "This run needs the worker fleet and no pipeline control plane is "
-                "configured (UNITY_INGESTION_PIPELINE_URL is unset). Files are "
+                "reachable (neither UNITY_INGESTION_PIPELINE_URL nor "
+                "UNITY_COMMS_URL is set). Files are "
                 "always parsed off the assistant's process, so configure a control "
                 "plane or run the self-host worker services.",
             )
 
         dispatch_id = dispatch_run(
-            base_url=self._settings.PIPELINE_URL,
+            base_url=self._settings.resolved_pipeline_url(),
             run_key=run_key,
             request=request,
             request_key=f"jobs/{run_key}/request.json",
@@ -1015,14 +1018,14 @@ class IngestionManager(BaseIngestionManager):
         dispatch_id = row.get("dispatch_id")
         if not dispatch_id or row.get("state") in TERMINAL_STATES:
             return row
-        if not self._settings.PIPELINE_URL:
+        if not self._settings.resolved_pipeline_url():
             return row
 
         from unify.ingestion_manager.dispatch import fetch_status
 
         try:
             fleet = fetch_status(
-                base_url=self._settings.PIPELINE_URL,
+                base_url=self._settings.resolved_pipeline_url(),
                 dispatch_id=str(dispatch_id),
             )
         except Exception as error:  # noqa: BLE001 -- read path stays readable
@@ -1265,12 +1268,12 @@ class IngestionManager(BaseIngestionManager):
         a reachable control plane cannot act on it -- and an empty base URL
         would otherwise surface as an obscure malformed-request error.
         """
-        url = self._settings.PIPELINE_URL
+        url = self._settings.resolved_pipeline_url()
         if not url:
             raise RuntimeError(
                 f"Run {dispatch_id} was dispatched to the worker fleet, but no "
                 "pipeline control plane is configured "
-                "(UNITY_INGESTION_PIPELINE_URL is unset), so it cannot be "
+                "reachable, so it cannot be "
                 "steered from here.",
             )
         return url
