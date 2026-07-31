@@ -235,3 +235,55 @@ def test_tags_participate_in_the_sync_hash(custom_tasks_dir, tmp_path):
     original = collect_custom_tasks(str(custom_tasks_dir))["ops/daily-check"]
     changed = collect_custom_tasks(str(retagged))["ops/daily-check"]
     assert original["custom_hash"] != changed["custom_hash"]
+
+
+@_handle_project
+@pytest.mark.asyncio
+@pytest.mark.requires_orchestra
+async def test_sync_writes_tags_onto_the_row_and_clears_them_on_removal(
+    task_scheduler_factory,
+    custom_tasks_dir,
+    tmp_path,
+):
+    """The hash carrying tags is not enough — the row writers must carry them too.
+
+    The first shipped version added tags to the sync hash but not to the insert
+    or update entry builders, so reconcile stamped the new hash while writing
+    ``tags: None`` — and every later sync then skipped the row as up to date.
+    The tags could never arrive without a manual backfill.
+    """
+
+    scheduler = task_scheduler_factory()
+    source = collect_custom_tasks(path=custom_tasks_dir)
+    scheduler.sync_custom_tasks(source_tasks=source)
+
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert rows[0].tags == ["ops", "daily"]
+
+    # An edit that only changes tags must update the row.
+    retagged_dir = tmp_path / "retagged"
+    retagged_dir.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = dict(row)
+        if row["key"] == "ops/daily-check":
+            row["tags"] = ["ops", "weekly"]
+        lines.append(json.dumps(row))
+    (retagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+    scheduler._custom_tasks_synced = False
+    scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=retagged_dir))
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert rows[0].tags == ["ops", "weekly"]
+
+    # Removing every tag untags the row rather than leaving the stale list.
+    untagged_dir = tmp_path / "untagged"
+    untagged_dir.mkdir()
+    lines = []
+    for row in _EXAMPLE_TASK_LINES:
+        row = {k: v for k, v in row.items() if k != "tags"}
+        lines.append(json.dumps(row))
+    (untagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
+    scheduler._custom_tasks_synced = False
+    scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=untagged_dir))
+    rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
+    assert not rows[0].tags
