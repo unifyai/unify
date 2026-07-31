@@ -264,3 +264,77 @@ def task_scheduler_mutation_scenario(task_mutation_scenario):
 
         restore_scenario_context("tests/task_scheduler/MutationScenario")
         yield ts, task_ids
+
+
+# --------------------------------------------------------------------------- #
+#  Real assistant-scoped task surface (integration tests)                     #
+# --------------------------------------------------------------------------- #
+
+TASK_SURFACE_PROJECT = "Assistants"
+
+
+@pytest.fixture()
+def task_surface():
+    """A real ``{user}/{agent_id}/Tasks`` surface on the bundled local Orchestra.
+
+    Orchestra projects ``Tasks/Executions`` only for a task *surface*: the
+    ``Assistants`` project at ``{user}/{assistant}/Tasks`` or
+    ``Teams/{id}/Tasks``. The ``_handle_project`` fixture nests contexts under
+    ``UnityTests``, which is not one, so definitions written through it are
+    never projected — the reason this repo's dispatch-seam tests sat dead for
+    two months while the seam broke in production.
+
+    This provisions the surface the way production gets one: a real assistant
+    over the public API, session identity bound to it, ``Assistants`` active.
+    Each test gets a fresh assistant, so its Tasks tree is isolated for free.
+    """
+
+    from unify.session_details import SESSION_DETAILS
+    from unisdk.utils.http import RequestError
+
+    base_url = str(unisdk.BASE_URL or "")
+    if "localhost" not in base_url and "127.0.0.1" not in base_url:
+        pytest.skip(
+            "task_surface provisions assistants and refuses to run against a "
+            f"non-local Orchestra ({base_url!r})",
+        )
+
+    try:
+        user_info = unisdk.get_user_basic_info()
+    except (RequestError, ConnectionError, OSError) as exc:
+        pytest.skip(f"local Orchestra unreachable or unauthenticated: {exc!r}")
+    user_id = str(user_info.get("user_id") or "")
+    if not user_id:
+        pytest.skip(f"basic-info returned no user_id: {user_info!r}")
+
+    created = unisdk.create_assistant(first_name="Task Surface Probe")
+    agent_id = int(created["agent_id"])
+
+    previous_project = unisdk.active_project()
+    previous_user_id = SESSION_DETAILS.user.id
+    previous_agent_id = SESSION_DETAILS.assistant.agent_id
+
+    unisdk.activate(TASK_SURFACE_PROJECT)
+    unisdk.set_context(f"{user_id}/{agent_id}", relative=False)
+    SESSION_DETAILS.user.id = user_id
+    SESSION_DETAILS.assistant.agent_id = agent_id
+    for context_name in ("Tasks", "Tasks/Meta"):
+        ContextRegistry.forget(TaskScheduler, context_name)
+
+    try:
+        yield type(
+            "TaskSurface",
+            (),
+            {"user_id": user_id, "agent_id": agent_id},
+        )
+    finally:
+        SESSION_DETAILS.user.id = previous_user_id
+        SESSION_DETAILS.assistant.agent_id = previous_agent_id
+        for context_name in ("Tasks", "Tasks/Meta"):
+            ContextRegistry.forget(TaskScheduler, context_name)
+        if previous_project:
+            unisdk.activate(previous_project)
+        try:
+            unisdk.delete_assistant(agent_id)
+        except (RequestError, ConnectionError, OSError):
+            pass
