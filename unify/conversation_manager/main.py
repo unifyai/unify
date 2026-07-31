@@ -99,6 +99,7 @@ def _apply_test_mocks(cm: ConversationManager) -> None:
 def _populate_session_details_from_env() -> None:
     """Populate SESSION_DETAILS from environment variables."""
     SESSION_DETAILS.populate_from_env()
+    SESSION_DETAILS.bind_derived_ownership()
 
 
 def create_conversation_manager(

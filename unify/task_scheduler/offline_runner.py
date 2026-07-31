@@ -329,6 +329,7 @@ def _mark_source_task_failed(config: OfflineTaskConfig, error_text: str) -> None
         return
     try:
         SESSION_DETAILS.populate_from_env()
+        SESSION_DETAILS.bind_derived_ownership()
         unify.ensure_initialised(project_name=TASK_MACHINE_STATE_PROJECT)
         scheduler = TaskScheduler()
         rows = scheduler._store.get_rows_by_log_ids(  # type: ignore[attr-defined]
