@@ -1192,6 +1192,86 @@ async def _(
     )
 
 
+async def _record_meet_chat(
+    event: (
+        GoogleMeetChatMessage
+        | TeamsMeetChatMessage
+        | GoogleMeetChatSent
+        | TeamsMeetChatSent
+    ),
+    cm: "ConversationManager",
+    *,
+    medium: Medium,
+    sender_name: str,
+    role: str,
+) -> None:
+    """Record one meeting-chat line, in either direction.
+
+    It lands in three places, each serving a different reader. The contact
+    thread is the brain's flat prompt view, so provenance rides in the body as a
+    ``<meeting chat>`` marker -- nothing there carries structure. The Transcripts
+    mirror and the call-utterance store are durable records, so they carry the
+    bare text plus ``kind="chat"``: Console needs to tell a typed line from a
+    spoken one to render it as chat and withhold a seek control it has no audio
+    for.
+
+    The store row is keyed on the meet session id, the same key the spoken lines
+    use, which puts chat and speech in one chronological transcript. The
+    exchange id needs no plumbing here -- ``log_message`` resolves it from the
+    medium.
+    """
+    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
+    message_id = cm.contact_index.push_message(
+        contact_id=contact_id,
+        sender_name=sender_name,
+        thread_name=medium,
+        message_content=f"<meeting chat> {event.content}",
+        role=role,
+        timestamp=event.timestamp,
+    )
+
+    await managers_utils.queue_operation(
+        managers_utils.log_message,
+        cm,
+        event,
+        local_message_id=message_id,
+    )
+
+    call_key = cm.call_manager.meet_session_id
+    if not call_key:
+        LOGGER.error(
+            f"{medium.value} chat message dropped from the call store: no "
+            "session id on the active meet",
+        )
+        return
+
+    is_assistant = role == "assistant"
+    utterance = {
+        "content": event.content,
+        "speaker_name": sender_name,
+        "speaker_assistant_id": (
+            int(SESSION_DETAILS.assistant.agent_id)
+            if is_assistant and SESSION_DETAILS.assistant.agent_id is not None
+            else None
+        ),
+        "spoken_at": event.timestamp.isoformat(),
+        "metadata": {
+            "contact_id": contact_id,
+            # Typed, not spoken. Consumers key the chat rendering and the
+            # absence of a seek control off this rather than guessing from
+            # a missing audio offset, which a spoken line can also have.
+            "kind": "chat",
+        },
+    }
+    asyncio.create_task(
+        asyncio.to_thread(
+            post_call_utterances_to_orchestra,
+            str(call_key),
+            [utterance],
+        ),
+    )
+
+
 @EventHandler.register((GoogleMeetChatMessage, TeamsMeetChatMessage))
 async def _(
     event: GoogleMeetChatMessage | TeamsMeetChatMessage,
@@ -1199,13 +1279,14 @@ async def _(
     *args,
     **kwargs,
 ):
-    """Surface a meeting-chat message to the brain as conversation context.
+    """Record an inbound meeting-chat message and wake the brain to answer it.
 
-    Deliberately not written to the call-utterance store: that is the record of
-    what was *said* on the call, and a typed message logged there would read as
-    speech. It lands in the contact thread instead, where the brain sees it with
-    its provenance intact and can answer a question someone pasted rather than
-    spoke.
+    Notify + wake, like the other prominent meet events: someone typing is
+    addressing the assistant just as much as someone speaking, so this schedules
+    an LLM run rather than leaving the message to be noticed by whatever turn
+    happens next. Without the run the text still reaches the brain's context but
+    only surfaces once somebody speaks -- so a meeting where the assistant is
+    asked something purely in chat gets no reply at all.
     """
     medium = (
         Medium.GOOGLE_MEET
@@ -1215,14 +1296,43 @@ async def _(
     label = f"{event.sender_name} in meeting chat: {event.content}"
     cm.notifications_bar.push_notif("Comms", label, event.timestamp)
 
-    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
-    cm.contact_index.push_message(
-        contact_id=contact_id,
+    await _record_meet_chat(
+        event,
+        cm,
+        medium=medium,
         sender_name=event.sender_name,
-        thread_name=medium,
-        message_content=f"<meeting chat> {event.content}",
         role="user",
-        timestamp=event.timestamp,
+    )
+
+    contact_id = (event.contact.get("contact_id") if event.contact else None) or 1
+    await cm.request_llm_run(delay=0, triggering_contact_id=contact_id)
+
+
+@EventHandler.register((GoogleMeetChatSent, TeamsMeetChatSent))
+async def _(
+    event: GoogleMeetChatSent | TeamsMeetChatSent,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    """Record what the assistant posted into the meeting chat.
+
+    No LLM run and no notification: the assistant just acted, so there is
+    nothing to wake it for and nothing to tell its operator that it does not
+    already know. Recording it is what stops the transcript showing a chat
+    question with no answer beside it.
+    """
+    medium = (
+        Medium.GOOGLE_MEET
+        if isinstance(event, GoogleMeetChatSent)
+        else Medium.TEAMS_MEET
+    )
+    await _record_meet_chat(
+        event,
+        cm,
+        medium=medium,
+        sender_name=SESSION_DETAILS.assistant.name or "Assistant",
+        role="assistant",
     )
 
 

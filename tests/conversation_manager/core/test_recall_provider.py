@@ -213,6 +213,50 @@ async def test_relay_url_carries_the_room_and_token() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Participant video
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_join_asks_for_participant_video_by_default() -> None:
+    """The request plumbing existed for a while and nothing ever set it.
+
+    A bot dispatched without this joins fine and is simply blind to any screen
+    somebody shares, which shows up as an assistant that ignores the thing the
+    meeting is about.
+    """
+    provider = _provider()
+    with patch.dict("os.environ", LIVEKIT_ENV, clear=False):
+        await provider.join(
+            channel="google_meet",
+            meeting_url="https://meet.google.com/abc",
+            display_name="Unify",
+            room_name="unity_25_gmeet",
+        )
+
+    kwargs = provider._client.create_bot.call_args.kwargs
+    assert kwargs["capture_participant_video"] is True
+
+
+@pytest.mark.asyncio
+async def test_participant_video_can_be_declined() -> None:
+    """It carries a variant surcharge, so a workspace may opt out of it."""
+    env = dict(LIVEKIT_ENV)
+    env["RECALL_PARTICIPANT_VIDEO"] = "0"
+    with patch.dict("os.environ", env, clear=False):
+        provider = _provider()
+        await provider.join(
+            channel="google_meet",
+            meeting_url="https://meet.google.com/abc",
+            display_name="Unify",
+            room_name="unity_25_gmeet",
+        )
+
+    kwargs = provider._client.create_bot.call_args.kwargs
+    assert kwargs["capture_participant_video"] is False
+
+
+# ---------------------------------------------------------------------------
 # State translation
 # ---------------------------------------------------------------------------
 

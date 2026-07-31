@@ -239,6 +239,8 @@ async def test_realtime_endpoint_subscribes_only_to_read_events() -> None:
         "participant_events.speech_on",
         "participant_events.speech_off",
         "participant_events.chat_message",
+        "participant_events.screenshare_on",
+        "participant_events.screenshare_off",
     ]
 
 
@@ -429,11 +431,14 @@ async def test_participant_video_is_off_by_default() -> None:
 
 
 @pytest.mark.asyncio
-async def test_participant_video_needs_gallery_layout() -> None:
-    """Separate per-participant video only arrives in gallery layout.
+async def test_participant_video_sends_every_key_it_needs() -> None:
+    """Four keys, and omitting any one of them fails silently.
 
-    Without it the platform sends one composited stream and there is no
-    screenshare track to pick out -- the subscription would be silently useless.
+    The bot joins, the meeting proceeds, and no frame ever arrives -- which from
+    the outside is indistinguishable from a relay that is down. Gallery layout is
+    what makes the platform send separate streams at all; the artifact block is
+    what makes the PNG one exist; the variant is what Recall says is required to
+    carry it; the event is what subscribes us.
     """
     session = _mock_session(body={"id": "bot_1"})
     with patch("aiohttp.ClientSession", return_value=session):
@@ -447,15 +452,40 @@ async def test_participant_video_needs_gallery_layout() -> None:
 
     payload = _create_payload(session)
     assert payload["recording_config"]["video_mixed_layout"] == "gallery_view_v2"
-    # Retention must survive being edited alongside it.
+    assert payload["recording_config"]["video_separate_png"] == {}
+    assert payload["variant"] == {
+        "google_meet": "web_4_core",
+        "microsoft_teams": "web_4_core",
+    }
+    # Retention must survive being edited alongside them.
     assert payload["recording_config"]["retention"] is None
     endpoints = payload["recording_config"]["realtime_endpoints"]
     assert "video_separate_png.data" in endpoints[0]["events"]
 
 
 @pytest.mark.asyncio
+async def test_a_plain_meeting_pays_for_none_of_it() -> None:
+    """The variant carries a surcharge, so it may not ride along by default."""
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            realtime_events_url="wss://comms/meet/events?room=r&token=t",
+        )
+
+    payload = _create_payload(session)
+    assert "variant" not in payload
+    assert "video_separate_png" not in payload["recording_config"]
+    assert "video_mixed_layout" not in payload["recording_config"]
+    events = payload["recording_config"]["realtime_endpoints"][0]["events"]
+    assert "video_separate_png.data" not in events
+
+
+@pytest.mark.asyncio
 async def test_participant_video_stays_png() -> None:
-    """H264 would cost a decoder and the web_4_core variant for ~1000px."""
+    """H264 buys 200-1000px of a screen PNG already carries, for a decoder."""
     session = _mock_session(body={"id": "bot_1"})
     with patch("aiohttp.ClientSession", return_value=session):
         await _client(session).create_bot(
@@ -470,7 +500,6 @@ async def test_participant_video_stays_png() -> None:
         "events"
     ]
     assert "video_separate_h264.data" not in events
-    assert "variant" not in _create_payload(session)
 
 
 @pytest.mark.asyncio
