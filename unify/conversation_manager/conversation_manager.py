@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import contextlib
 import json
 import traceback
@@ -71,6 +72,24 @@ DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
 DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
+SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS = 600
+SLOW_BRAIN_FAILURE_RESPONSE = (
+    "I hit a technical problem and couldn't respond just now. Please try "
+    "again in a moment — if it keeps happening, contact support@unify.ai "
+    "so we can look into it."
+)
+SLOW_BRAIN_FAILURE_EMAIL_SUBJECT = "Temporary problem responding"
+# Self-scheduled wait(delay) polling backoff. Timer wakes are full-priced
+# slow-brain turns; a model that busy-polls a long-running act ("check
+# again in 10 seconds", repeatedly) burns tokens with zero information
+# gain — external events wake the brain immediately regardless, so only
+# the self-scheduled timer needs a floor. A small budget of fast polls
+# per window stays free; beyond it the effective delay doubles per extra
+# poll up to the cap.
+WAIT_POLL_WINDOW_SECONDS = 600.0
+WAIT_POLL_FREE_BUDGET = 5
+WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS = 60
+WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS = 600
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
         "act",
@@ -1496,10 +1515,69 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if self.mode.is_voice and self._is_transient_llm_error(exc):
                 with contextlib.suppress(Exception):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
+            elif not self.mode.is_voice:
+                # Text surfaces have no fast brain to apologise for a dead
+                # slow brain — without this, a hard failure (e.g. an
+                # unconstructable LLM client on a stale image) is pure
+                # silence, and users have re-sent the same message for
+                # hours. Throttled so repeated failures produce one
+                # apology, not one per attempt.
+                with contextlib.suppress(Exception):
+                    await self._send_slow_brain_failure_reply()
             raise
+
+    async def _send_slow_brain_failure_reply(self) -> None:
+        """Tell the user their message hit a hard failure (throttled)."""
+        reply_context = self._last_inbound_reply_context
+        if not reply_context:
+            return
+        now = self.loop.time()
+        last_sent = getattr(self, "_slow_brain_failure_reply_sent_at", None)
+        if (
+            last_sent is not None
+            and now - last_sent < SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS
+        ):
+            return
+        self._slow_brain_failure_reply_sent_at = now
+        await self._send_system_reply(
+            reply_context,
+            content=SLOW_BRAIN_FAILURE_RESPONSE,
+            email_subject=SLOW_BRAIN_FAILURE_EMAIL_SUBJECT,
+        )
 
     def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:
         self._last_inbound_reply_context = reply_context
+
+    def _clamp_wait_poll_delay(self, delay: int) -> int:
+        """Apply escalating backoff to repeated self-scheduled wait polls.
+
+        Keeps the first ``WAIT_POLL_FREE_BUDGET`` timer wakes per window at
+        the model's requested cadence, then doubles the enforced minimum
+        per extra poll (capped). External events are unaffected — they wake
+        the brain immediately whether or not a timer is pending.
+        """
+        polls = getattr(self, "_wait_poll_times", None)
+        if polls is None:
+            polls = self._wait_poll_times = collections.deque(maxlen=64)
+        now = self.loop.time()
+        polls.append(now)
+        recent = sum(1 for t in polls if now - t <= WAIT_POLL_WINDOW_SECONDS)
+        excess = recent - WAIT_POLL_FREE_BUDGET
+        if excess <= 0:
+            return delay
+        floor = min(
+            WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS * (2 ** (excess - 1)),
+            WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS,
+        )
+        if delay < floor:
+            self._session_logger.info(
+                "wait",
+                f"Wait-poll backoff: raising delay {delay}s -> {floor}s "
+                f"({recent} timer polls in the last "
+                f"{int(WAIT_POLL_WINDOW_SECONDS)}s)",
+            )
+            return floor
+        return delay
 
     def _credit_gate_throttle_key(
         self,
@@ -1534,17 +1612,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._credit_gate_reply_sent_at[throttle_key] = now
         return False
 
-    async def _send_credit_gate_reply(
+    async def _send_system_reply(
         self,
         reply_context: dict[str, Any],
+        *,
+        content: str,
+        email_subject: str,
     ) -> bool:
+        """Deliver a canned system message over the inbound reply channel.
+
+        Shared by the credit-gate reply and the slow-brain hard-failure
+        apology: routes plain text back over whichever medium the last
+        inbound message arrived on.
+        """
         medium = reply_context.get("medium")
         contact_id = reply_context.get("contact_id")
         tools = ConversationManagerBrainActionTools(self)
 
         if medium == Medium.UNIFY_MESSAGE.value:
             send_kwargs: dict[str, Any] = {
-                "content": DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                "content": content,
             }
             raw_group_id = reply_context.get("group_id")
             raw_team_id = reply_context.get("team_id")
@@ -1560,20 +1647,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
         elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
             await tools.send_sms(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
             await tools.send_whatsapp(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.EMAIL.value:
             email_id = reply_context.get("email_id")
             thread_id = reply_context.get("thread_id")
             if email_id:
                 await tools.send_email(
-                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    subject=email_subject,
+                    body=content,
                     reply_all=True,
                     email_id_to_reply_to=email_id,
                     thread_id=thread_id,
@@ -1581,21 +1668,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
             elif contact_id is not None:
                 await tools.send_email(
                     to=[contact_id],
-                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    subject=email_subject,
+                    body=content,
                 )
             else:
                 return False
         elif medium == Medium.API_MESSAGE.value:
             await tools.send_api_response(
                 contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tags=reply_context.get("tags"),
             )
         elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
             await tools.send_discord_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
             "channel_id",
@@ -1604,12 +1691,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 channel_id=reply_context["channel_id"],
                 guild_id=reply_context.get("guild_id") or "",
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
             await tools.send_slack_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 team_id=reply_context.get("team_id") or "",
                 thread_ts=reply_context.get("thread_ts"),
             )
@@ -1621,12 +1708,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 team_id=reply_context.get("team_id") or "",
                 thread_ts=reply_context.get("thread_ts"),
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
             await tools.send_teams_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 chat_id=reply_context.get("chat_id"),
             )
         elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
@@ -1634,7 +1721,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_teams_message(
                 contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 channel_id=reply_context.get("channel_id"),
                 team_id=reply_context.get("team_id"),
             )
@@ -1645,7 +1732,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_ms_teams_bot_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tenant_id=reply_context["tenant_id"],
                 conversation_id=reply_context["conversation_id"],
             )
@@ -1656,7 +1743,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_ms_teams_bot_channel_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tenant_id=reply_context["tenant_id"],
                 conversation_id=reply_context["conversation_id"],
             )
@@ -1664,6 +1751,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return False
 
         return True
+
+    async def _send_credit_gate_reply(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        return await self._send_system_reply(
+            reply_context,
+            content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            email_subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+        )
 
     async def _maybe_handle_depleted_credit_gate(
         self,
@@ -2430,6 +2527,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 )
                 self._session_logger.info("wait", msg)
                 if delay is not None:
+                    delay = self._clamp_wait_poll_delay(delay)
                     await self.run_llm(delay=delay)
                 break
 
