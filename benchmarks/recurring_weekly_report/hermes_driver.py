@@ -212,6 +212,75 @@ def _load_cron_jobs(hermes_home: Path) -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
+def defuse_hermes_artifacts(hermes_home: Path) -> list[str]:
+    """Neutralize live machinery the hermes agent may have left behind.
+
+    The agent can legitimately create recurring cron jobs, spawn a gateway
+    process to tick them, and (observed in the drift_recovery operator-fix
+    session) even install a persistent launchd service — all pointed at the
+    throwaway HERMES_HOME. Results directories must be inert artifacts, so
+    after a run: disable every cron job in the profile, kill any gateway
+    process whose environment binds this home, and remove launchd agents
+    that reference it. Returns a log of actions taken.
+    """
+    import plistlib
+    import signal
+    import subprocess
+
+    actions: list[str] = []
+    jobs_file = hermes_home / "cron" / "jobs.json"
+    if jobs_file.exists():
+        data = json.loads(jobs_file.read_text(encoding="utf-8"))
+        jobs = data.get("jobs") if isinstance(data, dict) else data
+        for job in jobs or []:
+            if job.get("enabled"):
+                job["enabled"] = False
+                job["state"] = "paused"
+                job["paused_reason"] = "benchmark artifact - defused post-run"
+                actions.append(f"disabled cron job {job.get('id')}")
+        jobs_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    home_str = str(hermes_home)
+    try:
+        pids = subprocess.run(
+            ["pgrep", "-f", "hermes_cli.main gateway"],
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+    except Exception:
+        pids = []
+    for pid in pids:
+        try:
+            env_dump = subprocess.run(
+                ["ps", "eww", pid],
+                capture_output=True,
+                text=True,
+            ).stdout
+            if home_str in env_dump:
+                os.kill(int(pid), signal.SIGTERM)
+                actions.append(f"killed gateway pid {pid}")
+        except Exception:
+            continue
+
+    launch_agents = Path.home() / "Library" / "LaunchAgents"
+    if launch_agents.is_dir():
+        for plist_path in launch_agents.glob("*hermes*.plist"):
+            try:
+                if home_str not in plist_path.read_text(errors="replace"):
+                    continue
+                label = plistlib.loads(plist_path.read_bytes()).get("Label")
+                if label:
+                    subprocess.run(
+                        ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
+                        capture_output=True,
+                    )
+                plist_path.unlink()
+                actions.append(f"removed launch agent {plist_path.name}")
+            except Exception:
+                continue
+    return actions
+
+
 def _snapshot_profile_artifacts(hermes_home: Path) -> dict[str, Any]:
     """Record what the agent persisted: cron jobs, skills, scripts."""
     artifacts: dict[str, Any] = {"cron_jobs": _load_cron_jobs(hermes_home)}
@@ -349,6 +418,7 @@ def main() -> int:
         )
 
     results["profile_final"] = _snapshot_profile_artifacts(hermes_home)
+    results["defuse_actions"] = defuse_hermes_artifacts(hermes_home)
     _finalize(results, ledger, results_dir, fixture, proxy)
     return 0
 

@@ -40,6 +40,7 @@ from benchmarks.drift_recovery.protocol import (  # noqa: E402
 )
 from benchmarks.recurring_weekly_report.hermes_driver import (  # noqa: E402
     BENCH_MODEL,
+    defuse_hermes_artifacts,
     CONFIG_TEMPLATE,
     HERMES_REPO,
     PhaseLedger,
@@ -199,6 +200,7 @@ def main() -> int:
         )
 
     results["profile_final"] = _snapshot_profile_artifacts(hermes_home)
+    results["defuse_actions"] = defuse_hermes_artifacts(hermes_home)
     _finalize(results, ledger, results_dir, fixture, proxy)
     return 0
 
