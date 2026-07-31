@@ -16,6 +16,8 @@ import types
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Mapping
 
+from unify.common.custom_sync import CustomSyncPartialFailure
+
 from .dependency_analysis import collect_dependencies_from_source
 
 from .custom import CustomFunctionMetadata
@@ -32,7 +34,7 @@ class CustomFunctionCollectError(RuntimeError):
     """
 
 
-class CustomFunctionSyncPartialFailure(RuntimeError):
+class CustomFunctionSyncPartialFailure(CustomSyncPartialFailure):
     """Raised after a custom-function sync where one or more names failed.
 
     Successful names are still written. The aggregate custom-functions hash is
@@ -42,9 +44,7 @@ class CustomFunctionSyncPartialFailure(RuntimeError):
     """
 
     def __init__(self, failures: Mapping[str, BaseException]) -> None:
-        self.failures = dict(failures)
-        names = ", ".join(sorted(self.failures))
-        super().__init__(f"Custom function sync partially failed for: {names}")
+        super().__init__("functions", failures)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -93,6 +93,7 @@ def collect_custom_venvs(
 
         venvs[name] = {
             "name": name,
+            "custom_key": name,
             "venv": content,
             "custom_hash": custom_hash,
         }
@@ -350,6 +351,7 @@ def collect_custom_functions(
 
         functions[name] = {
             "name": name,
+            "custom_key": name,
             "argspec": argspec,
             "docstring": docstring,
             "implementation": implementation,

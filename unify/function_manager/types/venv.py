@@ -34,6 +34,13 @@ class VirtualEnv(AuthoredRow):
         ),
         json_schema_extra={"ui_editable": True},
     )
+    custom_key: Optional[str] = Field(
+        None,
+        description=(
+            "Stable sync identity of a source-defined custom venv. "
+            "Defined to equal the venv name. None for user-added venvs."
+        ),
+    )
     custom_hash: Optional[str] = Field(
         None,
         description=(

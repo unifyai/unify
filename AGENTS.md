@@ -345,6 +345,58 @@ Skip heavy uploads on cancel (`if: success() || failure()`); keep a short
 - Cancel-latency smoke (A–E): Flow Smoke dispatch with
   `confirm_llm_spend=CANCEL_SMOKE_OK` / `scripts/dev/run_cancel_smoke.sh`
 
+# Custom Source Sync: one engine, one identity contract
+
+All git-tracked source definitions (tasks, functions, venvs, guidance,
+knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+integration registry) reconcile through the shared engine in
+`unify/common/custom_sync.py`. Full contract:
+[`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).
+
+## Invariants
+
+- A deployment-owned row has `custom_key` **and** `custom_hash`; rows
+  authored by users/actors have neither. `custom_key` is the identity;
+  auto-counted ids (`task_id`, `function_id`, …) are environment-local
+  handles that source code must never reference.
+- Each manager declares its key policy in ONE place (its `custom_*.py`
+  collector). Changing a key policy is an identity migration for every
+  deployment — plan it, never drive-by edit it.
+- Inserts write `custom_key`/`custom_hash` atomically with the row.
+  No create-then-stamp second write.
+- Two live managed rows with the same `custom_key` is an error the
+  engine raises (`CustomSyncDuplicateKeyError`) — never silently pick a
+  survivor.
+- Per-entry failures are isolated and re-raised as
+  `CustomSyncPartialFailure` after the pass; the aggregate hash is not
+  stored on partial failure so the next reconcile retries.
+- Every reconcile holds `exclusive_sync_lease` on the meta context.
+- Writers either persist the collected field dict wholesale, or consume
+  every field and raise on leftovers. A collector hashing a field the
+  writer drops caused live rows to pin themselves "up to date" with the
+  field unwritten (the task `tags` incident) — the leftover check exists
+  to make that class impossible.
+
+## Hard refuse
+
+- A new bespoke `sync_custom_*` diff loop, or "just this one" fork of
+  the engine's semantics inside a manager. Extend the engine instead.
+- Adding a field to a collector's hash without routing the same field
+  through the writer (and vice versa).
+- Stamping identity after insert, or hand-writing rows with a
+  `custom_key` outside the engine.
+- Changing a manager's key derivation (or making an optional source
+  `key` mandatory) without a migration plan for live rows in every
+  deployment.
+
+## Deviations are declared knobs, not forks
+
+`prune=False` (secrets), `collision="yield"` (secrets),
+`find_adoptable` (data seeds, integration registry, functions/venvs
+legacy rows), `should_update` (tasks: skip while running),
+`max_workers` (tasks). New deviations need a named knob on the adapter
+and a line in the writeup's table.
+
 This Unity project is for an AI Assistant, which is implemented as a heavily distributed multi-node system. Each node in the system communicates via English language based public APIs. The assistant's "brain" is then implemented a bit like a back office, where each manager deals with different aspects of the assistant's overall emergent intelligence. For the most part (with a few exceptions, such as `CodeActActor` and `ConversationManager`) the public methods of these managers are implemented as asynchronous tool loops, whereby a central LLM handles the English language request by orchestrating lower level tools which read and mutate the manager-specific backend resources (via the unify python client, which wraps the REST API connecting to the DB). These manager methods are dynamic, and expose handles for mid-flight steering, question answering, pausing, resuming and stopping etc. These manager methods are also often **nested**, whereby the public API of one manager is exposed in the tool set of a higher level manager. The async tool loops can also steer their inner in-flight tools, enabling fully nested dynamic steering of async tool loops up to an arbitrary depth. In terms of hierarchy, the `Actor` serves as the central intelligence, orchestrating other managers through code-first plans. Importantly, we never apply "fast paths" or heuristics based on regex or substring detection from user commands. If a method needs to respond correctly to a certain type of user input, this must **always** be addressed by prompting the model and/or improving docstrings of the exposed tools in order to **nudge** the LLM in the right direction.
 
 # Full Local Stack First
