@@ -3225,6 +3225,57 @@ def build_ask_handle_prompt(
     return parts
 
 
+_MEET_PLATFORM_NAMES = {
+    "google_meet": ("Google Meet", "Google Meet call"),
+    "teams_meet": ("Microsoft Teams", "Microsoft Teams meeting"),
+}
+
+
+def _meet_visual_context(channel: str) -> str:
+    """What the assistant can and cannot see in a browser meeting.
+
+    Framed as an evidence rule rather than a statement of fact, because this
+    prompt is built once when the call starts -- long before anyone shares
+    anything -- and is never rebuilt. A block that asserts "I can see the
+    meeting" is therefore wrong for most of every call, and it used to make the
+    fast brain answer "yes, I can see your screen" while holding no image at all,
+    seconds before the slow brain correctly said it could not see one.
+
+    The label is interpolated from the emitter's own constant, never restated:
+    the model is told to look for exactly the string that will arrive.
+    """
+
+    from unify.conversation_manager.cm_types.screenshot import visual_source_label
+
+    platform, call_description = _MEET_PLATFORM_NAMES[channel]
+    label = visual_source_label(channel)
+
+    return f"""{platform} visual context
+--------------------------
+I am in a {call_description} joined through an automated browser. I have no
+camera view of the room: I cannot see participants' faces, video tiles, the
+{platform} chat panel, or the meeting controls. The one thing I can ever see is a
+screen somebody chooses to share.
+
+When a participant shares their screen, an image arrives in my context labelled:
+- `{label}` — the sharer's own machine. The label may carry
+  `-- SHARED BY <name>`, which tells me whose screen it is.
+
+**I can only see what is actually attached.** If there is no such image in my
+context, then nobody is sharing and I cannot see anything — I say so plainly
+instead of guessing. Being in the meeting is not the same as seeing it, and I
+never claim to see a screen on the strength of being on the call.
+
+If someone asks whether I can see their screen, I do not answer it myself: I keep
+my reply contentless and let the considered reply speak, because it is the one
+that actually reads the image. Claiming either way and being corrected a moment
+later is worse than a brief pause.
+
+Shared-screen images refresh every second or so while a share is live. They are
+background context — I do not narrate what I see unless asked, or unless it is
+directly relevant to what we are discussing."""
+
+
 def build_voice_agent_prompt(
     *,
     bio: str,
@@ -3249,13 +3300,16 @@ def build_voice_agent_prompt(
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
 ) -> PromptParts:
-    """Build the system prompt that seeds the Voice Agent's opening greeting.
+    """Build the Voice Agent's system prompt for the whole call.
 
-    The fast brain no longer composes substantive replies (on user turns it only
-    emits a short filler phrase via the buffer selector; the slow brain owns all
-    substantive speech). This prompt is used solely to seed the opening-greeting
-    sidecar, so it carries identity, caller context, opening guidance, and tone —
-    not the old reply-time data-handling rules.
+    The slow brain owns substantive speech; on user turns the fast brain emits
+    only a short filler phrase. But this is the fast brain's system prompt for
+    every one of those turns, not just the opening greeting -- what it claims here
+    is spoken aloud, first, before the considered reply lands.
+
+    Built **once**, at session setup, and never rebuilt. Nothing in it can
+    describe live state: anything that changes during a call (who is present, what
+    is on screen) has to arrive as context, not be asserted here.
 
     Parameters
     ----------
@@ -3627,45 +3681,8 @@ I use the user's screenshot only for deictic references — when they point at s
 Screenshots persist across turns for reference but their presence is not an instruction to speak or describe.""",
         )
 
-    if channel == "google_meet":
-        parts.add(
-            """Google Meet visual context
---------------------------
-I am in a Google Meet call joined via an automated browser. I receive periodic
-screenshots of the meeting tab, labeled:
-- `=== GOOGLE MEET (live view of the meeting) ===` — what the meeting looks
-  like right now: participant video tiles, any content being presented, chat
-  messages visible in the Meet UI, and meeting controls.
-
-I **can** see the meeting. When someone asks "can you see my screen?" or
-"can you see the meeting?", I confirm that I can — because the screenshot
-in my context IS the live meeting view. I use it to observe who is present,
-what is being presented or shared, and any visual cues from participants.
-
-Screenshots update every few seconds. They are background context — I do not
-narrate what I see unless asked or unless it is directly relevant to the
-conversation.""",
-        )
-
-    if channel == "teams_meet":
-        parts.add(
-            """Microsoft Teams visual context
------------------------------
-I am in a Microsoft Teams meeting joined via an automated browser. I receive
-periodic screenshots of the meeting tab, labeled:
-- `=== TEAMS MEETING (live view of the meeting) ===` — what the meeting looks
-  like right now: participant video tiles, any content being presented, chat
-  messages visible in the Teams UI, and meeting controls.
-
-I **can** see the meeting. When someone asks "can you see my screen?" or
-"can you see the meeting?", I confirm that I can — because the screenshot
-in my context IS the live meeting view. I use it to observe who is present,
-what is being presented or shared, and any visual cues from participants.
-
-Screenshots update every few seconds. They are background context — I do not
-narrate what I see unless asked or unless it is directly relevant to the
-conversation.""",
-        )
+    if channel in ("google_meet", "teams_meet"):
+        parts.add(_meet_visual_context(channel))
 
     # Participant comms: on all calls (not just boss)
     parts.add(

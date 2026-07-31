@@ -1083,6 +1083,26 @@ class ConversationManagerBrainActionTools:
         """
         result = await self._cm.call_manager.send_meet_chat(message)
         if result:
+            # Recorded only on success, so a failed post cannot leave a reply in
+            # the transcript that no participant ever saw.
+            from unify.conversation_manager.events import (
+                GoogleMeetChatSent,
+                TeamsMeetChatSent,
+            )
+
+            sent_cls = (
+                TeamsMeetChatSent
+                if self._cm.call_manager.has_active_teams_meet
+                else GoogleMeetChatSent
+            )
+            boss = (
+                self._cm.contact_index.get_contact(
+                    contact_id=SESSION_DETAILS.boss_contact_id,
+                )
+                or {}
+            )
+            sent = sent_cls(contact=boss, content=message)
+            await self._event_broker.publish(sent.topic, sent.to_json())
             return {"status": "ok", "message": "Posted to the meeting chat."}
         return {
             "status": "error",

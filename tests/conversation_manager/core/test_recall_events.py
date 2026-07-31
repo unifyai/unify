@@ -11,9 +11,13 @@ like too.
 from unify.conversation_manager.domains.recall.events import (
     EVENT_CHAT_MESSAGE,
     EVENT_JOIN,
+    EVENT_SCREENSHARE_ON,
     EVENT_SPEECH_ON,
+    EVENT_VIDEO_FRAME,
     ROSTER_EVENTS,
+    SCREENSHARE_EVENTS,
     SUBSCRIBED_EVENTS,
+    VIDEO_FRAME_TYPE_SCREENSHARE,
     parse_relayed_event,
     participant_from_payload,
 )
@@ -128,3 +132,37 @@ def test_roster_events_are_the_ones_that_change_who_is_present():
     assert EVENT_JOIN in ROSTER_EVENTS
     assert EVENT_SPEECH_ON not in ROSTER_EVENTS
     assert ROSTER_EVENTS <= set(SUBSCRIBED_EVENTS)
+
+
+def test_screenshare_transitions_are_subscribed():
+    """A bot that is not told to send these never reports a share at all.
+
+    They are also what ends one: without ``screenshare_off`` the assistant keeps
+    describing a screen nobody is showing any more.
+    """
+    assert SCREENSHARE_EVENTS <= set(SUBSCRIBED_EVENTS)
+
+
+def test_a_screenshare_transition_names_its_presenter():
+    """Frames are stored per presenter, so the id is what orders them."""
+    event = parse_relayed_event(
+        _frame(EVENT_SCREENSHARE_ON, {"id": 7, "name": "Ada", "is_host": False}),
+    )
+    assert event is not None
+    assert event.name == EVENT_SCREENSHARE_ON
+    assert event.participant is not None
+    # Normalised: the same person arrives as 7 here and "7" over REST.
+    assert event.participant.id == "7"
+    assert event.participant.name == "Ada"
+
+
+def test_video_frames_are_not_a_participant_event():
+    """They are handled by the relay, not forwarded, so they need their own name.
+
+    Screenshare and webcam frames share this one event and are told apart only by
+    ``type`` -- naming the discriminator here is what stops a consumer treating a
+    face as a shared screen.
+    """
+    assert EVENT_VIDEO_FRAME not in SUBSCRIBED_EVENTS
+    assert EVENT_VIDEO_FRAME.startswith("video_separate")
+    assert VIDEO_FRAME_TYPE_SCREENSHARE == "screenshare"

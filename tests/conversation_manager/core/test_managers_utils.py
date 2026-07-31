@@ -24,6 +24,7 @@ from unify.conversation_manager.events import (
     SyncContacts,
     EmailReceived,
     EmailSent,
+    GoogleMeetChatMessage,
     InboundUnifyMeetUtterance,
     OutboundUnifyMeetUtterance,
     InboundPhoneUtterance,
@@ -243,6 +244,45 @@ async def test_log_message_unify_meet_expands_receiver_ids_from_roster(
     assert out_logged.receiver_ids == [2, 3, 4]
     assert in_logged.sender_id == 2
     assert in_logged.receiver_ids == [3, 4, 10]
+
+
+@pytest.mark.asyncio
+async def test_log_message_tags_browser_meet_chat_and_shares_the_exchange(
+    monkeypatch,
+):
+    """A typed line joins the meeting's exchange, tagged apart from speech.
+
+    Same exchange because it is the same conversation -- the medium resolves the
+    id, so chat needs no plumbing of its own. Tagged because a reader otherwise
+    cannot tell it from something said out loud, and Console keys the chat
+    rendering off it.
+    """
+    monkeypatch.setattr(managers_utils.SESSION_DETAILS, "self_contact_id", 10)
+    cm = _make_cm_for_log_message()
+    cm.contact_index.get_contact = MagicMock(
+        return_value={"contact_id": 2, "first_name": "Ada", "surname": "Owner"},
+    )
+    cm.call_manager.google_meet_exchange_id = 91
+
+    event = GoogleMeetChatMessage(
+        contact={"contact_id": 2, "first_name": "Ada", "surname": "Owner"},
+        sender_name="Ada Owner",
+        content="here is the doc",
+    )
+
+    with patch.object(
+        managers_utils,
+        "event_broker",
+        new=MagicMock(publish=AsyncMock()),
+    ):
+        await managers_utils.log_message(cm, event)
+
+    logged = cm.transcript_manager._sim_messages[-1]
+    assert logged.metadata["kind"] == "chat"
+    assert logged.exchange_id == 91
+    # Inbound: the participant speaks to the assistant, not the reverse.
+    assert logged.sender_id == 2
+    assert logged.receiver_ids == [10]
 
 
 @pytest.mark.asyncio
