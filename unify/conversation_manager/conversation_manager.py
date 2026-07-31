@@ -289,6 +289,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # send durably completes the step. Lost on restart on purpose — the
         # row stays re-clickable, so a tool can never be permanently masked.
         self._onboarding_clicked_trigger_steps: set[str] = set()
+        # Armed only inside the learning-demo chip-click -> step-complete
+        # window (learning_beat_requested .. learn-from-correction
+        # step_completed / session restart). Gates the StorageCheck-completion
+        # wake in event_handlers.py's ActorNotification handler so storage
+        # completing after every act does not wake the brain product-wide.
+        self._learning_demo_storage_wake_armed: bool = False
         # Static, deployment-gated onboarding catalog (phases + steps + copy),
         # fetched once from Orchestra's canonical source of truth and reused for
         # every prompt build so console_ui never re-declares onboarding copy.
@@ -3176,6 +3182,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def clear_onboarding_clicked_trigger_steps(self) -> None:
         """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
         self._onboarding_clicked_trigger_steps.clear()
+
+    @property
+    def learning_demo_storage_wake_armed(self) -> bool:
+        """Whether a StorageCheck-completion notification should wake the brain.
+
+        Armed on ``learning_beat_requested``, cleared on the
+        ``learn-from-correction`` step completing or on a fresh
+        ``onboarding_session_started`` — so an abandoned demo can't leave
+        the wake armed across sessions.
+        """
+        return self._learning_demo_storage_wake_armed
+
+    def set_learning_demo_storage_wake_armed(self, armed: bool) -> None:
+        self._learning_demo_storage_wake_armed = armed
 
     def active_pending_onboarding_outbound(self) -> dict[str, Any] | None:
         """Return armed onboarding outbound metadata, or None if unset or expired."""

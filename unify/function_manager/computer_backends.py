@@ -1075,6 +1075,12 @@ class ComputerBackend(_LowLevelActionsMixin, ABC):
     async def resume(self) -> None:
         """Resume a paused agent's action loop."""
 
+    def clear_session(self, mode: str) -> None:
+        """Drop any cached session so the next ``get_session`` re-creates it.
+
+        No-op for backends without a session cache.
+        """
+
 
 # A valid 32x32 white PNG image encoded as base64 - used as default mock screenshot
 # This ensures screenshot values don't cause "invalid image format" errors when sent to LLMs
