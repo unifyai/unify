@@ -912,27 +912,19 @@ class ScreenshotHistory:
         for entry, _ in self._entries:
             latest_by_source[entry.source] = entry
 
-        # Inner text only; the ``===`` fencing is applied below so an attribution
-        # can be appended without slicing it back off.
-        source_labels = {
-            "assistant": "YOUR SCREEN (this is what YOUR machine currently shows)",
-            "user": "USER'S SCREEN (this is THEIR machine, not yours)",
-            "webcam": "USER'S WEBCAM",
-            "google_meet": "SCREEN SHARED IN GOOGLE MEET (a participant's machine, not yours)",
-            "teams_meet": "SCREEN SHARED IN TEAMS MEETING (a participant's machine, not yours)",
-        }
+        from unify.conversation_manager.cm_types.screenshot import (
+            VISUAL_SOURCE_ORDER,
+            visual_source_label,
+        )
 
         parts: list = []
-        for source in ("assistant", "user", "webcam", "google_meet", "teams_meet"):
+        for source in VISUAL_SOURCE_ORDER:
             entry = latest_by_source.get(source)
             if entry is None:
                 continue
-            label = source_labels.get(source, "SCREENSHOT")
-            if entry.attribution:
-                # Named, because in a meeting "whose screen is this" is the first
-                # thing the answer depends on.
-                label = f"{label} -- SHARED BY {entry.attribution}"
-            parts.append(f"=== {label} ===")
+            # Shared with the voice-agent prompt, which tells the model to look
+            # for this exact string.
+            parts.append(visual_source_label(source, entry.attribution))
             parts.append(
                 ImageContent(image=f"data:image/jpeg;base64,{entry.b64}"),
             )
