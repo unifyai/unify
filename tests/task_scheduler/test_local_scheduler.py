@@ -600,10 +600,6 @@ class TestTaskDueFromSnapshot:
             wake="scheduled",
             delivery="live",
             task_name="Weekly Status",
-            task_description=(
-                "Send Monday morning status report to the team — "
-                "summarise Friday's progress."
-            ),
             scheduled_for="2030-04-10T09:00:00+00:00",
             revision="rev-abc",
         )
@@ -617,13 +613,12 @@ class TestTaskDueFromSnapshot:
         assert event.scheduled_for == "2030-04-10T09:00:00+00:00"
         assert event.wake == "scheduled"
         assert event.task_label == "Weekly Status"
-        assert event.task_summary.startswith("Send Monday morning")
-        assert len(event.task_summary) <= 220
+        assert event.task_summary == "Weekly Status"
         assert event.visibility_policy == "silent_by_default"
         assert event.recurrence_hint == "one_off"
         assert "Weekly Status" in event.reason
 
-    def test_recurring_hint_set_when_repeat_present(self):
+    def test_recurring_hint_set_when_definition_repeats(self):
         from unify.task_scheduler.local_scheduler.scheduler import (
             _task_due_from_snapshot,
         )
@@ -632,7 +627,7 @@ class TestTaskDueFromSnapshot:
         snap = TaskExecutionSnapshot(
             **{
                 **{k: getattr(snap, k) for k in snap.__dataclass_fields__.keys()},
-                "repeat": [{"frequency": "weekly", "interval": 1}],
+                "recurring": True,
             },
         )
 

@@ -168,11 +168,16 @@ async def _start_live_task_due_execution(
         f"Scheduled task due now: '{_task_due_label(event, activation)}' "
         f"(task_id={event.task_id})."
     )
+    task_description: str | None = None
+    try:
+        task_description = scheduler._get_task_or_raise(event.task_id).description
+    except ValueError:
+        task_description = None
     return await _register_live_task_handle(
         cm,
         handle=handle,
         query=query,
-        task_description=activation.task_description,
+        task_description=task_description,
     )
 
 
@@ -310,15 +315,7 @@ def _task_due_summary(
     """Return one compact summary for one due-task wake."""
 
     label = _task_due_label(event, activation)
-    activation_description = (
-        activation.task_description
-        if activation and activation.task_description
-        else ""
-    )
-    return _compact_task_text(
-        event.task_summary or activation_description,
-        fallback=label,
-    )
+    return _compact_task_text(event.task_summary or None, fallback=label)
 
 
 def _task_due_recurrence_hint(
@@ -327,7 +324,7 @@ def _task_due_recurrence_hint(
 ) -> str:
     """Return whether the due task should be treated as recurring or one-off."""
 
-    if activation and isinstance(activation.repeat, list) and activation.repeat:
+    if activation and activation.recurring:
         return "recurring"
     return event.recurrence_hint or "one_off"
 
@@ -420,7 +417,7 @@ def _activation_summary(candidate: TaskExecutionSnapshot) -> str:
     """Return one compact summary for a trigger candidate."""
 
     label = _activation_label(candidate)
-    return _compact_task_text(candidate.task_description, fallback=label)
+    return _compact_task_text(None, fallback=label)
 
 
 def _describe_trigger_candidate(candidate: TaskExecutionSnapshot) -> str:

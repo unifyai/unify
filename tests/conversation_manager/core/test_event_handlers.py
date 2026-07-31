@@ -20,6 +20,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from types import SimpleNamespace
+
 from tests.helpers import _handle_project
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
@@ -2815,7 +2817,6 @@ class TestTaskDueEventHandlers:
             source_task_log_id=555,
             revision="rev-1",
             task_name="Morning briefing",
-            task_description="Deliver the overnight briefing summary unprompted.",
         )
         mock_cm.actor = MagicMock()
         captured: dict[str, object] = {}
@@ -2828,6 +2829,11 @@ class TestTaskDueEventHandlers:
 
         fake_scheduler = MagicMock()
         fake_scheduler.execute = AsyncMock(side_effect=_execute)
+        fake_scheduler._get_task_or_raise = MagicMock(
+            return_value=SimpleNamespace(
+                description="Deliver the overnight briefing summary unprompted.",
+            ),
+        )
 
         async def _noop(*args, **kwargs):
             return None
@@ -2929,7 +2935,6 @@ class TestTaskDueEventHandlers:
             source_task_log_id=source_task_log_id,
             revision="rev-1",
             task_name="Scheduled integration report",
-            task_description="Prepare the scheduled report.",
         )
         mock_cm.actor = actor
 
@@ -2948,7 +2953,6 @@ class TestTaskDueEventHandlers:
                 revision="rev-1",
                 scheduled_for="2026-04-10T09:00:00+00:00",
                 task_name="Scheduled integration report",
-                task_description="Prepare the scheduled report.",
             ),
         )
         monkeypatch.setattr(
