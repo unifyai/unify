@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -50,6 +51,7 @@ _TASK_OUTBOUND_OPERATION_CREATE_OR_ADOPT_PATH = (
 )
 _TASK_OUTBOUND_OPERATION_UPDATE_PATH = "/task-outbound-operation/update"
 _TASK_RUN_HTTP_TIMEOUT_SECONDS = 15
+_TASK_RUN_HTTP_ATTEMPTS = 4
 _EXECUTION_QUERY_FIELDS = [
     "assistant_id",
     "destination",
@@ -1064,15 +1066,36 @@ def _orchestra_admin_post(
             "Skipping task-execution persistence because ORCHESTRA_URL or UNIFY_KEY is missing.",
         )
         return None
-    response = requests.post(
-        f"{orchestra_url}{path}",
-        json=dict(payload),
-        headers={"Authorization": f"Bearer {unify_key}"},
-        timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    body = response.json()
-    return body if isinstance(body, dict) else None
+    # Every payload on this path is idempotent — create-or-adopt converges on
+    # run_key / operation_key, and updates are keyed patches — so a transient
+    # failure is retried rather than surfaced. A single 500 here once ended a
+    # recurring series for good: the occurrence that failed to project was the
+    # only thing that would ever project its successor.
+    last_error: Exception | None = None
+    for attempt in range(_TASK_RUN_HTTP_ATTEMPTS):
+        if attempt:
+            time.sleep(2 ** (attempt - 1))
+        try:
+            response = requests.post(
+                f"{orchestra_url}{path}",
+                json=dict(payload),
+                headers={"Authorization": f"Bearer {unify_key}"},
+                timeout=_TASK_RUN_HTTP_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+        if response.status_code >= 500 or response.status_code == 429:
+            last_error = requests.HTTPError(
+                f"{response.status_code} from {path}",
+                response=response,
+            )
+            continue
+        response.raise_for_status()
+        body = response.json()
+        return body if isinstance(body, dict) else None
+    assert last_error is not None
+    raise last_error
 
 
 def _drop_none_values(payload: Mapping[str, Any]) -> dict[str, Any]:

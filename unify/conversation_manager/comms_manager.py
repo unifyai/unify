@@ -1020,6 +1020,7 @@ class CommsManager:
                     "is_coordinator": event.get("is_coordinator", False),
                     "is_multiplayer": event.get("is_multiplayer", False),
                     "update_kind": event.get("update_kind", "general"),
+                    "wake_reasons": event.get("wake_reasons") or [],
                 }
                 await publish(
                     "app:comms:assistant_update",

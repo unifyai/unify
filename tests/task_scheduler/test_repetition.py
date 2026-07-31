@@ -200,7 +200,7 @@ def _capture_projected_occurrences(monkeypatch) -> list[str]:
 
     projected: list[str] = []
     monkeypatch.setattr(
-        "unify.task_scheduler.task_scheduler.create_or_adopt_live_task_run",
+        "unify.task_scheduler.task_scheduler.project_task_occurrence",
         lambda provenance: projected.append(provenance.scheduled_for),
     )
     monkeypatch.setattr(

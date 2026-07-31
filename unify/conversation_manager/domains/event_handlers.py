@@ -3370,6 +3370,18 @@ async def _(event: AssistantUpdateEvent, cm: "ConversationManager", *args, **kwa
         cm._coordinator_state_checked_at = 0.0
         await cm._refresh_coordinator_onboarding_state()
 
+    # Updates can carry wake reasons too (e.g. the multiplayer flip's
+    # announcement for a pod that was already live). Replay through the
+    # same chain startup uses; when managers are still initializing the
+    # reasons queue up for the post-init replay instead.
+    if event.wake_reasons:
+        cm._startup_wake_reasons = [
+            *(getattr(cm, "_startup_wake_reasons", None) or []),
+            *event.wake_reasons,
+        ]
+        if cm.initialized:
+            await _consume_startup_wake_reasons(cm)
+
 
 @EventHandler.register(GetChatHistory)
 async def _(event: GetChatHistory, cm: "ConversationManager", *args, **kwargs):
