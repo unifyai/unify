@@ -2722,7 +2722,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
-        self.owner_team_id: int | None = payload.get("owner_team_id")
+        # Arrives as an int from the bootstrap secret's JSON, but coerce
+        # defensively: a string here would make team_owned truthy while every
+        # integer comparison downstream silently failed.
+        raw_owner_team_id = payload.get("owner_team_id")
+        try:
+            self.owner_team_id: int | None = (
+                int(raw_owner_team_id) if raw_owner_team_id not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            self.owner_team_id = None
         is_coordinator = bool(payload.get("is_coordinator", False))
         is_multiplayer = bool(payload.get("is_multiplayer", False))
         # Set API key on SESSION_DETAILS for runtime access
