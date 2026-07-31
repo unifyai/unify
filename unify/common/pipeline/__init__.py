@@ -67,6 +67,12 @@ from .run_ledger import (
     generate_run_ledger_path,
 )
 from .row_streaming import iter_table_input_row_batches, iter_table_input_rows
+from .run_journal import (
+    OBSERVABILITY_KEY,
+    NullJournal,
+    RunJournal,
+    journal_from_payload,
+)
 from .transport import build_table_handles, detect_csv_dialect
 from .types import (
     CONTENT_CHECKPOINT_ID,
@@ -102,6 +108,10 @@ from .work_queue import (
 # computed ``__all__``, so every re-export above reads as an unused import --
 # 80-odd false positives that bury real findings. Keep it alphabetical by hand.
 __all__ = [
+    "OBSERVABILITY_KEY",
+    "NullJournal",
+    "RunJournal",
+    "journal_from_payload",
     "ArtifactIngestFn",
     "ArtifactNotFound",
     "ArtifactStore",
