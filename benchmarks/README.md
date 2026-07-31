@@ -42,6 +42,7 @@ automations becomes measurable.
 | [`recurring_weekly_report`](recurring_weekly_report/) | complete | Weekly metrics digest from NL: setup cost, per-run cost over N simulated weeks, correctness, entrypoint-attach behavior |
 | [`drift_recovery`](drift_recovery/) | complete | After both systems converge, the API renames a field: cost + reliability of recovery (unify 10/10 autonomous; hermes needs a human) |
 | [`semantic_triage`](semantic_triage/) | complete | Recurring work with a judgment substep: steady-state per-fire cost (unify ~645 tokens via one `query_llm` call vs hermes ~21.5k via agent boot, both 100% accurate) |
+| [`policy_propagation`](policy_propagation/) | complete | One shared policy across three automations, one change request: both propagate 15/15; hermes's change is ~2.3× cheaper, unify's steady state ~23× cheaper (payback ~round 28); exposes the guidance-factoring gap |
 
 Planned follow-ons (see the experiment README for rationale): a
 high-frequency change-detection monitor (hermes's own documented blueprint),
