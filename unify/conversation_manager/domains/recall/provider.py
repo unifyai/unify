@@ -28,6 +28,7 @@ from unify.conversation_manager.domains.recall.client import (
     RecallClient,
     RecallError,
     RecallBotState,
+    meet_bridge_base_url,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class RecallMeetProvider:
         bridge_page_url: str | None = None,
         relay_url: str | None = None,
         assistant_id: str | int | None = None,
+        capture_participant_video: bool | None = None,
     ) -> None:
         self._client = client or RecallClient()
         self._bridge_page_url = (
@@ -73,6 +75,11 @@ class RecallMeetProvider:
         ).strip()
         self._relay_url = relay_url if relay_url is not None else _default_relay_url()
         self._assistant_id = str(assistant_id) if assistant_id is not None else ""
+        self._capture_participant_video = (
+            capture_participant_video
+            if capture_participant_video is not None
+            else _participant_video_enabled()
+        )
 
     async def preflight(self) -> str | None:
         # Nothing to wait for -- Recall is a hosted API, not a process that
@@ -112,6 +119,7 @@ class RecallMeetProvider:
                     "unify_room": room_name,
                     "unify_assistant_id": self._assistant_id,
                 },
+                capture_participant_video=self._capture_participant_video,
             )
         except RecallError as exc:
             LOGGER.error("[recall] %s join failed: %s", channel, exc)
@@ -217,20 +225,23 @@ class RecallMeetProvider:
         return f"{self._relay_url}{separator}{query}"
 
 
-def _default_relay_url() -> str:
-    """Derive the relay websocket from the bridge page's own host.
+def _participant_video_enabled() -> bool:
+    """Whether bots should stream per-participant video frames.
 
-    Both are served by comms, so one configured URL is enough and the two can
-    never drift onto different hosts.
+    On by default: an assistant that cannot see a shared screen is the failure
+    people notice, and the cost is a variant surcharge rather than anything
+    per-frame. The switch exists so a workspace can decline that surcharge
+    without giving up meetings altogether.
     """
 
-    page = (os.environ.get("MEET_BRIDGE_PAGE_URL") or "").strip()
-    if not page:
-        return ""
-    base = page.split("?", 1)[0]
-    if base.endswith("/bridge"):
-        base = base[: -len("/bridge")]
-    base = base.rstrip("/")
+    raw = (os.environ.get("RECALL_PARTICIPANT_VIDEO") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _default_relay_url() -> str:
+    """Derive the relay websocket from the bridge page's own host."""
+
+    base = meet_bridge_base_url()
     if base.startswith("https://"):
         return "wss://" + base[len("https://") :] + "/events"
     if base.startswith("http://"):

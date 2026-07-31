@@ -22,6 +22,7 @@ from typing import Any, Mapping
 import aiohttp
 
 from unify.conversation_manager.domains.recall.events import (
+    EVENT_VIDEO_FRAME,
     SUBSCRIBED_EVENTS,
     RecallParticipant,
     participant_from_payload,
@@ -44,6 +45,11 @@ DEFAULT_RECALL_REGION = "eu-central-1"
 # meeting itself, so it should either answer quickly or be retried by the
 # caller's own join flow.
 _REQUEST_TIMEOUT_S = 30.0
+
+# Bot variant with enough CPU for per-participant video. It buys headroom only:
+# camera and screenshare output stay 1280x720 at 15fps on every variant, and the
+# 360p/2fps of separate PNG video is fixed too.
+VARIANT_WEB_4_CORE = "web_4_core"
 
 # Seconds the bot waits after the last other participant leaves before it exits.
 # Recall's default is 2s; 5 rides out someone dropping and rejoining without
@@ -149,6 +155,23 @@ def recall_configured() -> bool:
     return bool((os.environ.get("RECALL_API_KEY") or "").strip())
 
 
+def meet_bridge_base_url() -> str:
+    """Root of the comms host serving the bridge page and its side channels.
+
+    The bridge page, the realtime event relay and the shared-screen store are
+    all served by comms, so one configured URL is enough and they can never
+    drift onto different hosts. Empty when unconfigured.
+    """
+
+    page = (os.environ.get("MEET_BRIDGE_PAGE_URL") or "").strip()
+    if not page:
+        return ""
+    base = page.split("?", 1)[0]
+    if base.endswith("/bridge"):
+        base = base[: -len("/bridge")]
+    return base.rstrip("/")
+
+
 class RecallClient:
     """Thin async client over the Recall bot API.
 
@@ -214,10 +237,26 @@ class RecallClient:
             },
         }
         if capture_participant_video:
-            # Separate per-participant video only arrives in gallery layout;
-            # without this the platform sends one composited stream and there is
-            # no screenshare track to pick out.
+            # Three keys, all load-bearing, and every one of them fails silently
+            # when omitted -- the bot joins and simply never sends a frame.
+            #
+            # Gallery layout: separate per-participant video only arrives in it;
+            # otherwise the platform sends one composited stream with no
+            # screenshare track to pick out.
             payload["recording_config"]["video_mixed_layout"] = "gallery_view_v2"
+            # The artifact block itself. It carries no options -- resolution and
+            # frame rate are fixed at 360p/2fps and cannot be requested -- but
+            # subscribing the event without declaring the artifact yields
+            # nothing.
+            payload["recording_config"]["video_separate_png"] = {}
+            # Recall's prose says separate participant video requires the
+            # four-core variant while their own PNG example omits it. Paying the
+            # surcharge (+$0.10/hr on plan) is the cheaper of the two mistakes:
+            # the other one is a meeting where the assistant is silently blind.
+            payload["variant"] = {
+                "google_meet": VARIANT_WEB_4_CORE,
+                "microsoft_teams": VARIANT_WEB_4_CORE,
+            }
         if metadata:
             payload["metadata"] = dict(metadata)
         if realtime_events_url:
@@ -227,11 +266,10 @@ class RecallClient:
             # indistinguishable from a relay that is down.
             events = list(SUBSCRIBED_EVENTS)
             if capture_participant_video:
-                # PNG rather than H264: 360p at 2fps needs no decoder and no
-                # web_4_core variant (+$0.10/hr), and H264 only reaches
-                # 200-1000px anyway -- too little extra to read a shared screen
-                # that PNG cannot, for materially more cost and complexity.
-                events.append("video_separate_png.data")
+                # PNG rather than H264: a still frame needs no decoder, and H264
+                # only reaches 200-1000px anyway -- too little extra to read a
+                # shared screen that PNG cannot, for materially more complexity.
+                events.append(EVENT_VIDEO_FRAME)
             payload["recording_config"]["realtime_endpoints"] = [
                 {
                     "type": "websocket",

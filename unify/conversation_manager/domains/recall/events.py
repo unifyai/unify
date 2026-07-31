@@ -27,10 +27,24 @@ EVENT_UPDATE = "participant_events.update"
 EVENT_SPEECH_ON = "participant_events.speech_on"
 EVENT_SPEECH_OFF = "participant_events.speech_off"
 EVENT_CHAT_MESSAGE = "participant_events.chat_message"
+EVENT_SCREENSHARE_ON = "participant_events.screenshare_on"
+EVENT_SCREENSHARE_OFF = "participant_events.screenshare_off"
+
+# Recall's per-participant video frames. Screenshare and webcam frames arrive
+# interleaved on this one event, told apart only by ``type`` -- there is no
+# screenshare-specific stream -- so a consumer that does not check it will
+# treat somebody's face as their shared screen.
+EVENT_VIDEO_FRAME = "video_separate_png.data"
+VIDEO_FRAME_TYPE_SCREENSHARE = "screenshare"
 
 # Events that change who is in the meeting. ``update`` is here because a rename
 # arrives as an update against an id already on the roster.
 ROSTER_EVENTS = frozenset({EVENT_JOIN, EVENT_LEAVE, EVENT_UPDATE})
+
+# Events that change who is presenting. Frames are useless without these: they
+# are what says a share has ended, and a frame slot left unattended keeps
+# showing the last thing somebody shared for the rest of the call.
+SCREENSHARE_EVENTS = frozenset({EVENT_SCREENSHARE_ON, EVENT_SCREENSHARE_OFF})
 
 # What a bot subscribes to at creation, in the order Recall is told them.
 #
@@ -44,6 +58,8 @@ SUBSCRIBED_EVENTS = (
     EVENT_SPEECH_ON,
     EVENT_SPEECH_OFF,
     EVENT_CHAT_MESSAGE,
+    EVENT_SCREENSHARE_ON,
+    EVENT_SCREENSHARE_OFF,
 )
 
 
