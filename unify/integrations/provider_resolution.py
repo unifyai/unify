@@ -7,6 +7,12 @@ from typing import Any, Mapping, Sequence
 
 PREFERRED_BACKEND_ORDER = ("composio", "pipedream")
 
+# Marks a connection as a workspace trigger facade (native_google/native_microsoft
+# rows presenting workspace OAuth credentials so provider-event triggers can bind
+# to them). Facades are trigger-only by design and must never register an app as
+# tool-connected or claim a tool-execution backend.
+WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE = "assistant_workspace_secrets"
+
 EXPLICIT_SLUG_ALIASES: dict[str, str] = {
     "microsoft_outlook": "outlook",
     "microsoft_outlook_calendar": "outlook",
