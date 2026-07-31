@@ -179,8 +179,29 @@ class ArtifactStore(Protocol):
         """
         ...
 
+    def put_bytes(self, key: str, data: bytes) -> str:
+        """Persist raw bytes under *key*, returning its storage URI.
+
+        Distinct from :meth:`put_json` because a source file is opaque: parsing
+        decides what it is, and round-tripping it through JSON would corrupt
+        anything that is not text. Used where bytes must reach the store through
+        a caller that cannot write to it directly.
+        """
+        ...
+
     def exists(self, key: str) -> bool:
         """Return ``True`` if an object exists at *key*."""
+        ...
+
+    def list_keys(self, prefix: str) -> list[str]:
+        """Every key under *prefix*, sorted.
+
+        On the port rather than on one backend because callers legitimately need
+        to ask what a job left behind -- which tables it checkpointed, what it
+        parked -- and cannot know the artifact ids in advance. A binding that
+        could not enumerate would force those callers into backend-specific
+        code, and the local binding would silently lose the ability to answer.
+        """
         ...
 
     def delete(self, key: str) -> None:
@@ -448,8 +469,38 @@ class LocalArtifactStore:
             raise ArtifactNotFound(f"Artifact not found: {key}")
         return json.loads(target.read_text(encoding="utf-8"))
 
+    def put_bytes(self, key: str, data: bytes) -> str:
+        target = self._key_path(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Replaced by rename so a reader never observes a partial file: a parse
+        # worker watching this directory must not open a half-written source.
+        tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+        return target.resolve().as_uri()
+
     def exists(self, key: str) -> bool:
         return self._key_path(key).exists()
+
+    def list_keys(self, prefix: str) -> list[str]:
+        root = self._key_path(prefix)
+        base = root if root.is_dir() else root.parent
+        if not base.exists():
+            return []
+        keys: list[str] = []
+        for path in base.rglob("*"):
+            if not path.is_file():
+                continue
+            # Lock files and generation sidecars are this backend's own
+            # bookkeeping, not objects a caller stored, so they are not keys.
+            if path.name.startswith(".") and (
+                path.name.endswith(".lock") or path.name.endswith(".gen")
+            ):
+                continue
+            key = str(path.relative_to(self.root_dir))
+            if key.startswith(prefix.lstrip("/")):
+                keys.append(key)
+        return sorted(keys)
 
     def delete(self, key: str) -> None:
         target = self._key_path(key)
