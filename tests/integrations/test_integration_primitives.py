@@ -152,14 +152,27 @@ def stub_materialized_tool(monkeypatch, *, name: str, tool_id: str) -> None:
     monkeypatch.setattr("unisdk.get_logs", fake_get_logs)
 
 
-def stub_materialized_app(monkeypatch, *, app_slug: str, names: list[str]) -> None:
+def stub_materialized_app(
+    monkeypatch,
+    *,
+    app_slug: str,
+    names: list[str],
+    backend_id: str | None = None,
+) -> None:
     monkeypatch.setattr("unisdk.get_active_context", lambda: {"read": "user-1/42"})
+    base_filter = (
+        'metadata["source"] == "provider_backed" '
+        f'and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}'
+    )
+    expected_filter = (
+        f"({base_filter}) and "
+        f'metadata["integration"]["backend_id"] == {json.dumps(backend_id)}'
+        if backend_id
+        else base_filter
+    )
 
     def fake_get_logs(**kwargs):
-        if kwargs.get("filter") == (
-            'metadata["source"] == "provider_backed" '
-            f'and metadata["integration"]["app_slug"] == {json.dumps(app_slug)}'
-        ):
+        if kwargs.get("filter") == expected_filter:
             return [
                 SimpleNamespace(
                     entries={
@@ -668,6 +681,8 @@ async def test_search_integrations_reports_connection_and_materialization_status
         "supported": True,
         "deployment_status": "global_catalog",
         "connection_status": "connected",
+        "tools_available": True,
+        "trigger_support": "not_connected",
         "connection_id": "conn-1",
         "external_account_label": "Sales Hub",
         "connections": [
@@ -677,6 +692,8 @@ async def test_search_integrations_reports_connection_and_materialization_status
                 "external_account_label": "Sales Hub",
                 "backend_id": None,
                 "provider_connection_id": None,
+                "granted_scopes": None,
+                "trigger_only": False,
             },
         ],
         "account_count": 1,
@@ -806,6 +823,130 @@ async def test_search_integrations_allows_omitted_query(monkeypatch) -> None:
             {"owner_scope": "assistant"},
         ),
     ]
+
+
+@pytest.mark.anyio
+async def test_search_integrations_facade_only_app_reports_tools_unavailable(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationClient()
+    client.app_results = [
+        {
+            "canonical_app_slug": "google_meet",
+            "display_name": "Google Meet",
+            "supported": True,
+            "auth_modes": ["oauth"],
+            "tool_count": 3,
+            "score": 95.0,
+            "match_reason": "exact app match",
+        },
+    ]
+    client.list_connections = lambda **scope: [
+        {
+            "connection_id": "conn-facade-1",
+            "canonical_app_slug": "google_meet",
+            "status": "connected",
+            "backend_id": "native_google",
+            "credential_storage": "assistant_workspace_secrets",
+            "granted_scopes": ["calendar.events"],
+        },
+    ]
+    patch_ops_from_client(monkeypatch, client)
+    monkeypatch.setattr(
+        "unify.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
+    primitives = IntegrationPrimitives(owner_scope={})
+
+    result = await primitives.search_integrations("google meet")
+
+    item = result["results"][0]
+    assert item["connection_status"] == "connected"
+    assert item["tools_available"] is False
+    assert item["trigger_support"] == "connected"
+    assert item["connection_id"] is None
+    assert item["sync_status"] not in ("not_yet_synced",)
+    assert item["sync_status"] == "tools_not_connected"
+    assert "Composio/Pipedream" in item["next_action"]
+    assert item["connections"] == [
+        {
+            "connection_id": "conn-facade-1",
+            "status": "connected",
+            "external_account_label": None,
+            "backend_id": "native_google",
+            "provider_connection_id": None,
+            "granted_scopes": ["calendar.events"],
+            "trigger_only": True,
+        },
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_integrations_facade_and_composio_app_derives_tool_fields_from_composio(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationClient()
+    client.app_results = [
+        {
+            "canonical_app_slug": "google_meet",
+            "display_name": "Google Meet",
+            "supported": True,
+            "auth_modes": ["oauth"],
+            "tool_count": 3,
+            "score": 95.0,
+            "match_reason": "exact app match",
+        },
+    ]
+    client.list_connections = lambda **scope: [
+        {
+            "connection_id": "conn-facade-1",
+            "canonical_app_slug": "google_meet",
+            "status": "connected",
+            "backend_id": "native_google",
+            "credential_storage": "assistant_workspace_secrets",
+            "granted_scopes": ["calendar.events"],
+        },
+        {
+            "connection_id": "conn-composio-1",
+            "canonical_app_slug": "google_meet",
+            "status": "connected",
+            "backend_id": "composio",
+            "external_account_label": "Work Meet",
+            "granted_scopes": ["meetings.read"],
+        },
+    ]
+    patch_ops_from_client(monkeypatch, client)
+    monkeypatch.setattr(
+        "unify.integrations.primitives.list_catalog_apps",
+        lambda **_kwargs: list(client.app_results),
+    )
+    stub_materialized_app(
+        monkeypatch,
+        app_slug="google_meet",
+        names=["primitives.integrations.google_meet.list_meetings"],
+        backend_id="composio",
+    )
+    primitives = IntegrationPrimitives(owner_scope={})
+
+    result = await primitives.search_integrations("google meet")
+
+    item = result["results"][0]
+    assert item["connection_status"] == "connected"
+    assert item["tools_available"] is True
+    assert item["trigger_support"] == "connected"
+    assert item["connection_id"] == "conn-composio-1"
+    assert item["external_account_label"] == "Work Meet"
+    assert item["sync_status"] == "materialized"
+    assert item["materialized_tool_count"] == 1
+    trigger_entry = next(
+        row for row in item["connections"] if row["connection_id"] == "conn-facade-1"
+    )
+    assert trigger_entry["trigger_only"] is True
+    tool_entry = next(
+        row for row in item["connections"] if row["connection_id"] == "conn-composio-1"
+    )
+    assert tool_entry["trigger_only"] is False
+    assert tool_entry["granted_scopes"] == ["meetings.read"]
 
 
 def test_integration_primitives_expose_discovery_and_permission_tools() -> None:
