@@ -45,6 +45,12 @@ def bootstrap_assistant_substrate(
     from unify.common.runtime_context import bind_runtime_context_root
     from unify.session_details import SESSION_DETAILS
 
+    # Ownership is derived from the platform record, not trusted from the
+    # launcher, and it must be bound before the context root is: the root
+    # resolution below is exactly what routes shared-scoped storage to
+    # Teams/{owner} versus the personal tree.
+    SESSION_DETAILS.bind_derived_ownership()
+
     bind_runtime_context_root(skip_create=True, strict=True)
 
     if prepare_workspace:
