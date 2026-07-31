@@ -3691,17 +3691,31 @@ async def _(event: ActorNotification, cm: "ConversationManager", *args, **kwargs
 
     The fast brain receives actor progress via ``_render_boss_notifications``
     and the ``NotificationReplyEvaluator`` decides whether to speak.
-    """
-    if event.handle_id in cm.in_flight_actions:
-        from unify.common.prompt_helpers import now as prompt_now
 
-        cm.in_flight_actions[event.handle_id]["handle_actions"].append(
-            {
-                "action_name": "progress",
-                "query": event.response,
-                "timestamp": prompt_now(),
-            },
-        )
+    A notification can also arrive *late* -- after the handle has already
+    moved from ``in_flight_actions`` to ``completed_actions`` (e.g. the
+    StorageCheck phase finishing well after ``ActorResult`` resolved the
+    action). Record those too instead of silently dropping them, so the
+    handle's history reflects everything that actually happened.
+    """
+    from unify.common.prompt_helpers import now as prompt_now
+
+    entry = {
+        "action_name": "progress",
+        "query": event.response,
+        "timestamp": prompt_now(),
+    }
+    action_data = cm.in_flight_actions.get(event.handle_id) or cm.completed_actions.get(
+        event.handle_id,
+    )
+    if action_data and "handle_actions" in action_data:
+        action_data["handle_actions"].append(entry)
+
+    # ponytail: single-consumer wake gate. If a second consumer needs to
+    # react to a distinct notification `kind`, upgrade this to a dedicated
+    # event class instead of growing this branch.
+    if event.kind == "storage_review_complete" and cm.learning_demo_storage_wake_armed:
+        await cm.request_llm_run()
 
 
 @EventHandler.register(ComputerActCompleted)
