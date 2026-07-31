@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="860" height="664" viewBox="0 0 860 664" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
 <rect width="860" height="664" fill="#fcfcfb"/>
 <text x="84" y="26" fill="#1a1a19" font-size="17" font-weight="700">One policy, three automations, one change request: cost to run and to change</text>
-<text x="84" y="44" fill="#6f6e6a" font-size="12">gpt-5.6-sol via OpenRouter · correctness 15/15 vs 15/15 · every post-change fire honored the new threshold</text>
+<text x="84" y="44" fill="#6f6e6a" font-size="12">gpt-5.6-sol via OpenRouter · correctness 15/15 vs 15/15 vs 14/15 · every post-change fire honored the new threshold</text>
 <text x="84" y="82" fill="#1a1a19" font-size="14" font-weight="600">Steady-state tokens per round — all three automations (log scale)</text>
 <line x1="84" y1="321.0" x2="655" y2="321.0" stroke="#e8e7e4" stroke-width="1"/>
 <text x="76" y="325.0" fill="#6f6e6a" font-size="11" text-anchor="end">1.0k</text>
@@ -14,6 +14,11 @@
 <rect x="270.3" y="128.2" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="460.7" y="113.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="651.0" y="132.1" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<polyline points="84.0,111.1 274.3,111.4 464.7,111.1 655.0,124.9" fill="none" stroke="#009E73" stroke-width="2"/>
+<path d="M 84.0 106.1 L 88.5 115.1 L 79.5 115.1 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 274.3 106.4 L 278.8 115.4 L 269.8 115.4 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 464.7 106.1 L 469.2 115.1 L 460.2 115.1 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 655.0 119.9 L 659.5 128.9 L 650.5 128.9 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
 <polyline points="84.0,280.1 274.3,283.3 464.7,284.7 655.0,283.3" fill="none" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="84.0" cy="280.1" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
 <circle cx="274.3" cy="283.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
@@ -23,6 +28,8 @@
 <text x="678" y="287.3" fill="#1a1a19" font-size="12">Unify · 2.2k/round</text>
 <rect x="663" y="131.1" width="10" height="10" fill="#eb6834"/>
 <text x="678" y="140.1" fill="#1a1a19" font-size="12">hermes · 57k/round</text>
+<rect x="663" y="151.9" width="10" height="10" fill="#009E73"/>
+<text x="678" y="160.9" fill="#1a1a19" font-size="12">openclaw · 80k/round</text>
 <text x="84.0" y="339.0" fill="#6f6e6a" font-size="11" text-anchor="middle">round 2</text>
 <text x="274.3" y="339.0" fill="#6f6e6a" font-size="11" text-anchor="middle">round 3</text>
 <text x="464.7" y="339.0" fill="#6f6e6a" font-size="11" text-anchor="middle">round 4</text>
@@ -41,12 +48,16 @@
 <text x="132.8" y="399" fill="#6f6e6a" font-size="11">measured | projected</text>
 <polyline points="84.0,546.2 98.3,542.8 112.5,538.0 126.8,534.8" fill="none" stroke="#eb6834" stroke-width="2"/>
 <polyline points="126.8,534.8 141.1,531.2 155.4,527.6 169.6,523.9 183.9,520.3 198.2,516.7 212.5,513.1 226.8,509.5 241.0,505.9 255.3,502.3 269.6,498.6 283.9,495.0 298.1,491.4 312.4,487.8 326.7,484.2 340.9,480.6 355.2,476.9 369.5,473.3 383.8,469.7 398.1,466.1 412.3,462.5 426.6,458.9 440.9,455.2 455.2,451.6 469.4,448.0 483.7,444.4 498.0,440.8 512.2,437.2 526.5,433.5 540.8,429.9 555.1,426.3 569.3,422.7 583.6,419.1 597.9,415.5 612.2,411.8 626.4,408.2 640.7,404.6 655.0,401.0" fill="none" stroke="#eb6834" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
+<polyline points="84.0,609.0 98.3,603.6 112.5,598.2 126.8,594.2" fill="none" stroke="#009E73" stroke-width="2"/>
+<polyline points="126.8,594.2 141.1,589.1 155.4,584.0 169.6,579.0 183.9,573.9 198.2,568.8 212.5,563.8 226.8,558.7 241.0,553.6 255.3,548.6 269.6,543.5 283.9,538.4 298.1,533.4 312.4,528.3 326.7,523.2 340.9,518.2 355.2,513.1 369.5,508.0 383.8,503.0 398.1,497.9 412.3,492.8 426.6,487.7 440.9,482.7 455.2,477.6 469.4,472.5 483.7,467.5 498.0,462.4 512.2,457.3 526.5,452.3 540.8,447.2 555.1,442.1 569.3,437.1 583.6,432.0 597.9,426.9 612.2,421.9 626.4,416.8 640.7,411.7 655.0,406.7" fill="none" stroke="#009E73" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
 <polyline points="84.0,553.8 98.3,553.7 112.5,553.5 126.8,553.4" fill="none" stroke="#2a78d6" stroke-width="2"/>
 <polyline points="126.8,553.4 141.1,553.2 155.4,553.1 169.6,553.0 183.9,552.8 198.2,552.7 212.5,552.5 226.8,552.4 241.0,552.2 255.3,552.1 269.6,552.0 283.9,551.8 298.1,551.7 312.4,551.5 326.7,551.4 340.9,551.3 355.2,551.1 369.5,551.0 383.8,550.8 398.1,550.7 412.3,550.5 426.6,550.4 440.9,550.3 455.2,550.1 469.4,550.0 483.7,549.8 498.0,549.7 512.2,549.6 526.5,549.4 540.8,549.3 555.1,549.1 569.3,549.0 583.6,548.8 597.9,548.7 612.2,548.6 626.4,548.4 640.7,548.3 655.0,548.1" fill="none" stroke="#2a78d6" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
 <rect x="663" y="543.1" width="10" height="10" fill="#2a78d6"/>
 <text x="678" y="552.1" fill="#1a1a19" font-size="12">Unify · 1.11M</text>
 <rect x="663" y="396.0" width="10" height="10" fill="#eb6834"/>
 <text x="678" y="405.0" fill="#1a1a19" font-size="12">hermes · 3.44M</text>
+<rect x="663" y="417.7" width="10" height="10" fill="#009E73"/>
+<text x="678" y="426.7" fill="#1a1a19" font-size="12">openclaw · 3.35M</text>
 <text x="84.0" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">change</text>
 <text x="126.8" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">3</text>
 <text x="255.3" y="634.0" fill="#6f6e6a" font-size="11" text-anchor="middle">12</text>
