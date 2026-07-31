@@ -37,6 +37,12 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - Ephemeral live action (UI control/one‑off interaction) → `Actor.act` (called via ConversationManager)
   - Durable, tracked work → `TaskScheduler.execute` (via `primitives.tasks.execute`)
   - Never use `TaskScheduler.update` to start work; always use `execute`.
+- **Storing new data or files (any source)**
+  - Rows from an API / connected app / user input, specific files, whole folders, or a reshape of a stored table → `primitives.ingestion.submit(source, target)`. One verb for every source/target pairing; returns a run handle immediately.
+  - Observe and recover with `primitives.ingestion.get_status` / `get_logs` / `wait` / `retry` / `cancel` / `pause` / `resume`. `status.next_step` states the one action that makes sense.
+  - There is no `primitives.data.ingest` — a direct ingest blocked the plan for the length of the write and left nothing to inspect if it died part-way.
+- **Generative UI (canvases)**
+  - Author, revise and inspect interactive views → `primitives.canvas.*` (`create_view`, `update_view`, `refresh_props`, `preview`, `list_invocations`, …). Bind live data to stored tables (including ones an ingestion run just produced via `status.contexts`), never to a provider call.
 - **File → knowledge distillation**
   - Parse with `primitives.files.parse`, then distill durable statements into typed claims via `KnowledgeManager_add_knowledge` (attach `source_refs` pointing at the file / transcript / user statement). There is no `primitives.knowledge` pipeline and no NL `ask`/`update`/`refactor` loop on KnowledgeManager.
 - **Images**
@@ -101,10 +107,28 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### DataManager
 - **Role**: Low‑level data operations on any Unify context.
-- **Scope**: Canonical implementation of filter, search, reduce, join, insert, update, delete, vectorize, plot.
+- **Scope**: Canonical implementation of filter, search, reduce, join, insert, update, delete, vectorize, plot. `ingest` exists as the low-level chunked write engine but is **not** exposed to the Actor — storing new data routes through `IngestionManager` so every write is recorded, checkpointed and recoverable.
 - **Connections**:
-  - **Steered by**: `FileManager` (delegates data ops), `Actor` (via `primitives.data.*`).
+  - **Steered by**: `FileManager` (delegates data ops), `IngestionManager` (row writes via the shared checkpointed engine), `Actor` (via `primitives.data.*`).
   - **Steers**: — (pure primitives module, no high‑level tool loops).
+
+### IngestionManager
+- **Role**: The one verb for storing data and files from anywhere — `submit(source, target)` — with a resumable, checkpointed engine behind it that in-process and worker-fleet execution share.
+- **Scope**: `submit`, `get_status`, `get_logs`, `wait`, `list_runs`, `retry`, `cancel`, `pause`, `resume` via `primitives.ingestion.*`. Sources: `RowsSource` (anything in hand), `FilesSource` / `FolderSource` (parse via the file pipeline), `TableSource` (reshape stored rows). Targets: `TableTarget` (one queryable context) or `CollectionTarget` (documents kept whole, inner tables extracted). Runs and their events are rows in `Ingestion/Runs` + `Ingestion/Events`.
+- **Tiering**: never a caller's choice. Files parse off the assistant's process whenever a worker fleet is reachable; rows and tables run in process only under a measured row ceiling. Both tiers write the same artifacts, leases and checkpoints, so the tier affects latency and nothing else.
+- **Negative scope**: does not query or reshape-in-place (DataManager), does not answer questions about file contents (FileManager `ask`), does not own provider fetches (integrations fetch, ingestion stores).
+- **Connections**:
+  - **Steered by**: `Actor` (via `primitives.ingestion.*`); `FileManager` (attachment ingestion submits here).
+  - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
+
+### CanvasManager
+- **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
+- **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
+- **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.
+- **Write plane**: declared, schema-validated actions; the viewer's input is validated server-side, recorded as an invocation row, then executed by the assistant in one of three lanes (stored function, task trigger, actor request).
+- **Connections**:
+  - **Steered by**: `Actor` (via `primitives.canvas.*`); `ConversationManager` (executes recorded invocations on `CanvasInvocationRequested`).
+  - **Steers**: `DataManager` (binding dry-runs), `FunctionManager` (action target resolution and execution), `TaskScheduler` (task-lane triggers), the actor (assistant-lane requests).
 
 ### WebSearcher
 - **Role**: Lightweight, text-based retrieval engine for quick one-off internet queries (headlines, weather, definitions, current events).
