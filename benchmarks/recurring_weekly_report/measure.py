@@ -99,11 +99,16 @@ def _extract_usage(event: LLMEvent) -> tuple[int, int, int, dict[str, Any] | Non
 class LLMLedger:
     """Append-only record of every LLM call in the process, with phase windows."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, capture_requests_path: Path | None = None) -> None:
         self._records: list[LLMCallRecord] = []
         self._lock = threading.Lock()
         self._phase_marks: list[tuple[str, int, int, float]] = []
         self._chained_hook: Any = None
+        # Full request bodies enable offline replay of specific decision
+        # points (rerun a critical call with modified prompts without paying
+        # for a whole run). Written as JSONL; large, so results .gitignore
+        # files keep it out of version control.
+        self._capture_requests_path = capture_requests_path
 
     def install(self) -> None:
         """Install as the process-global hook, chaining any existing hook.
@@ -135,6 +140,22 @@ class LLMLedger:
         )
         with self._lock:
             self._records.append(record)
+            if self._capture_requests_path is not None:
+                try:
+                    with open(
+                        self._capture_requests_path,
+                        "a",
+                        encoding="utf-8",
+                    ) as f:
+                        f.write(
+                            json.dumps(
+                                {"ts": record.ts, "request": event.request},
+                                default=str,
+                            )
+                            + "\n",
+                        )
+                except Exception:
+                    pass  # capture is best-effort; never break accounting
         if self._chained_hook is not None:
             try:
                 self._chained_hook(event)

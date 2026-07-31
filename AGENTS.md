@@ -345,6 +345,58 @@ Skip heavy uploads on cancel (`if: success() || failure()`); keep a short
 - Cancel-latency smoke (A–E): Flow Smoke dispatch with
   `confirm_llm_spend=CANCEL_SMOKE_OK` / `scripts/dev/run_cancel_smoke.sh`
 
+# Custom Source Sync: one engine, one identity contract
+
+All git-tracked source definitions (tasks, functions, venvs, guidance,
+knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+integration registry) reconcile through the shared engine in
+`unify/common/custom_sync.py`. Full contract:
+[`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).
+
+## Invariants
+
+- A deployment-owned row has `custom_key` **and** `custom_hash`; rows
+  authored by users/actors have neither. `custom_key` is the identity;
+  auto-counted ids (`task_id`, `function_id`, …) are environment-local
+  handles that source code must never reference.
+- Each manager declares its key policy in ONE place (its `custom_*.py`
+  collector). Changing a key policy is an identity migration for every
+  deployment — plan it, never drive-by edit it.
+- Inserts write `custom_key`/`custom_hash` atomically with the row.
+  No create-then-stamp second write.
+- Two live managed rows with the same `custom_key` is an error the
+  engine raises (`CustomSyncDuplicateKeyError`) — never silently pick a
+  survivor.
+- Per-entry failures are isolated and re-raised as
+  `CustomSyncPartialFailure` after the pass; the aggregate hash is not
+  stored on partial failure so the next reconcile retries.
+- Every reconcile holds `exclusive_sync_lease` on the meta context.
+- Writers either persist the collected field dict wholesale, or consume
+  every field and raise on leftovers. A collector hashing a field the
+  writer drops caused live rows to pin themselves "up to date" with the
+  field unwritten (the task `tags` incident) — the leftover check exists
+  to make that class impossible.
+
+## Hard refuse
+
+- A new bespoke `sync_custom_*` diff loop, or "just this one" fork of
+  the engine's semantics inside a manager. Extend the engine instead.
+- Adding a field to a collector's hash without routing the same field
+  through the writer (and vice versa).
+- Stamping identity after insert, or hand-writing rows with a
+  `custom_key` outside the engine.
+- Changing a manager's key derivation (or making an optional source
+  `key` mandatory) without a migration plan for live rows in every
+  deployment.
+
+## Deviations are declared knobs, not forks
+
+`prune=False` (secrets), `collision="yield"` (secrets),
+`find_adoptable` (data seeds, integration registry, functions/venvs
+legacy rows), `should_update` (tasks: skip while running),
+`max_workers` (tasks). New deviations need a named knob on the adapter
+and a line in the writeup's table.
+
 This Unity project is for an AI Assistant, which is implemented as a heavily distributed multi-node system. Each node in the system communicates via English language based public APIs. The assistant's "brain" is then implemented a bit like a back office, where each manager deals with different aspects of the assistant's overall emergent intelligence. For the most part (with a few exceptions, such as `CodeActActor` and `ConversationManager`) the public methods of these managers are implemented as asynchronous tool loops, whereby a central LLM handles the English language request by orchestrating lower level tools which read and mutate the manager-specific backend resources (via the unify python client, which wraps the REST API connecting to the DB). These manager methods are dynamic, and expose handles for mid-flight steering, question answering, pausing, resuming and stopping etc. These manager methods are also often **nested**, whereby the public API of one manager is exposed in the tool set of a higher level manager. The async tool loops can also steer their inner in-flight tools, enabling fully nested dynamic steering of async tool loops up to an arbitrary depth. In terms of hierarchy, the `Actor` serves as the central intelligence, orchestrating other managers through code-first plans. Importantly, we never apply "fast paths" or heuristics based on regex or substring detection from user commands. If a method needs to respond correctly to a certain type of user input, this must **always** be addressed by prompting the model and/or improving docstrings of the exposed tools in order to **nudge** the LLM in the right direction.
 
 # Full Local Stack First
@@ -1952,10 +2004,10 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   `run_key` (the idempotency key). Occurrence and attempt are the same row.
   Recurrence creates the *next* Execution when the current one **starts** — it
   does **not** clone the Tasks row.
-- **`instance_id` is vestigial.** It is a legacy occurrence counter kept only so
-  pre-migration rows still read back. It is not unique, not auto-counted, and
-  not part of identity; new rows get `0`. Treat any non-zero `instance_id` as a
-  pre-migration artefact, not as a thing to allocate, increment, or reason about.
+- **`instance_id` no longer exists.** The legacy occurrence counter was purged
+  (July 2026): no code writes or reads it, and there is no field to set. A
+  stored `instance_id` entry on an old row is inert junk — never a lookup key,
+  never identity.
 - Concurrency is normal now: several Executions can be in flight against one
   definition, so a definition sitting in `active` is not a zombie by itself.
 
@@ -1968,8 +2020,6 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   Executions.
 - Do **not** invent a Tasks row by hand with an explicit `task_id` — go through
   TaskScheduler APIs and let Orchestra allocate it.
-- Do **not** write `instance_id` at all. It buys nothing on the current model,
-  and a non-zero value pushes reads down the legacy compat path (see below).
 
 ## Allowed ops
 
@@ -1977,24 +2027,16 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
 |---|---|
 | Arm a planted custom task | Set **`enabled=True`** on the definition row (the single `task_id` row, `custom_key` set). TaskScheduler schedules the next Execution. |
 | Pause | `enabled=False` on the definition row; optionally cancel open Executions. |
-| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). It takes no `instance_id`. |
+| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). |
 | Change cadence | Edit `tasks.jsonl` + deploy reconcile, or TaskScheduler APIs that own the schedule — not ad-hoc DM patches. |
 | Stuck `active` zombie | `POST /admin/task-source/release-active` with the source task log id. |
 
-## Legacy compat path
+## Pre-migration remnants
 
-`_get_task_row(task_id, instance_id)` addresses by `task_id` alone when
-`instance_id == 0`, and only falls back to the old
-`task_id AND instance_id` filter when it is non-zero
-(`unify/task_scheduler/task_scheduler.py`, the `if instance_id != 0:` branch).
-That fallback exists to read surviving pre-migration rows. Do not lean on it
-for new work, and do not pass a non-zero `instance_id` to make a lookup
-"more specific" — on a post-migration task it just fails to match.
-
-If a `task_id` genuinely resolves to more than one Tasks row, that is a
-pre-migration remnant (or a bad hand-write), not a counter desync. Delete the
-stale duplicate, or leave it terminal and do not re-trigger until the health
-check is clean.
+If a `task_id` resolves to more than one Tasks row, that is a pre-migration
+remnant (or a bad hand-write), not a counter desync. Delete the stale
+duplicate, or leave it terminal and do not re-trigger until the health check
+is clean.
 
 ## Break-glass
 
