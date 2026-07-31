@@ -88,13 +88,23 @@ class TableWork:
     chunk_size: int = 500
     description: Optional[str] = None
     column_descriptions: Optional[Dict[str, str]] = None
+    # Caller-declared row identity. When set, these columns are the unique keys
+    # the insert upserts on, so a re-run of the same source updates rows in
+    # place instead of appending a second copy -- the current-state-table case.
+    # When absent, identity falls back to the reserved per-run resume key below,
+    # and a re-run appends -- the time-series case.
+    unique_keys: Optional[Dict[str, str]] = None
+    # Explicit column schema. Merged under any column descriptions; omit to let
+    # the backend infer from the rows.
+    fields: Optional[Dict[str, Any]] = None
     embed_columns: Optional[List[str]] = None
     embed_strategy: str = "off"
     post_ingest: Any = None
     infer_untyped_fields: bool = False
     # Prefix for the reserved upsert key. Scopes identity to one job and table so
     # two jobs writing the same context cannot collide on a row key and overwrite
-    # each other's rows while each reports success.
+    # each other's rows while each reports success. Only consulted when the
+    # caller declared no unique keys of its own.
     ingest_key_prefix: str = ""
 
 
@@ -305,14 +315,15 @@ class CheckpointedIngest:
                 initial_chunks,
             )
 
-        fields: Dict[str, Any] = {
-            name: {"description": description}
-            for name, description in (entry.column_descriptions or {}).items()
-        }
-        # The reserved key is declared and made unique so a re-attempt upserts.
-        # Without it a resume that misjudges its offset appends duplicates
-        # instead of overwriting them.
-        fields.setdefault(INGEST_KEY_COLUMN, "str")
+        fields: Dict[str, Any] = dict(entry.fields or {})
+        for name, description in (entry.column_descriptions or {}).items():
+            fields.setdefault(name, {"description": description})
+        if not entry.unique_keys:
+            # The reserved key is declared and made unique so a re-attempt
+            # upserts. Without it a resume that misjudges its offset appends
+            # duplicates instead of overwriting them. Caller-declared keys make
+            # it redundant: they identify the row whichever attempt writes it.
+            fields.setdefault(INGEST_KEY_COLUMN, "str")
 
         return ArtifactWorkItem(
             kind="table",
@@ -445,7 +456,7 @@ class CheckpointedIngest:
             table_input_handle=entry.handle,
             description=entry.description,
             fields=payload["fields"],
-            unique_keys={INGEST_KEY_COLUMN: "str"},
+            unique_keys=entry.unique_keys or {INGEST_KEY_COLUMN: "str"},
             infer_untyped_fields=entry.infer_untyped_fields,
             chunk_size=entry.chunk_size,
             embed_columns=entry.embed_columns,
@@ -457,9 +468,14 @@ class CheckpointedIngest:
             # what the source declared, rather than leaving the shortfall for the
             # completion check to find after the fact.
             expected_total_rows=entry.declared_rows or None,
-            private_ingest_key_column=INGEST_KEY_COLUMN,
+            # The reserved resume key applies only when the caller declared no
+            # identity of its own; with caller keys, a re-delivered chunk
+            # already upserts on them.
+            private_ingest_key_column=("" if entry.unique_keys else INGEST_KEY_COLUMN),
             private_ingest_key_prefix=(
-                entry.ingest_key_prefix or f"{self._job_id}:{entry.table_id}"
+                ""
+                if entry.unique_keys
+                else (entry.ingest_key_prefix or f"{self._job_id}:{entry.table_id}")
             ),
             storage_client=payload.get("storage_client"),
             on_task_complete=_on_chunk,

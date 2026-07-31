@@ -283,6 +283,30 @@ class TestIngestShape:
         assert call["unique_keys"] == {INGEST_KEY_COLUMN: "str"}
         assert INGEST_KEY_COLUMN in call["fields"]
 
+    def test_caller_declared_keys_own_the_row_identity(self, store):
+        """Declared unique keys reach the insert; the reserved key stands down.
+
+        This is the contract behind "supplying unique_keys makes a re-run an
+        upsert": if the declared keys were dropped in favour of the per-run
+        reserved key, every re-submission of the same source would append a
+        full duplicate copy while reporting success.
+        """
+        dm = FakeDataManager()
+        entry = work()
+        keyed = TableWork(
+            **{
+                **entry.__dict__,
+                "unique_keys": {"email": "str"},
+                "fields": {"email": "str", "name": "str"},
+            },
+        )
+        CheckpointedIngest(artifact_store=store, job_id="j18").run([keyed], dm=dm)
+        call = dm.calls[0]
+        assert call["unique_keys"] == {"email": "str"}
+        assert call["private_ingest_key_column"] == ""
+        assert INGEST_KEY_COLUMN not in call["fields"]
+        assert call["fields"]["email"] == "str"
+
     def test_progress_is_reported_as_it_commits(self, store):
         seen: List[tuple] = []
         dm = FakeDataManager()
