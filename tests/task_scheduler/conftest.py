@@ -307,7 +307,13 @@ def task_surface():
     if not user_id:
         pytest.skip(f"basic-info returned no user_id: {user_info!r}")
 
-    created = unisdk.create_assistant(first_name="Task Surface Probe")
+    # Unique per test: assistant names are unique per scope, and the parallel
+    # harness runs tests concurrently — a shared name is a create/create race.
+    import uuid
+
+    created = unisdk.create_assistant(
+        first_name=f"Task Surface Probe {uuid.uuid4().hex[:8]}",
+    )
     agent_id = int(created["agent_id"])
 
     previous_project = unisdk.active_project()
