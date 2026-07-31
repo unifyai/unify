@@ -17,10 +17,15 @@ architecture converge to unattended, and what does week-N cost look like?
    (`_CodeActEntrypointHandle`): the expected steady state is **0 LLM calls,
    0 tokens**, with a bounded LLM repair loop only on failure.
 
-The skill-architecture comparison arm (hermes-agent: `hermes cron create`
-fires the full agent with skill content injected into the prompt on every
-firing) is driven separately; this directory measures the Unify side with
-per-phase token/cost precision.
+The hermes-agent comparison arm (`run_hermes.sh` / `hermes_driver.py`)
+applies the identical protocol: the same utterance via headless
+`hermes chat -q` in a throwaway `HERMES_HOME`, then manual
+`hermes cron run` fires of whatever the agent created, metered by a local
+recording proxy in front of OpenRouter (`openrouter_proxy.py`). First
+result: the hermes agent also converged to a zero-LLM steady state
+(`no_agent` cron + standalone script), but encoded the schedule as
+hourly-on-Mondays with an in-script wall-clock gate — off-spec, and inert
+when fired on demand (see the `*-hermes` results NOTE.md).
 
 ## Task definition
 

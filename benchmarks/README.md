@@ -4,12 +4,19 @@ Standalone, open-sourceable benchmarks that back the claims in
 [Why we split skills into functions and guidance](https://unify.ai/blog/why-we-split-skills-into-functions-and-guidance)
 with real numbers instead of hand-waving.
 
-The core claim under test: for recurring automations set up from a single
-natural-language request, an architecture with a first-class scheduler→function
-binding (Unify: `TaskScheduler` + `FunctionManager` entrypoints) converges to a
-**zero-LLM-token steady state**, while prose-first skill architectures
-(e.g. hermes-agent) pay **at least one full agent invocation per firing,
-forever** — because their only trigger path runs through the model.
+The core question under test: for recurring automations set up from a single
+natural-language request, what does each architecture converge to unattended,
+what does it cost to get there, and how good is the persisted artifact?
+Unify's first-class scheduler→function binding (`TaskScheduler` +
+`FunctionManager` entrypoints) reaches a **zero-LLM-token steady state** with
+a typed, on-demand-executable, registry-discoverable function. The first
+head-to-head (vs hermes-agent) showed its agent can also reach a zero-LLM
+steady state via `no_agent` cron scripts — the measured differences were
+artifact quality (schedule fidelity, on-demand executability, correctness
+under trigger) and lifecycle (registry + review/repair vs a free-floating
+script). The many-to-many function/guidance advantages are the subject of
+the planned family/maintenance phases, where reuse across related
+automations becomes measurable.
 
 ## Design principles
 

@@ -28,7 +28,6 @@ import pytest
 import unisdk
 from unisdk.utils.http import RequestError
 
-from tests.helpers import _handle_project
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.local_scheduler import LocalActivationScheduler
 from unify.task_scheduler.machine_state import (
@@ -72,27 +71,15 @@ _REQUIRES_LIVE_ORCHESTRA = pytest.mark.skipif(
 
 # Orchestra projects executions only for a task *surface*: the ``Assistants``
 # project, at ``{user}/{assistant}/Tasks`` or ``Teams/{id}/Tasks``. The
-# test-project fixture nests definitions under the test name in ``UnityTests``,
-# which satisfies neither, so a definition written through it is never
-# projected and the reads below return nothing.
+# ``task_surface`` fixture (conftest) provisions a real one — an assistant
+# created over the public API with session identity bound to it — so nothing
+# here is mocked and projection genuinely fires.
 #
-# These tests were written on 2026-05-26 against the assumption that it was,
-# and never executed once: their skip guard called ``unisdk.get_projects``,
-# which has never existed, and a bare ``except Exception`` turned that
-# ``AttributeError`` into a skip. Fixing the guard revealed the premise.
-#
-# The occurrence-walk coverage they were meant to provide now lives in
-# orchestra's ``test_task_machine_projection.py``, where the fixtures build a
-# real surface against a real database. Re-enabling these needs a fixture that
-# provisions an assistant-scoped Tasks table here.
-_REQUIRES_TASK_SURFACE = pytest.mark.skip(
-    reason=(
-        "Needs an assistant-scoped Tasks surface; the test-project fixture's "
-        "nested UnityTests context is not one, so Orchestra never projects. "
-        "Occurrence-walk coverage lives in orchestra "
-        "test_task_machine_projection.py."
-    ),
-)
+# History worth keeping: these tests were written on 2026-05-26 assuming the
+# nested ``UnityTests`` test context was a surface. It is not, and their skip
+# guard called a function that never existed, swallowed by a bare ``except`` —
+# so they skipped silently for two months while the seam they were written to
+# guard broke in production.
 
 
 class _RecordingBroker:
@@ -105,10 +92,8 @@ class _RecordingBroker:
         self.published.append((topic, payload))
 
 
-@_REQUIRES_TASK_SURFACE
 @_REQUIRES_LIVE_ORCHESTRA
-@_handle_project
-def test_local_scheduler_picks_up_real_orchestra_activation():
+def test_local_scheduler_picks_up_real_orchestra_activation(task_surface):
     """A scheduled task created via TaskScheduler is visible to the local scheduler.
 
     Validates the full read pipeline:
@@ -124,15 +109,7 @@ def test_local_scheduler_picks_up_real_orchestra_activation():
     test fails.
     """
 
-    # SESSION_DETAILS.assistant.agent_id must match the value Orchestra uses
-    # for the assistant-scoped Tasks context so projection writes the right
-    # value into the activation row.  The _handle_project fixture sets up
-    # the context path as ".../default/0/...", so agent_id == 0.
-    SESSION_DETAILS.assistant.agent_id = 0
-    try:
-        asyncio.run(_run_scheduler_integration())
-    finally:
-        SESSION_DETAILS.assistant.agent_id = None
+    asyncio.run(_run_scheduler_integration())
 
 
 async def _run_scheduler_integration() -> None:
@@ -187,10 +164,8 @@ async def _run_scheduler_integration() -> None:
         await local_scheduler.stop()
 
 
-@_REQUIRES_TASK_SURFACE
 @_REQUIRES_LIVE_ORCHESTRA
-@_handle_project
-def test_recurring_task_rearm_visible_to_local_scheduler():
+def test_recurring_task_rearm_visible_to_local_scheduler(task_surface):
     """A recurring task's next occurrence is also visible to the local scheduler.
 
     When a scheduled definition executes, the scheduler projects the next
@@ -200,11 +175,7 @@ def test_recurring_task_rearm_visible_to_local_scheduler():
     next reconcile.
     """
 
-    SESSION_DETAILS.assistant.agent_id = 0
-    try:
-        asyncio.run(_run_recurring_integration())
-    finally:
-        SESSION_DETAILS.assistant.agent_id = None
+    asyncio.run(_run_recurring_integration())
 
 
 async def _run_recurring_integration() -> None:
