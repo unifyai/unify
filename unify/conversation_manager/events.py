@@ -486,9 +486,9 @@ class GoogleMeetParticipantLeft(Event):
 class GoogleMeetChatMessage(Event):
     """A participant posted in the Google Meet chat.
 
-    Kept distinct from an utterance because it is typed, not spoken: routing it
-    through the utterance path would record it in the call transcript as
-    something the participant said out loud.
+    Kept distinct from an utterance because it is typed, not spoken. It is still
+    recorded on the call, tagged ``kind="chat"`` so a reader can tell it from
+    something said out loud rather than having it read as speech.
     """
 
     topic: ClassVar[str | None] = "app:comms:googlemeet_chat"
@@ -497,6 +497,21 @@ class GoogleMeetChatMessage(Event):
     sender_name: str
     content: str
     sender_email: str | None = None
+
+
+@dataclass
+class GoogleMeetChatSent(Event):
+    """The assistant posted in the Google Meet chat.
+
+    The outbound half of ``GoogleMeetChatMessage``. Without it a transcript
+    shows a question someone typed and no answer, because the assistant's reply
+    went to chat and nothing recorded it.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:googlemeet_chat_sent"
+
+    contact: dict
+    content: str
 
 
 @dataclass
@@ -607,6 +622,19 @@ class TeamsMeetChatMessage(Event):
     sender_name: str
     content: str
     sender_email: str | None = None
+
+
+@dataclass
+class TeamsMeetChatSent(Event):
+    """The assistant posted in the Teams meeting chat.
+
+    The outbound half of ``TeamsMeetChatMessage``.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:teamsmeet_chat_sent"
+
+    contact: dict
+    content: str
 
 
 @dataclass

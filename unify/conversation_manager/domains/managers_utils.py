@@ -1328,6 +1328,10 @@ async def log_message(
             OutboundGoogleMeetUtterance,
             InboundTeamsMeetUtterance,
             OutboundTeamsMeetUtterance,
+            GoogleMeetChatMessage,
+            TeamsMeetChatMessage,
+            GoogleMeetChatSent,
+            TeamsMeetChatSent,
             ApiMessageSent,
             ApiMessageReceived,
         ),
@@ -1592,6 +1596,19 @@ async def log_message(
                     if call_key:
                         metadata = metadata or {}
                         metadata["call_id"] = call_key
+            elif isinstance(
+                event,
+                (
+                    GoogleMeetChatMessage,
+                    TeamsMeetChatMessage,
+                    GoogleMeetChatSent,
+                    TeamsMeetChatSent,
+                ),
+            ):
+                # Mirrors the tag on the call-store row. The content here is the
+                # bare message -- the ``<meeting chat>`` marker the contact
+                # thread carries is a prompt affordance, not part of the record.
+                metadata = {"kind": "chat"}
 
             # Voice-derived speaker attribution (all diarized voice channels).
             dia_sid = getattr(event, "diarization_speaker_id", None)
