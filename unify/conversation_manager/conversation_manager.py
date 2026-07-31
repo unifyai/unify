@@ -289,6 +289,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # send durably completes the step. Lost on restart on purpose — the
         # row stays re-clickable, so a tool can never be permanently masked.
         self._onboarding_clicked_trigger_steps: set[str] = set()
+        # Armed only inside the learning-demo chip-click -> step-complete
+        # window (learning_beat_requested .. learn-from-correction
+        # step_completed / session restart). Gates the StorageCheck-completion
+        # wake in event_handlers.py's ActorNotification handler so storage
+        # completing after every act does not wake the brain product-wide.
+        self._learning_demo_storage_wake_armed: bool = False
         # Static, deployment-gated onboarding catalog (phases + steps + copy),
         # fetched once from Orchestra's canonical source of truth and reused for
         # every prompt build so console_ui never re-declares onboarding copy.
@@ -1440,72 +1446,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             "app:comms:assistant_notification",
             event_json,
         )
-
-    async def set_speaker_engagement(
-        self,
-        *,
-        speaker: str,
-        engaged: bool,
-    ) -> dict[str, Any]:
-        """Promote or demote a call voice's conversational standing.
-
-        Resolves ``speaker`` against the permanently engaged call participants
-        (by name — engaging them is a no-op, demoting them is refused) and
-        otherwise treats it as a session speaker label ("Speaker 2"). The
-        update is mirrored locally for prompt/tool rendering and pushed to the
-        voice agent over IPC, where it takes effect on the floor/turn/reply
-        gates immediately.
-        """
-        cmgr = self.call_manager
-        if not self.in_voice_session:
-            return {"status": "no_active_call"}
-        name = (speaker or "").strip()
-        if not name:
-            return {
-                "status": "error",
-                "reason": "speaker must be a non-empty name or label",
-            }
-        low = name.lower()
-
-        for cid, cname in cmgr.engaged_contacts.items():
-            cname_low = cname.lower()
-            if low == cname_low or low == cname_low.split()[0]:
-                if not engaged:
-                    return {
-                        "status": "refused",
-                        "reason": (
-                            f"{cname} is a primary call participant and always "
-                            "remains engaged."
-                        ),
-                    }
-                return {"status": "already_engaged", "speaker": cname}
-
-        # Anonymous session label: use the canonical casing if already heard.
-        canonical = next(
-            (lbl for lbl in cmgr.known_speaker_labels if lbl.lower() == low),
-            name,
-        )
-        if engaged:
-            cmgr.engaged_labels.add(canonical)
-        else:
-            cmgr.engaged_labels.discard(canonical)
-        await self.event_broker.publish(
-            "app:call:speaker_engagement",
-            json.dumps(
-                {
-                    "action": "engage" if engaged else "disengage",
-                    "label": canonical,
-                },
-            ),
-        )
-        self._session_logger.info(
-            "speaker_engagement",
-            f"{'Engaged' if engaged else 'Disengaged'} speaker: {canonical}",
-        )
-        return {
-            "status": "engaged" if engaged else "disengaged",
-            "speaker": canonical,
-        }
 
     async def _perform_deferred_hang_up(self, *, awaiting_speech: bool) -> None:
         """Run a hang-up the ``hang_up`` tool deferred, after speech is delivered.
@@ -2782,7 +2722,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
-        self.owner_team_id: int | None = payload.get("owner_team_id")
+        # Arrives as an int from the bootstrap secret's JSON, but coerce
+        # defensively: a string here would make team_owned truthy while every
+        # integer comparison downstream silently failed.
+        raw_owner_team_id = payload.get("owner_team_id")
+        try:
+            self.owner_team_id: int | None = (
+                int(raw_owner_team_id) if raw_owner_team_id not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            self.owner_team_id = None
         is_coordinator = bool(payload.get("is_coordinator", False))
         is_multiplayer = bool(payload.get("is_multiplayer", False))
         # Set API key on SESSION_DETAILS for runtime access
@@ -3242,6 +3191,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def clear_onboarding_clicked_trigger_steps(self) -> None:
         """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
         self._onboarding_clicked_trigger_steps.clear()
+
+    @property
+    def learning_demo_storage_wake_armed(self) -> bool:
+        """Whether a StorageCheck-completion notification should wake the brain.
+
+        Armed on ``learning_beat_requested``, cleared on the
+        ``learn-from-correction`` step completing or on a fresh
+        ``onboarding_session_started`` — so an abandoned demo can't leave
+        the wake armed across sessions.
+        """
+        return self._learning_demo_storage_wake_armed
+
+    def set_learning_demo_storage_wake_armed(self, armed: bool) -> None:
+        self._learning_demo_storage_wake_armed = armed
 
     def active_pending_onboarding_outbound(self) -> dict[str, Any] | None:
         """Return armed onboarding outbound metadata, or None if unset or expired."""

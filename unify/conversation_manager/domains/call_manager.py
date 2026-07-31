@@ -199,36 +199,6 @@ class LivekitCallManager:
         self.google_meet_exchange_id = UNASSIGNED
         self.teams_meet_start_timestamp = None
         self.teams_meet_exchange_id = UNASSIGNED
-        # Parent-side mirror of the voice agent's engaged-speaker set: the
-        # permanently engaged call participants (contact_id -> display name),
-        # labels the slow brain has engaged, and every anonymous speaker label
-        # heard on the call so far (for tool-docstring status rendering).
-        self.engaged_contacts: dict[int, str] = {}
-        self.engaged_labels: set[str] = set()
-        self.known_speaker_labels: set[str] = set()
-
-    def reset_speaker_engagement(
-        self,
-        contact: dict | None,
-        boss: dict | None,
-    ) -> None:
-        """Initialize the per-call engagement mirror at call start."""
-        self.engaged_contacts = {}
-        for cand in (contact, boss):
-            if not cand or cand.get("contact_id") is None:
-                continue
-            name = (
-                f"{cand.get('first_name', '')} {cand.get('surname', '')}".strip()
-                or f"contact {cand['contact_id']}"
-            )
-            self.engaged_contacts[int(cand["contact_id"])] = name
-        self.engaged_labels = set()
-        self.known_speaker_labels = set()
-
-    def note_speaker_label(self, label: str | None) -> None:
-        """Record an anonymous speaker label heard on the active call."""
-        if label:
-            self.known_speaker_labels.add(label.strip())
 
     def set_config(self, config: CallConfig):
         self.assistant_id = config.assistant_id
@@ -806,7 +776,6 @@ class LivekitCallManager:
         self.is_outbound = outbound
         self._call_channel = channel
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -970,7 +939,6 @@ class LivekitCallManager:
         self.is_outbound = outbound
         self._call_channel = "unify_meet"
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         await self._ensure_socket_server()
         if self._socket_server:
@@ -1132,7 +1100,6 @@ class LivekitCallManager:
         self.meet_join_failure_reason = None
         self._call_channel = channel
         self._disconnect_contact = contact
-        self.reset_speaker_engagement(contact, boss)
 
         opener = (self.pending_opener or "").strip()
         meet_opening_config = None
@@ -1686,9 +1653,6 @@ class LivekitCallManager:
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
         self.unify_meet_participants = []
-        self.engaged_contacts = {}
-        self.engaged_labels = set()
-        self.known_speaker_labels = set()
 
         if self._boss_notification_task and not self._boss_notification_task.done():
             self._boss_notification_task.cancel()

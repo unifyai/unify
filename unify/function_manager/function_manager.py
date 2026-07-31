@@ -3158,8 +3158,21 @@ class FunctionManager(BaseFunctionManager):
             limit=limit,
         )
 
+        from unify.integrations.provider_resolution import (
+            PREFERRED_BACKEND_ORDER,
+            WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE,
+        )
+
         connected_backend_by_app: dict[str, str | None] = {}
         for connection in active_connections:
+            if (
+                connection.get("credential_storage")
+                == WORKSPACE_TRIGGER_FACADE_CREDENTIAL_STORAGE
+            ):
+                # Workspace trigger facade: presents workspace OAuth credentials
+                # as a trigger backend only. It must never register an app as
+                # tool-connected or claim a tool-execution backend.
+                continue
             raw_conn_app = connection.get("canonical_app_slug")
             conn_app = (
                 normalize_app_slug(raw_conn_app)
@@ -3178,9 +3191,6 @@ class FunctionManager(BaseFunctionManager):
                     connected_backend_by_app[conn_app] = None
                 continue
             if existing and existing != backend:
-                from unify.integrations.provider_resolution import (
-                    PREFERRED_BACKEND_ORDER,
-                )
 
                 def _rank(value: str) -> int:
                     try:
@@ -3247,19 +3257,38 @@ class FunctionManager(BaseFunctionManager):
 
         for key, rows in rows_by_key.items():
             expected_hash = self._hash_integration_rows(rows)
+            backend_id, item_app = key_to_app[key]
             if current_hashes.get(key) == expected_hash:
-                unchanged_apps.append({"key": key, "rows": len(rows)})
+                observed_rows = self._count_provider_integration_rows_for_app(
+                    backend_id=backend_id,
+                    app_slug=item_app,
+                    expected_rows=len(rows),
+                )
+                if observed_rows is not None and observed_rows == len(rows):
+                    unchanged_apps.append({"key": key, "rows": len(rows)})
+                    log_staging_diagnostic(
+                        logger,
+                        (
+                            "Provider integration sync hash decision key=%s "
+                            "decision=unchanged rows=%d"
+                        ),
+                        key,
+                        len(rows),
+                    )
+                    continue
                 log_staging_diagnostic(
                     logger,
                     (
-                        "Provider integration sync hash decision key=%s "
-                        "decision=unchanged rows=%d"
+                        "Provider integration sync unchanged-hash verification "
+                        "mismatch key=%s expected_rows=%d observed_rows=%s; "
+                        "hash is a hint, not a guarantee -- falling through to "
+                        "the changed path to rematerialize"
                     ),
                     key,
                     len(rows),
+                    observed_rows,
+                    level=logging.WARNING,
                 )
-                continue
-            backend_id, item_app = key_to_app[key]
             deleted = self._delete_provider_integration_rows_for_apps(
                 [(backend_id, item_app)],
             )
@@ -8037,7 +8066,11 @@ def _wrap_venv_write(method_name: str) -> None:
 
 
 def _signature_with_destination(method: Callable[..., Any]) -> inspect.Signature:
-    signature = inspect.signature(method)
+    # follow_wrapped=False: the concrete methods carry @functools.wraps(Base...),
+    # and following the chain would resolve to the abstract signature, silently
+    # dropping concrete-only parameters (e.g. add_functions' ``overwrite``) from
+    # the LLM-visible tool schema.
+    signature = inspect.signature(method, follow_wrapped=False)
     if "destination" in signature.parameters:
         return signature
     parameters = list(signature.parameters.values())

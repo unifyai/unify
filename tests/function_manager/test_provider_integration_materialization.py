@@ -746,6 +746,115 @@ def test_sync_materializes_only_connected_backend_tools(monkeypatch) -> None:
     assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "pipedream"
 
 
+def test_workspace_trigger_facade_only_connection_materializes_nothing(
+    monkeypatch,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+
+    result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+
+    assert result["status"] == "unchanged"
+    assert result["apps"] == []
+    assert result["unchanged_apps"] == []
+    assert fm._inserted_rows == []
+    assert not hasattr(fm, "_deleted_apps")
+    assert not hasattr(fm, "_stored_hashes")
+
+
+def test_workspace_trigger_facade_with_composio_resolves_composio_without_warning(
+    monkeypatch,
+    caplog,
+) -> None:
+    client = FakeIntegrationOps()
+    client.connections = [
+        {
+            "connection_id": "conn-facade",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "native_google",
+            "status": "connected",
+            "credential_storage": "assistant_workspace_secrets",
+        },
+        {
+            "connection_id": "conn-composio",
+            "canonical_app_slug": "googlemeet",
+            "backend_id": "composio",
+            "status": "connected",
+        },
+    ]
+    client.results = [
+        {
+            **MOCK_TOOL,
+            "tool_id": "composio:googlemeet:create_meeting",
+            "backend_id": "composio",
+            "provider_app_id": "googlemeet",
+            "provider_tool_id": "create_meeting",
+            "canonical_name": "primitives.integrations.googlemeet.create_meeting",
+            "function_manager_name": (
+                "primitives_integrations__googlemeet__create_meeting"
+            ),
+            "app_slug": "googlemeet",
+            "tool_display_name": "Create meeting",
+            "activation_state": "connected_ready",
+        },
+    ]
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    sync_logger = logging.getLogger("unify.function_manager.function_manager")
+    sync_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="unify.function_manager.function_manager")
+
+    try:
+        result = fm.sync_provider_integration_tools(app_slug="googlemeet")
+    finally:
+        sync_logger.removeHandler(caplog.handler)
+
+    assert result["status"] == "synced"
+    assert len(fm._inserted_rows) == 1
+    assert fm._inserted_rows[0]["metadata"]["integration"]["backend_id"] == "composio"
+    assert "Multiple connected backends" not in caplog.text
+
+
 def test_insert_primitives_preserves_validated_integration_metadata(
     monkeypatch,
 ) -> None:
@@ -1014,13 +1123,63 @@ def test_materialization_hash_match_skips_delete_and_insert(monkeypatch) -> None
     fm._get_stored_integration_tool_hash_by_app = lambda: {
         "composio:hubspot": current_hash,
     }
+    # Rows already materialized from a prior sync -- the unchanged-hash
+    # verification (_count_provider_integration_rows_for_app) must see them
+    # present so it doesn't mistake a cached hash for the real thing.
+    fm._inserted_rows = [expected_row]
 
     result = fm.sync_provider_integration_tools(app_slug="hubspot")
 
     assert result["status"] == "unchanged"
     assert result["apps"] == []
     assert result["unchanged_apps"] == [{"key": "composio:hubspot", "rows": 1}]
-    assert fm._inserted_rows == []
+    assert fm._inserted_rows == [expected_row]
+    assert not hasattr(fm, "_deleted_apps")
+
+
+def test_zombie_unchanged_hash_with_zero_rows_falls_through_to_changed(
+    monkeypatch,
+) -> None:
+    """A cached hash match is a hint, not a guarantee -- if the rows behind
+    it were deleted out-of-band (bulk cleanup, --full reset, retention), the
+    unchanged branch must notice they're actually gone and rematerialize
+    instead of trusting the hash forever.
+    """
+    client = FakeIntegrationOps()
+    expected_row = FunctionManager.__new__(
+        FunctionManager,
+    )._integration_tool_to_function_row(MOCK_TOOL)
+    current_hash = FunctionManager._hash_integration_rows([expected_row])
+    monkeypatch.setattr(
+        "unify.integrations.ops.list_connections",
+        client.list_connections,
+    )
+    monkeypatch.setattr(
+        "unify.function_manager.function_manager.list_catalog_tools",
+        lambda **_kwargs: list(client.results),
+    )
+    fm = _fake_function_manager()
+    fm._get_stored_integration_tool_hash_by_app = lambda: {
+        "composio:hubspot": current_hash,
+    }
+    # No rows actually materialized (the zombie scenario): hash claims
+    # synced, but the context has zero rows for this app.
+
+    result = fm.sync_provider_integration_tools(app_slug="hubspot")
+
+    assert result["status"] == "synced"
+    assert result["unchanged_apps"] == []
+    assert result["apps"] == [
+        {
+            "key": "composio:hubspot",
+            "rows": 1,
+            "rows_deleted": 0,
+            "fully_inserted": True,
+        },
+    ]
+    assert fm._deleted_apps == [("composio", "hubspot")]
+    assert fm._inserted_rows == [expected_row]
+    assert fm._stored_hashes == {"composio:hubspot": current_hash}
 
 
 def test_materialization_does_not_cache_hash_when_rows_already_catalogued(

@@ -727,6 +727,50 @@ class TestLazySessionInvalidation:
         assert not hasattr(ns, "_active")
 
 
+# ── Desktop dead-session recovery ─────────────────────────────────────
+
+
+class TestDesktopDeadSessionRecovery:
+    """A desktop session reaped by the agent-service idle timeout is replaced
+    transparently: clear the backend cache, re-create, retry once."""
+
+    @pytest.mark.asyncio
+    async def test_act_recreates_reaped_session(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from unify.function_manager.computer_backends import (
+            ActResult,
+            ComputerAgentError,
+        )
+
+        cp = _make_primitives()
+
+        # Give the mock backend MagnitudeBackend's caching semantics.
+        sessions = {}
+        real_get = cp.backend.get_session
+
+        async def caching_get(mode):
+            if mode not in sessions:
+                sessions[mode] = await real_get(mode)
+            return sessions[mode]
+
+        monkeypatch.setattr(cp.backend, "get_session", caching_get)
+        monkeypatch.setattr(
+            cp.backend,
+            "clear_session",
+            lambda mode: sessions.pop(mode, None),
+        )
+
+        stale = await cp.backend.get_session("desktop")
+        stale.act = AsyncMock(
+            side_effect=ComputerAgentError("session_not_found", "Session gone"),
+        )
+
+        result = await cp.desktop.act("open the browser")
+        assert isinstance(result, ActResult)  # succeeded on the fresh session
+        assert sessions["desktop"] is not stale  # cache was actually replaced
+
+
 # ── Push session invalidation (Option B) ──────────────────────────────
 
 

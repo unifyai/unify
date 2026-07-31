@@ -2309,96 +2309,6 @@ class ConversationManagerBrainActionTools:
         """
         return {"status": "guidance_noted"}
 
-    async def engage_speaker(self, *, speaker: str) -> dict[str, Any]:
-        """
-        Give another voice on the call full conversational standing.
-
-        During calls, transcript lines are attributed by voice: my primary call
-        participants appear by name, while other voices in the room appear as
-        anonymous labels like "Speaker 2". Those background voices are heard
-        and transcribed, but they cannot end turns, trigger my replies, or
-        interrupt my speech — I treat them as context only.
-
-        I call this when a background voice becomes a legitimate conversation
-        partner: my caller hands the conversation over ("talk to my friend for
-        a moment", "my colleague has a question"), or a background speaker
-        clearly addresses me directly and my caller would want me to respond.
-        Once engaged, that voice holds the floor like any participant. My
-        caller always remains engaged regardless — engaging a guest never
-        demotes anyone.
-
-        Args:
-            speaker: The transcript label of the voice to engage (e.g.
-                "Speaker 2"), exactly as it appears in the conversation.
-        """
-        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=True)
-
-    async def disengage_speaker(self, *, speaker: str) -> dict[str, Any]:
-        """
-        Return a previously engaged voice to background (context-only) status.
-
-        I call this when a guest's turn in the conversation is over — the
-        caller takes back the conversation ("thanks, I'm back", "that's all
-        from him"), the guest says goodbye, or the caller asks me to stop
-        responding to them. Their speech is still transcribed as labeled
-        context; they simply stop holding the floor. Primary call participants
-        can never be disengaged.
-
-        Args:
-            speaker: The transcript label of the engaged voice to demote
-                (e.g. "Speaker 2").
-        """
-        return await self._cm.set_speaker_engagement(speaker=speaker, engaged=False)
-
-    def _speaker_engagement_doc_suffix(self) -> str:
-        """Live engagement status appendix for the engage/disengage docstrings.
-
-        Rendered per turn (``as_tools`` runs each turn) so the slow brain sees
-        the current engaged set and which anonymous voices have been heard.
-        Returns ``""`` when no anonymous voice has surfaced yet.
-        """
-        cmgr = self._cm.call_manager
-        if not cmgr.known_speaker_labels and not cmgr.engaged_labels:
-            return ""
-        engaged_names = sorted(cmgr.engaged_contacts.values()) + sorted(
-            cmgr.engaged_labels,
-        )
-        lines = [
-            "",
-            f"Currently engaged: {', '.join(engaged_names)}.",
-        ]
-        background = sorted(cmgr.known_speaker_labels - cmgr.engaged_labels)
-        if background:
-            lines.append(
-                f"Background voices heard so far (not engaged): {', '.join(background)}.",
-            )
-        return "\n".join(lines)
-
-    def _with_doc_suffix(
-        self,
-        base: "Callable[..., Any]",
-        suffix: str,
-    ) -> "Callable[..., Any]":
-        """Return ``base`` with ``suffix`` appended to its docstring.
-
-        Rebuilt per turn (``as_tools`` runs each turn) so dynamic status stays
-        current. Returns ``base`` unchanged for an empty suffix.
-        """
-        if not suffix:
-            return base
-
-        @wraps(base)
-        async def _with_suffix(**kwargs: Any) -> Any:
-            return await base(**kwargs)
-
-        # Pin the schema signature to the bound method's (which already
-        # excludes ``self``); without this, ``inspect.signature`` would unwrap
-        # past the bound method and re-expose ``self``.
-        _with_suffix.__signature__ = inspect.signature(base)
-        base_doc = inspect.getdoc(base) or ""
-        _with_suffix.__doc__ = f"{base_doc}\n{suffix}"
-        return _with_suffix
-
     def _whatsapp_contact_label(self, contact_id: int) -> str:
         """Human-friendly name for a contact in the window-status appendix."""
         contact = None
@@ -2541,15 +2451,6 @@ class ConversationManagerBrainActionTools:
                 tools["allow_hang_up"] = self.allow_hang_up
             else:
                 tools["withdraw_hang_up"] = self.withdraw_hang_up
-            engagement_suffix = self._speaker_engagement_doc_suffix()
-            tools["engage_speaker"] = self._with_doc_suffix(
-                self.engage_speaker,
-                engagement_suffix,
-            )
-            tools["disengage_speaker"] = self._with_doc_suffix(
-                self.disengage_speaker,
-                engagement_suffix,
-            )
         if (
             self._cm.call_manager.has_active_google_meet
             or self._cm.call_manager.has_active_teams_meet

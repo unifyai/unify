@@ -227,3 +227,60 @@ run("only contracted regions are advertised", () => {
   // configuration time into a session that starts and then behaves wrongly.
   assert.deepEqual(supportedRegions(), ["gb", "us"]);
 });
+
+// A dedicated-IP endpoint: the username is literal and the exit is a fixed
+// address, so the region cannot travel to the provider as a parameter.
+const DEDICATED_ENV = {
+  UNITY_EGRESS_PROXY_SERVER: "http://isp.example.net:8001",
+  UNITY_EGRESS_PROXY_USERNAME: "acct_fixed",
+  UNITY_EGRESS_PROXY_PASSWORD: "s3cret", // pragma: allowlist secret - test fixture
+  UNITY_EGRESS_PROXY_REGIONS: "gb",
+};
+
+run("a dedicated endpoint serves its declared region with the username verbatim", () => {
+  const resolved = resolveEgress(
+    { mode: "region", region: "gb", sessionKey: "alice" },
+    DEDICATED_ENV,
+  );
+  // Nothing to substitute, and nothing invented: a literal username must reach
+  // the provider byte-for-byte or it simply fails to authenticate.
+  assert.equal(resolved.proxy?.username, "acct_fixed");
+  assert.equal(resolved.contextOptions.timezoneId, "Europe/London");
+});
+
+run("a dedicated endpoint refuses a region it does not exit from", () => {
+  // The exit is one fixed address. Serving `us` from it would pair a London
+  // address with America/New_York and en-US — a sharper contradiction than no
+  // proxy at all, and one that reports success.
+  assert.throws(
+    () => resolveEgress({ mode: "region", region: "us" }, DEDICATED_ENV),
+    (err: unknown) =>
+      err instanceof EgressPolicyError && /serves gb, not "us"/.test((err as Error).message),
+  );
+});
+
+run("a fixed exit of undeclared geography refuses every region", () => {
+  // Without a declaration there is no way to know where the endpoint leaves
+  // from, so claiming any particular region is a guess.
+  const { UNITY_EGRESS_PROXY_REGIONS: _omitted, ...undeclared } = DEDICATED_ENV;
+  assert.throws(
+    () => resolveEgress({ mode: "region", region: "gb" }, undeclared),
+    (err: unknown) =>
+      err instanceof EgressPolicyError && /unknown geography/.test((err as Error).message),
+  );
+});
+
+run("a geo-targeted username needs no region declaration", () => {
+  // The region travels in the username, so the provider itself enforces it and
+  // any supported region is servable without further configuration.
+  const resolved = resolveEgress({ mode: "region", region: "us" }, MANAGED_ENV);
+  assert.ok(resolved.proxy?.username?.includes("-us-"));
+});
+
+run("the region declaration tolerates spacing and case", () => {
+  const resolved = resolveEgress(
+    { mode: "region", region: "us" },
+    { ...DEDICATED_ENV, UNITY_EGRESS_PROXY_REGIONS: " GB , US " },
+  );
+  assert.equal(resolved.contextOptions.locale, "en-US");
+});
