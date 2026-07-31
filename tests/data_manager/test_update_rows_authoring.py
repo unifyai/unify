@@ -6,8 +6,15 @@ from unify.common.authorship import AUTHORING_ASSISTANT_ID_FIELD
 from unify.data_manager.ops import mutation_ops
 
 
-def test_filter_update_strips_authoring_from_overwrite_payload(monkeypatch) -> None:
-    """Existing rows carry authoring_assistant_id; overwrite must omit it."""
+def test_filter_update_sends_only_the_callers_columns(monkeypatch) -> None:
+    """The filter path must never round-trip the row it read.
+
+    Orchestra merges partial payloads server-side and rejects any update that
+    names an immutable field even with an unchanged value — so re-sending the
+    row's own columns (auto-counted identity keys, authorship) turns an
+    ordinary state update into a 400. This is the failure that left every
+    ingestion run stuck at `queued`.
+    """
 
     captured: list[dict] = []
 
@@ -55,7 +62,8 @@ def test_filter_update_strips_authoring_from_overwrite_payload(monkeypatch) -> N
     assert AUTHORING_ASSISTANT_ID_FIELD not in payload["entries"]
     assert payload["entries"]["custom_hash"] == "abc123"
     assert payload["entries"]["campaign_slug"] == "stargazer-v1"
-    assert payload["entries"]["custom_key"] == "stargazer-v1"
+    # The row's own columns stay server-side; only the update crosses the wire.
+    assert "custom_key" not in payload["entries"]
 
 
 def test_log_id_update_strips_authoring_from_delta_payload(monkeypatch) -> None:
