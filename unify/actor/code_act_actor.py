@@ -1188,6 +1188,31 @@ def _build_storage_tools(
 
             if not callable(attach_entrypoint):
                 return "No task entrypoint attachment hook is available."
+            # A recorded entrypoint id that does not resolve at execution time
+            # fails every future wake of the task, so verify the id actually
+            # persisted before recording it on the definition.
+            if fm is None:
+                return (
+                    "Refusing to attach an entrypoint: no FunctionManager is "
+                    "available to verify the function id."
+                )
+            try:
+                resolution = fm.filter_functions(
+                    filter=f"function_id == {int(function_id)}",
+                    include_implementations=False,
+                )
+            except Exception as exc:
+                return (
+                    f"Refusing to attach function_id {int(function_id)}: "
+                    f"resolvability check failed ({type(exc).__name__}: {exc})."
+                )
+            if not resolution:
+                return (
+                    f"Refusing to attach function_id {int(function_id)}: no "
+                    "stored function resolves to that id. Store the function "
+                    "first (or re-check the id from the add_functions result) "
+                    "and attach the id that actually persisted."
+                )
             return str(
                 attach_entrypoint(
                     function_id=int(function_id),
@@ -4785,11 +4810,30 @@ class CodeActActor(BaseCodeActActor):
         )
         client = new_llm_client(self._model)
         client.set_system_message(
-            "You are repairing a stored symbolic task executor. The function "
-            "must preserve the task contract, managed primitives, deterministic "
-            "inputs, side-effect ordering, and failure semantics. Prefer updating "
-            "the existing function with overwrite=True. Do not replace managed "
-            "primitives with ad hoc weaker implementations.",
+            "You are repairing a stored symbolic task executor. The contract "
+            "you must preserve is the task's OUTCOME: what it computes, the "
+            "semantics and exactness of those values, which side effects it "
+            "performs, where it delivers them, in what order, and how it fails "
+            "when the outcome is truly unachievable. How the function READS its "
+            "external inputs is not contract: external interfaces evolve after "
+            "a function is stored (fields get renamed or nested, endpoints get "
+            "versioned), and adapting ingestion to the environment's current "
+            "shape while keeping the outcome exactly equivalent is precisely "
+            "what repair is for. The task description records the environment "
+            "as it looked when the task was created; when the observed failure "
+            "contradicts it, trust the failure evidence over the description's "
+            "input details. Bear in mind that the function's own validation "
+            "messages describe its assumptions, not what the environment "
+            "actually returned — a missing expected field usually means the "
+            "interface changed shape, not that the data is corrupt, so prefer "
+            "ingestion that detects the current shape (e.g. accepts a renamed "
+            "equivalent field) over rejecting the input. Never weaken the "
+            "outcome to make the error disappear: do not fabricate values, "
+            "skip required side effects, or coerce genuinely invalid data. "
+            "Update the existing function in place with overwrite=True so its "
+            "function_id stays stable; never delete and re-add it, because "
+            "references such as task entrypoints hold the id. Do not replace "
+            "managed primitives with ad hoc weaker implementations.",
         )
         message = (
             "A symbolic task executor failed certification or execution.\n\n"
@@ -4801,9 +4845,12 @@ class CodeActActor(BaseCodeActActor):
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
             f"Failure: {type(failure).__name__}: {failure}\n\n"
-            "Repair the stored function if possible, then briefly summarize the "
-            "equivalence rationale and the change made. If it cannot be repaired "
-            "without changing the task contract, say so without promoting it."
+            "Diagnose the failure, repair the stored function in place "
+            "(overwrite=True) when an outcome-equivalent fix exists — "
+            "including adapting input handling to an evolved external "
+            "interface — then briefly summarize the equivalence rationale and "
+            "the change made. Only if no fix can preserve the task's outcome "
+            "semantics, say so without modifying the function."
         )
         handle = start_async_tool_loop(
             client=client,

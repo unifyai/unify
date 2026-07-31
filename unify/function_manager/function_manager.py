@@ -8066,7 +8066,11 @@ def _wrap_venv_write(method_name: str) -> None:
 
 
 def _signature_with_destination(method: Callable[..., Any]) -> inspect.Signature:
-    signature = inspect.signature(method)
+    # follow_wrapped=False: the concrete methods carry @functools.wraps(Base...),
+    # and following the chain would resolve to the abstract signature, silently
+    # dropping concrete-only parameters (e.g. add_functions' ``overwrite``) from
+    # the LLM-visible tool schema.
+    signature = inspect.signature(method, follow_wrapped=False)
     if "destination" in signature.parameters:
         return signature
     parameters = list(signature.parameters.values())
