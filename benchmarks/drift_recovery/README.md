@@ -65,14 +65,17 @@ bash benchmarks/drift_recovery/run_hermes.sh
 
 | arm | correct fires | total tokens | recovery |
 |---|---|---|---|
-| unify (fixed build) | 6/10 | 1.74M | autonomous: 4 cheap in-run repair attempts, recovered at fire 9, zero-token correct at fire 10 |
+| **unify (current: `5fb19164d` + probe `54987ca06`)** | **10/10** | 1.51M | **in-run self-repair at fire 5** — the repair probed the live API, fixed the function in place (3 calls, $0.18, 82s), delivered the same fire; fires 6–10 back to 0 tokens |
 | hermes + human | 8/10 | 1.42M | operator noticed 2 failures and asked hermes to fix itself (739k-token session) |
 | hermes alone | 4/10 → flat forever | 0.67M | none possible: `no_agent` script has no model in the loop |
+| unify (fixed, pre-probe) | 6/10 | 1.74M | autonomous but blind: 4 fire-by-fire repair attempts — see `2026-07-31T11-54-41Z-unify/NOTE.md` |
 | unify (pre-fix baseline) | 4/10 | 2.89M | none — see `2026-07-31T11-08-13Z-unify/NOTE.md`; defects fixed in `5fb19164d` |
 
-The benchmark's first unify run failed outright and yielded four production
+The benchmark's first unify run failed outright and yielded five production
 fixes (repair-prompt contract framing, `overwrite` swallowed from the
 `add_functions` schema, unresolvable entrypoint attaches, description-
-anchored no-op completions). The rerun on the fixed build is the honest
-result: slower to recover than a human-guided fix on this task, but the only
-arm that recovers **unattended** and returns to the zero-token steady state.
+anchored no-op completions, and a read-only diagnostic probe so repair
+observes the environment instead of guessing). The current result is the
+designed curve: reliability never dips through the schema change, drift
+costs one $0.18 blip, and no human is ever involved — while hermes's
+recovery needs an operator, and without one it stays broken forever.
