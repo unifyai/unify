@@ -13,7 +13,6 @@ from unify.contact_manager.types.contact import UNASSIGNED
 from unify.common.context_registry import ContextRegistry
 from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
-from unify.conversation_manager import speaker_id
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.comms_utils import (
@@ -1752,18 +1751,6 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
     ):
         sender_name = event.speaker_label
 
-    # Track anonymous voice labels for the engagement tools' status appendix.
-    # Keyed on provenance, not "no voice match": a roster/DOM-resolved *real*
-    # name is also unverified, but it is not a "Speaker N" placeholder and must
-    # not pollute the anonymous-label roster.
-    if (
-        role == "user"
-        and getattr(event, "speaker_label", None)
-        and getattr(event, "speaker_label_source", None)
-        == speaker_id.LABEL_SOURCE_ANONYMOUS
-    ):
-        cm.call_manager.note_speaker_label(event.speaker_label)
-
     message_id = cm.contact_index.push_message(
         contact_id=contact_id,
         sender_name=sender_name,
@@ -1850,18 +1837,6 @@ async def _(event: Event, cm: "ConversationManager", *args, **kwargs):
                     [utterance],
                 ),
             )
-
-    # A non-engaged (background) utterance is context, not a turn: the fast
-    # brain emitted no reply and scheduled no slow-brain user run for it. A
-    # debounced non-user-origin run lets the slow brain notice a background
-    # voice addressing the assistant and engage it; bursts collapse in the
-    # debouncer.
-    if role == "user" and getattr(event, "engaged", True) is False:
-        await cm.request_llm_run(
-            delay=2,
-            triggering_contact_id=contact_id,
-        )
-        return
 
     # Reset proactive speech on any utterance (user or assistant).
     await cm.schedule_proactive_speech()
