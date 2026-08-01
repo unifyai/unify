@@ -66,7 +66,7 @@ bash benchmarks/drift_recovery/run_hermes.sh
 | arm | correct fires | total tokens | recovery |
 |---|---|---|---|
 | **unify (current: `5fb19164d` + probe `54987ca06`)** | **10/10** | 1.51M | **in-run self-repair at fire 5** — the repair probed the live API, fixed the function in place (3 calls, $0.18, 82s), delivered the same fire; fires 6–10 back to 0 tokens |
-| openclaw | 9/10 | 0.40M | autonomous, in-loop: fire 5 declined to deliver against the renamed field, fire 6 adapted and caught up the cursor range — but the cron payload never heals, so every post-drift fire re-pays ~2× (~16k → ~36k tokens); see the run's NOTE.md |
+| openclaw | 9/10 | 0.40M | autonomous, in-loop: fire 5 declined to deliver against the renamed field, fire 6 adapted and caught up the cursor range — but the cron payload never heals, so every post-drift fire re-pays ~2.5× (~16k → ~40k tokens); see the run's NOTE.md |
 | hermes + human | 8/10 | 1.42M | operator noticed 2 failures and asked hermes to fix itself (739k-token session) |
 | hermes alone | 4/10 → flat forever | 0.67M | none possible: `no_agent` script has no model in the loop |
 | unify (fixed, pre-probe) | 6/10 | 1.74M | autonomous but blind: 4 fire-by-fire repair attempts — see `2026-07-31T11-54-41Z-unify/NOTE.md` |

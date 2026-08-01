@@ -16,7 +16,7 @@ recovery is the finding:
 3. **The artifact never heals.** The cron payload was byte-identical after
    fire 10 — still describing `unit_price_cents` — so every post-drift
    fire re-discovers the rename from scratch: per-fire cost roughly
-   doubles (≈16k → ≈36k tokens, 2 → 4-5 calls) and stays there. The
+   2.5×es (≈16k → ≈40k tokens, 2 → 4-5 calls) and stays there. The
    adaptation is paid per fire, forever, instead of once.
 
 Contrast across arms: unify repaired its stored function **in place**
@@ -25,5 +25,5 @@ script died silently (4/10 alone, 8/10 only after a 743k-token
 human-initiated fix); openclaw absorbed the drift in-loop (9/10 alone) at
 a permanent ~2× per-fire tax. Total for the 10-fire series openclaw is
 cheapest (~0.40M vs 1.42M/1.51M) — at this hourly cadence its post-drift
-slope (~36k/fire) hands the lead back to unify's flat line inside ~31
-fires.
+slope (~40k/fire) hands the lead back to unify's flat line within ~28
+more fires.

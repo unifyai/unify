@@ -54,12 +54,12 @@ cost:
 |---|---|---|---|
 | unify | stored function, frozen control flow, **one** focused `query_llm` call | **1 LLM call · ~645 tokens · $0.006 · ~10 s** | setup 635k + fire-1 distillation 821k |
 | hermes | prompt-driven cron (`no_agent: false`) — full agent boot each fire | 5 LLM calls · ~21.5k tokens · ~22 s | setup 154k |
-| openclaw | prompt-driven isolated cron (`agentTurn` payload) — agent turn each fire | 4 LLM calls · ~30.7k tokens · ~21 s | setup 84k |
+| openclaw | prompt-driven isolated cron (`agentTurn` payload) — agent turn each fire | 4 LLM calls · ~30k tokens · ~21 s | setup 84k |
 
 The openclaw arm (2026-07-31, added later the same day) also scored 100%
 on all 96 inquiries — three architectures, zero scorer daylight — on the
 cheapest setup and the most expensive steady state of the three; its
-break-even against unify's distillation lands near fire 46.
+break-even against unify's distillation lands near fire 47.
 
 Same request, same model, same perfect accuracy — **~33× fewer tokens per
 firing** than hermes (~48× vs openclaw). Hermes's cheaper setup buys it the first ~2.5 days of hourly
