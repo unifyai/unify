@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from unify.conversation_manager.prompt_builders import (
+    _build_voice_calls_guide,
+    build_fast_brain_turn_guidance,
     build_system_prompt,
     build_voice_agent_prompt,
 )
@@ -1201,3 +1203,53 @@ class TestOnboardingPromptLeakageGuard:
         assert "Startable steps right now" in prompt
         assert "1. Trigger WhatsApp message from T-W1N" in prompt
         assert "2. Add your phone number" in prompt
+
+
+class TestFastBrainTurnGuidance:
+    """The note handed to the slow brain after the Voice Agent finishes a turn.
+
+    The Voice Agent's line is already in the caller's ears by the time the slow
+    brain runs, so the note has to read as reported fact. Phrasing it as an
+    intention invites a reply that re-answers the question and opens with a
+    second "Yes".
+    """
+
+    @pytest.mark.parametrize(
+        "classification",
+        ["defer", "smalltalk", "continuation", "some_future_classification"],
+    )
+    def test_line_is_presented_as_already_spoken(self, classification):
+        note = build_fast_brain_turn_guidance(
+            classification=classification,
+            intended_speech="Yes — I can take a look at that.",
+        )
+        assert "Yes — I can take a look at that." in note
+        assert "intended speech" not in note.lower()
+        assert "heard" in note.lower()
+
+    def test_defer_asks_for_continuation_not_a_fresh_reply(self):
+        note = build_fast_brain_turn_guidance(
+            classification="defer",
+            intended_speech="Yes — I can take a look at that.",
+        )
+        lowered = note.lower()
+        assert "continues that same piece of speech" in lowered
+        assert "do not restate it" in lowered
+        assert "do not re-answer" in lowered
+        assert "same yes/no" in lowered
+        # The filler framing told the slow brain the line did not count.
+        assert "filler" not in lowered
+
+    def test_smalltalk_still_asks_for_silence(self):
+        note = build_fast_brain_turn_guidance(
+            classification="smalltalk",
+            intended_speech="It's just gone nine here.",
+        )
+        assert "wait()" in note
+        assert "do not repeat or paraphrase it" in note.lower()
+
+    def test_voice_guide_treats_the_spoken_line_as_delivered(self):
+        guide = _build_voice_calls_guide()
+        assert "mine and already delivered" in guide
+        assert "Continue from what I just said." in guide
+        assert 'never "Yes. The quickest way is…"' in guide
