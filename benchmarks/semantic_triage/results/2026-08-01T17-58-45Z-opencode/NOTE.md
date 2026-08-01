@@ -11,7 +11,9 @@ runs are kept:
 | `18-01-55Z` | agent + custom command + cron spec | cron_spec | **8/8, 100%** | 18.9k |
 
 **Two of three setups produced a working automation.** The failure mode is
-specific and visible in `opencode_cli.log`: in `17-55-38Z` the agent went
+specific, and was read from the run's CLI log at the time (that log is no
+longer committed — it captures resolved provider config and so can carry a
+plaintext API key): in `17-55-38Z` the agent went
 looking for a launchd job, hit OpenCode's own `external_directory`
 permission auto-rejection on `~/Library/LaunchAgents`, and abandoned the
 task without writing anything. The two successful runs instead wrote a

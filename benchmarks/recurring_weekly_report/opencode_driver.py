@@ -471,23 +471,14 @@ def defuse_host_artifacts(results_dir: Path, crontab_before: str | None) -> list
 
 def scrub_state_archive(state_root: Path, workspace: Path) -> None:
     """Keep the evidentiary artifacts; drop machine state and caches."""
-    for name in ("cache", "state"):
-        target = state_root / name
-        if target.is_dir():
-            shutil.rmtree(target, ignore_errors=True)
-    shim_bin = state_root / "bin"
-    if shim_bin.is_dir():
-        shutil.rmtree(shim_bin, ignore_errors=True)
-    data = state_root / "data" / "opencode"
-    for name in ("log", "bin", "repos", "snapshot"):
-        target = data / name
-        if target.is_dir():
-            shutil.rmtree(target, ignore_errors=True)
-    for auth in data.rglob("auth.json"):
-        auth.unlink()
-    config_copy = state_root / "config" / "opencode"
-    if config_copy.is_dir():
-        shutil.rmtree(config_copy, ignore_errors=True)
+    # Everything under the state root is runtime machinery, and OpenCode
+    # persists *resolved* provider config into its local SQLite database —
+    # so the archive would carry a plaintext API key even when the config
+    # file only holds an {env:...} reference. None of it is evidence: the
+    # findings cite the workspace artifacts and the summary tables. Drop
+    # the whole state root rather than pruning it directory by directory.
+    if state_root.is_dir():
+        shutil.rmtree(state_root, ignore_errors=True)
     ws_git = workspace / ".git"
     if ws_git.is_dir():
         shutil.rmtree(ws_git, ignore_errors=True)
