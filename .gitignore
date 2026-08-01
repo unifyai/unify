@@ -23,6 +23,7 @@ application_default_credentials.json
 __pycache__/
 implementations.py
 .cache.ndjson
+.cache.ndjson.idx
 .cache_write.ndjson
 .flow-cache/
 .log.txt
