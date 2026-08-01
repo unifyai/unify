@@ -23,7 +23,7 @@ post-change scoring window contains at least one item whose priority flips.
 
 | | Unify (factored guidance) | hermes | openclaw |
 |---|---|---|---|
-| correctness (15 fires, both epochs) | **15/15** | **15/15** | 10/15 fully exact |
+| correctness (15 fires, both epochs) | **15/15** | **15/15** | 10/15 fully exact (14/15 met the delivery contract) |
 | change propagated to all three automations | yes — guidance canon + 3 linked functions | yes (3 prompt edits) | yes (3 cron payloads rewritten) |
 | change-application cost | 1.02M tokens / $2.72 | 1.14M tokens | **142k tokens** |
 | steady state, whole family per round | **~2.2k tokens** | ~57k tokens | ~80k tokens |

@@ -6,7 +6,7 @@ has no direct-execution payload, so every fire boots an agent turn: 2 LLM
 calls, ~16.8k tokens, ~20 s. Three observations:
 
 1. **Cheapest setup of the three arms by an order of magnitude.** 4 calls /
-   64k tokens (hermes 1.22M, unify 1.52M to steady state). The OpenClaw
+   67k tokens (hermes 1.22M, unify 1.52M to steady state). The OpenClaw
    system prompt is small, and the agent did no exploratory scripting — it
    authored one cron job and stopped.
 2. **The payload is a self-authored program in prose.** The agent wrote the

@@ -31,7 +31,7 @@ The OpenClaw arm (`run_openclaw.sh` / `openclaw_driver.py`, which also
 hosts the shared OpenClaw toolkit for the other experiments) applies the
 same protocol via a throwaway `OPENCLAW_STATE_DIR`, a managed Gateway
 child, and `openclaw cron run` fires. Measured result: the cheapest setup
-of the three arms by an order of magnitude (64k tokens) and 4/4 exact
+of the three arms by an order of magnitude (67k tokens) and 4/4 exact
 on-demand deliveries — but no zero-token steady state exists to converge
 to: every fire boots an agent turn (~16.8k tokens), forever (see the
 `*-openclaw` results NOTE.md).
