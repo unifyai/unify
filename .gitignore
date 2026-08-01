@@ -24,6 +24,7 @@ __pycache__/
 implementations.py
 .cache.ndjson
 .cache_write.ndjson
+.flow-cache/
 .log.txt
 log.txt
 .logs.txt
