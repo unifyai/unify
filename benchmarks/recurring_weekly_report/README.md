@@ -36,6 +36,17 @@ on-demand deliveries — but no zero-token steady state exists to converge
 to: every fire boots an agent turn (~16.8k tokens), forever (see the
 `*-openclaw` results NOTE.md).
 
+The OpenCode arm (`run_opencode.sh` / `opencode_driver.py`) has no
+scheduler to register with, so the harness executes whatever the agent
+itself declared — preferring the command named in any crontab spec it
+writes. Measured result: **0/4 delivered when fired as declared**, because
+the agent encoded "every Monday 09:00" as an hourly job whose script exits
+unless the clock reads Monday 09:00 UTC — independently reproducing the
+same off-spec shape hermes chose. Its setup is the cheapest of any arm
+(85k) and the script itself is exactly correct: an earlier run that fired
+the script bare, bypassing the gate, delivered 4/4 byte-exact reports (see
+both `*-opencode` NOTE.md files).
+
 ## Task definition
 
 - Fixture: a seeded deterministic orders API (`fixture.py`), four regions,
@@ -67,7 +78,10 @@ to: every fire boots an agent turn (~16.8k tokens), forever (see the
 ## Run it
 
 ```bash
-bash benchmarks/recurring_weekly_report/run.sh
+bash benchmarks/recurring_weekly_report/run.sh          # unify arm
+bash benchmarks/recurring_weekly_report/run_hermes.sh   # hermes-agent arm
+bash benchmarks/recurring_weekly_report/run_openclaw.sh # openclaw arm
+bash benchmarks/recurring_weekly_report/run_opencode.sh # opencode arm
 ```
 
 Knobs (env): `RWR_RUNS` (default 4), `RWR_SEED`, `RWR_PORT`,

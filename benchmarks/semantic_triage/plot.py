@@ -37,6 +37,7 @@ GRID = "#e8e7e4"
 UNIFY_COLOR = "#2a78d6"
 HERMES_COLOR = "#eb6834"
 OPENCLAW_COLOR = "#009E73"
+OPENCODE_COLOR = "#7B52AB"
 
 WIDTH = 860
 PANEL_H = 240
@@ -96,6 +97,7 @@ def render(
     unify_results: dict[str, Any],
     hermes_results: dict[str, Any],
     openclaw_results: dict[str, Any] | None = None,
+    opencode_results: dict[str, Any] | None = None,
 ) -> str:
     n = int(unify_results["n_fires"])
     u_fires = _per_fire(unify_results)
@@ -107,6 +109,16 @@ def render(
     # hermes across all fires (its per-fire cost is flat from fire 1).
     u_steady = sum(u_fires[1:]) / max(len(u_fires) - 1, 1)
     h_steady = sum(h_fires) / len(h_fires)
+
+    c_fires: list[int] | None = None
+    c_setup = 0
+    c_steady = 0.0
+    c_acc = None
+    if opencode_results is not None:
+        c_fires = _per_fire(opencode_results)
+        c_setup = _phase_tokens(opencode_results).get("setup", 0)
+        c_steady = sum(c_fires) / len(c_fires)
+        c_acc = sum(float(f["accuracy"]) for f in opencode_results["fires"]) / n
 
     o_fires: list[int] | None = None
     o_setup = 0
@@ -135,12 +147,14 @@ def render(
         f"One natural-language request · gpt-5.6-sol via OpenRouter · accuracy "
         f"{u_acc:.0%} vs {h_acc:.0%}"
         + (f" vs {o_acc:.0%}" if o_acc is not None else "")
+        + (f" vs {c_acc:.0%}" if c_acc is not None else "")
         + f" on {u_items} inquiries each</text>",
     ]
 
     # ── Panel 1: per-fire tokens, log scale ────────────────────────────────
     p1_top = MARGIN_TOP
-    all_fire_vals = u_fires + h_fires + (o_fires or [])
+    all_fire_vals = u_fires + h_fires + (o_fires or []) + (c_fires or [])
+    all_fire_vals = [v for v in all_fire_vals if v > 0] or [1]
     lo = 10 ** math.floor(math.log10(max(min(all_fire_vals), 100)))
     hi = 10 ** math.ceil(math.log10(max(all_fire_vals)))
 
@@ -172,6 +186,8 @@ def render(
     ]
     if o_fires is not None:
         p1_series.append((o_fires, OPENCLAW_COLOR, "triangle"))
+    if c_fires is not None:
+        p1_series.append((c_fires, OPENCODE_COLOR, "diamond"))
     p1_series.append((u_fires, UNIFY_COLOR, "circle"))
     for vals, color, shape in p1_series:
         pts = " ".join(f"{_x(i + 1, n):.1f},{y1(v):.1f}" for i, v in enumerate(vals))
@@ -184,6 +200,12 @@ def render(
                 parts.append(
                     f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="{color}" '
                     f'stroke="{SURFACE}" stroke-width="2"/>',
+                )
+            elif shape == "diamond":
+                parts.append(
+                    f'<path d="M {cx:.1f} {cy - 5:.1f} L {cx + 5:.1f} {cy:.1f} '
+                    f'L {cx:.1f} {cy + 5:.1f} L {cx - 5:.1f} {cy:.1f} Z" '
+                    f'fill="{color}" stroke="{SURFACE}" stroke-width="2"/>',
                 )
             elif shape == "triangle":
                 parts.append(
@@ -203,6 +225,8 @@ def render(
     ]
     if o_fires is not None:
         p1_labels.append((o_fires, OPENCLAW_COLOR, "openclaw", o_steady))
+    if c_fires is not None:
+        p1_labels.append((c_fires, OPENCODE_COLOR, "opencode", c_steady))
     used_p1_ys: list[float] = []
     for vals, color, name, value in p1_labels:
         ey = y1(vals[-1])
@@ -236,7 +260,13 @@ def render(
     u_cum = cumulative(u_setup, u_fires, u_steady)
     h_cum = cumulative(h_setup, h_fires, h_steady)
     o_cum = cumulative(o_setup, o_fires, o_steady) if o_fires is not None else None
-    vmax = max(u_cum[-1], h_cum[-1], o_cum[-1] if o_cum else 0)
+    c_cum = cumulative(c_setup, c_fires, c_steady) if c_fires is not None else None
+    vmax = max(
+        u_cum[-1],
+        h_cum[-1],
+        o_cum[-1] if o_cum else 0,
+        c_cum[-1] if c_cum else 0,
+    )
 
     crossover = next(
         (i for i in range(len(u_cum)) if u_cum[i] <= h_cum[i]),
@@ -284,6 +314,8 @@ def render(
     p2_series: list[tuple[list[float], str]] = [(h_cum, HERMES_COLOR)]
     if o_cum is not None:
         p2_series.append((o_cum, OPENCLAW_COLOR))
+    if c_cum is not None:
+        p2_series.append((c_cum, OPENCODE_COLOR))
     p2_series.append((u_cum, UNIFY_COLOR))
     for cum, color in p2_series:
         solid = " ".join(f"{x2(i):.1f},{y2(v):.1f}" for i, v in enumerate(cum[: n + 1]))
@@ -304,6 +336,8 @@ def render(
     ]
     if o_cum is not None:
         p2_labels.append((o_cum, OPENCLAW_COLOR, "openclaw"))
+    if c_cum is not None:
+        p2_labels.append((c_cum, OPENCODE_COLOR, "opencode"))
     used_ys: list[float] = []
     for cum, color, name in p2_labels:
         ey = y2(cum[-1])
@@ -342,12 +376,15 @@ def render(
 
 def main() -> None:
     openclaw_dir: Path | None
+    opencode_dir: Path | None
     if len(sys.argv) >= 3:
         unify_dir, hermes_dir = Path(sys.argv[1]), Path(sys.argv[2])
         openclaw_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+        opencode_dir = Path(sys.argv[4]) if len(sys.argv) > 4 else None
     else:
         unify_dir, hermes_dir = _newest("*-unify"), _newest("*-hermes")
         openclaw_dir = _newest("*-openclaw", required=False)
+        opencode_dir = _newest("*-opencode", required=False)
     unify_results = json.loads((unify_dir / "results.json").read_text())
     hermes_results = json.loads((hermes_dir / "results.json").read_text())
     openclaw_results = (
@@ -355,9 +392,14 @@ def main() -> None:
         if openclaw_dir is not None
         else None
     )
+    opencode_results = (
+        json.loads((opencode_dir / "results.json").read_text())
+        if opencode_dir is not None
+        else None
+    )
     out = EXPERIMENT_DIR / "results" / "semantic_triage.svg"
     out.write_text(
-        render(unify_results, hermes_results, openclaw_results),
+        render(unify_results, hermes_results, openclaw_results, opencode_results),
         encoding="utf-8",
     )
     print(f"wrote {out}")

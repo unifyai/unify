@@ -39,6 +39,18 @@
 <path d="M 555.6 161.6 L 560.1 170.6 L 551.1 170.6 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
 <path d="M 615.3 139.4 L 619.8 148.4 L 610.8 148.4 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
 <path d="M 675.0 117.2 L 679.5 126.2 L 670.5 126.2 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
+<polyline points="78.0,322.0 137.7,299.8 197.4,277.6 257.1,255.4 316.8,233.2 376.5,233.2 436.2,233.2 495.9,211.0 555.6,188.8 615.3,166.6 675.0,144.4" fill="none" stroke="#7B52AB" stroke-width="2"/>
+<path d="M 78.0 317.0 L 83.0 322.0 L 78.0 327.0 L 73.0 322.0 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 137.7 294.8 L 142.7 299.8 L 137.7 304.8 L 132.7 299.8 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 197.4 272.6 L 202.4 277.6 L 197.4 282.6 L 192.4 277.6 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 257.1 250.4 L 262.1 255.4 L 257.1 260.4 L 252.1 255.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 316.8 228.2 L 321.8 233.2 L 316.8 238.2 L 311.8 233.2 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 376.5 228.2 L 381.5 233.2 L 376.5 238.2 L 371.5 233.2 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 436.2 228.2 L 441.2 233.2 L 436.2 238.2 L 431.2 233.2 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 495.9 206.0 L 500.9 211.0 L 495.9 216.0 L 490.9 211.0 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 555.6 183.8 L 560.6 188.8 L 555.6 193.8 L 550.6 188.8 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 615.3 161.6 L 620.3 166.6 L 615.3 171.6 L 610.3 166.6 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 675.0 139.4 L 680.0 144.4 L 675.0 149.4 L 670.0 144.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
 <polyline points="78.0,322.0 137.7,299.8 197.4,277.6 257.1,255.4 316.8,233.2 376.5,211.0 436.2,188.8 495.9,166.6 555.6,144.4 615.3,122.2 675.0,100.0" fill="none" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="78.0" cy="322.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
 <circle cx="137.7" cy="299.8" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
@@ -53,10 +65,12 @@
 <circle cx="675.0" cy="100.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="683" y="95.0" width="10" height="10" fill="#2a78d6"/>
 <text x="698" y="104.0" fill="#1a1a19" font-size="12">Unify · 10</text>
+<rect x="683" y="139.4" width="10" height="10" fill="#7B52AB"/>
+<text x="698" y="148.4" fill="#1a1a19" font-size="12">opencode · 8</text>
 <rect x="683" y="117.2" width="10" height="10" fill="#009E73"/>
 <text x="698" y="126.2" fill="#1a1a19" font-size="12">openclaw · 9</text>
-<rect x="683" y="139.4" width="10" height="10" fill="#eb6834"/>
-<text x="698" y="148.4" fill="#1a1a19" font-size="12">hermes + human · 8</text>
+<rect x="683" y="155.4" width="10" height="10" fill="#eb6834"/>
+<text x="698" y="164.4" fill="#1a1a19" font-size="12">hermes + human · 8</text>
 <line x1="681" y1="233.2" x2="695" y2="233.2" stroke="#eb6834" stroke-width="2" stroke-dasharray="4 3"/>
 <text x="698" y="237.2" fill="#1a1a19" font-size="12">hermes alone · 4</text>
 <text x="78" y="374" fill="#1a1a19" font-size="14" font-weight="600">Cost — cumulative LLM tokens</text>
@@ -96,6 +110,18 @@
 <path d="M 555.6 565.6 L 560.1 574.6 L 551.1 574.6 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
 <path d="M 615.3 559.3 L 619.8 568.3 L 610.8 568.3 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
 <path d="M 675.0 554.1 L 679.5 563.1 L 670.5 563.1 Z" fill="#009E73" stroke="#fcfcfb" stroke-width="2"/>
+<polyline points="78.0,608.4 137.7,608.4 197.4,608.4 257.1,608.4 316.8,608.4 376.5,608.4 436.2,608.4 495.9,575.3 555.6,575.3 615.3,575.3 675.0,575.3" fill="none" stroke="#7B52AB" stroke-width="2"/>
+<path d="M 78.0 603.4 L 83.0 608.4 L 78.0 613.4 L 73.0 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 137.7 603.4 L 142.7 608.4 L 137.7 613.4 L 132.7 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 197.4 603.4 L 202.4 608.4 L 197.4 613.4 L 192.4 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 257.1 603.4 L 262.1 608.4 L 257.1 613.4 L 252.1 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 316.8 603.4 L 321.8 608.4 L 316.8 613.4 L 311.8 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 376.5 603.4 L 381.5 608.4 L 376.5 613.4 L 371.5 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 436.2 603.4 L 441.2 608.4 L 436.2 613.4 L 431.2 608.4 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 495.9 570.3 L 500.9 575.3 L 495.9 580.3 L 490.9 575.3 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 555.6 570.3 L 560.6 575.3 L 555.6 580.3 L 550.6 575.3 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 615.3 570.3 L 620.3 575.3 L 615.3 580.3 L 610.3 575.3 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
+<path d="M 675.0 570.3 L 680.0 575.3 L 675.0 580.3 L 670.0 575.3 Z" fill="#7B52AB" stroke="#fcfcfb" stroke-width="2"/>
 <polyline points="78.0,521.9 137.7,400.7 197.4,400.7 257.1,400.7 316.8,400.7 376.5,396.0 436.2,396.0 495.9,396.0 555.6,396.0 615.3,396.0 675.0,396.0" fill="none" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="78.0" cy="521.9" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
 <circle cx="137.7" cy="400.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
@@ -110,6 +136,8 @@
 <circle cx="675.0" cy="396.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
 <rect x="683" y="391.0" width="10" height="10" fill="#2a78d6"/>
 <text x="698" y="400.0" fill="#1a1a19" font-size="12">Unify · 1.51M</text>
+<rect x="683" y="570.3" width="10" height="10" fill="#7B52AB"/>
+<text x="698" y="579.3" fill="#1a1a19" font-size="12">opencode · 290k</text>
 <rect x="683" y="554.1" width="10" height="10" fill="#009E73"/>
 <text x="698" y="563.1" fill="#1a1a19" font-size="12">openclaw · 400k</text>
 <rect x="683" y="420.7" width="10" height="10" fill="#eb6834"/>

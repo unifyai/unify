@@ -55,6 +55,15 @@ cost:
 | unify | stored function, frozen control flow, **one** focused `query_llm` call | **1 LLM call · ~645 tokens · $0.006 · ~10 s** | setup 635k + fire-1 distillation 821k |
 | hermes | prompt-driven cron (`no_agent: false`) — full agent boot each fire | 5 LLM calls · ~21.5k tokens · ~22 s | setup 154k |
 | openclaw | prompt-driven isolated cron (`agentTurn` payload) — agent turn each fire | 4 LLM calls · ~30k tokens · ~21 s | setup 84k |
+| opencode | self-authored *custom agent* + cron spec, fired via its own declared command | ~8.8k-18.9k tokens · ~12 s | setup 115k-125k |
+
+The opencode arm was run **three times** because its setup is bimodal: 2 of 3
+runs produced a working automation (both then scored 8/8 at 100%), and 1
+produced nothing at all after its attempt to install a launchd job was
+blocked by OpenCode's own permission model. Conditional on setup
+succeeding it is the second-cheapest arm per firing, because the agent
+points its schedule at a narrow custom agent definition rather than the
+full default context. See the `*-opencode` NOTE.md.
 
 The openclaw arm (2026-07-31, added later the same day) also scored 100%
 on all 96 inquiries — three architectures, zero scorer daylight — on the

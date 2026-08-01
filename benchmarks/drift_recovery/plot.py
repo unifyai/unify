@@ -37,6 +37,7 @@ GRID = "#e8e7e4"
 UNIFY_COLOR = "#2a78d6"
 HERMES_COLOR = "#eb6834"
 OPENCLAW_COLOR = "#009E73"
+OPENCODE_COLOR = "#7B52AB"
 
 WIDTH = 860
 PANEL_H = 240
@@ -136,6 +137,12 @@ def _markers(xs: list[float], ys: list[float], color: str, shape: str) -> list[s
         if shape == "circle":
             out.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}" '
+                f'stroke="{SURFACE}" stroke-width="2"/>',
+            )
+        elif shape == "diamond":
+            out.append(
+                f'<path d="M {x:.1f} {y - 5:.1f} L {x + 5:.1f} {y:.1f} '
+                f'L {x:.1f} {y + 5:.1f} L {x - 5:.1f} {y:.1f} Z" fill="{color}" '
                 f'stroke="{SURFACE}" stroke-width="2"/>',
             )
         elif shape == "triangle":
@@ -256,6 +263,7 @@ def render(
     unify_results: dict[str, Any],
     hermes_results: dict[str, Any],
     openclaw_results: dict[str, Any] | None = None,
+    opencode_results: dict[str, Any] | None = None,
 ) -> str:
     n = int(unify_results["n_fires"])
     drift_after = int(unify_results["drift_after_fire"])
@@ -264,6 +272,9 @@ def render(
     o_correct = o_tokens = None
     if openclaw_results is not None:
         o_correct, o_tokens = _series(openclaw_results)
+    c_correct = c_tokens = None
+    if opencode_results is not None:
+        c_correct, c_tokens = _series(opencode_results)
 
     height = MARGIN_TOP + PANEL_H + PANEL_GAP + PANEL_H + MARGIN_BOTTOM
     parts = [
@@ -296,6 +307,15 @@ def render(
                     OPENCLAW_COLOR,
                     "triangle",
                     "openclaw",
+                ),
+            )
+        if c_correct is not None:
+            rows.append(
+                (
+                    c_correct if correct_or_tokens == "correct" else c_tokens,
+                    OPENCODE_COLOR,
+                    "diamond",
+                    "opencode",
                 ),
             )
         rows.append(
@@ -352,12 +372,15 @@ def render(
 
 def main() -> None:
     openclaw_dir: Path | None
+    opencode_dir: Path | None
     if len(sys.argv) >= 3:
         unify_dir, hermes_dir = Path(sys.argv[1]), Path(sys.argv[2])
         openclaw_dir = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+        opencode_dir = Path(sys.argv[4]) if len(sys.argv) > 4 else None
     else:
         unify_dir, hermes_dir = _newest("*-unify"), _newest("*-hermes")
         openclaw_dir = _newest("*-openclaw", required=False)
+        opencode_dir = _newest("*-opencode", required=False)
     unify_results = json.loads((unify_dir / "results.json").read_text())
     hermes_results = json.loads((hermes_dir / "results.json").read_text())
     openclaw_results = (
@@ -365,9 +388,14 @@ def main() -> None:
         if openclaw_dir is not None
         else None
     )
+    opencode_results = (
+        json.loads((opencode_dir / "results.json").read_text())
+        if opencode_dir is not None
+        else None
+    )
     out = EXPERIMENT_DIR / "results" / "drift_recovery.svg"
     out.write_text(
-        render(unify_results, hermes_results, openclaw_results),
+        render(unify_results, hermes_results, openclaw_results, opencode_results),
         encoding="utf-8",
     )
     print(f"wrote {out}")
