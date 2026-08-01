@@ -55,6 +55,13 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 
 4) Scheduled activation
    - User-authored scheduled task rows are projected by Orchestra into machine-facing execution rows.
+   - Recurrence is owned by Orchestra, not by whoever dispatches. Marking a run
+     `running` projects that series' next occurrence, so a repeating task always
+     has its successor on the ledger before the current run does any work. The
+     runtime computes no slots; there is no handoff for a dispatcher to drop.
+   - The task supervisor sweep is the floor under that: it re-projects a head for
+     any enabled, armed definition that has none. A series can only reach that
+     state if the run-start transition never happened at all.
    - Communication materializes scheduled live executions as Cloud Tasks targeting the adapters `/scheduled/tasks/due` endpoint.
    - The live wake reason is delivered to ConversationManager, which asks the slow brain to start with `primitives.tasks.execute(task_id=...)`.
    - Cloud Scheduler is used for platform maintenance jobs; per-task cadence is delivered by dynamic Cloud Tasks.
@@ -62,7 +69,7 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 5) Trigger activation
    - Trigger definitions are projected into execution rows and mechanically matched by medium/contact filters when inbound communication events arrive.
    - Live trigger candidates are surfaced to the slow brain, which performs semantic acceptance and calls `primitives.tasks.execute(task_id=..., trigger_attempt_token=...)` so the run adopts the exact inbound provenance.
-   - Recurring triggerable tasks re-arm the definition back to `triggerable` before the current run is marked `active`.
+   - `triggerable` is an execution state, not a definition state. A recurring trigger's next arm is projected onto the ledger the same way a schedule's successor is; the definition carries only authored intent and its `enabled` switch.
 
 6) Offline activation
    - Offline means the hidden headless lane: the live ConversationManager and main actor are not woken.
@@ -85,6 +92,28 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 - Tasks with `schedule.start_at` must be `scheduled`.
 - Trigger-based tasks (`trigger`) cannot also carry a schedule.
 - Writes go through `_validated_write(...)`, which checks invariants, prevents direct `active` writes, and enforces schedule/trigger exclusivity.
+
+
+### Considered and declined: polling instead of Cloud Tasks
+
+Once Orchestra owned recurrence, replacing the Cloud Tasks timer with a
+poller over due execution rows became possible: the ledger already knows
+every open occurrence and its slot, so a loop selecting `state == scheduled
+AND scheduled_for <= now` would need no per-task timer at all.
+
+It is not worth doing. Cloud Tasks delivers per-task cadence at second
+granularity with no idle cost and no work of ours to keep alive; a poller
+trades that for a fixed interval that bounds every task's latency, a new
+always-on component to run and monitor, and lease/visibility handling to
+stop two pollers claiming one occurrence. That is a materially larger
+surface than the timer it replaces, in exchange for removing a dependency
+that has not been a source of incidents. The dropped-baton failures came
+from the recurrence handoff, which is now gone; they were never the timer's
+fault.
+
+Revisit only if Cloud Tasks itself starts costing us — quota ceilings,
+regional constraints, or materialization failures that the supervisor sweep
+has to keep covering for.
 
 
 ### Storage
