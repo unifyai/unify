@@ -1606,3 +1606,33 @@ class TestParticipantTimezones:
         # Match pattern like "12:30 PM (America/New_York)" or "1:30 AM (America/Los_Angeles)"
         pattern = r"\d{1,2}:\d{2} [AP]M \(America/"
         assert re.search(pattern, result), f"Time format not found in: {result}"
+
+    def test_current_time_reads_the_freezable_clock(self):
+        """The timezone block must go through ``prompt_helpers.now``.
+
+        That helper is the seam the suite freezes, and this block renders into
+        the transcript once per participant group. Reading the clock directly
+        here puts the wall-clock minute into every prompt, which changes the
+        LLM cache key on each run and makes cached flows miss.
+        """
+        from unify.conversation_manager.domains.renderer import (
+            _get_current_time_in_timezone,
+        )
+
+        # The autouse stub freezes now() at 2025-06-13 12:00 UTC.
+        assert _get_current_time_in_timezone("UTC") == "12:00 PM"
+        assert _get_current_time_in_timezone("America/New_York") == "8:00 AM"
+
+    def test_current_time_is_stable_across_repeated_renders(self):
+        """Repeated reads within a run must not drift.
+
+        ``UNITY_INCREMENTING_TIMESTAMPS`` advances the stub by microseconds so
+        **NEW** markers order correctly; at minute precision that must still
+        render one identical string, or a single prompt disagrees with itself.
+        """
+        from unify.conversation_manager.domains.renderer import (
+            _get_current_time_in_timezone,
+        )
+
+        rendered = {_get_current_time_in_timezone("Europe/London") for _ in range(5)}
+        assert rendered == {"1:00 PM"}

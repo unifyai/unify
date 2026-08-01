@@ -59,17 +59,24 @@ if TYPE_CHECKING:
 def _get_current_time_in_timezone(tz_name: str) -> str:
     """Get the current time formatted for a specific timezone.
 
+    Reads the clock through ``prompt_helpers.now`` like every other prompt
+    surface rather than calling ``datetime.now`` directly. That is the seam the
+    test suite freezes, and this block renders into the transcript once per
+    participant group, so a raw clock here alone is enough to make a prompt
+    differ between runs and miss the LLM cache.
+
     Args:
         tz_name: IANA timezone identifier (e.g., "America/New_York")
 
     Returns:
         Formatted time string like "3:45 PM"
     """
-    from datetime import datetime, timezone as dt_timezone
     from zoneinfo import ZoneInfo
 
+    from unify.common.prompt_helpers import now as prompt_now
+
     _timing_t0 = perf_counter()
-    utc_now = datetime.now(dt_timezone.utc)
+    current_dt = prompt_now(as_string=False)
     _utc_now_ms = (perf_counter() - _timing_t0) * 1000
     _step_t0 = perf_counter()
     success = True
@@ -77,7 +84,7 @@ def _get_current_time_in_timezone(tz_name: str) -> str:
         tz_info = ZoneInfo(tz_name)
         _zoneinfo_ms = (perf_counter() - _step_t0) * 1000
         _step_t0 = perf_counter()
-        local_dt = utc_now.astimezone(tz_info)
+        local_dt = current_dt.astimezone(tz_info)
         _astimezone_ms = (perf_counter() - _step_t0) * 1000
         _step_t0 = perf_counter()
         result = local_dt.strftime("%I:%M %p").lstrip("0")
