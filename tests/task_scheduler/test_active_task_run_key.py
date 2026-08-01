@@ -90,6 +90,7 @@ async def test_active_task_scopes_lineage_before_watcher_result():
     actor = _LineageCapturingActor()
     task = await ActiveTask.create(
         actor,
+        task_description="Summarize the inbox.",
         task_id=42,
         task_run_reference=TaskRunReference(
             assistant_id="1",

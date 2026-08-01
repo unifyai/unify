@@ -3610,7 +3610,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Invoice follow-up",
-                task_description="Help handle invoice-related requests from Alice.",
+                task_summary="Help handle invoice-related requests from Alice.",
             ),
             TaskExecutionSnapshot(
                 assistant_id="42",
@@ -3747,7 +3747,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
-                task_description="Prioritize urgent inbound calls from Alice.",
+                task_summary="Prioritize urgent inbound calls from Alice.",
             ),
         ]
 
@@ -3798,7 +3798,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
-                task_description="Prioritize urgent inbound calls from Alice.",
+                task_summary="Prioritize urgent inbound calls from Alice.",
             ),
         ]
 

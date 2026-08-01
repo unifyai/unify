@@ -417,7 +417,7 @@ def _activation_summary(candidate: TaskExecutionSnapshot) -> str:
     """Return one compact summary for a trigger candidate."""
 
     label = _activation_label(candidate)
-    return _compact_task_text(None, fallback=label)
+    return _compact_task_text(candidate.task_summary or None, fallback=label)
 
 
 def _describe_trigger_candidate(candidate: TaskExecutionSnapshot) -> str:

@@ -1264,7 +1264,7 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         offline=True,
     )["details"]["task_id"]
-    source_log_id_b = _source_log_id(scheduler, task_id_b, 0)
+    source_log_id_b = _source_log_id(scheduler, task_id_b)
     task_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")[0]
 
     class _Handle:

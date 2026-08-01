@@ -311,8 +311,13 @@ def task_surface():
     # harness runs tests concurrently — a shared name is a create/create race.
     import uuid
 
+    # A Tasks surface needs the assistant row, not its cloud infrastructure.
+    # Provisioning infra reaches for real Pub/Sub topics, which a local
+    # Orchestra has no credentials for, so requesting it would make these
+    # tests unrunnable anywhere but a cloud-backed environment.
     created = unisdk.create_assistant(
         first_name=f"Task Surface Probe {uuid.uuid4().hex[:8]}",
+        config={"create_infra": False},
     )
     agent_id = int(created["agent_id"])
 

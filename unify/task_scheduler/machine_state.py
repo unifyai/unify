@@ -114,6 +114,7 @@ class TaskExecutionSnapshot:
     delivery: str | None = None
     state: str | None = None
     task_name: str | None = None
+    task_summary: str | None = None
     scheduled_for: str | None = None
     dispatch_offset_seconds: float | None = None
     trigger_medium: str | None = None
@@ -972,6 +973,7 @@ def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
         delivery=_coerce_str(entries.get("delivery")),
         state=_coerce_str(entries.get("state")),
         task_name=_coerce_str(entries.get("task_name")),
+        task_summary=_coerce_str(entries.get("task_summary")),
         scheduled_for=_coerce_str(entries.get("scheduled_for")),
         trigger_medium=_coerce_str(entries.get("trigger_medium")),
         trigger_from_contact_ids=_coerce_int_list(
