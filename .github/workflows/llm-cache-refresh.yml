@@ -149,11 +149,15 @@ jobs:
           done < <(python3 .github/scripts/discover_test_paths.py "${RAW_PATHS[@]}")
         fi
 
-        # flows force UNILLM_CACHE=false in conftest — they burn spend without writing cache.
+        # Flows fill the shared cache from their own workflow: flow-smoke.yml
+        # runs them read-write and consolidates each session's writes itself.
+        # Their per-session cache dirs also do not match the .cache_write.ndjson
+        # this workflow uploads, so refreshing them here would spend and collect
+        # nothing.
         FILTERED=()
         for _p in "${PATHS[@]}"; do
           if [[ "$_p" == *tests/flows* ]]; then
-            echo "Skipping live-only path (no cache writes): $_p" >&2
+            echo "Skipping path that manages its own cache: $_p" >&2
             continue
           fi
           FILTERED+=("$_p")

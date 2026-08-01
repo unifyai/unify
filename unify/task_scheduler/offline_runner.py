@@ -103,7 +103,6 @@ class OfflineTaskConfig:
     revision: str
     destination: str | None = None
     task_name: str = ""
-    task_description: str = ""
     scheduled_for: str = ""
     source_ref: str = ""
     source_medium: str = ""
@@ -234,7 +233,6 @@ def _load_config_from_env() -> OfflineTaskConfig:
         revision=revision,
         destination=destination,
         task_name=os.environ.get("UNITY_OFFLINE_TASK_NAME", ""),
-        task_description=os.environ.get("UNITY_OFFLINE_TASK_DESCRIPTION", ""),
         scheduled_for=os.environ.get("UNITY_OFFLINE_TASK_SCHEDULED_FOR", ""),
         source_ref=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_REF", ""),
         source_medium=os.environ.get("UNITY_OFFLINE_TASK_SOURCE_MEDIUM", ""),
@@ -499,7 +497,6 @@ def _build_offline_provenance(config: OfflineTaskConfig) -> TaskRunProvenance:
         source_ref=config.source_ref or None,
         source_contact_id=config.source_contact_id or None,
         task_name=config.task_name or None,
-        task_description=config.task_description or config.request or None,
         attempt_token=_trigger_attempt_token(config),
         destination=config.destination,
     )

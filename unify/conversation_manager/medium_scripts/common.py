@@ -855,17 +855,26 @@ _TRACK_TO_EVENT: dict[tuple[str, bool], type[Event]] = {
     ("camera", False): UserWebcamStopped,
 }
 
+# Marks a meet interaction event as inferred from LiveKit track state rather
+# than reported by a frontend. The event handler reads this to decide which
+# source owns a surface, so it is the sole definition of the marker.
+TRACK_AUTODETECT_REASON = "LiveKit track auto-detected"
+
 
 async def publish_meet_interaction_from_track(source: str, active: bool) -> None:
-    """Publish a meet interaction event when a LiveKit video track changes.
+    """Publish a meet interaction event inferred from a LiveKit video track.
 
-    Called by ``UserTrackCaptureManager`` via the ``on_track_change`` callback
-    so that the CM receives the same events it would get from a real frontend.
+    Called by ``UserTrackCaptureManager`` via the ``on_track_change`` callback.
+    This is a fallback for surfaces no frontend reports on — the LiveKit Agents
+    Playground has no Console to announce that a developer started sharing.
+    Where a frontend does report, it is authoritative and these events are
+    dropped: track subscription describes transport state, which diverges from
+    the user intent a frontend reports.
     """
     event_cls = _TRACK_TO_EVENT.get((source, active))
     if event_cls is None:
         return
-    event = event_cls(reason="LiveKit track auto-detected")
+    event = event_cls(reason=TRACK_AUTODETECT_REASON)
     await event_broker.publish(event_cls.topic, event.to_json())
 
 

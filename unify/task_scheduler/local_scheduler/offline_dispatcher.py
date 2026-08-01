@@ -148,7 +148,6 @@ def _build_local_offline_runner_env(
         wake=wake,
         run_key=run_key,
         task_name=str(snap.task_name or ""),
-        task_description=str(snap.task_description or ""),
         scheduled_for=snap.scheduled_for,
         source_ref=source_ref,
         source_medium=resolved_medium,
