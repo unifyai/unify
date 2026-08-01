@@ -53,7 +53,6 @@ class TestBuildOfflineRunnerEnv:
             "UNITY_OFFLINE_TASK_FUNCTION_ID",
             "UNITY_OFFLINE_TASK_REQUEST",
             "UNITY_OFFLINE_TASK_NAME",
-            "UNITY_OFFLINE_TASK_DESCRIPTION",
             "UNITY_OFFLINE_TASK_WAKE",
             "UNITY_OFFLINE_TASK_SCHEDULED_FOR",
             "UNITY_OFFLINE_TASK_SOURCE_REF",
@@ -106,19 +105,14 @@ class TestBuildOfflineRunnerEnv:
         env = self._make_env(destination="team:41001")
         assert env["TASK_DESTINATION"] == "team:41001"
 
-    def test_request_text_uses_description_first(self):
-        env = self._make_env(
-            task_description="The full description",
-            task_name="Short name",
-        )
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The full description"
-
-    def test_request_text_falls_back_to_name(self):
-        env = self._make_env(task_description="", task_name="Just the name")
+    def test_request_text_is_the_task_name(self):
+        # A display label only: the scheduler-managed lane reads the
+        # authored description from the definition, never from the env.
+        env = self._make_env(task_name="Just the name")
         assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Just the name"
 
-    def test_request_text_synthesised_when_both_empty(self):
-        env = self._make_env(task_description="", task_name="")
+    def test_request_text_synthesised_when_name_empty(self):
+        env = self._make_env(task_name="")
         assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Execute task 101"
 
     def test_scheduled_for_normalised_to_utc(self):
@@ -396,8 +390,7 @@ def _original_communication_env_builder(
 
     team_ids = assistant_data.get("team_ids") or []
     task_request = (
-        str(activation.get("task_description") or "").strip()
-        or str(activation.get("task_name") or "").strip()
+        str(activation.get("task_name") or "").strip()
         or f"Execute task {request.task_id}"
     )
     entrypoint = activation.get("entrypoint") or request.entrypoint
@@ -417,7 +410,6 @@ def _original_communication_env_builder(
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
         "UNITY_OFFLINE_TASK_REQUEST": task_request,
         "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
-        "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
         "UNITY_OFFLINE_TASK_WAKE": request.wake,
         "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
         "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
@@ -492,7 +484,6 @@ def _new_communication_env_builder(
         wake=request.wake,
         run_key=run_key,
         task_name=str(activation.get("task_name") or ""),
-        task_description=str(activation.get("task_description") or ""),
         scheduled_for=request.scheduled_for,
         source_ref=request.source_ref,
         source_medium=(
@@ -575,7 +566,6 @@ class TestCommunicationEnvBuilderEquivalence:
         request = _FakeOfflineRequest(**request_kwargs)
         activation = {
             "task_name": "Daily summary",
-            "task_description": "Send the daily summary email.",
             "entrypoint": None,
             **overrides.get("activation", {}),
         }

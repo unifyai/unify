@@ -421,6 +421,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.user_screen_share_active: bool = False
         self.user_webcam_active: bool = False
         self.user_remote_control_active: bool = False
+        # Flag names above that a frontend has reported on. A frontend is
+        # authoritative for its surfaces, so track-inferred events stop being
+        # applied to them once it speaks.
+        self._frontend_reported_meet_surfaces: set[str] = set()
 
         # screenshot buffer for slow brain visual context
         self._screenshot_buffer: list[ScreenshotEntry] = []

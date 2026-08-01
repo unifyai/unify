@@ -48,7 +48,6 @@ def build_offline_runner_env(
     wake: str,
     run_key: str,
     task_name: str = "",
-    task_description: str = "",
     scheduled_for: str | None = None,
     source_ref: str | None = None,
     source_medium: str | None = None,
@@ -68,11 +67,7 @@ def build_offline_runner_env(
 ) -> dict[str, str]:
     """Build the task-specific env-var dict for one offline_runner subprocess."""
 
-    request_text = _request_text(
-        task_description=task_description,
-        task_name=task_name,
-        task_id=task_id,
-    )
+    request_text = _request_text(task_name=task_name, task_id=task_id)
 
     env: dict[str, str] = {
         "UNITY_OFFLINE_TASK_MODE": "actor",
@@ -85,7 +80,6 @@ def build_offline_runner_env(
         ),
         "UNITY_OFFLINE_TASK_REQUEST": request_text,
         "UNITY_OFFLINE_TASK_NAME": str(task_name or ""),
-        "UNITY_OFFLINE_TASK_DESCRIPTION": str(task_description or ""),
         "UNITY_OFFLINE_TASK_WAKE": wake,
         "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _iso_utc_or_empty(scheduled_for),
         "UNITY_OFFLINE_TASK_SOURCE_REF": source_ref or "",
@@ -211,12 +205,13 @@ def normalize_run_key_component(value: str) -> str:
     return normalised or "assistant"
 
 
-def _request_text(*, task_description: str, task_name: str, task_id: int) -> str:
-    """Pick the most descriptive text to hand offline_runner as the prompt."""
+def _request_text(*, task_name: str, task_id: int) -> str:
+    """Label the run for display fallbacks; the definition holds the program.
 
-    cleaned_description = (task_description or "").strip()
-    if cleaned_description:
-        return cleaned_description
+    The scheduler-managed lane fetches the authored description itself, so
+    this text is only ever a human-facing label, never the prompt.
+    """
+
     cleaned_name = (task_name or "").strip()
     if cleaned_name:
         return cleaned_name

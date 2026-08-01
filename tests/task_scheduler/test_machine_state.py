@@ -388,7 +388,6 @@ def test_create_or_adopt_live_task_run_persists_display_fields(monkeypatch):
         source_contact_id="2",
         source_contact_display_name="Alice Owner",
         task_name="Follow up on invoice",
-        task_description="Ask Alice for the missing invoice details.",
     )
 
     def _fake_post(path: str, payload: dict[str, object]):
@@ -408,7 +407,7 @@ def test_create_or_adopt_live_task_run_persists_display_fields(monkeypatch):
     assert isinstance(payload, dict)
     assert payload["source_contact_display_name"] == "Alice Owner"
     assert payload["task_name"] == "Follow up on invoice"
-    assert payload["task_description"] == "Ask Alice for the missing invoice details."
+    assert "task_description" not in payload
     assert payload["started_at"] == "2026-04-16T10:15:00+00:00"
     assert payload["wake"] == "triggered"
     assert payload["delivery"] == "live"

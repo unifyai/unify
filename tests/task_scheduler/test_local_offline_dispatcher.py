@@ -26,7 +26,6 @@ def _make_snapshot(
     revision: str = "rev-1",
     next_due_at: str | None = _DEFAULT_DUE,
     task_name: str = "Run weekly report",
-    task_description: str = "Generate the weekly report and email finance.",
     entrypoint: int | None = None,
     trigger_medium: str | None = None,
     source_task_log_id: int | None = 999,
@@ -40,7 +39,6 @@ def _make_snapshot(
         wake=wake,
         delivery=delivery,
         task_name=task_name,
-        task_description=task_description,
         scheduled_for=next_due_at,
         trigger_medium=trigger_medium,
         entrypoint=entrypoint,
@@ -91,19 +89,14 @@ class TestBuildLocalOfflineRunnerEnv:
         missing = required - set(env.keys())
         assert not missing, f"Missing env vars: {missing}"
 
-    def test_task_request_falls_back_through_description_then_name(self):
-        snap = _make_snapshot(
-            task_name="The Name",
-            task_description="The Description",
-        )
-        env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
-        assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The Description"
-
-        snap = _make_snapshot(task_name="The Name", task_description="")
+    def test_task_request_is_a_name_derived_label(self):
+        # The request text is only a display label: the scheduler-managed
+        # lane fetches the authored description from the definition itself.
+        snap = _make_snapshot(task_name="The Name")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
         assert env["UNITY_OFFLINE_TASK_REQUEST"] == "The Name"
 
-        snap = _make_snapshot(task_name="", task_description="")
+        snap = _make_snapshot(task_name="")
         env = od._build_local_offline_runner_env(snap, wake=Wake.scheduled.value)
         assert env["UNITY_OFFLINE_TASK_REQUEST"] == f"Execute task {snap.task_id}"
 
@@ -185,7 +178,6 @@ class TestBuildLocalOfflineRunnerEnv:
             wake=Wake.scheduled.value,
             delivery=Delivery.offline.value,
             task_name="Run weekly report",
-            task_description="Generate the weekly report and email finance.",
             scheduled_for=_DEFAULT_DUE,
             revision="rev-1",
             requires_filesystem=True,

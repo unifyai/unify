@@ -184,29 +184,33 @@ def build_fast_brain_turn_guidance(
         )
     if classification == FAST_BRAIN_TURN_SMALLTALK:
         return (
-            "[Voice Agent turn completed. Classification: SMALLTALK. "
-            f"Intended speech (may still be playing or may have been "
-            f"interrupted): {quoted}. Do NOT repeat this line via "
-            "guide_voice_agent; call wait() unless you have something "
-            "additional and substantive beyond what the Voice Agent already "
-            "covered.]"
+            "[Voice Agent turn completed. Classification: SMALLTALK. You have "
+            f"just said this aloud and the caller has heard it: {quoted}. Do "
+            "NOT repeat or paraphrase it via guide_voice_agent; call wait() "
+            "unless you have something additional and substantive beyond what "
+            "it already covered.]"
         )
     if classification == FAST_BRAIN_TURN_CONTINUATION:
         return (
-            "[Voice Agent turn completed. Classification: CONTINUATION. "
-            f"Resumed verbatim remainder: {quoted}. This was already your "
-            "prior line; call wait() unless the caller's new message requires "
-            "more.]"
+            "[Voice Agent turn completed. Classification: CONTINUATION. You "
+            f"have just finished delivering your interrupted line: {quoted}. "
+            "The caller has now heard it; call wait() unless their new message "
+            "requires more.]"
         )
     if classification == FAST_BRAIN_TURN_DEFER:
         return (
-            "[Voice Agent turn completed. Classification: DEFER (latency "
-            f"filler). Intended speech: {quoted}. Compose the substantive "
-            "reply via guide_voice_agent — the filler is not the answer.]"
+            "[Voice Agent turn completed. Classification: DEFER. You have just "
+            f"said this aloud and the caller has heard it: {quoted}. Your next "
+            "line continues that same piece of speech from where it stopped: "
+            "do not restate it, do not re-answer what it already answered, and "
+            "do not open with the same yes/no or acknowledgement it already "
+            "gave. Carry straight on into the substance via guide_voice_agent.]"
         )
     return (
         "[Voice Agent turn completed. Classification: "
-        f"{classification or 'unknown'}. Intended speech: {quoted}.]"
+        f"{classification or 'unknown'}. You have just said this aloud and the "
+        f"caller has heard it: {quoted}. Continue from it rather than restating "
+        "it.]"
     )
 
 
@@ -408,13 +412,13 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. For **HANG_UP** (only possible after I sanctioned ending via `allow_hang_up`) the Voice Agent is speaking its farewell and the call ends right after — I `wait()` and do not guide further speech. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
+**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and the line it just spoke. That line is **mine and already delivered** — I treat it as heard even if it was cut short, exactly like any `[You @ ...]` row. For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** I have already begun the answer out loud, so I continue that same piece of speech via `guide_voice_agent` rather than starting a fresh reply. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. For **HANG_UP** (only possible after I sanctioned ending via `allow_hang_up`) the Voice Agent is speaking its farewell and the call ends right after — I `wait()` and do not guide further speech. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
 
 **Idle small-talk exception.** If absolutely nothing is happening — no in-flight action, no recent assistant comms, and no pending spoken line — the Voice Agent may directly answer a casual "what are you doing?" style question with a playful non-work aside about passing time on the laptop, such as playing Snake, Sudoku, Mario Kart, or Tetris. This is only social banter. If any real work, recent message, call, action, result, or status is involved, I own the answer via `guide_voice_agent`.
 
 **Optional one-shot guidance.** The single exception to the above: I may bundle a short `fast_brain_guidance` note with a spoken `guide_voice_agent` turn — a ready fact the Voice Agent may use to give ONE basic, direct reply to the caller's very next message (e.g. confirm something I just told it). It is never spoken on its own and the Voice Agent never volunteers it; it only applies to the immediate next moment, and my next spoken turn replaces or clears it. I still never rely on the Voice Agent to compose, decide, or look anything up, and I can never hand it guidance without also speaking.
 
-**Continue from the filler.** The Voice Agent has just said a short filler phrase right before my line lands. I continue naturally from it and never restate the filler — e.g. after "One moment." I give the answer directly, not "One moment, …".
+**Continue from what I just said.** The line named in the `[Voice Agent turn completed …]` note has already left my mouth, whatever its length or content — a bare "One moment." and a full "Yes — I can take a look at that." are both equally spoken. My next line continues that one piece of speech instead of restarting it. So after "One moment." I give the answer directly, not "One moment, …" — and after a line that already committed to something, I do not commit again: I continue "The quickest way is…", never "Yes. The quickest way is…". Opening with a yes/no or acknowledgement I have just given tells the caller I have forgotten my own last sentence.
 
 **Interruptions.** When (and only when) I see an explicit `[... interrupted ...]` note naming a remainder the caller did not hear, I weave that remainder back in naturally if it still matters, or drop it if their new message moved on. Absent that note, my recent lines were delivered — I never re-deliver them."""
     )

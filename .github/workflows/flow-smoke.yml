@@ -180,9 +180,11 @@ jobs:
       UNIFY_TESTS_RAND_PROJ: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
-      # Flows always run live: the brain's later-turn prompts are not
-      # deterministic across runs, so a read-only cache replay always misses.
-      UNILLM_CACHE: "false"
+      # Read-write, never read-only: a miss must fall through to a live call and
+      # be recorded, not fail the gate. Hit rates start low because the brain
+      # embeds per-run values (wall-clock "[Now: ...]", task/log/context ids) in
+      # later-turn prompts, and only entries whose whole request matches replay.
+      UNILLM_CACHE: "true"
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
@@ -291,6 +293,16 @@ jobs:
         restore-keys: |
           uv-${{ runner.os }}-
 
+    # Same store the Tests matrix reads and the LLM cache refresh writes, so a
+    # flow run replays anything those already paid for.
+    - name: Restore .cache.ndjson
+      uses: actions/cache/restore@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cache-ndjson-${{ runner.os }}-
+
     - name: Configure unify/unillm paths for CI
       run: |
         # The checked-out dependency repos live in the workflow workspace, so
@@ -367,6 +379,25 @@ jobs:
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE
 
+    # Fold each session's misses back into the shared store so the next run
+    # replays them. Runs even when the smoke fails: completions bought before
+    # the failing turn are still worth keeping.
+    - name: Consolidate flow session caches
+      if: always()
+      run: |
+        python3 .github/scripts/consolidate_cache.py --artifacts-dir .flow-cache
+        # actions/cache/save fails if the path is absent.
+        touch .cache.ndjson
+        echo "Consolidated entry count: $(grep -c . .cache.ndjson || true)"
+        ls -lh .cache.ndjson
+
+    - name: Store consolidated cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
     - name: Stop local orchestra
       if: always()
       continue-on-error: true
@@ -391,24 +422,24 @@ jobs:
 
   # Single, stable required status check for staging->main releases.
   #
-  # This job MUST run unconditionally. GitHub counts a *skipped* required check
-  # as satisfied, so while the expensive `flows` job carried the required
-  # context directly, every ordinary push published an implicit passing
-  # "Flow smoke" on its commit. A release PR shares its head SHA with those
-  # pushes, so that stale pass can satisfy branch protection before the real
-  # PR-triggered run finishes -- letting a release merge without the gate.
-  # Recent releases here show exactly that stale context alongside the real
-  # result (pass + skipping); the identical shape in orchestra let four
-  # releases merge with a failing suite.
+  # This job must run unconditionally on the triggers where `flows` is meant
+  # to run (pull_request and workflow_dispatch), so the context is always an
+  # explicit pass or fail there rather than an implicit pass-by-skip -- the
+  # identical shape in orchestra let four releases merge with a failing suite.
   #
-  # Running always means the context is only ever an explicit pass or fail.
-  # An ordinary push now reports "Flow smoke" red, which is the honest signal:
-  # these paid, uncacheable flows did not run for this commit, so a release
-  # cannot be cut from it until they do.
+  # It must NOT run on plain push. `flows` is gated behind [run-flows] there
+  # (these are paid, uncacheable LLM calls -- too expensive for every commit),
+  # so an unconditional push-triggered run would just republish the same
+  # implicit-pass-by-skip bug for that trigger, or, once fixed to fail closed
+  # instead, would attach a failing "Flow smoke" run to that push's SHA that
+  # persists even after the real pull_request-triggered run for the same SHA
+  # passes -- branch protection blocks on any matching-name run, not just the
+  # latest. Publishing nothing on push means the context is simply pending
+  # until the pull_request run supplies the real answer.
   flow-smoke-required:
     name: Flow smoke
     needs: flows
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
     - name: Require the flow smoke to have passed

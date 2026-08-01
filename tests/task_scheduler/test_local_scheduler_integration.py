@@ -31,12 +31,15 @@ from unisdk.utils.http import RequestError
 from unify.session_details import SESSION_DETAILS
 from unify.task_scheduler.local_scheduler import LocalActivationScheduler
 from unify.task_scheduler.machine_state import (
+    TaskRunProvenance,
+    create_or_adopt_live_task_run,
     list_scheduled_executions,
+    update_task_run_record,
 )
 from unify.task_scheduler.task_scheduler import TaskScheduler
 from unify.task_scheduler.types.repetition import Frequency, RepeatPattern
 from unify.task_scheduler.types.schedule import Schedule
-from unify.task_scheduler.types.execution import Wake
+from unify.task_scheduler.types.execution import Delivery, Wake
 
 
 def _local_orchestra_authenticated() -> bool:
@@ -210,9 +213,23 @@ async def _run_recurring_integration() -> None:
         initial_handle = local_scheduler._timers[initial_snap.run_key]
         initial_revision = local_scheduler._known_revisions[initial_snap.run_key]
 
-        # Project the next occurrence, as a completing recurring run would.
-        current_task = scheduler._get_task_or_raise(task_id)
-        scheduler._project_next_occurrence(current_task)
+        # Advance the series the way production does: adopting the head and
+        # marking it running is what makes Orchestra project the successor.
+        # The runtime no longer computes slots, so driving this through the
+        # ledger is the only faithful way to exercise a re-arm.
+        reference = create_or_adopt_live_task_run(
+            TaskRunProvenance(
+                assistant_id=str(assistant_id),
+                task_id=task_id,
+                wake=Wake.scheduled,
+                delivery=Delivery.live,
+                source_task_log_id=initial_snap.source_task_log_id,
+                revision=initial_snap.revision,
+                scheduled_for=initial_snap.scheduled_for,
+            ),
+        )
+        assert reference is not None
+        update_task_run_record(reference, {"state": "running"})
 
         # Reconcile picks up the new instance's activation (or the existing
         # activation now points at the new instance with a fresh revision).

@@ -24,6 +24,7 @@ __pycache__/
 implementations.py
 .cache.ndjson
 .cache_write.ndjson
+.flow-cache/
 .log.txt
 log.txt
 .logs.txt
@@ -88,3 +89,8 @@ logs/ci/*
 .livekit-playground/
 # Legacy rename leftovers (never re-track)
 droid/
+# The benchmark suite moved to unifyai/colleague; only the pointer README is
+# tracked here. Local run data may still sit on disk for offline replay, and
+# some of it (agent CLI transcripts, resolved provider config) carries
+# plaintext API keys, so nothing under here is ever re-tracked.
+benchmarks/*/

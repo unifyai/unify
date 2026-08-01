@@ -77,10 +77,8 @@ from .machine_state import (
     consume_live_task_run_provenance,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
-    latest_scheduled_occurrence_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
-    project_task_occurrence,
     remember_live_task_run_provenance,
     update_task_run_record,
 )
@@ -112,11 +110,9 @@ from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
 from .types.repetition import (
-    deterministic_jitter_seconds,
     Frequency,
     RepeatPattern,
     Weekday,
-    next_repeated_start_at,
     normalize_repeat_patterns,
 )
 from .types.schedule import Schedule
@@ -1194,7 +1190,6 @@ class TaskScheduler(BaseTaskScheduler):
                 ),
                 destination=task.destination,
                 task_name=task.name,
-                task_description=task.description,
                 attempt_token=trigger_attempt_token,
             )
         if task_run_provenance and task_run_provenance.source_task_log_id is not None:
@@ -1243,7 +1238,9 @@ class TaskScheduler(BaseTaskScheduler):
                 state=ExecutionState.running.value,
             )
 
-        self._project_next_occurrence(task)
+        # The successor is projected by Orchestra when this run is marked
+        # running: recurrence is a ledger invariant, not something each
+        # dispatcher must remember to do.
 
         # Extend the ancestor chain for the duration of starting the child run,
         # so a spawned run that calls back into TaskScheduler.execute with this
@@ -1339,7 +1336,6 @@ class TaskScheduler(BaseTaskScheduler):
             source_ref=request.receipt_id,
             attempt_token=request.operation_id,
             task_name=definition.name,
-            task_description=definition.description,
         )
         remember_live_task_run_provenance(provenance)
 
@@ -1459,104 +1455,6 @@ class TaskScheduler(BaseTaskScheduler):
             description=description,
             destination=destination,
         )
-
-    def _project_next_occurrence(self, task: Task) -> bool:
-        """Create the Execution row for this task's next occurrence.
-
-        ``schedule.start_at`` is the series anchor and is never rewritten. The
-        next slot is derived from the newest occurrence the run ledger already
-        knows about, so every concurrent run computes the same timestamp; that
-        timestamp is baked into ``run_key``, and create-or-adopt turns the
-        second writer into an adopter instead of a racer. Nothing is written to
-        the definition, which is why a definition now carries authored intent
-        only.
-
-        Returns True when a next occurrence exists (or the task is armed by a
-        trigger and needs none), False when recurrence is exhausted.
-        """
-
-        if task.trigger is not None:
-            return True
-        if task.repeat is None or task.schedule_start_at is None:
-            return False
-
-        latest = latest_scheduled_occurrence_for_task(
-            task_id=int(task.task_id),
-            destination=task.destination,
-        )
-        previous_start = task.schedule_start_at
-        if latest:
-            try:
-                parsed = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-            except ValueError:
-                parsed = None
-            if parsed is not None:
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                if parsed > previous_start:
-                    previous_start = parsed
-        next_start_at = next_repeated_start_at(
-            previous_start=previous_start,
-            patterns=task.repeat,
-            current_occurrence_index=0,
-            now=previous_start,
-        )
-        if next_start_at is None:
-            return False
-        # The ledger records the *canonical* slot. Jitter spreads dispatch, it
-        # does not redefine the occurrence: baking it into scheduled_for makes
-        # the recorded time unrecoverable (the offset is seeded on the slot it
-        # is applied to), so each step would measure from a jittered value and
-        # the series would drift. Dispatch applies the offset instead.
-        scheduled_for = next_start_at.isoformat()
-        dispatch_offset = deterministic_jitter_seconds(
-            task_id=int(task.task_id),
-            slot=next_start_at,
-            patterns=task.repeat,
-        )
-
-        assistant_id = str(
-            SESSION_DETAILS.assistant.agent_id
-            or SESSION_DETAILS.assistant_context
-            or "",
-        ).strip()
-        if not assistant_id:
-            # Executions are assistant-owned; without one there is no ledger to
-            # project the next occurrence into.
-            return False
-        try:
-            project_task_occurrence(
-                TaskRunProvenance(
-                    assistant_id=assistant_id,
-                    task_id=int(task.task_id),
-                    wake=Wake.scheduled,
-                    delivery=Delivery.offline if task.offline else Delivery.live,
-                    source_task_log_id=self._source_task_log_id(int(task.task_id)),
-                    revision=(
-                        str(task.task_revision)
-                        if task.task_revision is not None
-                        else None
-                    ),
-                    destination=task.destination,
-                    scheduled_for=scheduled_for,
-                    dispatch_offset_seconds=dispatch_offset,
-                    entrypoint=task.entrypoint,
-                    task_name=task.name,
-                    task_description=task.description,
-                ),
-            )
-        except Exception:
-            # A run already in flight must not fail because the *next*
-            # occurrence could not be projected. Loud, because a series that
-            # stops projecting silently stops recurring.
-            logger.exception(
-                "Failed to project next occurrence (task_id=%s, scheduled_for=%s); "
-                "the series will not advance until this succeeds.",
-                task.task_id,
-                scheduled_for,
-            )
-            return False
-        return True
 
     def _one_shot_already_ran(self, task: Task) -> Any | None:
         """The terminal execution of a finished one-shot, if it has run.
