@@ -1540,7 +1540,6 @@ class TaskScheduler(BaseTaskScheduler):
                     dispatch_offset_seconds=dispatch_offset,
                     entrypoint=task.entrypoint,
                     task_name=task.name,
-                    task_description=task.description,
                 ),
             )
         except Exception:
