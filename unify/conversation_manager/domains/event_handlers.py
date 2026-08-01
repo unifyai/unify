@@ -4110,16 +4110,40 @@ async def _(
     *args,
     **kwargs,
 ):
+    from unify.conversation_manager.medium_scripts.common import (
+        TRACK_AUTODETECT_REASON,
+    )
+
     event_name = event.__class__.__name__
     log_type = _MEET_LOG_TYPES.get(event.__class__, "meet_interaction")
     log_msg = f"Event: {event_name}"
-    if event.reason == "LiveKit track auto-detected":
+    track_sourced = event.reason == TRACK_AUTODETECT_REASON
+    if track_sourced:
         cm._session_logger.debug(log_type, log_msg)
     else:
         cm._session_logger.info(log_type, log_msg)
 
-    # Update state flag on the CM.
     attr, value = _MEET_STATE_FLAGS[event.__class__]
+
+    # A frontend and LiveKit track subscription both describe this surface, but
+    # they measure different things: the frontend reports what the user asked
+    # for, the track reports what the transport is carrying. They diverge — a
+    # camera switched off in the UI can keep its track subscribed until room
+    # teardown — so letting both drive the flag makes the winner a matter of
+    # arrival order. The frontend owns every surface it has reported on; track
+    # events survive only where no frontend ever speaks, such as the Playground.
+    if track_sourced:
+        if attr in cm._frontend_reported_meet_surfaces:
+            return
+    else:
+        cm._frontend_reported_meet_surfaces.add(attr)
+
+    # Restating the current state carries no new information: notifying again
+    # would tell the assistant the screen share just started for a second time.
+    if getattr(cm, attr) == value:
+        return
+
+    # Update state flag on the CM.
     setattr(cm, attr, value)
 
     if (

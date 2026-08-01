@@ -86,6 +86,7 @@ from unify.conversation_manager.events import (
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.conversation_manager.domains.contact_index import ContactIndex
 from unify.conversation_manager.domains.notifications import NotificationBar
+from unify.conversation_manager.medium_scripts.common import TRACK_AUTODETECT_REASON
 from unify.conversation_manager.cm_types import Medium, Mode
 from unify.task_scheduler.machine_state import TaskExecutionSnapshot
 
@@ -184,6 +185,7 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.assistant_screen_share_active = False
+    cm._frontend_reported_meet_surfaces = set()
     cm.memory_manager = None
 
     # Create a SimulatedContactManager and populate with sample contacts
@@ -2063,6 +2065,88 @@ class TestMeetInteractionEventHandlers:
         notification = mock_cm.notifications_bar.notifications[-1]
         assert notification.type == "Meet"
         assert "screen sharing" in notification.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_track_autodetect_drops_once_frontend_owns_surface(self, mock_cm):
+        """A frontend report silences track-inferred events for that surface.
+
+        Both sources describe the same screen share, so without this the
+        assistant is told twice that sharing began.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+        count_after_frontend = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert len(mock_cm.notifications_bar.notifications) == count_after_frontend
+        assert mock_cm.user_screen_share_active is True
+
+    @pytest.mark.asyncio
+    async def test_stale_track_event_cannot_flip_frontend_owned_flag(self, mock_cm):
+        """A late track unsubscribe must not undo a fresh frontend report.
+
+        LiveKit can hold a camera track until room teardown, long after the user
+        switched it off and back on in the UI.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_webcam_active = False
+
+        await EventHandler.handle_event(UserWebcamStarted(), mock_cm)
+        assert mock_cm.user_webcam_active is True
+
+        await EventHandler.handle_event(
+            UserWebcamStopped(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert mock_cm.user_webcam_active is True
+
+    @pytest.mark.asyncio
+    async def test_track_autodetect_applies_without_a_frontend(self, mock_cm):
+        """With no frontend reporting, track inference still drives the state.
+
+        This is the LiveKit Agents Playground, which has no Console to announce
+        that a developer started sharing.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+        initial_count = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert mock_cm.user_screen_share_active is True
+        assert len(mock_cm.notifications_bar.notifications) == initial_count + 1
+
+    @pytest.mark.asyncio
+    async def test_repeated_frontend_event_does_not_renotify(self, mock_cm):
+        """Restating the current state carries no new information."""
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+        count_after_first = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+
+        assert len(mock_cm.notifications_bar.notifications) == count_after_first
 
     @pytest.mark.asyncio
     async def test_meet_interaction_does_not_trigger_slow_brain(self, mock_cm):
