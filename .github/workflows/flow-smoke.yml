@@ -180,9 +180,11 @@ jobs:
       UNIFY_TESTS_RAND_PROJ: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
-      # Flows always run live: the brain's later-turn prompts are not
-      # deterministic across runs, so a read-only cache replay always misses.
-      UNILLM_CACHE: "false"
+      # Read-write, never read-only: a miss must fall through to a live call and
+      # be recorded, not fail the gate. Hit rates start low because the brain
+      # embeds per-run values (wall-clock "[Now: ...]", task/log/context ids) in
+      # later-turn prompts, and only entries whose whole request matches replay.
+      UNILLM_CACHE: "true"
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
@@ -291,6 +293,16 @@ jobs:
         restore-keys: |
           uv-${{ runner.os }}-
 
+    # Same store the Tests matrix reads and the LLM cache refresh writes, so a
+    # flow run replays anything those already paid for.
+    - name: Restore .cache.ndjson
+      uses: actions/cache/restore@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cache-ndjson-${{ runner.os }}-
+
     - name: Configure unify/unillm paths for CI
       run: |
         # The checked-out dependency repos live in the workflow workspace, so
@@ -366,6 +378,25 @@ jobs:
         TEST_EXIT_CODE=$?
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE
+
+    # Fold each session's misses back into the shared store so the next run
+    # replays them. Runs even when the smoke fails: completions bought before
+    # the failing turn are still worth keeping.
+    - name: Consolidate flow session caches
+      if: always()
+      run: |
+        python3 .github/scripts/consolidate_cache.py --artifacts-dir .flow-cache
+        # actions/cache/save fails if the path is absent.
+        touch .cache.ndjson
+        echo "Consolidated entry count: $(grep -c . .cache.ndjson || true)"
+        ls -lh .cache.ndjson
+
+    - name: Store consolidated cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Stop local orchestra
       if: always()
