@@ -585,9 +585,6 @@ async def _handle_task_due_event(event: TaskDue, cm: "ConversationManager") -> b
                 destination=event.destination,
                 scheduled_for=event.scheduled_for,
                 task_name=(activation.task_name if activation is not None else None),
-                task_description=(
-                    activation.task_description if activation is not None else None
-                ),
             ),
         )
     try:
@@ -677,7 +674,6 @@ async def _handle_task_trigger_requested_event(
                 destination=event.destination,
                 source_ref=event.source_ref,
                 task_name=event.task_label or None,
-                task_description=event.task_summary or None,
             ),
         )
     try:
@@ -900,7 +896,6 @@ def _dispatch_offline_explicit_candidate(
         "source_ref": source_ref,
         "source_medium": "api",
         "task_name": candidate.task_name or None,
-        "task_description": candidate.task_description or None,
     }
     if candidate.destination:
         payload["destination"] = candidate.destination
@@ -1401,7 +1396,6 @@ async def _surface_trigger_task_candidates(
                     contact_id=contact_id,
                 ),
                 task_name=candidate.task_name,
-                task_description=candidate.task_description,
                 attempt_token=attempt_token,
             ),
         )
