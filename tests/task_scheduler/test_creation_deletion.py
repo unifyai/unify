@@ -187,8 +187,6 @@ def test_clone_recurring_task_instance_uses_space_destination_root():
         current = ts._filter_tasks(filter=f"task_id == {task_id}")[0]
         assert current.destination == f"team:{team_id}"
 
-        ts._project_next_occurrence(current)
-
         rows = ts._filter_tasks(filter=f"task_id == {task_id}")
         assert len(rows) == 1
         assert rows[0].destination == f"team:{team_id}"

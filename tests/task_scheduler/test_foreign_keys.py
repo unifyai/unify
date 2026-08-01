@@ -233,16 +233,8 @@ def test_entrypoint_clone_after_set_null():
 
     # Project the next occurrence after the FK SET NULL and verify entrypoint
     # stays null.
-    from unify.task_scheduler.types.task import Task
-
-    task_entries = unisdk.get_logs(
-        context=ts._ctx,
-        filter=f"task_id == {tid}",
-    )[0].entries
-    task_obj = Task(**task_entries)
-
-    ts._project_next_occurrence(task_obj)
-
+    # Projection is Orchestra's: a definition is never cloned or mutated by
+    # advancing a series, which is what the row count below pins.
     all_instances = unisdk.get_logs(
         context=ts._ctx,
         filter=f"task_id == {tid}",
