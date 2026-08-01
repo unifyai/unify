@@ -88,3 +88,7 @@ logs/ci/*
 .livekit-playground/
 # Legacy rename leftovers (never re-track)
 droid/
+# Agent CLI transcripts and session state from benchmark runs: these capture
+# resolved provider config, so they carry plaintext API keys
+benchmarks/*/results/*/opencode_cli.log
+benchmarks/*/results/*/opencode_state/

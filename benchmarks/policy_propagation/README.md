@@ -58,14 +58,21 @@ confirmed here. Storage-time reviews cost ~230k tokens more each (the
 search-and-link work); the change dropped 1.6M — net positive after one
 change, and every future change of the same rule is cheap.
 
-The **opencode arm is inconclusive** and is deliberately excluded from the
-graph. Of its three automations one was never built at setup, one was
-built correctly but had legitimately nothing to do inside the harness's
-scoring windows, and only the third (audits, 4/5 exact) was actually
-measured. Its cost figures are ledger sums and remain valid: setups 475k,
-change 183k, steady state ~96k per round — the most expensive per-round
-figure in the suite. See `2026-08-01T18-05-15Z-opencode/NOTE.md` for the
-per-automation breakdown and what a conclusive rerun needs.
+The **opencode arm cannot reach this experiment**, and that is its
+conclusive result rather than a gap. Across three attempts — with the
+harness tightened after each, ending in a content-based gate that
+verifies every automation references its own sink endpoint and that the
+three are disjoint — OpenCode produced only ever **two separable
+automations from the three requests**, with triage the casualty every
+time: never built, then built but implemented against `/digests`, then
+built correctly and deleted by a later setup. All three attempts scored
+an identical 4/15, which is audits alone. The propagation question cannot
+be asked when the family never exists, so opencode is excluded from the
+graph. Its cost figures are ledger sums and stay valid: setups 437k,
+change 204k, steady state ~121k per round. Full evidence in
+`2026-08-01T18-42-20Z-opencode/NOTE.md`; the semantic_triage arm's
+three-sample finding (2 of 3 setups produce a working automation) is the
+same effect at N=1 automation.
 
 ## Notes
 

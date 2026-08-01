@@ -52,10 +52,19 @@ PROJECT_ROUNDS = 40
 
 
 def _newest(pattern: str, *, required: bool = True) -> Path | None:
+    def _usable(d: Path) -> bool:
+        f = d / "results.json"
+        if not f.exists():
+            return False
+        try:
+            # Setup-abort runs still write results.json for the record;
+            # they are not measurements and must never reach a graph.
+            return "aborted" not in json.loads(f.read_text())
+        except ValueError:
+            return False
+
     candidates = sorted(
-        d
-        for d in (EXPERIMENT_DIR / "results").glob(pattern)
-        if (d / "results.json").exists()
+        d for d in (EXPERIMENT_DIR / "results").glob(pattern) if _usable(d)
     )
     if not candidates:
         if required:

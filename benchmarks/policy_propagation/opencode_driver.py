@@ -73,6 +73,30 @@ from benchmarks.recurring_weekly_report.openrouter_proxy import (  # noqa: E402
 )
 
 
+def _declared_for(workspace: Path, automation: str) -> list[str]:
+    """Artifacts that genuinely implement this automation.
+
+    Name matching is not enough: a run was observed where the command
+    named `triage-support` read and posted to the *digests* sink, so the
+    triage automation did not exist while appearing to. The check is
+    therefore on content — the artifact must reference this automation's
+    own sink endpoint (`/triage`, `/digests`, `/audits`) — and the caller
+    additionally requires the three automations to be disjoint.
+    """
+    endpoint = f"/{automation}"
+    key = automation[:5]
+    found: list[str] = []
+    for name in discover_commands(workspace):
+        for sub in ("command", "commands"):
+            f = workspace / ".opencode" / sub / f"{name}.md"
+            if f.is_file() and endpoint in f.read_text(errors="replace"):
+                found.append(f"command:{name}")
+    for p in discover_scripts(workspace):
+        if endpoint in p.read_text(errors="replace") and key in p.name.lower():
+            found.append(f"script:{p.name}")
+    return sorted(set(found))
+
+
 def _artifact_shas(workspace: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for rel in workspace_files(workspace):
@@ -97,7 +121,11 @@ def _fire_named(
     single script, then the neutral wake), but matched to this automation
     so a three-automation workspace fires the right one.
     """
-    commands = [c for c in discover_commands(workspace) if automation[:5] in c.lower()]
+    # Resolve by content, not by name: the setup gate validates which
+    # artifact implements this automation's sink, and firing must agree
+    # with it or a fire consumes a sibling's pending range.
+    declared = _declared_for(workspace, automation)
+    commands = [d.split(":", 1)[1] for d in declared if d.startswith("command:")]
     if commands:
         code, out = run_opencode(
             ["run", "--command", commands[0]],
@@ -113,9 +141,8 @@ def _fire_named(
             "output_tail": out[-1000:],
         }
 
-    scripts = [
-        p for p in discover_scripts(workspace) if automation[:5] in p.name.lower()
-    ]
+    script_names = {d.split(":", 1)[1] for d in declared if d.startswith("script:")}
+    scripts = [p for p in discover_scripts(workspace) if p.name in script_names]
     if len(scripts) == 1:
         script = scripts[0]
         runner = (
@@ -226,7 +253,39 @@ def main() -> int:
                 time.monotonic() - t0,
             )
             results[f"setup_{automation}"] = {"exit_code": code}
-            print(f"[setup_{automation}] exit={code}")
+            # Every arm's driver aborts when a setup fails to register its
+            # automation. OpenCode's setup is bimodal, and a missing
+            # automation does not just cost its own fires: the wake-prompt
+            # fallback sends an agent into a shared workspace where it finds
+            # and runs a *sibling* automation, consuming that sibling's
+            # pending range before the sibling's own fire is scored. One
+            # missing automation therefore corrupts two. Fail fast instead.
+            declared = _declared_for(workspace, automation)
+            results[f"setup_{automation}"]["declared"] = declared
+            # Automations must also be disjoint: one artifact cannot serve
+            # as two automations, or a fire for one consumes the other's
+            # pending range and both score zero.
+            claimed = {
+                art
+                for other in AUTOMATIONS
+                if other != automation
+                for art in results.get(f"setup_{other}", {}).get("declared", [])
+            }
+            if set(declared) & claimed:
+                results["aborted"] = (
+                    f"setup_{automation} reused another automation's artifact "
+                    f"{sorted(set(declared) & claimed)}; rerun required"
+                )
+                print(f"[abort] setup_{automation} collided with a sibling")
+                return 2
+            if code != 0 or not declared:
+                results["aborted"] = (
+                    f"setup_{automation} produced no automation "
+                    f"(exit {code}); rerun required"
+                )
+                print(f"[abort] setup_{automation} declared nothing — {declared}")
+                return 2
+            print(f"[setup_{automation}] exit={code} declared={declared}")
         results["profile_after_setup"] = {
             "workspace_files": workspace_files(workspace),
             "commands": discover_commands(workspace),
