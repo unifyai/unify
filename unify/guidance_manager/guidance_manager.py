@@ -37,7 +37,13 @@ from ..common.filter_utils import normalize_filter_expr
 from ..common.context_registry import TableContext, ContextRegistry
 from ..common.stale_reason import StaleReason, merge_stale_reasons
 from ..common.sync_lease import exclusive_sync_lease
-from ..common.custom_sync import CustomSyncAdapter, run_custom_sync
+from ..common.custom_sync import (
+    DEPLOYMENT_SOURCE_ID,
+    CustomSyncAdapter,
+    managed_rows_filter,
+    run_custom_sync,
+    stored_hash_field,
+)
 
 GUIDANCE_TABLE = "Guidance"
 GUIDANCE_META_TABLE = "Guidance/Meta"
@@ -109,8 +115,7 @@ class GuidanceManager(BaseGuidanceManager):
 
         self._filter_scope = filter_scope
         self._exclude_ids = frozenset(exclude_ids) if exclude_ids else None
-        self._custom_guidance_synced = False
-        self._custom_guidance_synced_contexts: set[str] = set()
+        self._custom_guidance_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = threading.RLock()
         self._destination_write_scoped = False
 
@@ -369,8 +374,7 @@ class GuidanceManager(BaseGuidanceManager):
 
         # Reset sync bookkeeping for this manager instance
         try:
-            self._custom_guidance_synced = False
-            self._custom_guidance_synced_contexts.clear()
+            self._custom_guidance_synced_sources.clear()
         except Exception:
             pass
 
@@ -1053,7 +1057,11 @@ class GuidanceManager(BaseGuidanceManager):
     #  Custom Guidance Sync                                              #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_guidance_hash(self) -> str:
+    def _get_stored_custom_guidance_hash(
+        self,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> str:
+        field = stored_hash_field("custom_guidance_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1061,12 +1069,18 @@ class GuidanceManager(BaseGuidanceManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_guidance_hash", "")
+                return logs[0].entries.get(field, "")
         except Exception as exc:
             logger.warning("Failed to retrieve custom guidance hash: %s", exc)
         return ""
 
-    def _store_custom_guidance_hash(self, hash_value: str) -> None:
+    def _store_custom_guidance_hash(
+        self,
+        hash_value: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> None:
+        field = stored_hash_field("custom_guidance_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -1077,13 +1091,13 @@ class GuidanceManager(BaseGuidanceManager):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_guidance_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_guidance_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as exc:
@@ -1101,10 +1115,17 @@ class GuidanceManager(BaseGuidanceManager):
             if lg.entries.get("custom_key")
         }
 
-    def _delete_custom_guidance_by_key(self, custom_key: str) -> bool:
+    def _delete_custom_guidance_by_key(
+        self,
+        custom_key: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
-            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            filter=(
+                f"custom_key == '{custom_key}' and " f"{managed_rows_filter(source_id)}"
+            ),
             limit=1,
         )
         if not logs:
@@ -1167,10 +1188,15 @@ class GuidanceManager(BaseGuidanceManager):
         source_guidance: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
         destination: str | None = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
-        """Ensure custom guidance rows match source ``guidance.jsonl`` definitions."""
+        """Ensure custom guidance rows match source ``guidance.jsonl`` definitions.
+
+        Reconciles only the rows *source_id* owns; rows planted in the same
+        context by other sources are neither read nor pruned.
+        """
         try:
-            guidance_context, meta_context, is_personal = (
+            guidance_context, meta_context, _is_personal = (
                 self._sync_destination_contexts(destination)
             )
         except ToolErrorException as exc:
@@ -1187,30 +1213,27 @@ class GuidanceManager(BaseGuidanceManager):
             self._temporary_guidance_context("_meta_ctx", meta_context),
         ):
             source_guidance = source_guidance or {}
-
-            def _mark_synced() -> None:
-                if is_personal:
-                    self._custom_guidance_synced = True
-                else:
-                    self._custom_guidance_synced_contexts.add(guidance_context)
+            synced_key = (guidance_context, source_id)
 
             return run_custom_sync(
                 adapter=_GuidanceSyncAdapter(
                     self,
                     function_name_to_id=function_name_to_id or {},
+                    source_id=source_id,
                 ),
                 source=source_guidance,
                 expected_hash=compute_custom_guidance_hash(
                     source_guidance=source_guidance,
                 ),
-                stored_hash=self._get_stored_custom_guidance_hash(),
-                already_synced=(
-                    self._custom_guidance_synced
-                    if is_personal
-                    else guidance_context in self._custom_guidance_synced_contexts
+                stored_hash=self._get_stored_custom_guidance_hash(source_id),
+                already_synced=synced_key in self._custom_guidance_synced_sources,
+                mark_synced=lambda: self._custom_guidance_synced_sources.add(
+                    synced_key,
                 ),
-                mark_synced=_mark_synced,
-                store_hash=self._store_custom_guidance_hash,
+                store_hash=lambda value: self._store_custom_guidance_hash(
+                    value,
+                    source_id=source_id,
+                ),
             )
 
     def sync_custom(
@@ -1218,6 +1241,7 @@ class GuidanceManager(BaseGuidanceManager):
         *,
         source_guidance: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
         """Sync custom guidance from pre-collected sources across destinations."""
         if source_guidance is None:
@@ -1235,6 +1259,7 @@ class GuidanceManager(BaseGuidanceManager):
                 source_guidance=group,
                 function_name_to_id=function_name_to_id,
                 destination=destination_arg,
+                source_id=source_id,
             )
             # Destination helpers may return a tool-error payload dict; skip
             # that destination and continue syncing the remaining groups.
@@ -1253,14 +1278,16 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         manager: GuidanceManager,
         *,
         function_name_to_id: Dict[str, int],
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> None:
         self._manager = manager
         self._function_name_to_id = function_name_to_id
+        self.source_id = source_id
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._ctx,
-            filter="custom_hash != None",
+            filter=managed_rows_filter(self.source_id),
             exclude_fields=list_private_fields(self._manager._ctx),
         )
         return [dict(lg.entries or {}) for lg in logs]
@@ -1297,7 +1324,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_guidance_by_key(key)
+        self._manager._delete_custom_guidance_by_key(key, source_id=self.source_id)
 
     def find_collision(
         self,
@@ -1306,7 +1333,7 @@ class _GuidanceSyncAdapter(CustomSyncAdapter):
     ) -> Optional[Dict[str, Any]]:
         existing = unisdk.get_logs(
             context=self._manager._ctx,
-            filter=f"custom_key == '{key}'",
+            filter=f"custom_key == '{key}' and custom_hash == None",
             limit=1,
         )
         if not existing:

@@ -164,7 +164,7 @@ def test_sync_custom_knowledge_is_idempotent(
         if (v.get("destination") or "personal") == "personal"
     }
     assert km.sync_custom(source_claims=source) is True
-    km._custom_knowledge_synced = False
+    km._custom_knowledge_synced_sources.clear()
     assert km.sync_custom(source_claims=source) is False
 
 

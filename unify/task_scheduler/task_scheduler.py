@@ -40,9 +40,12 @@ from ..common.context_registry import (
     TableContext,
 )
 from ..common.custom_sync import (
+    DEPLOYMENT_SOURCE_ID,
     CustomSyncAdapter,
+    managed_rows_filter,
     require_consumed,
     run_custom_sync,
+    stored_hash_field,
 )
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
@@ -346,8 +349,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores: Dict[str, TasksStore] = {}
         self._active_task_root_context: Optional[str] = None
-        self._custom_tasks_synced = False
-        self._custom_tasks_synced_contexts: set[str] = set()
+        self._custom_tasks_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = threading.RLock()
         self._provision_storage()
 
@@ -768,8 +770,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._personal_tasks_context = self._ctx
         self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores.clear()
-        self._custom_tasks_synced = False
-        self._custom_tasks_synced_contexts.clear()
+        self._custom_tasks_synced_sources.clear()
         self._provision_storage()
 
     def _task_id_to_log_id_map(self, task_ids: List[int]) -> Dict[int, int]:
@@ -3085,7 +3086,11 @@ class TaskScheduler(BaseTaskScheduler):
         meta_context = self._meta_context_for_destination(destination)
         return data_context, meta_context, destination in (None, "personal")
 
-    def _get_stored_custom_tasks_hash(self) -> str:
+    def _get_stored_custom_tasks_hash(
+        self,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> str:
+        field = stored_hash_field("custom_tasks_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3093,12 +3098,18 @@ class TaskScheduler(BaseTaskScheduler):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_tasks_hash", "") or ""
+                return logs[0].entries.get(field, "") or ""
         except Exception as exc:
             logger.warning("Failed to read custom tasks hash: %s", exc)
         return ""
 
-    def _store_custom_tasks_hash(self, hash_value: str) -> None:
+    def _store_custom_tasks_hash(
+        self,
+        hash_value: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> None:
+        field = stored_hash_field("custom_tasks_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3109,22 +3120,29 @@ class TaskScheduler(BaseTaskScheduler):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_tasks_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_tasks_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as exc:
             logger.warning("Failed to store custom tasks hash: %s", exc)
 
-    def _delete_custom_task_by_key(self, custom_key: str) -> bool:
+    def _delete_custom_task_by_key(
+        self,
+        custom_key: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
-            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            filter=(
+                f"custom_key == '{custom_key}' and " f"{managed_rows_filter(source_id)}"
+            ),
             limit=1,
         )
         if not logs:
@@ -3150,6 +3168,7 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
+        source_id = payload.pop("source_id", DEPLOYMENT_SOURCE_ID)
         # Destination routing is owned by sync_custom_tasks / sync_custom: the
         # caller has already scoped self._ctx to the target root. Per-row
         # destination is grouping metadata only (same as guidance/contacts).
@@ -3193,6 +3212,7 @@ class TaskScheduler(BaseTaskScheduler):
         sync_identity: Dict[str, Any] = {
             "custom_key": custom_key,
             "custom_hash": custom_hash,
+            "source_id": source_id,
         }
         if tags is not None:
             sync_identity["tags"] = tags
@@ -3227,6 +3247,7 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
+        source_id = payload.pop("source_id", DEPLOYMENT_SOURCE_ID)
         payload.pop("destination", None)
         entrypoint_function = payload.pop("entrypoint_function", None)
         schedule = payload.pop("schedule", None)
@@ -3277,6 +3298,7 @@ class TaskScheduler(BaseTaskScheduler):
         entries: Dict[str, Any] = {
             "custom_key": custom_key,
             "custom_hash": custom_hash,
+            "source_id": source_id,
             "name": name,
             "description": description,
             "schedule": schedule,
@@ -3315,7 +3337,9 @@ class TaskScheduler(BaseTaskScheduler):
         entries = {key: value for key, value in entries.items() if value is not _UNSET}
 
         sync_meta = {
-            key: entries[key] for key in ("custom_key", "custom_hash") if key in entries
+            key: entries[key]
+            for key in ("custom_key", "custom_hash", "source_id")
+            if key in entries
         }
         provider_entries = {
             key: value for key, value in entries.items() if key not in sync_meta
@@ -3351,10 +3375,15 @@ class TaskScheduler(BaseTaskScheduler):
         source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
         destination: str | None = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
-        """Ensure custom task rows match source ``tasks.jsonl`` definitions."""
+        """Ensure custom task rows match source ``tasks.jsonl`` definitions.
+
+        Reconciles only the rows *source_id* owns; rows planted in the same
+        context by other sources are neither read nor pruned.
+        """
         try:
-            tasks_context, meta_context, is_personal = self._sync_destination_contexts(
+            tasks_context, meta_context, _is_personal = self._sync_destination_contexts(
                 destination,
             )
         except ToolErrorException as exc:
@@ -3394,30 +3423,27 @@ class TaskScheduler(BaseTaskScheduler):
                 self._temporary_tasks_meta_context(meta_context),
             ):
                 source_tasks = source_tasks or {}
-
-                def _mark_synced() -> None:
-                    if is_personal:
-                        self._custom_tasks_synced = True
-                    else:
-                        self._custom_tasks_synced_contexts.add(tasks_context)
+                synced_key = (tasks_context, source_id)
 
                 return run_custom_sync(
                     adapter=_TaskSyncAdapter(
                         self,
                         function_name_to_id=function_name_to_id or {},
+                        source_id=source_id,
                     ),
                     source=source_tasks,
                     expected_hash=compute_custom_tasks_hash(
                         source_tasks=source_tasks,
                     ),
-                    stored_hash=self._get_stored_custom_tasks_hash(),
-                    already_synced=(
-                        self._custom_tasks_synced
-                        if is_personal
-                        else tasks_context in self._custom_tasks_synced_contexts
+                    stored_hash=self._get_stored_custom_tasks_hash(source_id),
+                    already_synced=synced_key in self._custom_tasks_synced_sources,
+                    mark_synced=lambda: self._custom_tasks_synced_sources.add(
+                        synced_key,
                     ),
-                    mark_synced=_mark_synced,
-                    store_hash=self._store_custom_tasks_hash,
+                    store_hash=lambda value: self._store_custom_tasks_hash(
+                        value,
+                        source_id=source_id,
+                    ),
                 )
         finally:
             self._ctx = previous_context
@@ -3429,6 +3455,7 @@ class TaskScheduler(BaseTaskScheduler):
         *,
         source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
         """Sync custom tasks from pre-collected sources across destinations."""
         if source_tasks is None:
@@ -3446,6 +3473,7 @@ class TaskScheduler(BaseTaskScheduler):
                 source_tasks=group,
                 function_name_to_id=function_name_to_id,
                 destination=destination_arg,
+                source_id=source_id,
             )
         return changed
 
@@ -3466,15 +3494,17 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         scheduler: TaskScheduler,
         *,
         function_name_to_id: Dict[str, int],
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> None:
         self._scheduler = scheduler
         self._function_name_to_id = function_name_to_id
+        self.source_id = source_id
         self.max_workers = scheduler._custom_task_sync_workers()
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._scheduler._ctx,
-            filter="custom_hash != None",
+            filter=managed_rows_filter(self.source_id),
             limit=1000,
             exclude_fields=list_private_fields(self._scheduler._ctx),
         )
@@ -3514,7 +3544,7 @@ class _TaskSyncAdapter(CustomSyncAdapter):
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._scheduler._delete_custom_task_by_key(key)
+        self._scheduler._delete_custom_task_by_key(key, source_id=self.source_id)
 
     def find_collision(
         self,
