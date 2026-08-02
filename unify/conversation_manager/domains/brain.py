@@ -258,6 +258,7 @@ def build_brain_spec(
         console_guidance=cm.console_guidance(
             "full" if SESSION_DETAILS.is_coordinator else "brief",
         ),
+        console_action_catalogue=cm.console_action_catalogue(),
         coordinator_onboarding_active=cm.coordinator_onboarding_active,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
         coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,

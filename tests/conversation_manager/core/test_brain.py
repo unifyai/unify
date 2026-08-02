@@ -82,6 +82,7 @@ def _make_cm():
         ),
         # No Console presence in these sessions, so no orientation block.
         console_guidance=lambda detail="brief": "",
+        console_action_catalogue=lambda: "",
         assistant_job_title="",
         assistant_about="Operations assistant.",
         computer_fast_path_eligible=False,
@@ -160,6 +161,7 @@ class TestBrainSpecStateMessage:
                 hang_up_gate_reason=None,
             ),
             console_guidance=lambda detail="brief": "",
+            console_action_catalogue=lambda: "",
             assistant_job_title="",
             assistant_about="",
             computer_fast_path_eligible=False,

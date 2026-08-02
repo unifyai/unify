@@ -1115,6 +1115,9 @@ class CommsManager:
                         console_guidance_full=str(
                             event.get("console_guidance_full") or "",
                         ),
+                        console_action_catalogue=str(
+                            event.get("console_action_catalogue") or "",
+                        ),
                     ),
                     "assistant_turn_injected": lambda r: _assistant_turn_injected_from_payload(
                         event,

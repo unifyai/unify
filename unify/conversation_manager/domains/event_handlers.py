@@ -3550,6 +3550,7 @@ async def _(
         version=event.console_guidance_version,
         brief=event.console_guidance_brief,
         full=event.console_guidance_full,
+        actions=event.console_action_catalogue,
     )
     if hasattr(cm, "_session_logger"):
         cm._session_logger.debug(
