@@ -2117,6 +2117,27 @@ class AssistantPresenceObserved(Event):
 
 
 @dataclass
+class ConsoleScriptResult(Event):
+    """What became of the console moves this assistant asked for.
+
+    Reported once per script, after it settles. Without it the runtime steers
+    blind: it says "and there it is" whether or not the control was there, which
+    is worse than never having offered to navigate.
+
+    ``outcomes`` is a list of ``{"target": str, "outcome": str}``. The outcomes
+    that mean a move did not happen are distinguished on purpose -- a control
+    that was missing, a user who switched the feature off, and speech that never
+    reached the move all call for the assistant to say something different.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:console_script_result"
+    loggable: ClassVar[bool] = False
+
+    script_id: str = ""
+    outcomes: list = field(default_factory=list)
+
+
+@dataclass
 class CoordinatorDelegate(Event):
     """A Coordinator assigned asynchronous work to this colleague.
 
