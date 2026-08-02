@@ -44,6 +44,9 @@ from unify.conversation_manager.domains.task_execution import (
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
 )
+from unify.conversation_manager.domains.console_script_result import (
+    handle_console_script_result,
+)
 from unify.conversation_manager.domains.whatsapp_history import (
     whatsapp_sent_history_content,
 )
@@ -3557,6 +3560,19 @@ async def _(
             "assistant_presence_observed",
             f"Assistant presence observed from {event.source or 'console'}.",
         )
+
+
+@EventHandler.register(ConsoleScriptResult)
+async def _(
+    event: ConsoleScriptResult,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # Only a move that failed is worth a turn. A landed one is recorded for the
+    # next one, because the assistant already said what it was doing.
+    if await handle_console_script_result(event, cm):
+        await cm.request_llm_run(delay=0)
 
 
 @EventHandler.register(CoordinatorDelegate)
