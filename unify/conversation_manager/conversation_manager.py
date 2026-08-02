@@ -2,6 +2,7 @@ import asyncio
 import collections
 import contextlib
 import json
+import time
 import traceback
 from datetime import datetime
 from typing import Any, Callable, Optional, Reversible
@@ -67,6 +68,10 @@ RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
 ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS = 120
+# How long a Console presence heartbeat keeps the Console orientation block in
+# the prompt. Comfortably longer than Console's keep-warm interval so a user who
+# is present but idle does not drop out of it between beats.
+CONSOLE_PRESENCE_TTL_S = 600.0
 DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
@@ -314,10 +319,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # wake in event_handlers.py's ActorNotification handler so storage
         # completing after every act does not wake the brain product-wide.
         self._learning_demo_storage_wake_armed: bool = False
-        # Static, deployment-gated onboarding catalog (phases + steps + copy),
-        # fetched once from Orchestra's canonical source of truth and reused for
-        # every prompt build so console_ui never re-declares onboarding copy.
-        self.onboarding_catalog: dict[str, Any] | None = None
+        # Console orientation text and when the Console last reported the user
+        # present, both set from AssistantPresenceObserved. See
+        # ``console_guidance`` for why they are held together.
+        self._console_guidance: dict[str, str] = {}
+        self._console_guidance_version: str = ""
+        self._console_presence_at: float | None = None
         self._coordinator_state_checked_at: float = 0.0
         # Shared keep-alive HTTP client for Orchestra state reads/writes, plus
         # the in-flight background refresh (see
@@ -739,6 +746,45 @@ class ConversationManager(metaclass=SingletonABCMeta):
         return self.call_manager.call_contact or self.contact_index.get_contact(
             contact_id=SESSION_DETAILS.boss_contact_id,
         )
+
+    def record_console_presence(
+        self,
+        *,
+        version: str = "",
+        brief: str = "",
+        full: str = "",
+    ) -> None:
+        """Note that Console reported the user present, and keep any text it sent.
+
+        Heartbeats that carry no text still refresh presence: most of them are
+        version-only by design, and treating those as absence would blink the
+        prompt section in and out between the ones that do carry it.
+        """
+        self._console_presence_at = time.monotonic()
+        if not brief and not full:
+            return
+        if version and version != self._console_guidance_version:
+            self._session_logger.info(
+                "console_guidance",
+                f"Console guidance updated to version {version}.",
+            )
+        self._console_guidance_version = version
+        self._console_guidance = {"brief": brief, "full": full}
+
+    def console_guidance(self, detail: str = "brief") -> str:
+        """Console orientation text, but only while the user is on the Console.
+
+        Someone who emailed hours ago is not looking at a screen, so describing
+        it to them is prompt bloat that also invites the assistant to talk about
+        a surface nobody has open. The window is generous relative to Console's
+        keep-warm heartbeat so an idle-but-present user does not flicker in and
+        out of it, since each flip costs a prompt-cache miss.
+        """
+        if self._console_presence_at is None:
+            return ""
+        if time.monotonic() - self._console_presence_at > CONSOLE_PRESENCE_TTL_S:
+            return ""
+        return self._console_guidance.get(detail, "")
 
     async def capture_assistant_screenshot(
         self,
@@ -3011,18 +3057,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
             resp.raise_for_status()
             info = (resp.json() or {}).get("info") or {}
-            # The onboarding catalog is static + deployment-gated; fetch it
-            # once and reuse it for every subsequent prompt build.
-            if self.onboarding_catalog is None:
-                cat_resp = await client.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                    headers={
-                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                )
-                cat_resp.raise_for_status()
-                catalog = (cat_resp.json() or {}).get("info") or {}
-                self.onboarding_catalog = catalog if isinstance(catalog, dict) else None
             self._apply_coordinator_state_info(info)
         except Exception as exc:
             # repr, not str: httpx timeout exceptions stringify to "".

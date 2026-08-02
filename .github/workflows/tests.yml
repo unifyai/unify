@@ -73,11 +73,29 @@ on:
 # AND (when the perpetual staging→main PR exists) a `pull_request`-event
 # run for the same commit, doubling credit usage.
 #
+# The perpetual staging→main PR is the exception, and gets its own group.
+# It runs only the release smoke tier, so sharing a group with the staging
+# push meant a single-file smoke run cancelled the full matrix three
+# seconds after that matrix started — the `cancel-in-progress` above is
+# evaluated for the *incoming* run, so "push events let an in-flight matrix
+# finish" could not hold against a PR-event run in the same group. Tagged
+# pushes lost their suites silently and staging landed commits with no real
+# signal. The cost of separating them is one extra smoke job per staging
+# push; the cost of sharing was every matrix that push asked for.
+#
 # Group key uses `github.head_ref` (PR source branch) when available,
-# falling back to `github.ref_name` (branch name on a direct push).
+# falling back to `github.ref_name` (branch name on a direct push), so a
+# feature branch's push and PR runs still dedupe against each other.
 # Different branches still parallelise.
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: >-
+    tests-${{ github.workflow }}-${{
+      (github.event_name == 'pull_request'
+        && github.base_ref == 'main'
+        && github.head_ref == 'staging')
+      && 'release-smoke'
+      || (github.head_ref || github.ref_name)
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -898,17 +916,25 @@ jobs:
         pip install uv
         pip install poetry
 
-    # Cache uv dependencies to avoid re-downloading on every run
+    # Cache uv dependencies to avoid re-downloading on every run.
+    # Only the download cache is stored, never .venv: uv rebuilds the
+    # environment from it by hardlink in seconds, whereas caching both stored
+    # every dependency twice and made this the largest object in the repo's
+    # Actions cache. It is saved on every ref, so the duplication crowded out
+    # the shared .cache.ndjson and left read-only LLM tests with no cache at
+    # all. Keep this path list to what cannot be reconstructed locally.
     - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.cache/uv
-          .venv
-        # Include unillm and unify pyproject.toml to bust cache when dependencies change
-        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
+        path: ~/.cache/uv
+        # v2 marks the drop of .venv. Without a new prefix the existing entries
+        # still match on an unchanged dependency hash, and a cache hit does not
+        # re-save, so the old two-copy archives would survive until a dependency
+        # moved. Include unillm and unify pyproject.toml to bust the cache when
+        # dependencies change.
+        key: uv-v2-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
         restore-keys: |
-          uv-${{ runner.os }}-
+          uv-v2-${{ runner.os }}-
 
     - name: Configure unify/unillm paths for CI
       run: |

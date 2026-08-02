@@ -14,8 +14,12 @@ import os
 # Flow tests run in parallel via parallel_run.sh; disable the shared LLM cache
 # before any unify/unillm imports so completions cannot bleed across sessions.
 # Mirrors conftest: a developer who opts into a per-process cache by exporting
-# UNILLM_CACHE_DIR keeps their setting.
-if not os.environ.get("UNILLM_CACHE_DIR"):
+# UNILLM_CACHE_DIR keeps their setting, but tests/settings.py's repo-root default
+# is not a choice, so it still counts as "nobody arranged a private directory".
+_repo_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+if os.environ.get("UNILLM_CACHE_DIR", _repo_root) == _repo_root:
     os.environ["UNILLM_CACHE"] = "false"
 
 import asyncio
