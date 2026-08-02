@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from unify.common import console_ui
 from unify.common.accessible_teams_block import build_accessible_teams_block
 from unify.conversation_manager.domains.learning_billsplit_fixtures import (
     learning_billsplit_scenario_prompt_lines,
@@ -556,14 +555,14 @@ def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
     """Explain that the assistant cannot send SMS or make calls."""
     if assistant_has_phone:
         return ""
-    return f"""- I do not currently have a phone number configured, so I cannot send SMS messages or make phone calls. If my boss asks me to text or call someone, I should let them know I don't have a phone number set up yet and explain that they can set one up by {console_ui.CONTACT_DETAILS_VIA_MENU}."""
+    return """- I do not currently have a phone number configured, so I cannot send SMS messages or make phone calls. If my boss asks me to text or call someone, I should let them know I don't have a phone number set up yet and offer to walk them through setting one up in my contact details."""
 
 
 def _build_missing_email_notice(assistant_has_email: bool) -> str:
     """Explain that the assistant cannot send or receive emails."""
     if assistant_has_email:
         return ""
-    return f"""- I do not currently have an email address configured, so I cannot send or receive emails. If my boss asks me to email someone, I should let them know I don't have an email set up yet and explain that they can set one up by {console_ui.CONTACT_DETAILS_VIA_MENU}."""
+    return """- I do not currently have an email address configured, so I cannot send or receive emails. If my boss asks me to email someone, I should let them know I don't have an email set up yet and offer to walk them through setting one up in my contact details."""
 
 
 def _build_whatsapp_number_change_notice(assistant_has_whatsapp: bool) -> str:
@@ -1472,8 +1471,6 @@ def _build_coordinator_onboarding_progress_block(
         elif estimated_time:
             detail.append(f"      Rough time: ~{estimated_time}")
         flow_note = str((step or {}).get("flow_note") or "").strip()
-        if not flow_note:
-            flow_note = console_ui.step_flow_note(step_id)
         if flow_note:
             detail.append(f"      How they advance it: {flow_note}")
         if nudge.strip():
@@ -1709,6 +1706,34 @@ I am a fully remote virtual employee. I am not a chatbot or an AI assistant — 
 I communicate with my boss and their contacts directly through different mediums. I can communicate with several people at the same time — more details in the Input format and Output format sections.{voice_note}"""
 
 
+def _build_local_mode_note_block() -> str:
+    """Orientation for deployments with no Console front-end.
+
+    Names the actual interaction surface so the model never invents a dashboard
+    or an onboarding flow the user cannot see.
+    """
+    return """Interaction surface
+-------------------
+I run locally on my boss's machine and talk to them directly here — through this chat (and voice, if they start a call). There is no web dashboard or onboarding checklist in this setup, so I never refer my boss to a "console", an "Integrations tab", an onboarding flow, or any on-screen panel, and I never nudge them to complete onboarding steps.
+
+When my boss wants to connect an app, manage credentials, change account or billing settings, or run multiple assistants, those live in the hosted product at unify.ai — I point them there rather than describing a local UI. For anything I can do directly (chat, calls, web research, driving a browser/desktop), I just do it."""
+
+
+def _desktop_access_faq(*, has_linked_user_desktop: bool = False) -> str:
+    """Desktop-access FAQ entry for the onboarding reference."""
+    if has_linked_user_desktop:
+        return """**Q: Can you access my computer directly?**
+A: Yes — you've linked a desktop to me, so I can work directly on it. (When there's no active screen share I drive the linked machine; if you'd rather keep an eye on things live, just share your screen on a call.)"""
+    return """**Q: Can you access my computer directly?**
+A: Not directly — but on a call you can put my computer on screen and take control of it, and I'll talk you through it. If you need me to do something on my machine, just ask. If you need something done on *your* machine, share your screen so I can see it and walk you through the steps."""
+
+
+def _app_management_faq(coordinator_name: str) -> str:
+    """App-management FAQ entry for the onboarding reference."""
+    return f"""**Q: Can you help me manage my apps and online services?**
+A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. Connecting an app happens under **Integrations**, where you authorize it securely — credentials are never shared through chat. If a credential must be shared across the team or org (rather than scoped to just me), {coordinator_name} is the right person to place it, and I'll happily hand that part off."""
+
+
 def _build_base_onboarding_reference(
     *,
     desktop_access_faq: str,
@@ -1743,7 +1768,7 @@ A: Absolutely. Send me documents, links, or anything else you'd share with a new
 A: Head to unify.ai and create an account. If we're already in touch, select "already in contact with an assistant" during signup and enter my details to link up. From there, the console has everything — chat with file attachments, voice and video calls with screen sharing, billing setup, and usage monitoring.
 
 **Q: How do I set up your email / phone number / WhatsApp?**
-A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. If you'd rather do it yourself, hover over my name in the assistant list on the console — you'll see a ⋮ menu appear to the right. Click that and select Contact Details to configure my email, phone number, or WhatsApp.
+A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. You can also set my email, phone number, and WhatsApp yourself from my contact details in the console.
 
 {app_management_faq}
 
@@ -2521,10 +2546,10 @@ def build_system_prompt(
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    console_guidance: str = "",
     coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
-    onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -2727,7 +2752,6 @@ def build_system_prompt(
     coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
-    coordinator_onboarding_flow_reference_block = ""
     coordinator_console_literacy_block = ""
     coordinator_onboarding_progress_block = ""
     coordinator_act_query_guidance_block = ""
@@ -2741,28 +2765,14 @@ def build_system_prompt(
                 is_multiplayer=is_multiplayer,
             )
         )
-        # Console-UI guidance is only meaningful when a Console front-end
-        # exists. The public local install has no Console, so these blocks
-        # are omitted there (see ``console_ui_present``).
+        # Console orientation, published by the running Console. Empty when
+        # this deployment has no Console front-end, or when Console could not
+        # be reached — in both cases the section is simply omitted.
+        coordinator_console_literacy_block = console_guidance
         if console_ui_present:
-            # General Console/product literacy — layout, surfaces, where
-            # credentials live, screen-share guidance, org/account
-            # navigation. This is *not* onboarding-specific: it stays on in
-            # every mode (onboarding, working, and deferred) so the
-            # Coordinator can always orient the user and nudge platform
-            # behaviours ("you can undock the Meet window like {this}")
-            # even when they aren't engaging with onboarding.
-            coordinator_console_literacy_block = (
-                console_ui.build_coordinator_console_literacy_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                    catalog=onboarding_catalog,
-                )
-            )
             # ``coordinator_onboarding_active`` gates onboarding-specific
-            # scaffolding (reactive narration, the checklist/flow map, and
-            # the live progress block). General platform literacy above
-            # is intentionally kept on.
+            # scaffolding (reactive narration and the live progress block).
+            # General Console orientation above is intentionally kept on.
             if coordinator_onboarding_active:
                 # Reactive-narration rules for the gradual onboarding flow.
                 # Cheap to build unconditionally for coordinators — orchestra
@@ -2771,17 +2781,6 @@ def build_system_prompt(
                 # they simply never see the notification it describes.
                 coordinator_onboarding_narration_block = (
                     _build_coordinator_onboarding_narration_block()
-                )
-                # UI reference for the gradual-onboarding view: layout,
-                # step contents, and the user-facing affordances behind
-                # each step, so I can answer "what do I click on next?"
-                # while onboarding is active.
-                coordinator_onboarding_flow_reference_block = (
-                    console_ui.build_coordinator_onboarding_flow_reference_block(
-                        COORDINATOR_NAME,
-                        self_reference=True,
-                        catalog=onboarding_catalog,
-                    )
                 )
                 # Standing, always-current onboarding progress (done steps +
                 # the valid next targets with nudge copy), precomputed by
@@ -2974,13 +2973,6 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_onboarding_progress_block:
         parts.add(coordinator_onboarding_progress_block)
 
-    # Companion UI reference describing the onboarding view layout
-    # and step contents — used to answer the user's "what do I
-    # do next?" / "where do I click?" questions. Same gating as the
-    # narration block above (Coordinator).
-    if coordinator_onboarding_flow_reference_block:
-        parts.add(coordinator_onboarding_flow_reference_block)
-
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)
 
@@ -3124,25 +3116,22 @@ When contacts communicate in a non-English language, I match their language in m
     if not is_voice_call:
         parts.add(_build_base_proactive_meeting_offers_block())
 
-    # 13. Console knowledge (Coordinator uses literacy block).
-    #     Omitted with no Console front-end (public local install).
-    if not is_coordinator and console_ui_present:
-        parts.add(console_ui.build_base_console_knowledge_block())
+    # 13. Console knowledge, published by the running Console. The Coordinator
+    #     takes the deeper variant alongside its own orientation block.
+    if not is_coordinator and console_guidance:
+        parts.add(console_guidance)
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
-    #     carries this surface and explicitly disclaims pre-baked Console click
-    #     paths in favor of live look-up). The Console/onboarding FAQ is omitted
-    #     when no Console front-end exists.
+    #     carries this surface). The FAQ is omitted when no Console front-end
+    #     exists.
     if not is_coordinator:
         if console_ui_present:
-            desktop_access_faq = console_ui.desktop_access_faq(
-                has_linked_user_desktop=has_linked_user_desktop,
-            )
-            app_management_faq = console_ui.app_management_faq(COORDINATOR_NAME)
             parts.add(
                 _build_base_onboarding_reference(
-                    desktop_access_faq=desktop_access_faq,
-                    app_management_faq=app_management_faq,
+                    desktop_access_faq=_desktop_access_faq(
+                        has_linked_user_desktop=has_linked_user_desktop,
+                    ),
+                    app_management_faq=_app_management_faq(COORDINATOR_NAME),
                 ),
             )
         coordinator_reference = _build_twin_deferral_block(
@@ -3156,7 +3145,7 @@ When contacts communicate in a non-English language, I match their language in m
     #      interaction surface explicitly so it never references a Console or
     #      an onboarding flow the user cannot see.
     if not console_ui_present:
-        parts.add(console_ui.build_local_mode_note_block())
+        parts.add(_build_local_mode_note_block())
 
     # 15. Voice calls guide (when on a voice call).
     if is_voice_call:
@@ -3542,10 +3531,12 @@ When my boss introduces a third party on the call ("I'm here with Maria — Mari
         "One thought at a time.",
     )
 
-    # Platform knowledge. The Coordinator's bio already carries the live
-    # look-up posture for Console questions, so this block applies only to
-    # regular assistants. Omitted with no Console front-end (public local
-    # install), where there is no Integrations tab / profile menu to describe.
+    # Platform knowledge, withheld from the Coordinator on purpose: giving its
+    # fast brain the same navigation knowledge as the slow brain had it
+    # freelancing contradictory "where do I click" answers, so those questions
+    # defer to the slow brain. Console's own surface list is slow-brain-only for
+    # the same reason, and because this prompt is built in the LiveKit worker
+    # subprocess, which does not see the presence the block is gated on.
     if not is_coordinator and console_ui_present:
         parts.add(
             """Platform knowledge
@@ -3555,7 +3546,7 @@ When someone asks how to set something up, connect a service, add credentials, o
 
 I do NOT lead with technical jargon (API tokens, OAuth, SDK, credentials) or console navigation paths unless the person explicitly indicates they already know what they're doing and just want the location. Most users are non-technical — a guided walkthrough is always more comfortable than a list of steps.
 
-Under the hood (for my own reference when actually guiding someone through a screen share): credentials are added on the **Integrations** tab (the plug icon on my right-hand pane) — the user picks the app from the gallery and authorizes it; credentials are never shared through chat. My contact details (email/phone/WhatsApp) live under the ⋮ menu on my name in the assistant list → Contact Details. Billing and account settings are in the profile menu (top-right). I can integrate with virtually any service that offers an API and handle the rest programmatically.""",
+I can integrate with virtually any service that offers an API and handle the rest programmatically. Credentials are authorized in the console and are never shared through chat. I do not describe the console's layout from memory — where someone needs to be walked to a specific screen, I offer the screen share and let my considered reply carry the detail.""",
         )
 
     # Boss details
@@ -3659,38 +3650,23 @@ This is a summary of my past conversations with the person on this call:
 I use this context to personalize the conversation, but I don't explicitly reference "my records" or "our past conversations" unless natural to do so.""",
         )
 
-    # Unify Meet is a Console-driven medium; its controls describe the Console
-    # overlay, so they are omitted with no Console front-end.
+    # Unify Meet runs inside the Console, so what the call itself can do is
+    # stated here as capability. Where those controls sit on screen is not:
+    # the Console publishes its own layout, and a remembered one goes stale.
     if channel == "unify_meet" and console_ui_present:
-        meet_bottom_bar = (
-            '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me), '
-            '"Show assistant screen" (shows my desktop to the user; once visible, '
-            '"Enable mouse and keyboard control" lets them operate it directly). '
-            "Mic and camera toggles are bottom-left; settings and text chat are bottom-right."
+        meet_desktop_capability = (
+            "The user can also put my desktop on screen and operate it directly, "
+            "and I can drive their linked machine."
             if has_linked_user_desktop
-            else '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me — '
-            "I can see it but NOT interact with it), "
-            '"Show assistant screen" (shows *my* desktop to the user; once visible, '
-            '"Enable mouse and keyboard control" lets the *user* operate *my* desktop directly '
-            "— NOT the other way around). "
-            "Mic and camera toggles are bottom-left; settings and text chat are bottom-right."
+            else "The user can also put *my* desktop on screen and take control of "
+            "it — that direction only. I cannot operate their machine."
         )
         parts.add(
-            f"""Unify Meet controls
--------------------
-These controls are **inside the Meet window itself** and always visible during a call — they do NOT require undocking or resizing:
-{meet_bottom_bar}
-- **Top-right**: the glove icon (undocks the window so it can be dragged/resized).""",
-        )
+            f"""Unify Meet
+----------
+This call is happening inside the Console. The user can share their own screen with me, turn their camera and mic on or off, and type in the call's text chat. {meet_desktop_capability}
 
-        parts.add(
-            """Meet window layout
-------------------
-The Meet window opens as a large overlay that covers most of the console. By default, the user can only see the Meet — the rest of the console (Profile, Chat, etc.) is hidden behind it.
-
-**Undocking is only needed for console pages** (Profile, Chat, Integrations, Billing, etc.) or the ⋮ menu on my name in the assistant list (for my Contact Details) — NOT for Meet controls. The Meet's own buttons (bottom bar, top-right icons) are always accessible inside the Meet window. If the user has trouble with a Meet control like "Show assistant screen" or "Enable mouse and keyboard control", the issue is NOT that the console is hidden — those buttons are right there in the Meet window.
-
-When I need to direct the user to a **console page** specifically (e.g. hover over my name → ⋮ → Contact Details, the Integrations tab to connect an app, or Billing), I first guide them to undock the Meet window by clicking the glove icon in the top-right corner, then dragging it to one side of the screen.""",
+The call window can be moved aside so the rest of the Console is reachable during the call. I describe these as things the call can do, not as buttons in particular places — if the user cannot find a control, I ask what they see rather than directing them to a corner of the screen.""",
         )
 
         no_user_desktop_control_guardrail = (

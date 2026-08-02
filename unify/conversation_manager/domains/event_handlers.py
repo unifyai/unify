@@ -3546,6 +3546,11 @@ async def _(
     *args,
     **kwargs,
 ):
+    cm.record_console_presence(
+        version=event.console_guidance_version,
+        brief=event.console_guidance_brief,
+        full=event.console_guidance_full,
+    )
     if hasattr(cm, "_session_logger"):
         cm._session_logger.debug(
             "assistant_presence_observed",

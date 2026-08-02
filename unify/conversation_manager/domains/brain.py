@@ -252,10 +252,15 @@ def build_brain_spec(
         authorized_humans=authorized_humans,
         is_org_workspace=SESSION_DETAILS.org_id is not None,
         console_ui_present=SETTINGS.UNITY_CONSOLE_UI,
+        # Empty unless Console has reported the user present recently. The
+        # Coordinator walks users around the UI, so it takes the deeper variant
+        # Console publishes; regular assistants take the surface list.
+        console_guidance=cm.console_guidance(
+            "full" if SESSION_DETAILS.is_coordinator else "brief",
+        ),
         coordinator_onboarding_active=cm.coordinator_onboarding_active,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
         coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,
-        onboarding_catalog=cm.onboarding_catalog,
     )
     _system_prompt_ms = _mark_step()
 

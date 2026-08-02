@@ -1521,7 +1521,6 @@ def _fake_conversation_manager(scenario: CoordinatorScenario) -> SimpleNamespace
         coordinator_onboarding_active=False,
         coordinator_onboarding_render=None,
         onboarding_clicked_trigger_steps=[],
-        onboarding_catalog=None,
     )
 
 
