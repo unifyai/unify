@@ -2547,6 +2547,7 @@ def build_system_prompt(
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
     console_guidance: str = "",
+    console_action_catalogue: str = "",
     coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
@@ -3120,6 +3121,12 @@ When contacts communicate in a non-English language, I match their language in m
     #     takes the deeper variant alongside its own orientation block.
     if not is_coordinator and console_guidance:
         parts.add(console_guidance)
+
+    # 13b. Navigation targets, present only while a Console is open to be
+    #      driven. Paired with the ``show_in_console`` tool, which is withheld
+    #      on the same condition.
+    if console_action_catalogue:
+        parts.add(console_action_catalogue)
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
     #     carries this surface). The FAQ is omitted when no Console front-end

@@ -90,6 +90,13 @@ if os.environ.get("UNILLM_CACHE_DIR", _repo_root) == _repo_root:
         if os.path.exists(_shared) and not os.path.lexists(_private):
             os.symlink(_shared, _private)
     os.environ["UNILLM_CACHE_DIR"] = _session_cache_dir
+    # The variable alone would not move anything. Backends bind their directory
+    # when their class body runs, and the root conftest imports unillm long
+    # before this file executes, so the session directory has to be applied
+    # through the API. The variable is still set for anything reading it fresh.
+    import unillm
+
+    unillm.set_cache_dir(_session_cache_dir)
 os.environ.setdefault("UNILLM_CACHE", "true")
 
 import contextlib

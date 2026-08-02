@@ -2193,6 +2193,7 @@ class TestMeetInteractionEventHandlers:
             console_guidance_version="guidance-v2",
             console_guidance_brief="Console knowledge\nBrief.",
             console_guidance_full="Console knowledge\nFull.",
+            console_action_catalogue="- `section:chat` — Chat",
         )
         await EventHandler.handle_event(event, mock_cm)
 
@@ -2200,6 +2201,7 @@ class TestMeetInteractionEventHandlers:
             version="guidance-v2",
             brief="Console knowledge\nBrief.",
             full="Console knowledge\nFull.",
+            actions="- `section:chat` — Chat",
         )
 
     # --------------------------------------------------------------------- #
