@@ -2089,6 +2089,13 @@ class AssistantPresenceObserved(Event):
     The adapters wake the runtime before publishing this event. Unity treats it
     as presence-only context: no LLM run is requested and no user-visible reply
     is composed.
+
+    It also carries the Console's own orientation text, because that text is
+    only worth putting in a prompt while the user is actually looking at the
+    Console. Low-frequency heartbeats carry the full text and the rest carry
+    only ``console_guidance_version``, so the runtime converges on the current
+    text within a few minutes of a Console deploy or a pod restart without
+    every heartbeat paying for it.
     """
 
     topic: ClassVar[str | None] = "app:comms:assistant_presence_observed"
@@ -2098,6 +2105,9 @@ class AssistantPresenceObserved(Event):
     source: str = ""
     page_visibility: str = ""
     occurred_at: str = ""
+    console_guidance_version: str = ""
+    console_guidance_brief: str = ""
+    console_guidance_full: str = ""
 
 
 @dataclass

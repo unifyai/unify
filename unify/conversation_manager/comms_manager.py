@@ -1106,6 +1106,15 @@ class CommsManager:
                         source=str(event.get("source") or "console"),
                         page_visibility=str(event.get("page_visibility") or ""),
                         occurred_at=str(event.get("occurred_at") or ""),
+                        console_guidance_version=str(
+                            event.get("console_guidance_version") or "",
+                        ),
+                        console_guidance_brief=str(
+                            event.get("console_guidance_brief") or "",
+                        ),
+                        console_guidance_full=str(
+                            event.get("console_guidance_full") or "",
+                        ),
                     ),
                     "assistant_turn_injected": lambda r: _assistant_turn_injected_from_payload(
                         event,

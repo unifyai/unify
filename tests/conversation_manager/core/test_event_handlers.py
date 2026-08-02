@@ -2180,6 +2180,28 @@ class TestMeetInteractionEventHandlers:
         mock_cm.request_llm_run.assert_not_called()
         mock_cm.schedule_proactive_speech.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_assistant_presence_observed_records_console_guidance(self, mock_cm):
+        """The heartbeat hands Console's orientation text to the runtime.
+
+        Delivery rides on presence because the text is only worth putting in a
+        prompt while the user is looking at the screen it describes.
+        """
+        event = AssistantPresenceObserved(
+            reason="keepwarm",
+            source="assistant_profile",
+            console_guidance_version="guidance-v2",
+            console_guidance_brief="Console knowledge\nBrief.",
+            console_guidance_full="Console knowledge\nFull.",
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.record_console_presence.assert_called_once_with(
+            version="guidance-v2",
+            brief="Console knowledge\nBrief.",
+            full="Console knowledge\nFull.",
+        )
+
     # --------------------------------------------------------------------- #
     # Screenshot capture on utterance
     # --------------------------------------------------------------------- #
