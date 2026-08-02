@@ -162,6 +162,45 @@ def _callable_accepts_clarification_kwargs(fn: Any) -> bool:
 _CLAR_GLOBAL_MISSING = object()
 
 
+def _make_sandbox_clarification_fn(global_state: Dict[str, Any]):
+    """An awaitable the sandbox can call to ask the user and block on it.
+
+    The queues already reached the sandbox as ``__clarification_up_q__`` /
+    ``__clarification_down_q__``, but nothing exposed a way to use them, so
+    generated code had no route to the clarification channel. Its only option
+    was to write the question out through whatever API the task happened to
+    describe — which asks without waiting, because a script cannot receive a
+    reply. The question goes out, execution continues, and the work proceeds
+    on a guess that looks like it was checked.
+
+    Awaiting this suspends the Python program at the call site, exactly as the
+    JSON tool suspends the loop. The actor is code-first, so an ambiguity
+    found halfway through a program should not require abandoning the program
+    to ask about it.
+
+    Queues are read at call time rather than captured, so the function stays
+    correct across the bind/restore cycle.
+    """
+
+    async def request_clarification(question: str) -> str:
+        """Ask the caller a question and wait for their answer.
+
+        Blocks this call site until an answer arrives and then returns it, so
+        the surrounding code resumes with the answer in hand.
+        """
+        up = global_state.get("__clarification_up_q__")
+        down = global_state.get("__clarification_down_q__")
+        if up is None or down is None:
+            raise RuntimeError(
+                "No clarification channel is available in this context — "
+                "proceed with a stated assumption instead of asking.",
+            )
+        await up.put(str(question))
+        return await down.get()
+
+    return request_clarification
+
+
 def bind_sandbox_clarification_queues(
     global_state: Dict[str, Any],
     up_q: asyncio.Queue[str],
@@ -184,11 +223,14 @@ def bind_sandbox_clarification_queues(
         global_state.get("__clarification_up_q__", _CLAR_GLOBAL_MISSING),
         global_state.get("__clarification_down_q__", _CLAR_GLOBAL_MISSING),
     )
+    previous_fn = global_state.get("request_clarification", _CLAR_GLOBAL_MISSING)
     global_state["__clarification_up_q__"] = up_q
     global_state["__clarification_down_q__"] = down_q
+    global_state["request_clarification"] = _make_sandbox_clarification_fn(global_state)
     return {
         "injectors": previous_injectors,
         "globals": previous_globals,
+        "fn": previous_fn,
     }
 
 
@@ -214,6 +256,11 @@ def restore_sandbox_clarification_queues(
         global_state.pop("__clarification_down_q__", None)
     else:
         global_state["__clarification_down_q__"] = prev_down
+    prev_fn = token.get("fn", _CLAR_GLOBAL_MISSING)
+    if prev_fn is _CLAR_GLOBAL_MISSING:
+        global_state.pop("request_clarification", None)
+    else:
+        global_state["request_clarification"] = prev_fn
 
 
 class _ClarificationQueueInjector:
