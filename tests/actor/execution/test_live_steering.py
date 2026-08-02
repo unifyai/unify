@@ -408,7 +408,198 @@ async def test_stored_function_body_is_steerable_when_synthesised():
     assert "only the first two" in channel.messages
 
 
-def test_dispatch_proxy_passes_non_callables_through():
+@pytest.mark.asyncio
+async def test_completed_calls_are_named_so_a_replacement_can_resume():
+    """The suspend notification must say what already happened, with arguments.
+
+    A block abandoned partway through has done real work that rewriting the
+    code cannot undo. The model decides what to skip, from a named list —
+    rather than a replay cache deciding for it, which would satisfy a
+    correction meaning "undo that" with a cache hit.
+    """
+    session = PythonExecutionSession()
+    interject_q: asyncio.Queue = asyncio.Queue()
+    notify_q: asyncio.Queue = asyncio.Queue()
+    channel = SteeringChannel(
+        interject_q=interject_q,
+        notification_q=notify_q,
+        suspend_timeout=5.0,
+    )
+    token = bind_sandbox_steering_channel(session.global_state, channel)
+
+    sent: list[str] = []
+
+    class _Comms:
+        async def send(self, to: str) -> str:
+            sent.append(to)
+            # A real primitive does I/O and yields here. Without a yield the
+            # whole block runs to completion before anything else on the loop
+            # gets a turn, so nothing could interject partway through.
+            await asyncio.sleep(0)
+            return f"sent:{to}"
+
+    class _Prims:
+        comms = _Comms()
+
+    # Raw, not pre-wrapped: the sandbox installs the steering proxy itself.
+    session.global_state["primitives"] = _Prims()
+
+    async def steer() -> None:
+        while len(sent) < 2:
+            await asyncio.sleep(0)
+        await interject_q.put("stop, the rest are wrong")
+        while channel.progress()["suspensions"] < 1:
+            await asyncio.sleep(0)
+        await interject_q.put("ok continue")
+
+    steerer = asyncio.create_task(steer())
+    try:
+        out = await session.execute(
+            "for v in ['ana', 'bo', 'cy', 'di']:\n"
+            "    await primitives.comms.send(v)\n",
+        )
+        await steerer
+    finally:
+        restore_sandbox_steering_channel(session.global_state, token)
+        await session.close()
+
+    assert out["error"] is None
+
+    payload = notify_q.get_nowait()
+    already = payload["progress"]["already_done"]
+    # The suspend fires before the third send, so exactly the first two are
+    # reported — and by recipient, which is what a replacement needs.
+    assert already == [
+        "primitives.comms.send('ana')",
+        "primitives.comms.send('bo')",
+    ]
+
+
+def test_completed_call_list_is_bounded_and_says_so():
+    """A loop over thousands of rows must not put its history in the transcript.
+
+    But truncating silently would read as "only these happened", which is the
+    opposite of what the list exists to convey — so the real total is stated
+    whenever the list is short of it.
+    """
+    from unify.actor.execution.steering import _MAX_RECORDED_CALLS
+
+    channel = SteeringChannel(interject_q=None)
+    for i in range(_MAX_RECORDED_CALLS + 25):
+        channel.record_completed(f"primitives.data.insert({i})")
+
+    report = channel.progress()
+    assert len(report["already_done"]) == _MAX_RECORDED_CALLS
+    assert report["already_done_total"] == _MAX_RECORDED_CALLS + 25
+
+
+def test_untruncated_report_omits_the_total():
+    """No total when the list is complete — it would only add noise."""
+    channel = SteeringChannel(interject_q=None)
+    channel.record_completed("primitives.comms.send('ana')")
+    assert "already_done_total" not in channel.progress()
+
+
+def test_long_arguments_are_truncated_in_the_report():
+    from unify.actor.execution.steering import _render_call
+
+    rendered = _render_call("primitives.comms.send", ("x" * 500,), {})
+    assert len(rendered) < 120
+    assert rendered.endswith("…)")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proxy_sees_through_the_context_forwarding_wrapper():
+    """The production stacking: steering outside context forwarding.
+
+    ``ContextForwardingProxy`` returns a synchronous ``functools.wraps``
+    wrapper around an async method, and ``iscoroutinefunction`` is False for
+    it. Believing that would put every primitive on the path that cannot
+    suspend, and would record a call as done before it had run — in exactly
+    the configuration production uses, since parent chat context is normally
+    present.
+    """
+    from unify.function_manager.primitives.context_proxy import (
+        ContextForwardingProxy,
+    )
+
+    order: list[str] = []
+
+    class _Comms:
+        async def send(
+            self,
+            to: str,
+            *,
+            _parent_chat_context: list | None = None,
+        ) -> str:
+            order.append(f"dispatch:{to}")
+            await asyncio.sleep(0)
+            return f"sent:{to}"
+
+    class _Prims:
+        comms = _Comms()
+
+    interject_q: asyncio.Queue = asyncio.Queue()
+    channel = SteeringChannel(interject_q=interject_q, suspend_timeout=0.2)
+    proxied = SteeringDispatchProxy(
+        ContextForwardingProxy(_Prims(), _parent_chat_context=[{"role": "user"}]),
+        channel,
+    )
+
+    interject_q.put_nowait("wait")
+    result = await proxied.comms.send("ana")
+
+    assert result == "sent:ana"
+    # Suspension proves the async branch was taken through the wrapper.
+    assert channel.progress()["suspensions"] == 1
+    # And the completion was recorded after the dispatch, not before it.
+    assert channel.progress()["already_done"] == ["primitives.comms.send('ana')"]
+    assert order == ["dispatch:ana"]
+
+
+@pytest.mark.asyncio
+async def test_progress_locates_a_failure_in_the_code_as_written():
+    """Instrumentation shifts traceback lines; the checkpoint's do not.
+
+    A "<string>" traceback carries no source text to cross-reference, and the
+    wrapper already offsets its line numbers before instrumentation adds to
+    the shift. ``last_line_reached`` stays in the coordinates of the code the
+    model wrote, which is why the report is worth attaching on failure.
+    """
+    session = PythonExecutionSession()
+    channel = SteeringChannel(interject_q=asyncio.Queue())
+    token = bind_sandbox_steering_channel(session.global_state, channel)
+    try:
+        out = await session.execute("a = 1\nb = 2\nc = a / 0\nd = 4\n")
+    finally:
+        restore_sandbox_steering_channel(session.global_state, token)
+        await session.close()
+
+    assert "ZeroDivisionError" in (out["error"] or "")
+    progress = channel.progress()
+    assert progress["last_line_reached"] == 3
+    assert progress["last_statement"] == "c = a / 0"
+
+
+def test_dispatch_proxy_does_not_stack_on_itself():
+    """Nesting would checkpoint and record each dispatch once per layer.
+
+    Reachable in production: a block that calls something which runs its own
+    block arrives here with the outer proxy already on the shared sandbox
+    globals.
+    """
+    channel = SteeringChannel(interject_q=None)
+
+    class _Prims:
+        pass
+
+    target = _Prims()
+    once = SteeringDispatchProxy(target, channel)
+    twice = SteeringDispatchProxy(once, channel)
+    assert twice._target is target
+
+
+def test_dispatch_proxy_passes_plain_values_through():
     channel = SteeringChannel(interject_q=None)
 
     class _Manager:
@@ -419,6 +610,40 @@ def test_dispatch_proxy_passes_non_callables_through():
 
     proxy = SteeringDispatchProxy(_Prims(), channel)
     assert proxy.contacts.label == "contacts"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proxy_descends_into_nested_namespaces():
+    """Primitive families nest, and the nested ones do the irreversible work.
+
+    ``primitives.integrations.slack.send_message`` and
+    ``primitives.computer.web.new_session`` are the shapes that matter; a
+    proxy that stopped at one level would leave exactly those uncheckpointed.
+    """
+    interject_q: asyncio.Queue = asyncio.Queue()
+    channel = SteeringChannel(interject_q=interject_q, suspend_timeout=0.2)
+
+    class _Slack:
+        async def send_message(self, channel_name: str) -> str:
+            return f"posted:{channel_name}"
+
+    class _Integrations:
+        slack = _Slack()
+
+    class _Prims:
+        integrations = _Integrations()
+
+    proxy = SteeringDispatchProxy(_Prims(), channel)
+    interject_q.put_nowait("hold off on slack")
+
+    result = await proxy.integrations.slack.send_message("#eng")
+
+    assert result == "posted:#eng"
+    progress = channel.progress()
+    assert progress["suspensions"] == 1
+    assert progress["already_done"] == [
+        "primitives.integrations.slack.send_message('#eng')",
+    ]
 
 
 # ── the tool surface ───────────────────────────────────────────────────────

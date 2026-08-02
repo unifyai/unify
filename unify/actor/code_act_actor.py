@@ -3262,10 +3262,16 @@ class CodeActActor(BaseCodeActActor):
                 finally:
                     _PARENT_CHAT_CONTEXT.reset(_pcc_token)
 
-                # Only when something actually steered this block. An
-                # uninterrupted run reports nothing, so the common case costs
-                # no transcript weight.
-                if _steering is not None and _steering.messages:
+                # Only when something actually steered this block, or when it
+                # failed — an uninterrupted success reports nothing, so the
+                # common case costs no transcript weight.
+                #
+                # On failure the report earns its place: instrumentation shifts
+                # the line numbers in a "<string>" traceback, which carries no
+                # source text to cross-reference, whereas the checkpoint's
+                # ``last_line_reached`` is in the coordinates of the code as
+                # written.
+                if _steering is not None and (_steering.messages or out.get("error")):
                     out["steering"] = _steering.progress()
 
                 # Enrich with session name.
@@ -4018,12 +4024,13 @@ class CodeActActor(BaseCodeActActor):
                     except Exception:
                         pass
 
+                    _ef_steering = None
                     with self._sandbox_call_binding(
                         clarification_up_q=_clarification_up_q,
                         clarification_down_q=_clarification_down_q,
                         interject_q=_interject_queue,
                         notification_q=notification_q,
-                    ):
+                    ) as _ef_steering:
                         if (
                             isinstance(function_data, dict)
                             and function_data.get("is_primitive")
@@ -4250,6 +4257,16 @@ class CodeActActor(BaseCodeActActor):
                                 f"returning bare handle (no side output)",
                             )
                             return _ef_result_val
+
+                    # Same contract as execute_code: report only when something
+                    # actually steered this call. The bare-handle return above
+                    # is exempt — that value is a handle the loop adopts, and
+                    # steering continues through it rather than ending here.
+                    if _ef_steering is not None and _ef_steering.messages:
+                        if isinstance(out, dict):
+                            out["steering"] = _ef_steering.progress()
+                        else:
+                            out.steering = _ef_steering.progress()
 
                     _ef_log.debug(
                         f"⏱️ [execute_function +{_ef_ms()}] returning result",
