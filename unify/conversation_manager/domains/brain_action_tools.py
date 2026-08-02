@@ -32,6 +32,8 @@ from unify.comms.outbound_origin import (
 from unify.session_details import SESSION_DETAILS
 
 from unify.conversation_manager.console_actions import catalogue_form
+from unify.conversation_manager.cm_types import Mode
+from unify.conversation_manager.domains.comms_utils import publish_console_script
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -2318,15 +2320,24 @@ class ConversationManagerBrainActionTools:
         """
         Take my boss to a page in the console while I talk them through it.
 
-        I call this **alongside** ``guide_voice_agent`` and mark the moments in
-        that spoken line with ``[[1]]``, ``[[2]]``, … — one marker per target, in
-        order. The markers are removed before the line is spoken; each one is the
-        instant its move happens, so the console changes on the words rather than
-        before or after them::
+        Offered whenever my boss has the console open, whatever we are talking
+        over — a Meet, a phone call, SMS, email, chat. If they are reading my
+        reply with the console in another tab, they can watch it happen.
+
+        On a **Unify Meet** I call this alongside ``guide_voice_agent`` and mark
+        the moments in that spoken line with ``[[1]]``, ``[[2]]``, … — one marker
+        per target, in order. The markers are removed before the line is spoken,
+        and each move happens on its words rather than before or after them::
 
             guide_voice_agent(message="Sure — I'll open Integrations [[1]], and
                               your billing page is over here [[2]].")
             show_in_console(targets=["section:integrations", "route:/billing"])
+
+        **Anywhere else** there is no spoken line to sit inside, so I just name
+        the targets and the console walks them in order while my boss reads what
+        I said. No markers are needed::
+
+            show_in_console(targets=["section:integrations"])
 
         Every target must be one of the ids listed for me under console
         navigation targets. Those are the only places I can go; if what my boss
@@ -2334,13 +2345,14 @@ class ConversationManagerBrainActionTools:
         than moving them somewhere near it.
 
         This moves the page my boss is looking at, so I use it while I am
-        actually showing them something — not to jump them somewhere unasked, and
-        not more than a few steps in one breath. If they interrupt me, the moves I
-        had not yet reached are dropped, which is what should happen.
+        actually showing them something — alongside a message that says what they
+        are looking at, never on its own and never to jump them somewhere
+        unasked. A few steps at a time. On a call, if they interrupt me, the
+        moves I had not yet reached are dropped, which is what should happen.
 
         Args:
-            targets: Navigation target ids, in the order their markers appear in
-                the spoken line. One per marker.
+            targets: Navigation target ids, in the order they should happen. On a
+                Meet, one per ``[[n]]`` marker in the spoken line.
         """
         catalogue = self._cm.console_action_catalogue()
         if not catalogue:
@@ -2357,6 +2369,16 @@ class ConversationManagerBrainActionTools:
                     "Use an id from the console navigation targets list."
                 ),
             }
+        # In a Meet the moves are held until the spoken line reaches their
+        # markers, so they are published from the voice pipeline rather than
+        # here. Every other medium has no line to sit inside, and no room
+        # Console is a participant in, so they go out now over its event stream.
+        if self._cm.mode == Mode.MEET:
+            return {"status": "showing", "targets": targets}
+
+        await publish_console_script(
+            steps=[{"target": target} for target in targets],
+        )
         return {"status": "showing", "targets": targets}
 
     def _whatsapp_contact_label(self, contact_id: int) -> str:
@@ -2570,11 +2592,12 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
-            # Only offered while a Console is open to be driven. Off-console
-            # sessions never see the tool, so the model cannot narrate a move
-            # nobody is looking at.
-            if self._cm.console_action_catalogue():
-                tools["show_in_console"] = self.show_in_console
+        # Offered whenever Console reports the boss present, whatever medium
+        # this conversation is on. Someone reading a text reply with the Console
+        # open can watch a page change exactly as well as someone on a call; the
+        # only thing that makes it pointless is nobody being there to see it.
+        if self._cm.console_action_catalogue():
+            tools["show_in_console"] = self.show_in_console
         if self._cm.initialized:
             tools["act"] = self.act
             tools["ask_about_contacts"] = self.ask_about_contacts
