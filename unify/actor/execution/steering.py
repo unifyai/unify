@@ -55,6 +55,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import functools
+import inspect
+from contextlib import suppress
 from typing import Any, Dict, List, Optional
 
 #: Names the instrumented program calls. Chosen to be unlikely to collide with
@@ -69,6 +72,15 @@ CHANNEL_GLOBAL = "__steering_channel__"
 #: sets ``llm_turn_required``, but a turn that answers in prose rather than
 #: calling a tool would otherwise hang here forever.
 DEFAULT_SUSPEND_TIMEOUT_S = 180.0
+
+#: Ceiling on the completed-call list in a progress report. A block looping
+#: over thousands of rows would otherwise put its whole history in the
+#: transcript; the first calls are the ones a replacement needs to skip.
+_MAX_RECORDED_CALLS = 50
+
+#: Ceiling on one rendered argument, so a call carrying a document body does
+#: not dominate the report it appears in.
+_MAX_ARG_CHARS = 60
 
 
 class SteeringChannel:
@@ -94,6 +106,8 @@ class SteeringChannel:
         self._checkpoints = 0
         self._suspensions = 0
         self._source_lines: List[str] = []
+        self._completed: List[str] = []
+        self._completed_count = 0
 
     # ── what generated code may read ──────────────────────────────────────
     @property
@@ -109,6 +123,23 @@ class SteeringChannel:
     def active(self) -> bool:
         """Whether a steering channel is attached to this execution."""
         return self._interject_q is not None
+
+    def record_completed(self, call: str) -> None:
+        """Note a dispatch that finished, so a replacement block can skip it.
+
+        A block abandoned partway through has already done part of its work,
+        and that work cannot be undone by rewriting the code. Naming the calls
+        that completed — with their arguments — is what lets the model write a
+        replacement that resumes rather than repeats.
+
+        This is deliberately a report rather than a replay cache. Memoising a
+        side effect records that it happened, not that it is cheap to redo, so
+        having the model decide what to skip keeps a correction that meant
+        "undo that" from being satisfied by a cache hit.
+        """
+        self._completed_count += 1
+        if len(self._completed) < _MAX_RECORDED_CALLS:
+            self._completed.append(call)
 
     # ── what the tool reads back after execution ──────────────────────────
     def progress(self) -> Dict[str, Any]:
@@ -129,6 +160,12 @@ class SteeringChannel:
                 report["last_statement"] = source
         if self._messages:
             report["interjections_received"] = list(self._messages)
+        if self._completed:
+            report["already_done"] = list(self._completed)
+            # Silent truncation would read as "only these happened", which is
+            # the opposite of what the list is for. Say the real total.
+            if self._completed_count > len(self._completed):
+                report["already_done_total"] = self._completed_count
         return report
 
     def bind_source(self, code: str) -> None:
@@ -378,32 +415,113 @@ def current_channel(global_state: Dict[str, Any]) -> Optional[SteeringChannel]:
 # ---------------------------------------------------------------------------
 # Dispatch-boundary checkpoints
 # ---------------------------------------------------------------------------
+def _is_async_callable(fn: Any) -> bool:
+    """Whether *fn* ultimately dispatches a coroutine.
+
+    ``ContextForwardingProxy`` hands back a synchronous ``functools.wraps``
+    wrapper that returns the coroutine produced by an async method, and
+    ``iscoroutinefunction`` reports False for it because it inspects the
+    wrapper's own code flags rather than following ``__wrapped__``. Taking
+    that at face value would put every primitive on the synchronous path in
+    production, where parent chat context is normally present — checkpoints
+    that cannot suspend, and a completion recorded before the call had run.
+    """
+    seen: set[int] = set()
+    while fn is not None and id(fn) not in seen:
+        if asyncio.iscoroutinefunction(fn):
+            return True
+        seen.add(id(fn))
+        fn = getattr(fn, "__wrapped__", None)
+    return False
+
+
+def _render_call(path: str, args: tuple, kwargs: Dict[str, Any]) -> str:
+    """A one-line rendering of a dispatch, short enough for a report."""
+
+    def _short(value: Any) -> str:
+        text = repr(value)
+        if len(text) > _MAX_ARG_CHARS:
+            return text[: _MAX_ARG_CHARS - 1] + "…"
+        return text
+
+    rendered = [_short(a) for a in args]
+    rendered += [f"{k}={_short(v)}" for k, v in kwargs.items()]
+    return f"{path}({', '.join(rendered)})"
+
+
+#: Attribute values handed back untouched rather than treated as a namespace
+#: worth descending into. Everything else that is not callable is assumed to
+#: be a sub-namespace, because primitive families nest: the real side effects
+#: include ``primitives.integrations.slack.send_message`` and
+#: ``primitives.computer.web.new_session``, which stopping at one level would
+#: leave uncheckpointed.
+_PASSTHROUGH_TYPES = (
+    str,
+    bytes,
+    bytearray,
+    int,
+    float,
+    bool,
+    complex,
+    type(None),
+    list,
+    tuple,
+    dict,
+    set,
+    frozenset,
+)
+
+
 class _SteeringManagerProxy:
-    """Checkpoints one manager's methods on the way in."""
+    """Checkpoints one manager's methods on the way in, and records the way out.
 
-    __slots__ = ("_manager", "_channel")
+    Descends through nested namespaces so a call several levels down is
+    covered by the same checkpoint as a top-level one.
+    """
 
-    def __init__(self, manager: Any, channel: SteeringChannel) -> None:
+    __slots__ = ("_manager", "_channel", "_namespace")
+
+    def __init__(self, manager: Any, channel: SteeringChannel, namespace: str) -> None:
         self._manager = manager
         self._channel = channel
+        self._namespace = namespace
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._manager, name)
         if not callable(attr):
-            return attr
+            if isinstance(attr, _PASSTHROUGH_TYPES):
+                return attr
+            return _SteeringManagerProxy(
+                attr,
+                self._channel,
+                f"{self._namespace}.{name}",
+            )
 
-        if asyncio.iscoroutinefunction(attr):
+        path = f"primitives.{self._namespace}.{name}"
+
+        if _is_async_callable(attr):
 
             async def _checked(*args: Any, **kwargs: Any) -> Any:
                 await self._channel.checkpoint()
-                return await attr(*args, **kwargs)
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                self._channel.record_completed(_render_call(path, args, kwargs))
+                return result
 
         else:
 
             def _checked(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
                 self._channel.checkpoint_sync()
-                return attr(*args, **kwargs)
+                result = attr(*args, **kwargs)
+                self._channel.record_completed(_render_call(path, args, kwargs))
+                return result
 
+        # Keep the wrapped signature visible: anything introspecting this
+        # proxy — including the context-forwarding layer, if the wrapping
+        # order ever changes — decides what to inject from the parameters.
+        with suppress(AttributeError, TypeError, ValueError):
+            functools.wraps(attr)(_checked)
         return _checked
 
 
@@ -418,13 +536,27 @@ class SteeringDispatchProxy:
 
     Stored functions invoked as bare callables are not covered by this proxy;
     they are reached through statement and loop-body checkpoints only.
+
+    Completed calls are recorded on the way back out, so a block abandoned
+    partway through can tell the model exactly which side effects already
+    landed and with what arguments.
     """
 
     __slots__ = ("_target", "_channel")
 
     def __init__(self, target: Any, channel: SteeringChannel) -> None:
+        # Never stack on another steering layer. A block that calls something
+        # which runs its own block reaches this with the outer proxy already
+        # installed on the shared sandbox globals, and nesting would checkpoint
+        # and record each dispatch once per layer.
+        while isinstance(target, SteeringDispatchProxy):
+            target = target._target
         self._target = target
         self._channel = channel
 
     def __getattr__(self, name: str) -> Any:
-        return _SteeringManagerProxy(getattr(self._target, name), self._channel)
+        return _SteeringManagerProxy(
+            getattr(self._target, name),
+            self._channel,
+            name,
+        )
