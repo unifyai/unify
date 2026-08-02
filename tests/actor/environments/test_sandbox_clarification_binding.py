@@ -109,3 +109,82 @@ def test_execute_code_and_execute_function_accept_clarification_kwargs():
     assert "_clarification_up_q: asyncio.Queue[str] | None = None" in src
     assert src.count("_clarification_up_q: asyncio.Queue[str] | None = None") >= 2
     assert "with self._sandbox_clarification_binding(" in src
+
+
+# ---------------------------------------------------------------------------
+# request_clarification, callable from inside generated code
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sandbox_request_clarification_blocks_until_answered():
+    """The call site suspends, and resumes with the answer as its value.
+
+    This is the property that makes asking from code meaningful. Without it a
+    program can only *emit* a question and carry on, which is indistinguishable
+    from not asking: the work proceeds on a guess that looks checked.
+    """
+    global_state: dict = {}
+    up_q: asyncio.Queue[str] = asyncio.Queue()
+    down_q: asyncio.Queue[str] = asyncio.Queue()
+    bind_sandbox_clarification_queues(global_state, up_q, down_q)
+
+    ask = global_state["request_clarification"]
+    task = asyncio.create_task(ask("Which Sarah — Chen or Okonkwo?"))
+
+    question = await asyncio.wait_for(up_q.get(), timeout=2)
+    assert question == "Which Sarah — Chen or Okonkwo?"
+
+    # Still suspended: nothing has answered yet.
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    await down_q.put("Sarah Chen, in Finance.")
+    assert await asyncio.wait_for(task, timeout=2) == "Sarah Chen, in Finance."
+
+
+@pytest.mark.asyncio
+async def test_sandbox_request_clarification_reads_queues_at_call_time():
+    """Rebinding to a later tool call's queues redirects an existing handle.
+
+    The function is installed once per bind but must not capture the queues,
+    or code holding a reference from an earlier call would write into a
+    channel nobody is watching.
+    """
+    global_state: dict = {}
+    first_up: asyncio.Queue[str] = asyncio.Queue()
+    first_down: asyncio.Queue[str] = asyncio.Queue()
+    bind_sandbox_clarification_queues(global_state, first_up, first_down)
+    ask = global_state["request_clarification"]
+
+    second_up: asyncio.Queue[str] = asyncio.Queue()
+    second_down: asyncio.Queue[str] = asyncio.Queue()
+    bind_sandbox_clarification_queues(global_state, second_up, second_down)
+
+    task = asyncio.create_task(ask("which one?"))
+    assert await asyncio.wait_for(second_up.get(), timeout=2) == "which one?"
+    assert first_up.empty()
+    await second_down.put("the second")
+    assert await asyncio.wait_for(task, timeout=2) == "the second"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_request_clarification_absent_without_a_channel():
+    """No channel, no tool — and a legible error if it is called anyway.
+
+    A loop without clarification queues must not appear to offer asking. The
+    contract is to proceed on a stated assumption instead.
+    """
+    global_state: dict = {}
+    assert "request_clarification" not in global_state
+
+    up_q: asyncio.Queue[str] = asyncio.Queue()
+    down_q: asyncio.Queue[str] = asyncio.Queue()
+    token = bind_sandbox_clarification_queues(global_state, up_q, down_q)
+    ask = global_state["request_clarification"]
+    restore_sandbox_clarification_queues(global_state, token)
+
+    # Restored away with the queues it belonged to.
+    assert "request_clarification" not in global_state
+    with pytest.raises(RuntimeError, match="No clarification channel"):
+        await ask("anyone there?")
