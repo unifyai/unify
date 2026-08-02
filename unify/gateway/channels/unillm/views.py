@@ -31,13 +31,27 @@ import httpx
 import unillm
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from unillm.limit_hooks import SpendingLimitExceededError
 
 from unify.gateway.channels.unillm.schema import ChatCompletionRequest
 from unify.settings import SETTINGS
+from unify.spending_limits import (
+    caller_context,
+    install_multi_tenant_limit_check_hook,
+)
 
 logger = logging.getLogger("unify.gateway.channels.unillm")
 
 router = APIRouter()
+
+# This endpoint spends real money on a bare user API key, so it must run
+# under the same spending gates as the assistant runtime (credit balance,
+# trial daily burn ceiling, per-entity monthly caps). The runtime installs
+# them in ``unify.init()``, which no gateway process calls — so install
+# here, at the one import site that mounts this router. UniLLM treats a
+# missing hook as "allowed", which is how this path previously enforced
+# nothing at all.
+install_multi_tenant_limit_check_hook()
 
 
 # ---------------------------------------------------------------------------
@@ -115,20 +129,95 @@ async def chat_completions(
     (e.g. ``claude-sonnet-4-20250514@anthropic``, ``gpt-4o@openai``).
     """
     api_key = _extract_api_key(request)
-    await _authenticate_user_api_key(api_key)
+    user_info = await _authenticate_user_api_key(api_key)
 
     messages = [msg.model_dump(exclude_none=True) for msg in request_body.messages]
     _ensure_non_system_message(messages)
 
+    user_id = user_info.get("user_id")
+    # Absent on Orchestra builds predating the field; None is also the
+    # correct value for a personal key, and the user-spend check resolves
+    # the wallet server-side either way.
+    org_id = user_info.get("organization_id")
+
+    # Assert the gates here rather than relying on the equivalent check
+    # inside UniLLM's own call path. Two reasons: a denied stream has to
+    # fail before StreamingResponse commits the status line, and this
+    # endpoint's enforcement should not be contingent on the internal
+    # wiring of a callee — that contingency is precisely how it came to
+    # enforce nothing at all.
+    await _assert_within_limits(
+        model=request_body.model,
+        api_key=api_key,
+        user_id=user_id,
+        org_id=org_id,
+    )
+
     if request_body.stream:
-        return await _stream_response(request_body, messages, api_key)
-    return await _non_stream_response(request_body, messages, api_key)
+        return await _stream_response(
+            request_body,
+            messages,
+            api_key,
+            user_id=user_id,
+            org_id=org_id,
+        )
+    return await _non_stream_response(
+        request_body,
+        messages,
+        api_key,
+        user_id=user_id,
+        org_id=org_id,
+    )
+
+
+async def _assert_within_limits(
+    *,
+    model: str,
+    api_key: str,
+    user_id: str | None,
+    org_id: int | None,
+) -> None:
+    """Run the spending gates up-front, raising 402 if the caller is blocked.
+
+    UniLLM runs the same check inside ``generate()``; this duplicate exists
+    only so the streaming path can fail before any bytes are committed to
+    the response. No-op when no hook is installed (self-host, local dev).
+    """
+    from unillm.limit_hooks import (
+        LimitCheckRequest,
+        check_limits,
+        is_limit_check_enabled,
+    )
+
+    if not is_limit_check_enabled():
+        return
+
+    async with caller_context(api_key, user_id=user_id, org_id=org_id):
+        result = await check_limits(
+            LimitCheckRequest(model=model, endpoint="chat/completions"),
+        )
+
+    if not result.allowed:
+        raise _limit_denied(SpendingLimitExceededError(result))
+
+
+def _limit_denied(error: SpendingLimitExceededError) -> HTTPException:
+    """Map a spending-limit denial onto 402 Payment Required.
+
+    402 rather than 429: the caller is not being rate-limited, they are out
+    of money (or out of trial allowance). OpenAI-compatible clients surface
+    the body text, so the hook's reason string reaches the user unaltered.
+    """
+    return HTTPException(status_code=402, detail=str(error))
 
 
 async def _non_stream_response(
     request_body: ChatCompletionRequest,
     messages: list,
     api_key: str,
+    *,
+    user_id: str | None = None,
+    org_id: int | None = None,
 ) -> dict:
     """Handle non-streaming chat completion."""
     client = unillm.AsyncUnify(
@@ -149,7 +238,11 @@ async def _non_stream_response(
         return_full_completion=True,
     )
 
-    response = await client.generate(messages=messages)
+    async with caller_context(api_key, user_id=user_id, org_id=org_id):
+        try:
+            response = await client.generate(messages=messages)
+        except SpendingLimitExceededError as e:
+            raise _limit_denied(e) from e
     return response.model_dump()
 
 
@@ -157,6 +250,9 @@ async def _stream_response(
     request_body: ChatCompletionRequest,
     messages: list,
     api_key: str,
+    *,
+    user_id: str | None = None,
+    org_id: int | None = None,
 ) -> StreamingResponse:
     """Handle streaming chat completion with Server-Sent Events."""
 
@@ -181,9 +277,12 @@ async def _stream_response(
             return_full_completion=True,
         )
 
-        async for chunk in client.generate(messages=messages):
-            chunk_data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
-            yield f"data: {json.dumps(chunk_data)}\n\n"
+        async with caller_context(api_key, user_id=user_id, org_id=org_id):
+            async for chunk in client.generate(messages=messages):
+                chunk_data = (
+                    chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
+                )
+                yield f"data: {json.dumps(chunk_data)}\n\n"
 
         yield "data: [DONE]\n\n"
 
