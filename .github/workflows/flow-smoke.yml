@@ -38,6 +38,8 @@ on:
 
 permissions:
   contents: read
+  # Reading the cross-branch llm-cache-ndjson artifact.
+  actions: read
 
 # Share a group across the push and pull_request events for the same source
 # branch so a [run-flows] push and its staging -> main PR don't double-run.
@@ -304,25 +306,14 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
-    # See the note in tests.yml: Actions cache is the hot layer, GCS the durable
-    # one behind it, read only when the hot layer misses. Set up whenever the
-    # bucket is configured, not just on a miss — this job also publishes at the
-    # end, on a path a cache hit still reaches.
-    - name: Set up gcloud
-      if: vars.LLM_CACHE_BUCKET != ''
-      uses: google-github-actions/setup-gcloud@v2
-
-    - name: Fall back to the durable LLM cache in GCS
-      if: steps.cache-read.outputs.cache-matched-key == '' && vars.LLM_CACHE_BUCKET != ''
-      run: |
-        obj="gs://${{ vars.LLM_CACHE_BUCKET }}/${{ runner.os }}/cache.ndjson"
-        # An absent object is the pre-first-publish state, not a failure.
-        if gcloud storage objects describe "$obj" >/dev/null 2>&1; then
-          gcloud storage cp "$obj" .cache.ndjson
-          echo "Restored $(grep -c . .cache.ndjson || true) entries from $obj"
-        else
-          echo "No durable cache at $obj yet; flows run fully live."
-        fi
+    # This gate runs as a pull_request with base=main, which cannot restore an
+    # entry saved on staging, so without the cross-branch artifact the flows
+    # replay nothing and re-buy every completion.
+    - name: Hydrate .cache.ndjson from the cross-branch artifact
+      if: steps.cache-read.outputs.cache-matched-key == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: .github/scripts/hydrate_llm_cache.sh
 
     - name: Configure unify/unillm paths for CI
       run: |
@@ -436,14 +427,19 @@ jobs:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-    # Flows buy live completions on every gate, so what they fold back belongs
-    # in the durable copy too, not only in the evictable one.
-    - name: Publish the durable LLM cache to GCS
-      if: always() && steps.consolidate.outputs.publish == 'true' && vars.LLM_CACHE_BUCKET != ''
-      run: |
-        obj="gs://${{ vars.LLM_CACHE_BUCKET }}/${{ runner.os }}/cache.ndjson"
-        gcloud storage cp .cache.ndjson "$obj"
-        echo "Published $(grep -c . .cache.ndjson || true) entries to $obj"
+    # The Actions copy above is branch-scoped and evictable, so the completions
+    # this gate paid for only outlive the branch as an artifact. Retention is
+    # the ceiling on how long the store survives without a refresh.
+    - name: Publish the cross-branch LLM cache artifact
+      if: always() && steps.consolidate.outputs.publish == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 0
+        retention-days: 90
 
     - name: Stop local orchestra
       if: always()

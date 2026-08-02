@@ -6,13 +6,16 @@ dashboards, integration registry) reconciles through this module. The
 contract lives in ``docs/writeups/custom-source-sync.md``; the short
 version:
 
-- A deployment-owned row carries ``custom_key`` (stable identity of the
-  authored source entry) and ``custom_hash`` (content fingerprint), set
-  together, atomically with the row itself.
+- A managed row carries ``custom_key`` (stable identity of the authored
+  source entry), ``custom_hash`` (content fingerprint), and ``source_id``
+  (which source authored it), set together, atomically with the row
+  itself.
 - The diff loop is implemented once, here. Managers supply a
   :class:`CustomSyncAdapter` with their storage mechanics and declared
   policy knobs, never a bespoke loop.
-- Two live managed rows sharing one ``custom_key`` raise
+- Every pass is scoped to one ``source_id``. Two sources syncing into the
+  same context see disjoint row sets, so neither prunes the other's rows.
+- Two live managed rows of one source sharing one ``custom_key`` raise
   :class:`CustomSyncDuplicateKeyError` instead of silently picking a
   survivor.
 - Per-entry failures are isolated: the pass completes, then raises
@@ -30,21 +33,61 @@ from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
+DEPLOYMENT_SOURCE_ID = "deployment"
+"""Source id for rows authored by the assistant's own deployment sources.
+
+Rows written before ``source_id`` existed carry no value for it. They are
+the deployment's, so the deployment's reconcile claims them and stamps
+them on its next pass; other sources never match them.
+"""
+
+
+def managed_rows_filter(source_id: str) -> str:
+    """Filter selecting the managed rows one source owns.
+
+    Every adapter's ``live_rows`` must use this rather than a bare
+    ``custom_hash != None``: an unscoped query hands a source its
+    siblings' rows, and prune then deletes them.
+    """
+
+    if source_id == DEPLOYMENT_SOURCE_ID:
+        return (
+            "custom_hash != None and "
+            f"(source_id == '{source_id}' or source_id == None)"
+        )
+    return f"custom_hash != None and source_id == '{source_id}'"
+
+
+def stored_hash_field(base_field: str, source_id: str) -> str:
+    """Meta field holding one source's aggregate hash.
+
+    The deployment keeps the original unsuffixed field so existing
+    installations do not re-sync on upgrade; every other source gets its
+    own slot instead of fighting over that one.
+    """
+
+    if source_id == DEPLOYMENT_SOURCE_ID:
+        return base_field
+    return f"{base_field}__{source_id}"
+
 
 class CustomSyncDuplicateKeyError(RuntimeError):
-    """Two live managed rows share one ``custom_key``.
+    """Two live managed rows of one source share one ``custom_key``.
 
     The engine refuses to guess which row is authoritative. Delete the
     stale duplicate (or clear its ``custom_key``/``custom_hash``) and
-    re-run the sync.
+    re-run the sync. Rows of *different* sources may share a key freely;
+    they are distinct rows and never collide.
     """
 
-    def __init__(self, kind: str, custom_key: str) -> None:
+    def __init__(self, kind: str, custom_key: str, source_id: str) -> None:
         self.kind = kind
         self.custom_key = custom_key
+        self.source_id = source_id
         super().__init__(
-            f"Custom {kind} sync found two live rows with "
-            f"custom_key={custom_key!r}; refusing to pick a survivor.",
+            f"Custom {kind} sync found two live rows for source "
+            f"{source_id!r} with custom_key={custom_key!r}; refusing to "
+            "pick a survivor.",
         )
 
 
@@ -119,6 +162,14 @@ class CustomSyncAdapter:
     ``insert``, ``update``, ``delete``) and declare policy deviations as
     the named knobs below — never by forking the diff loop.
 
+    Source scoping is not optional. ``live_rows`` and ``find_collision``
+    must both restrict to :attr:`source_id` — use :func:`managed_rows_filter`
+    — because the loop prunes every managed row whose key left the source.
+    An unscoped query therefore deletes whatever a sibling source planted
+    in the same context. ``insert`` need not write ``source_id`` itself:
+    the loop stamps it into the fields after ``transform``, so a writer
+    that persists its field dict wholesale gets it for free.
+
     Policy knobs:
 
     - ``prune``: delete managed rows whose key left the source
@@ -133,13 +184,17 @@ class CustomSyncAdapter:
     """
 
     kind: str = "rows"
+    source_id: str = DEPLOYMENT_SOURCE_ID
     prune: bool = True
     collision: Literal["replace", "yield"] = "replace"
     max_workers: int = 1
 
     def live_rows(self) -> Iterable[Dict[str, Any]]:
-        """Yield every managed row (``custom_hash`` set), including its
-        ``custom_key`` and any fields ``update``/``delete`` need back."""
+        """Yield this source's managed rows, including their ``custom_key``
+        and any fields ``update``/``delete`` need back.
+
+        Scope the query with ``managed_rows_filter(self.source_id)``.
+        """
         raise NotImplementedError
 
     def insert(self, key: str, fields: Dict[str, Any]) -> None:
@@ -153,6 +208,13 @@ class CustomSyncAdapter:
         live_row: Dict[str, Any],
         fields: Dict[str, Any],
     ) -> None:
+        """Overwrite the row, reaching it by the storage handle carried on
+        *live_row*.
+
+        Do not re-query by ``source_id``: a legacy row adopted by the
+        deployment has not been stamped yet, and this write is what stamps
+        it.
+        """
         raise NotImplementedError
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
@@ -196,7 +258,12 @@ class CustomSyncAdapter:
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
-        """Return an unmanaged row occupying this entry's natural slot."""
+        """Return an unmanaged row occupying this entry's natural slot.
+
+        Scope the probe to :attr:`source_id`. A sibling source's row is
+        not a collision — it is another source's property, and replacing
+        it silently uninstalls part of that source.
+        """
         return None
 
     def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
@@ -211,7 +278,7 @@ def _index_live_rows(adapter: CustomSyncAdapter) -> Dict[str, Dict[str, Any]]:
             continue
         key = str(key)
         if key in live:
-            raise CustomSyncDuplicateKeyError(adapter.kind, key)
+            raise CustomSyncDuplicateKeyError(adapter.kind, key, adapter.source_id)
         live[key] = row
     return live
 
@@ -225,6 +292,9 @@ def _upsert_one(
     insert_lock: threading.Lock,
 ) -> str:
     fields = adapter.transform(key, dict(fields))
+    # Stamped after transform so transforms stay source-agnostic and the
+    # collected content hash is identical whoever installs the bundle.
+    fields["source_id"] = adapter.source_id
     if key in live:
         live_row = live[key]
         if live_row.get("custom_hash") == fields.get("custom_hash"):
@@ -273,6 +343,9 @@ def reconcile_custom_rows(
     adapter: CustomSyncAdapter,
 ) -> CustomSyncResult:
     """Run one full diff of source entries against live managed rows.
+
+    Scoped to ``adapter.source_id`` throughout: the live index, the
+    collision probes, and the prune all see only that source's rows.
 
     Raises :class:`CustomSyncDuplicateKeyError` before touching anything
     if the live rows are ambiguous, and :class:`CustomSyncPartialFailure`

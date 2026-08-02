@@ -927,6 +927,53 @@ async def publish_voice_enrollment_suggested(*, num_speakers: int) -> None:
         )
 
 
+async def publish_console_script(*, steps: list[dict]) -> None:
+    """Send Console a sequence of moves to make, outside a Unify Meet.
+
+    In a Meet the moves ride the LiveKit data channel and are timed against the
+    spoken line, because Console is a participant in that room and is receiving
+    the synchronized transcript. Nowhere else is: a phone call's room is the SIP
+    leg, and a text thread has no room at all. So everywhere else the moves go
+    over the assistant's event stream instead, and Console walks them in order.
+
+    Presence is what gates this, not the medium. Someone reading a text reply
+    with the Console open in another tab is exactly as able to watch as someone
+    on a call, and the only thing that would make this pointless is nobody being
+    there to see it.
+    """
+    if not steps:
+        return
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event = {
+        "event_type": "console_script",
+        "steps": steps,
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(
+                {
+                    "thread": "unity_system_event",
+                    "event": event,
+                },
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error publishing console_script: {e}",
+            )
+        return
+
+    try:
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unity_system_event",
+            event=event,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['comms_outbound']} Error publishing console_script: {e}",
+        )
+
+
 async def publish_assistant_desktop_ready(
     binding_id: str,
     desktop_url: str,

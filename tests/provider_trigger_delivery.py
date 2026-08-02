@@ -83,9 +83,25 @@ def orchestra_admin_key() -> str:
     return os.getenv("ORCHESTRA_ADMIN_KEY", "local-admin-key")
 
 
+def catalog_environment() -> str:
+    """Catalog environment the target Orchestra resolves trigger candidates from.
+
+    Orchestra reads ``PROVIDER_TRIGGER_CATALOG_ENVIRONMENT`` when it stages a
+    catalog lookup, and ``tests/parallel_run.sh`` exports ``selfhost`` before
+    starting its server, so seeding through the same variable keeps both
+    processes pointed at one environment.
+
+    Only ``selfhost`` imports from the committed fixture catalogs. Every other
+    environment imports live from the provider and requires COMPOSIO_API_KEY /
+    PIPEDREAM_CLIENT_ID, which the fixture-backed suite neither has nor wants.
+    """
+
+    return os.getenv("PROVIDER_TRIGGER_CATALOG_ENVIRONMENT", "selfhost").strip()
+
+
 def ensure_provider_trigger_catalog_seeded(
     *,
-    environments: tuple[str, ...] = ("selfhost", "staging"),
+    environments: tuple[str, ...] | None = None,
     backends: tuple[str, ...] = ("composio",),
 ) -> None:
     """Import fixture-backed provider trigger catalogs for local Orchestra runs."""
@@ -93,7 +109,7 @@ def ensure_provider_trigger_catalog_seeded(
     base = orchestra_api_base()
     headers = {"Authorization": f"Bearer {orchestra_admin_key()}"}
     for backend_id in backends:
-        for environment in environments:
+        for environment in environments or (catalog_environment(),):
             response = requests.post(
                 f"{base}/v0/admin/provider-trigger-catalog/import/{backend_id}",
                 params={"environment": environment},
@@ -164,8 +180,16 @@ def require_provider_trigger_topology(assistant_id: int = 1) -> None:
 
 
 def ensure_provider_trigger_test_prerequisites() -> None:
-    """Seed catalogs and verify provider-trigger topology is usable locally."""
+    """Verify provider-trigger topology is usable locally, then seed catalogs.
 
+    Topology is checked first because it is the coarser precondition and does
+    not depend on the catalog: a server that cannot serve provider triggers at
+    all should report that through the skip below, not through whatever the
+    admin import endpoint happens to raise on the way there.
+    """
+
+    require_provider_trigger_topology()
+    environment = catalog_environment()
     ensure_provider_trigger_catalog_seeded()
     catalog = requests.get(
         f"{orchestra_api_base()}/v0/admin/provider-trigger-catalog/bootstrap",
@@ -174,13 +198,18 @@ def ensure_provider_trigger_test_prerequisites() -> None:
     )
     catalog.raise_for_status()
     bootstrap = catalog.json().get("bootstrap_states") or []
-    if not bootstrap:
+    seeded = [
+        row
+        for row in bootstrap
+        if row.get("environment") == environment and row.get("backend_id") == "composio"
+    ]
+    if not seeded:
         raise RuntimeError(
-            "provider trigger catalog bootstrap is empty after import; "
-            "restart local Orchestra with SELF_HOST=1 and "
-            "ORCHESTRA_TRIGGER_CALLBACK_BASE_URL=https://orchestra.example",
+            "provider trigger catalog bootstrap has no composio row for "
+            f"environment {environment!r} after import; the suite and Orchestra "
+            "must agree on PROVIDER_TRIGGER_CATALOG_ENVIRONMENT (parallel_run.sh "
+            "exports 'selfhost'), and only 'selfhost' imports from fixtures.",
         )
-    require_provider_trigger_topology()
 
 
 def _orchestra_db_container() -> str:

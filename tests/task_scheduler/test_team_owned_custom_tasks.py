@@ -80,13 +80,17 @@ def test_sync_custom_tasks_allows_personal_label_when_resolved_to_team(
         "_temporary_tasks_meta_context",
         lambda ctx: _MetaCtx(),
     )
-    monkeypatch.setattr(scheduler, "_get_stored_custom_tasks_hash", lambda: "same")
+    monkeypatch.setattr(
+        scheduler,
+        "_get_stored_custom_tasks_hash",
+        lambda *_a, **_k: "same",
+    )
     monkeypatch.setattr(
         "unify.task_scheduler.task_scheduler.compute_custom_tasks_hash",
         lambda **_: "same",
     )
-    scheduler._custom_tasks_synced = False
-    scheduler._custom_tasks_synced_contexts = set()
+    scheduler._custom_tasks_synced_sources.clear()
+
     scheduler._ctx = "Teams/11/Tasks"
     scheduler._store = MagicMock()
     scheduler._root_stores = {}
