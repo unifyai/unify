@@ -32,6 +32,11 @@ from unify.function_manager.primitives import ComputerPrimitives
 from unify.common.hierarchical_logger import DEFAULT_ICON
 
 from .capture import _stdout_parts, capture_sandbox_output
+from .steering import (
+    SteeringDispatchProxy,
+    current_channel,
+    instrument_for_steering,
+)
 from .types import TextPart
 
 if TYPE_CHECKING:
@@ -656,6 +661,17 @@ class PythonExecutionSession:
                     ast.fix_missing_locations(tree)
                     code = ast.unparse(tree)
 
+                # Steering checkpoints, only when a tool call attached a
+                # channel. Without one the block is unsteerable anyway, so it
+                # runs exactly as it did before and pays nothing.
+                steering_channel = current_channel(self.global_state)
+                if steering_channel is not None:
+                    # Bind and re-parse against the same text so a reported
+                    # line number indexes the source the model is shown.
+                    steering_channel.bind_source(code)
+                    tree = instrument_for_steering(ast.parse(code))
+                    code = ast.unparse(tree)
+
                 async_code = "async def __exec_wrapper():\n"
                 if top_level_assign_targets:
                     async_code += f"    global {', '.join(sorted(list(top_level_assign_targets)))}\n"
@@ -716,15 +732,27 @@ class PythonExecutionSession:
                 # chat context is available, so inner tool loops receive it.
                 _pcc = _PARENT_CHAT_CONTEXT.get()
                 _orig_prims = self.global_state.get("primitives")
-                if _pcc is not None and _orig_prims is not None:
+                _wrapped_prims = _orig_prims
+                if _pcc is not None and _wrapped_prims is not None:
                     from unify.function_manager.primitives.context_proxy import (
                         ContextForwardingProxy,
                     )
 
-                    self.global_state["primitives"] = ContextForwardingProxy(
-                        _orig_prims,
+                    _wrapped_prims = ContextForwardingProxy(
+                        _wrapped_prims,
                         _parent_chat_context=_pcc,
                     )
+                # Outermost, so a checkpoint runs before context forwarding and
+                # before the primitive itself. Reaches dispatches the statement
+                # and loop-body checkpoints cannot see, such as a primitive
+                # called inside a comprehension or gathered concurrently.
+                if steering_channel is not None and _wrapped_prims is not None:
+                    _wrapped_prims = SteeringDispatchProxy(
+                        _wrapped_prims,
+                        steering_channel,
+                    )
+                if _wrapped_prims is not _orig_prims:
+                    self.global_state["primitives"] = _wrapped_prims
 
                 spawned_handles: list[Any] = []
                 spawned_token = _SANDBOX_SPAWNED_HANDLES.set(spawned_handles)
