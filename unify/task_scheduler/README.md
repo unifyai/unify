@@ -12,8 +12,40 @@ This package manages the creation, scheduling, execution, and lifecycle of tasks
 ### High-level picture
 
 - `TaskScheduler` is the orchestrator. It composes read/write "tools" and runs LLM loops for `ask` and `update`. The `execute` path does not use an async tool loop; it returns a `SteerableToolHandle` directly.
-- Tasks are independent: there is no queue chaining or ordering between tasks. Each task holds only its own schedule, trigger, and status.
+- Tasks are independent: there is no queue chaining or ordering between tasks. Each task holds only its own schedule and trigger.
 - All reads/writes go through `TasksStore` (Unify I/O).
+
+**A definition is authored intent; a run is a row.** The `Tasks` row holds what
+a person asked for — name, description, schedule, repeat rule, entrypoint — and
+one switch, `enabled`. It carries no run state at all: no next-run timestamp, no
+"currently firing" flag, no lease. Everything about a particular firing lives in
+`Tasks/Executions`, and the open row there *is* the thing that will fire.
+
+That split is the reason most of this subsystem looks the way it does. When the
+next-run time lives on the definition, advancing a series means mutating the
+row every tick, and two dispatchers racing to mutate it need a lock or a
+time-based lease to stay correct. With occurrences as their own rows, the
+question "what runs next" is a query rather than a field, and safety comes from
+the key instead of a lease:
+
+- **`run_key` is derived, not allocated.** Orchestra's
+  `_build_open_execution_run_key` and unify's `build_task_run_key` compose it
+  from `delivery`, `wake`, `assistant_id`, `destination`, `task_id`, a digest of
+  the authored revision, and a tail. Two components that agree on the facts
+  produce the same string, so create-or-adopt converges on one row without
+  coordinating. A projected head can only carry what the row itself knows — the
+  due time on a scheduled wake, the medium on a triggered one — so the contact
+  and message that fire a live trigger are absent until an event actually
+  arrives, and a firing carrying them is a distinct occurrence with its own key.
+- **The two implementations must stay byte-identical.** `team:11` and
+  `2026-07-29T16:50:00+00:00` once normalized differently on each side, so the
+  dispatcher failed to adopt the projected row and minted a second execution for
+  the same occurrence. Two rows read as concurrency, the overlap guard then
+  skipped every tick, and the series stopped without an error. Both normalizers
+  exist because of that.
+- **`revision` is a digest of authored fields only**, so adding or removing a
+  projected column is a non-event, while a real edit (a new schedule, a
+  different entrypoint) retires the open head and mints a fresh occurrence.
 
 
 ### Key files and responsibilities
