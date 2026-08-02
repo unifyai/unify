@@ -31,6 +31,7 @@ from unify.comms.outbound_origin import (
 )
 from unify.session_details import SESSION_DETAILS
 
+from unify.conversation_manager.console_actions import catalogue_form
 from unify.conversation_manager.domains import managers_utils
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -2347,12 +2348,12 @@ class ConversationManagerBrainActionTools:
                 "status": "error",
                 "error": "The console is not open, so there is nothing to show.",
             }
-        unknown = [t for t in targets if f"`{t}`" not in catalogue]
+        unknown = [t for t in targets if f"`{catalogue_form(t)}`" not in catalogue]
         if unknown:
             return {
                 "status": "error",
                 "error": (
-                    f"Not navigation targets: {', '.join(unknown)}. "
+                    f"Not console targets: {', '.join(unknown)}. "
                     "Use an id from the console navigation targets list."
                 ),
             }

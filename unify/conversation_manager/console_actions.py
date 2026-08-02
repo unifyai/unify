@@ -95,6 +95,23 @@ def parse_console_actions(message: str, targets: list[str]) -> ParsedUtterance:
     )
 
 
+def catalogue_form(target: str) -> str:
+    """The catalogue line a target should be looked up under.
+
+    Console lists a parameterized control once, as ``leaf:<id>:<name>``, because
+    the parameter is open-ended -- there is a card per connectable app. Naming a
+    specific one has to be checked against that placeholder rather than against
+    an id the catalogue could never contain.
+
+    This is the only shape Console's target grammar is known here. Everything
+    else is an opaque string that either appears in the catalogue or does not.
+    """
+    parts = target.split(":")
+    if target.startswith("leaf:") and len(parts) == 3 and parts[2]:
+        return f"leaf:{parts[1]}:<name>"
+    return target
+
+
 def strip_markers(message: str) -> str:
     """Remove markers without pairing anything, for paths that only speak.
 
