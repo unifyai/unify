@@ -2878,15 +2878,26 @@ class CodeActActor(BaseCodeActActor):
             pass
 
     @staticmethod
-    def _sandbox_clarification_binding(
+    def _sandbox_call_binding(
         *,
         clarification_up_q: asyncio.Queue[str] | None,
         clarification_down_q: asyncio.Queue[str] | None,
+        interject_q: asyncio.Queue | None = None,
+        notification_q: asyncio.Queue | None = None,
     ):
-        """Bind per-call clarification queues onto the live sandbox for one tool call.
+        """Bind one tool call's channels onto the live sandbox.
 
-        Nested manager clarifications then write into the outer tool's
-        ``clar_up_queue`` (mailbox A) watched by the async tool loop.
+        Two channels, both per-call and both restored on exit:
+
+        * clarification queues, so nested manager clarifications write into the
+          outer tool's ``clar_up_queue`` (mailbox A) watched by the async tool
+          loop
+        * a :class:`SteeringChannel`, so checkpoints inside the running block
+          can observe interjections aimed at this call and suspend for a
+          decision
+
+        Yields the steering channel so the caller can report progress once
+        execution ends, however it ended.
         """
         from contextlib import contextmanager
 
@@ -2894,26 +2905,39 @@ class CodeActActor(BaseCodeActActor):
             bind_sandbox_clarification_queues,
             restore_sandbox_clarification_queues,
         )
+        from unify.actor.execution.steering import (
+            SteeringChannel,
+            bind_sandbox_steering_channel,
+            restore_sandbox_steering_channel,
+        )
 
         @contextmanager
         def _binding():
-            if clarification_up_q is None or clarification_down_q is None:
-                yield
-                return
             try:
                 sb = _CURRENT_SANDBOX.get()
             except Exception:
-                yield
+                yield None
                 return
-            token = bind_sandbox_clarification_queues(
-                sb.global_state,
-                clarification_up_q,
-                clarification_down_q,
+
+            clar_token = None
+            if clarification_up_q is not None and clarification_down_q is not None:
+                clar_token = bind_sandbox_clarification_queues(
+                    sb.global_state,
+                    clarification_up_q,
+                    clarification_down_q,
+                )
+
+            channel = SteeringChannel(
+                interject_q=interject_q,
+                notification_q=notification_q,
             )
+            steer_token = bind_sandbox_steering_channel(sb.global_state, channel)
             try:
-                yield
+                yield channel
             finally:
-                restore_sandbox_clarification_queues(sb.global_state, token)
+                restore_sandbox_steering_channel(sb.global_state, steer_token)
+                if clar_token is not None:
+                    restore_sandbox_clarification_queues(sb.global_state, clar_token)
 
         return _binding()
 
@@ -2941,6 +2965,7 @@ class CodeActActor(BaseCodeActActor):
             _notification_up_q: asyncio.Queue[dict] | None = None,
             _clarification_up_q: asyncio.Queue[str] | None = None,
             _clarification_down_q: asyncio.Queue[str] | None = None,
+            _interject_queue: asyncio.Queue | None = None,
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
             """
@@ -3021,6 +3046,29 @@ class CodeActActor(BaseCodeActActor):
             allowlist. Static API keys and provider SDKs that read credentials
             from the environment may still use ``os.environ`` after checking
             available secret names.
+
+            Steering while the block runs
+            -----------------------------
+            Python blocks are steerable in flight. Checkpoints sit between
+            top-level statements, at the top of every loop body, and before
+            every ``primitives.*`` call, so a correction arriving partway
+            through can reach the block instead of only being able to kill it.
+
+            When one arrives, the block suspends at its next checkpoint and
+            you are given a turn with a report of how far it got. Two ways
+            forward: ``stop_execute_code_<call_id>`` abandons the block so you
+            can write a corrected one, or interjecting again resumes it as
+            written. Prefer stopping when the correction changes what the
+            remaining work should do, and resuming when it does not.
+
+            Generated code may read ``steering.messages`` for the interjection
+            texts delivered so far, which lets a long loop adapt without being
+            abandoned. Blocks that ignore it behave exactly as written.
+
+            A checkpoint can only run when the block yields. A synchronous
+            call that blocks — ``time.sleep``, non-async HTTP, a tight compute
+            loop — holds execution until it returns, so prefer async calls in
+            work that may need correcting partway through.
 
             For in-process Python execution with rich output, the result is wrapped in an
             ExecutionResult object (a Pydantic model implementing FormattedToolResult).
@@ -3175,11 +3223,14 @@ class CodeActActor(BaseCodeActActor):
                     pass
 
                 _pcc_token = _PARENT_CHAT_CONTEXT.set(_parent_chat_context)
+                _steering = None
                 try:
-                    with self._sandbox_clarification_binding(
+                    with self._sandbox_call_binding(
                         clarification_up_q=_clarification_up_q,
                         clarification_down_q=_clarification_down_q,
-                    ):
+                        interject_q=_interject_queue,
+                        notification_q=notification_q,
+                    ) as _steering:
                         try:
                             out = await self._session_executor.execute(
                                 code=code,
@@ -3210,6 +3261,12 @@ class CodeActActor(BaseCodeActActor):
                             }
                 finally:
                     _PARENT_CHAT_CONTEXT.reset(_pcc_token)
+
+                # Only when something actually steered this block. An
+                # uninterrupted run reports nothing, so the common case costs
+                # no transcript weight.
+                if _steering is not None and _steering.messages:
+                    out["steering"] = _steering.progress()
 
                 # Enrich with session name.
                 if out.get("session_id") is not None:
@@ -3691,6 +3748,7 @@ class CodeActActor(BaseCodeActActor):
                 _notification_up_q: asyncio.Queue[dict] | None = None,
                 _clarification_up_q: asyncio.Queue[str] | None = None,
                 _clarification_down_q: asyncio.Queue[str] | None = None,
+                _interject_queue: asyncio.Queue | None = None,
                 _parent_chat_context: list[dict] | None = None,
             ) -> Any:
                 """
@@ -3749,6 +3807,18 @@ class CodeActActor(BaseCodeActActor):
                     sandbox (e.g. ``"primitives.contacts.ask"``).
                 call_kwargs : dict, optional
                     Keyword arguments to pass to the function.
+
+                Steering while the function runs
+                -------------------------------
+                Steerable in flight, like ``execute_code``. When the stored
+                implementation is synthesised into the sandbox, checkpoints
+                are placed inside the function's own body as well, so a long
+                loop within a stored function can be corrected partway through
+                rather than only before it starts or after it finishes.
+
+                A correction suspends the call at its next checkpoint and
+                gives you a turn: ``stop_execute_function_<call_id>`` abandons
+                it, interjecting again resumes it.
 
                 Returns
                 -------
@@ -3948,9 +4018,11 @@ class CodeActActor(BaseCodeActActor):
                     except Exception:
                         pass
 
-                    with self._sandbox_clarification_binding(
+                    with self._sandbox_call_binding(
                         clarification_up_q=_clarification_up_q,
                         clarification_down_q=_clarification_down_q,
+                        interject_q=_interject_queue,
+                        notification_q=notification_q,
                     ):
                         if (
                             isinstance(function_data, dict)
