@@ -44,6 +44,8 @@ class _PresenceHost:
 
     record_console_presence = cm_module.ConversationManager.record_console_presence
     console_guidance = cm_module.ConversationManager.console_guidance
+    console_is_open = cm_module.ConversationManager.console_is_open
+    console_action_catalogue = cm_module.ConversationManager.console_action_catalogue
 
     def __init__(self) -> None:
         self._console_guidance: dict[str, str] = {}
@@ -160,6 +162,64 @@ class TestHeartbeatPayload:
 
         assert host._console_presence_at is not None
         assert host.console_guidance("brief") == ""
+
+
+# =============================================================================
+# Navigation targets
+# =============================================================================
+
+
+CATALOGUE = "Places I can take my boss\n- `section:integrations` — Integrations"
+
+
+class TestActionCatalogue:
+    def test_catalogue_available_while_the_console_is_open(self, host):
+        host.record_console_presence(
+            version="v1",
+            brief=BRIEF,
+            full=FULL,
+            actions=CATALOGUE,
+        )
+
+        assert host.console_is_open() is True
+        assert host.console_action_catalogue() == CATALOGUE
+
+    def test_catalogue_withheld_once_presence_goes_stale(self, host, clock):
+        """The tool is gated on this, so a shut console withdraws the ability.
+
+        Taking someone to a page they are not looking at accomplishes nothing,
+        and narrating the move would be a plain falsehood.
+        """
+        host.record_console_presence(
+            version="v1",
+            brief=BRIEF,
+            full=FULL,
+            actions=CATALOGUE,
+        )
+        clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
+
+        assert host.console_is_open() is False
+        assert host.console_action_catalogue() == ""
+
+    def test_no_catalogue_before_any_presence(self, host):
+        assert host.console_is_open() is False
+        assert host.console_action_catalogue() == ""
+
+    def test_catalogue_and_guidance_open_and_close_together(self, host, clock):
+        host.record_console_presence(
+            version="v1",
+            brief=BRIEF,
+            full=FULL,
+            actions=CATALOGUE,
+        )
+        assert bool(host.console_guidance("brief")) == bool(
+            host.console_action_catalogue(),
+        )
+
+        clock.advance(CONSOLE_PRESENCE_TTL_S + 1)
+        assert bool(host.console_guidance("brief")) == bool(
+            host.console_action_catalogue(),
+        )
 
 
 # =============================================================================

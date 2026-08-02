@@ -2309,6 +2309,55 @@ class ConversationManagerBrainActionTools:
         """
         return {"status": "guidance_noted"}
 
+    async def show_in_console(
+        self,
+        *,
+        targets: list[str],
+    ) -> dict[str, Any]:
+        """
+        Take my boss to a page in the console while I talk them through it.
+
+        I call this **alongside** ``guide_voice_agent`` and mark the moments in
+        that spoken line with ``[[1]]``, ``[[2]]``, … — one marker per target, in
+        order. The markers are removed before the line is spoken; each one is the
+        instant its move happens, so the console changes on the words rather than
+        before or after them::
+
+            guide_voice_agent(message="Sure — I'll open Integrations [[1]], and
+                              your billing page is over here [[2]].")
+            show_in_console(targets=["section:integrations", "route:/billing"])
+
+        Every target must be one of the ids listed for me under console
+        navigation targets. Those are the only places I can go; if what my boss
+        wants is not among them I say where it lives and let them click, rather
+        than moving them somewhere near it.
+
+        This moves the page my boss is looking at, so I use it while I am
+        actually showing them something — not to jump them somewhere unasked, and
+        not more than a few steps in one breath. If they interrupt me, the moves I
+        had not yet reached are dropped, which is what should happen.
+
+        Args:
+            targets: Navigation target ids, in the order their markers appear in
+                the spoken line. One per marker.
+        """
+        catalogue = self._cm.console_action_catalogue()
+        if not catalogue:
+            return {
+                "status": "error",
+                "error": "The console is not open, so there is nothing to show.",
+            }
+        unknown = [t for t in targets if f"`{t}`" not in catalogue]
+        if unknown:
+            return {
+                "status": "error",
+                "error": (
+                    f"Not navigation targets: {', '.join(unknown)}. "
+                    "Use an id from the console navigation targets list."
+                ),
+            }
+        return {"status": "showing", "targets": targets}
+
     def _whatsapp_contact_label(self, contact_id: int) -> str:
         """Human-friendly name for a contact in the window-status appendix."""
         contact = None
@@ -2520,6 +2569,11 @@ class ConversationManagerBrainActionTools:
                 tools["create_teams_meet"] = self.create_teams_meet
         if getattr(self._cm.mode, "is_voice", False):
             tools["guide_voice_agent"] = self.guide_voice_agent
+            # Only offered while a Console is open to be driven. Off-console
+            # sessions never see the tool, so the model cannot narrate a move
+            # nobody is looking at.
+            if self._cm.console_action_catalogue():
+                tools["show_in_console"] = self.show_in_console
         if self._cm.initialized:
             tools["act"] = self.act
             tools["ask_about_contacts"] = self.ask_about_contacts
