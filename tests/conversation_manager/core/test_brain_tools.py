@@ -87,6 +87,10 @@ def mock_cm():
 
     cm = MagicMock()
     cm.mode = Mode.TEXT
+    # Console shut by default. `show_in_console` is offered on presence rather
+    # than on medium, so leaving this to MagicMock's truthiness would quietly
+    # add the tool to every fixture that never meant to open a console.
+    cm.console_action_catalogue.return_value = ""
     cm.contact_index = ContactIndex()
     cm.in_flight_actions = {}
     cm.completed_actions = {}
@@ -370,6 +374,30 @@ class TestActionToolsAsTools:
             "wait",
         }
         assert set(tools.keys()) == expected
+
+    def test_offers_console_navigation_while_the_console_is_open(self, mock_cm):
+        """Offered on presence, not on medium — this fixture is a text session."""
+        from unify.conversation_manager.domains.brain_action_tools import (
+            ConversationManagerBrainActionTools,
+        )
+
+        mock_cm.console_action_catalogue.return_value = "- `section:chat` — Chat"
+        tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+
+        assert "show_in_console" in tools
+        # Still a text session, so nothing voice-only came with it.
+        assert "guide_voice_agent" not in tools
+
+    def test_withholds_console_navigation_when_the_console_is_shut(self, mock_cm):
+        """Nobody is there to watch, so the move cannot be narrated truthfully."""
+        from unify.conversation_manager.domains.brain_action_tools import (
+            ConversationManagerBrainActionTools,
+        )
+
+        mock_cm.console_action_catalogue.return_value = ""
+        tools = ConversationManagerBrainActionTools(mock_cm).as_tools()
+
+        assert "show_in_console" not in tools
 
     def test_excludes_phone_tools_without_number(self, mock_cm):
         """send_sms and make_call are excluded when assistant has no phone."""

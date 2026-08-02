@@ -165,7 +165,7 @@ async def test_sync_custom_guidance_is_idempotent(
     source = collect_custom_guidance(path=custom_guidance_dir)
 
     assert gm.sync_custom_guidance(source_guidance=source) is True
-    gm._custom_guidance_synced = False
+    gm._custom_guidance_synced_sources.clear()
     assert gm.sync_custom_guidance(source_guidance=source) is False
 
 

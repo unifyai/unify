@@ -2510,12 +2510,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     console_targets = [str(t) for t in raw if str(t).strip()]
 
             # The spoken line may carry [[n]] markers naming console moves. They
-            # are stripped here either way -- a line that reaches TTS with one
-            # still in it gets read aloud -- and the moves survive only when the
-            # console is open to make them.
+            # are stripped on every medium -- a line reaching TTS with one still
+            # in it gets read aloud -- but only a Meet can act on them. A phone
+            # call's room is the SIP leg, which Console is not in, so its moves
+            # went out over the event stream when the tool ran instead.
             console_steps: list[dict[str, Any]] = []
             if guidance_message and "[[" in guidance_message:
-                if console_targets and self.console_is_open():
+                if (
+                    console_targets
+                    and self.mode == Mode.MEET
+                    and self.console_is_open()
+                ):
                     parsed = parse_console_actions(guidance_message, console_targets)
                     guidance_message = parsed.spoken_text
                     console_steps = [
