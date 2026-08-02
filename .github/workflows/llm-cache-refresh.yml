@@ -532,12 +532,42 @@ jobs:
         echo "Using cache-diff artifacts from run $RUN_ID"
 
     - name: Restore existing consolidated cache
+      id: cache-read
       uses: actions/cache/restore@v4
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
+
+    - name: Authenticate to Google Cloud
+      if: vars.LLM_CACHE_BUCKET != ''
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+
+    # Pinned rather than assumed off the runner image: the seed step below reads
+    # a missing object as an empty cache, and a missing gcloud would look
+    # exactly the same to it.
+    - name: Set up gcloud
+      if: vars.LLM_CACHE_BUCKET != ''
+      uses: google-github-actions/setup-gcloud@v2
+
+    # Consolidation is a merge onto whatever this job restored, so seeding it
+    # from the durable copy is what stops a refresh from *shrinking* the store.
+    # The 29 July refresh restored nothing, merged its own 52 entries, and
+    # published that over a 9586-entry history.
+    - name: Seed consolidation from the durable LLM cache in GCS
+      if: steps.cache-read.outputs.cache-matched-key == '' && vars.LLM_CACHE_BUCKET != ''
+      run: |
+        obj="gs://${{ vars.LLM_CACHE_BUCKET }}/${{ runner.os }}/cache.ndjson"
+        # An absent object is the pre-first-publish state, not a failure.
+        if gcloud storage objects describe "$obj" >/dev/null 2>&1; then
+          gcloud storage cp "$obj" .cache.ndjson
+          echo "Seeded $(grep -c . .cache.ndjson || true) entries from $obj"
+        else
+          echo "No durable cache at $obj yet; consolidating from this run only."
+        fi
 
     - name: Download cache diffs from matrix shards
       uses: actions/download-artifact@v4
@@ -578,3 +608,15 @@ jobs:
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # The durable copy. Everything bought here is paid for with real LLM spend,
+    # so it must outlive the evictable Actions cache. Publishers overwrite rather
+    # than merge remotely: each one consolidates on top of the store it restored,
+    # so two concurrent refreshes can cost one of them a re-buy, which is far
+    # cheaper than the read-modify-write round trip it would take to prevent.
+    - name: Publish the durable LLM cache to GCS
+      if: steps.consolidate.outputs.publish == 'true' && vars.LLM_CACHE_BUCKET != ''
+      run: |
+        obj="gs://${{ vars.LLM_CACHE_BUCKET }}/${{ runner.os }}/cache.ndjson"
+        gcloud storage cp .cache.ndjson "$obj"
+        echo "Published $(grep -c . .cache.ndjson || true) entries to $obj"

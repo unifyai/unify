@@ -1138,6 +1138,33 @@ jobs:
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
 
+    # The Actions cache is the hot layer: it lives beside the runners, so it is
+    # the fast restore and stays the default path. It is also evictable, and
+    # losing it leaves read-only tests with nothing to replay. GCS is the
+    # durable copy behind it, read only when the hot layer misses so that no
+    # job pays a cross-cloud transfer it did not need. Unset LLM_CACHE_BUCKET
+    # leaves the fallback inert and the hot layer behaving exactly as before.
+    # Pinned rather than assumed off the runner image: the fallback below reads
+    # a missing object as an empty cache, and a missing gcloud would look
+    # exactly the same to it.
+    - name: Set up gcloud
+      if: steps.cache-read.outputs.cache-matched-key == '' && vars.LLM_CACHE_BUCKET != ''
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Fall back to the durable LLM cache in GCS
+      if: steps.cache-read.outputs.cache-matched-key == '' && vars.LLM_CACHE_BUCKET != ''
+      run: |
+        obj="gs://${{ vars.LLM_CACHE_BUCKET }}/${{ runner.os }}/cache.ndjson"
+        # An absent object is a cache miss, not an error: it is the state
+        # before the first refresh publishes. Any other failure is real and
+        # must surface rather than masquerade as an empty cache.
+        if gcloud storage objects describe "$obj" >/dev/null 2>&1; then
+          gcloud storage cp "$obj" .cache.ndjson
+          echo "Restored $(grep -c . .cache.ndjson || true) entries from $obj"
+        else
+          echo "No durable cache at $obj yet; tests run against an empty store."
+        fi
+
     # Cache orchestra's poetry dependencies keyed on orchestra's commit SHA
     - name: Cache orchestra poetry dependencies
       uses: actions/cache@v4
