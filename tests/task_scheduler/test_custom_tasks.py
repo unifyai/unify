@@ -162,7 +162,7 @@ async def test_sync_custom_tasks_is_idempotent(
     source = collect_custom_tasks(path=custom_tasks_dir)
 
     assert scheduler.sync_custom_tasks(source_tasks=source) is True
-    scheduler._custom_tasks_synced = False
+    scheduler._custom_tasks_synced_sources.clear()
     assert scheduler.sync_custom_tasks(source_tasks=source) is False
 
 
@@ -197,7 +197,7 @@ async def test_sync_custom_tasks_deletes_removed_entries(
     scheduler.sync_custom_tasks(source_tasks=source)
 
     reduced = {key: source[key] for key in source if key != "ops/daily-check"}
-    scheduler._custom_tasks_synced = False
+    scheduler._custom_tasks_synced_sources.clear()
     scheduler.sync_custom_tasks(source_tasks=reduced)
 
     rows = scheduler._filter_tasks(filter="custom_hash != None", limit=100)
@@ -270,7 +270,7 @@ async def test_sync_writes_tags_onto_the_row_and_clears_them_on_removal(
             row["tags"] = ["ops", "weekly"]
         lines.append(json.dumps(row))
     (retagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
-    scheduler._custom_tasks_synced = False
+    scheduler._custom_tasks_synced_sources.clear()
     scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=retagged_dir))
     rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
     assert rows[0].tags == ["ops", "weekly"]
@@ -283,7 +283,7 @@ async def test_sync_writes_tags_onto_the_row_and_clears_them_on_removal(
         row = {k: v for k, v in row.items() if k != "tags"}
         lines.append(json.dumps(row))
     (untagged_dir / TASKS_JSONL_FILENAME).write_text("\n".join(lines) + "\n")
-    scheduler._custom_tasks_synced = False
+    scheduler._custom_tasks_synced_sources.clear()
     scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=untagged_dir))
     rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
     assert not rows[0].tags
