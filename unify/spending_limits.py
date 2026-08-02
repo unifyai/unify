@@ -40,6 +40,23 @@ logger = logging.getLogger(__name__)
 
 LIMIT_CHECK_TIMEOUT = 5.0
 
+#: Providers an account may only reach once it has real payment history.
+#:
+#: These are the models whose per-call cost is high enough that a signup's
+#: free grant buys a meaningful amount of them, which makes them the ones
+#: worth farming an account for. Requiring payment first removes the return
+#: on creating the account at all, rather than trying to detect the misuse
+#: afterwards.
+#:
+#: Provider-scoped rather than model-scoped on purpose: a per-model list has
+#: to be revised every time a vendor ships, and the gap between the ship and
+#: the revision is the exposure.
+PAYMENT_GATED_PROVIDERS = frozenset(
+    p.strip().lower()
+    for p in os.environ.get("PAYMENT_GATED_PROVIDERS", "anthropic").split(",")
+    if p.strip()
+)
+
 _spend_client: Optional[AsyncSpendClient] = None
 _spend_client_key: Optional[str] = None
 
@@ -453,6 +470,28 @@ async def _notify_limit_reached(
         logger.warning(f"Failed to send spending limit notification: {e}")
 
 
+def _provider_of(model: str) -> Optional[str]:
+    """Extract the provider from a UniLLM ``model@provider`` endpoint.
+
+    The model half may itself contain ``/`` (``openai/gpt-5.6-terra``) and
+    the provider is always the trailing segment, so split on the last ``@``.
+    Returns ``None`` for a bare model name, which routes by UniLLM's own
+    default rather than naming a provider here.
+    """
+    _, sep, provider = model.rpartition("@")
+    if not sep:
+        return None
+    return provider.strip().lower() or None
+
+
+def _payment_gated(model: str, *, never_paid: bool) -> bool:
+    """Whether this call is for a paid-only provider on an unpaid account."""
+    if not never_paid:
+        return False
+    provider = _provider_of(model)
+    return provider is not None and provider in PAYMENT_GATED_PROVIDERS
+
+
 async def check_spending_limits_callback(
     request: "LimitCheckRequest",
 ) -> "LimitCheckResponse":
@@ -625,6 +664,28 @@ async def check_spending_limits_callback(
             reason=(
                 "This account is suspended. Add a payment method or "
                 "contact support to restore access."
+            ),
+        )
+
+    # Paid-only providers. ``trial_daily_cap`` is Orchestra's never-paid
+    # marker: it is populated only for accounts with no real payment
+    # history, and is already NULL for internal accounts and for orgs
+    # holding an admin-granted free trial, so those keep full model access
+    # without a second exemption list here.
+    #
+    # Unlike the Console-only gate above this applies on every surface,
+    # including the runtime. An account that has never paid cannot reach
+    # these providers from the Console either — that is the point, since
+    # the Console is where the free grant is meant to be spent and these
+    # models are what make spending it worthwhile.
+    if _payment_gated(request.model, never_paid=trial_daily_cap is not None):
+        provider = _provider_of(request.model)
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                f"{provider} models require a payment method on this "
+                "account. Add one to enable them, or switch this assistant "
+                "to one of the included models."
             ),
         )
 
