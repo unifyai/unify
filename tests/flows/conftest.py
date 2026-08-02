@@ -71,12 +71,14 @@ os.environ.setdefault("UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
 # .cache.ndjson to read from, and its own .cache_write.ndjson to append to.
 # That is the layout .github/scripts/consolidate_cache.py already merges, so CI
 # folds the per-session writes back into the shared store after a run.
-# Setting UNILLM_CACHE_DIR yourself opts out of all of this; UNILLM_CACHE=false
-# still forces a fully live run.
-if not os.environ.get("UNILLM_CACHE_DIR"):
-    _repo_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    )
+# Exporting UNILLM_CACHE_DIR yourself opts out of all of this; UNILLM_CACHE=false
+# still forces a fully live run. The repo root is not such an opt-out: the root
+# conftest imports tests/settings.py, which defaults the variable to exactly that
+# path, so treating "set" as "chosen" would skip the session layout every run.
+_repo_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+if os.environ.get("UNILLM_CACHE_DIR", _repo_root) == _repo_root:
     _session_cache_dir = os.path.join(_repo_root, ".flow-cache", str(os.getpid()))
     os.makedirs(_session_cache_dir, exist_ok=True)
     for _cache_file in (".cache.ndjson", ".cache.ndjson.idx"):

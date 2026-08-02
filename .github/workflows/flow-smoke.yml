@@ -283,15 +283,15 @@ jobs:
         pip install uv
         pip install poetry
 
+    # Download cache only, never .venv — see the note in tests.yml. Both
+    # workflows write this key, so they have to agree on what it holds.
     - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.cache/uv
-          .venv
-        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
+        path: ~/.cache/uv
+        key: uv-v2-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
         restore-keys: |
-          uv-${{ runner.os }}-
+          uv-v2-${{ runner.os }}-
 
     # Same store the Tests matrix reads and the LLM cache refresh writes, so a
     # flow run replays anything those already paid for.
@@ -383,16 +383,33 @@ jobs:
     # replays them. Runs even when the smoke fails: completions bought before
     # the failing turn are still worth keeping.
     - name: Consolidate flow session caches
+      id: consolidate
       if: always()
       run: |
+        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
+        # all when the file is missing, so neither case may abort the step.
+        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
+        restored=$(entries .cache.ndjson)
+        # Decided here rather than in the step condition so that dying before
+        # the comparison leaves the answer at "do not publish".
+        echo "publish=false" >> "$GITHUB_OUTPUT"
         python3 .github/scripts/consolidate_cache.py --artifacts-dir .flow-cache
         # actions/cache/save fails if the path is absent.
         touch .cache.ndjson
-        echo "Consolidated entry count: $(grep -c . .cache.ndjson || true)"
+        merged=$(entries .cache.ndjson)
+        if (( merged > restored )); then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "Consolidated entry count: $merged (restored $restored)"
         ls -lh .cache.ndjson
 
+    # Publishing a store that did not grow mints a newer entry under the shared
+    # cache-ndjson- prefix while adding no completions. restore-keys resolves a
+    # prefix to the most recently created match, so such an entry shadows the
+    # real cache for every later Tests and flow run, and each run then republishes
+    # what it just shadowed.
     - name: Store consolidated cache
-      if: always()
+      if: always() && steps.consolidate.outputs.publish == 'true'
       uses: actions/cache/save@v4
       with:
         path: .cache.ndjson
