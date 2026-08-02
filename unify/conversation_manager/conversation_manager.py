@@ -14,6 +14,10 @@ from unify.common.diagnostic_logging import staging_diagnostics_enabled
 from unify.session_details import SESSION_DETAILS
 from unify.coordinator_voice import resolve_runtime_voice
 from unify.settings import SETTINGS
+from unify.conversation_manager.console_actions import (
+    parse_console_actions,
+    strip_markers,
+)
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.common.hierarchical_logger import SessionLogger
@@ -753,6 +757,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         version: str = "",
         brief: str = "",
         full: str = "",
+        actions: str = "",
     ) -> None:
         """Note that Console reported the user present, and keep any text it sent.
 
@@ -769,7 +774,24 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"Console guidance updated to version {version}.",
             )
         self._console_guidance_version = version
-        self._console_guidance = {"brief": brief, "full": full}
+        self._console_guidance = {"brief": brief, "full": full, "actions": actions}
+
+    def console_is_open(self) -> bool:
+        """Whether Console reported the user present recently enough to count."""
+        if self._console_presence_at is None:
+            return False
+        return time.monotonic() - self._console_presence_at <= CONSOLE_PRESENCE_TTL_S
+
+    def console_action_catalogue(self) -> str:
+        """Navigation targets Console currently offers, or ``""`` when it is shut.
+
+        Gated with the orientation text and for the same reason, plus one of its
+        own: taking someone to a page they are not looking at accomplishes
+        nothing, so the tool that consumes this is withheld along with it.
+        """
+        if not self.console_is_open():
+            return ""
+        return self._console_guidance.get("actions", "")
 
     def console_guidance(self, detail: str = "brief") -> str:
         """Console orientation text, but only while the user is on the Console.
@@ -780,9 +802,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         keep-warm heartbeat so an idle-but-present user does not flicker in and
         out of it, since each flip costs a prompt-cache miss.
         """
-        if self._console_presence_at is None:
-            return ""
-        if time.monotonic() - self._console_presence_at > CONSOLE_PRESENCE_TTL_S:
+        if not self.console_is_open():
             return ""
         return self._console_guidance.get(detail, "")
 
@@ -1482,6 +1502,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         message: str,
         slow_brain_log_path: str = "",
         fast_brain_guidance: str = "",
+        console_steps: list[dict[str, Any]] | None = None,
     ) -> None:
         """Publish a slow-brain spoken line (``guide_voice_agent``) to the fast brain.
 
@@ -1501,6 +1522,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
             fast_brain_guidance=fast_brain_guidance,
+            console_steps=console_steps or [],
         )
         self._session_logger.info(
             "call_notification",
@@ -2477,12 +2499,37 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if self.mode.is_voice:
             guidance_message = ""
             fast_brain_guidance = ""
+            console_targets: list[str] = []
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
                     fast_brain_guidance = args.get("fast_brain_guidance", "")
-                    break
+                elif tool_exec.name == "show_in_console":
+                    raw = (tool_exec.args or {}).get("targets") or []
+                    console_targets = [str(t) for t in raw if str(t).strip()]
+
+            # The spoken line may carry [[n]] markers naming console moves. They
+            # are stripped here either way -- a line that reaches TTS with one
+            # still in it gets read aloud -- and the moves survive only when the
+            # console is open to make them.
+            console_steps: list[dict[str, Any]] = []
+            if guidance_message and "[[" in guidance_message:
+                if console_targets and self.console_is_open():
+                    parsed = parse_console_actions(guidance_message, console_targets)
+                    guidance_message = parsed.spoken_text
+                    console_steps = [
+                        {"target": step.target, "afterChars": step.after_chars}
+                        for step in parsed.steps
+                    ]
+                    if parsed.dropped:
+                        self._session_logger.info(
+                            "console_actions",
+                            f"Dropped console moves: {'; '.join(parsed.dropped)}.",
+                        )
+                else:
+                    # Markers with nothing to drive them: still not speakable.
+                    guidance_message = strip_markers(guidance_message)
 
             # A pending hang-up (recorded by the hang_up tool this turn) must not
             # tear down the session until the spoken line has been delivered,
@@ -2503,6 +2550,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     message=guidance_message,
                     slow_brain_log_path=slow_brain_log_path,
                     fast_brain_guidance=fast_brain_guidance,
+                    console_steps=console_steps,
                 )
                 # Stash the spoken line for a render-only overlay so the next run
                 # (which may start before the real `[You]` utterance is recorded)

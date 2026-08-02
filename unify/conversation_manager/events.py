@@ -1271,6 +1271,11 @@ class FastBrainNotification(Event):
     # give a basic direct reply to the caller's next message. Never spoken on its
     # own; an empty value clears any prior note.
     fast_brain_guidance: str = ""
+    # Console moves to make while this line plays, each as
+    # ``{"target": str, "afterChars": int}`` -- the position in ``message`` at
+    # which it should happen. Markers have already been stripped from
+    # ``message``; these are what they resolved to.
+    console_steps: list = field(default_factory=list)
 
 
 @dataclass
@@ -2108,6 +2113,7 @@ class AssistantPresenceObserved(Event):
     console_guidance_version: str = ""
     console_guidance_brief: str = ""
     console_guidance_full: str = ""
+    console_action_catalogue: str = ""
 
 
 @dataclass
