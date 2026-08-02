@@ -146,3 +146,35 @@ class TestCatalogueLookup:
 
     def test_extra_segments_are_left_to_fail_the_lookup(self):
         assert catalogue_form("leaf:integration:a:b") == "leaf:integration:a:b"
+
+
+class TestMediumRouting:
+    """Which delivery path a set of moves takes, and why.
+
+    Console is a participant only in a Unify Meet room, where it also receives
+    the transcript the moves are timed against. A phone call's room is the SIP
+    leg and a text thread has none, so everywhere else the moves go over the
+    assistant's event stream and are walked in order instead.
+    """
+
+    def test_meet_defers_to_the_spoken_line(self):
+        from unify.conversation_manager.cm_types import Mode
+
+        assert Mode.MEET.is_voice is True
+
+    def test_a_phone_call_is_voice_but_not_a_meet(self):
+        """The distinction the routing turns on, stated once.
+
+        Gating delivery on "is this voice" would publish a phone call's moves
+        into the SIP room, where nothing is listening.
+        """
+        from unify.conversation_manager.cm_types import Mode
+
+        assert Mode.CALL.is_voice is True
+        assert Mode.CALL != Mode.MEET
+
+    def test_text_is_neither(self):
+        from unify.conversation_manager.cm_types import Mode
+
+        assert Mode.TEXT.is_voice is False
+        assert Mode.TEXT != Mode.MEET
