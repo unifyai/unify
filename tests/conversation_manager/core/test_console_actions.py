@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from unify.conversation_manager.console_actions import (
+    catalogue_form,
     parse_console_actions,
     strip_markers,
 )
@@ -116,3 +117,32 @@ class TestMismatches:
 
         assert parsed.spoken_text == "Open Integrations now."
         assert parsed.steps == ()
+
+
+class TestCatalogueLookup:
+    """Checking a target against the list Console published.
+
+    A control that takes a name is listed once, under a placeholder, because
+    there is one per connectable app. Looking up the specific name has to find
+    that line rather than an id the catalogue could never hold.
+    """
+
+    def test_a_named_control_looks_up_under_its_placeholder(self):
+        assert catalogue_form("leaf:integration:github") == "leaf:integration:<name>"
+
+    def test_a_fixed_control_looks_itself_up(self):
+        assert catalogue_form("leaf:add-integration") == "leaf:add-integration"
+
+    @pytest.mark.parametrize(
+        "target",
+        ["section:integrations", "route:/billing", "account:security"],
+    )
+    def test_navigation_targets_are_untouched(self, target):
+        assert catalogue_form(target) == target
+
+    def test_an_empty_name_is_left_to_fail_the_lookup(self):
+        """Not rewritten into a valid placeholder, so it is rejected upstream."""
+        assert catalogue_form("leaf:integration:") == "leaf:integration:"
+
+    def test_extra_segments_are_left_to_fail_the_lookup(self):
+        assert catalogue_form("leaf:integration:a:b") == "leaf:integration:a:b"
