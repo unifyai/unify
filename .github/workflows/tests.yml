@@ -73,11 +73,29 @@ on:
 # AND (when the perpetual staging→main PR exists) a `pull_request`-event
 # run for the same commit, doubling credit usage.
 #
+# The perpetual staging→main PR is the exception, and gets its own group.
+# It runs only the release smoke tier, so sharing a group with the staging
+# push meant a single-file smoke run cancelled the full matrix three
+# seconds after that matrix started — the `cancel-in-progress` above is
+# evaluated for the *incoming* run, so "push events let an in-flight matrix
+# finish" could not hold against a PR-event run in the same group. Tagged
+# pushes lost their suites silently and staging landed commits with no real
+# signal. The cost of separating them is one extra smoke job per staging
+# push; the cost of sharing was every matrix that push asked for.
+#
 # Group key uses `github.head_ref` (PR source branch) when available,
-# falling back to `github.ref_name` (branch name on a direct push).
+# falling back to `github.ref_name` (branch name on a direct push), so a
+# feature branch's push and PR runs still dedupe against each other.
 # Different branches still parallelise.
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: >-
+    tests-${{ github.workflow }}-${{
+      (github.event_name == 'pull_request'
+        && github.base_ref == 'main'
+        && github.head_ref == 'staging')
+      && 'release-smoke'
+      || (github.head_ref || github.ref_name)
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
