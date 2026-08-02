@@ -180,6 +180,20 @@ def _make_sandbox_clarification_fn(global_state: Dict[str, Any]):
 
     Queues are read at call time rather than captured, so the function stays
     correct across the bind/restore cycle.
+
+    Deadlock exposure is the same as the JSON ``request_clarification`` tool:
+    both put on the same per-call up-queue and await the same down-queue with
+    no timeout, drained by the same ``_handle_clarification`` →
+    ``handle._clar_q`` path. The sandbox call sits under more stack frames,
+    but it is one await on one queue either way, and whatever answers one
+    answers the other.
+
+    It does differ in one respect, and not in its favour: the JSON tool fires
+    ``on_request`` / ``on_answer``, which publish ``ManagerMethod`` events
+    carrying the call id. A clarification raised from code is therefore
+    invisible on the event bus while an identical one raised from the tool is
+    visible. Closing that needs the call id threaded down to this bind, which
+    is a separate change.
     """
 
     async def request_clarification(question: str) -> str:
