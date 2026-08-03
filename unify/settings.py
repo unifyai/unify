@@ -103,6 +103,10 @@ class ProductionSettings(BaseSettings):
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
+    # Console origin used to build user-facing links (canvas and dashboard
+    # views). Per-environment deployments override this or every shared link
+    # points at production Console regardless of where the row lives.
+    CONSOLE_URL: str = "https://console.unify.ai"
     UNITY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
     # Catch-all domain for multiplayer twin alias addresses, and the Workspace
     # mailbox that receives them. Alias addresses have no Workspace user of
