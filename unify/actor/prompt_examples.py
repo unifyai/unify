@@ -1227,8 +1227,10 @@ def get_primitives_dashboards_baked_in_example() -> str:
 
     return '''
 # ============================================================
-# primitives.dashboards is the ONLY way to produce visual output
-# (charts, plots, tables, KPI cards, dashboards).
+# SUPERSEDED: primitives.canvas is how visual output is produced now --
+# every chart, plot, table, KPI card, dashboard and interactive view. These
+# tile examples remain only to read and amend boards that already exist, and
+# go away with the manager once those are migrated.
 #
 # PREFER LIVE TILES (data_bindings + on_data) for production:
 #   - Data is fetched fresh at render time, not baked into HTML
@@ -1630,22 +1632,98 @@ async def sales_dashboard() -> str:
 '''
 
 
-def get_primitives_data_ingest_example() -> str:
-    """Example: ingesting API data into a data context via ``primitives.data.ingest(...)``."""
+def get_primitives_ingestion_sources_example() -> str:
+    """Every place data comes from, through the one verb that stores it."""
 
-    return '''
-# Example: Ingest API data into a data context
-async def ingest_api_response(records: list) -> dict:
-    """Ingest rows from an API response into the Data namespace."""
-    result = await primitives.data.ingest(
+    return """
+# Storing data is ONE verb whatever the source: submit(source, target).
+#
+# The source says where data comes from; the target says where it lands. They
+# vary independently, so pick each on its own terms rather than looking for a
+# different function per case.
+from unify.ingestion_manager.types import (
+    CollectionTarget, EmbedSpec, FilesSource, FolderSource,
+    RowsSource, TableSource, TableTarget,
+)
+
+# --- 1. A third-party API you called yourself -------------------------------
+# Anything already in hand is RowsSource, however it was obtained.
+orders = httpx.get("https://api.example.com/orders").json()["data"]
+run = await primitives.ingestion.submit(
+    RowsSource(rows=orders),
+    TableTarget(
         context="Data/ExternalAPI/Orders",
-        rows=records,
-        description="Orders imported from external API",
-        fields={"order_id": "int", "customer": "str", "amount": "float", "date": "datetime"},
+        description="Orders imported from the billing API.",
+        # A stable key makes a re-run an upsert rather than an append, which is
+        # what a current-state table wants. Omit it to accumulate a time series.
         unique_keys={"order_id": "int"},
-    )
-    return {"rows_inserted": result.rows_inserted, "context": result.context}
-'''
+        fields={"order_id": "int", "customer": "str", "amount": "float"},
+    ),
+)
+
+# --- 2. A connected app, via the integration tools --------------------------
+# Identical shape: the integration call is just another way to get rows.
+deals = await primitives.integrations.hubspot.list_deals()
+await primitives.ingestion.submit(
+    RowsSource(rows=deals.get("results", [])),
+    TableTarget(context="Data/HubSpotDeals", unique_keys={"id": "str"}),
+)
+
+# --- 3. Files someone sent or uploaded --------------------------------------
+# A collection keeps documents whole and extracts any tables inside them, so
+# use it when the point is to read, search or cite -- not to query columns.
+await primitives.ingestion.submit(
+    FilesSource(paths=["Downloads/Q4-report.pdf", "Downloads/contract.docx"]),
+    CollectionTarget(name="Q4 Reports"),
+    embed=EmbedSpec(columns=["text"]),  # makes the content searchable
+)
+
+# --- 4. Spreadsheets that should become ONE queryable table -----------------
+# Same file source, different target: a table, because the point is to filter
+# and chart the columns rather than to read the documents.
+await primitives.ingestion.submit(
+    FilesSource(paths=["exports/jan.csv", "exports/feb.csv"]),
+    TableTarget(context="Data/Sales", infer_untyped_fields=True),
+)
+
+# --- 5. A whole folder, open-ended -----------------------------------------
+# Prefer this over listing hundreds of paths: it says the membership is
+# whatever matches now, rather than a snapshot taken earlier.
+await primitives.ingestion.submit(
+    FolderSource(path="exports/2026", pattern="*.xlsx", recursive=True),
+    CollectionTarget(name="2026 Exports"),
+)
+
+# --- 6. Reshaping something already stored ---------------------------------
+# Read server-side and write a narrower table a canvas can bind to cheaply.
+await primitives.ingestion.submit(
+    TableSource(
+        context="Data/EventLog",
+        filter="status == 'open'",
+        columns=["id", "owner", "opened_at"],
+    ),
+    TableTarget(context="Data/OpenItems", unique_keys={"id": "str"}),
+)
+
+# --- Then: nothing blocks, so find out how it went -------------------------
+# submit returns immediately. Poll when there is other work to do; wait only
+# when the plan genuinely cannot continue without the data.
+status = await primitives.ingestion.get_status(run.run_id)
+if not status.is_terminal:
+    status = await primitives.ingestion.wait(run.run_id, timeout_s=300)
+
+# next_step states the single action that makes sense -- including that there
+# is nothing to do. Prefer it over re-deriving the rule from the other fields.
+if status.state != "succeeded":
+    notify(f"Ingestion {run.run_id}: {status.next_step}")
+    # Parked items are the recoverable case: retry re-attempts only those.
+    if status.parked:
+        await primitives.ingestion.retry(run.run_id, only="dlq")
+
+# status.contexts reports the exact paths written -- bind to these rather than
+# guessing a storage layout, especially for files, where the layout is derived.
+return {"contexts": status.contexts, "rows": status.rows_written}
+"""
 
 
 def get_primitives_data_external_sync_example() -> str:
@@ -2264,6 +2342,12 @@ def get_example_function_map() -> dict[str, callable]:
     examples for exposed managers.
     """
     return {
+        # Canvas
+        "get_canvas_kit_reference": get_canvas_kit_reference,
+        "get_primitives_canvas_live_view_example": get_primitives_canvas_live_view_example,
+        "get_primitives_canvas_connected_apps_example": get_primitives_canvas_connected_apps_example,
+        "get_primitives_canvas_actions_example": get_primitives_canvas_actions_example,
+        "get_primitives_canvas_revision_example": get_primitives_canvas_revision_example,
         # Contacts
         "get_primitives_contact_ask_example": get_primitives_contact_ask_example,
         "get_primitives_contact_update_example": get_primitives_contact_update_example,
@@ -2289,14 +2373,14 @@ def get_example_function_map() -> dict[str, callable]:
         # Data (using real DataManager primitives)
         "get_primitives_data_filter_example": get_primitives_data_filter_example,
         "get_primitives_data_reduce_example": get_primitives_data_reduce_example,
-        "get_primitives_data_ingest_example": get_primitives_data_ingest_example,
+        "get_primitives_ingestion_sources_example": get_primitives_ingestion_sources_example,
         "get_primitives_data_external_sync_example": get_primitives_data_external_sync_example,
-        # Dashboards
-        "get_primitives_dashboards_baked_in_example": get_primitives_dashboards_baked_in_example,
-        "get_primitives_dashboards_live_data_example": get_primitives_dashboards_live_data_example,
-        "get_primitives_dashboards_rich_live_data_example": get_primitives_dashboards_rich_live_data_example,
+        # Dashboards -- superseded by canvas and deliberately unregistered, so
+        # the prompt teaches one way to produce visual output rather than two.
+        # The generators stay callable for the tile-to-canvas migration and for
+        # the tests that pin their shape; they and the manager go together once
+        # existing tiles are migrated.
         "get_primitives_dashboards_composition_example": get_primitives_dashboards_composition_example,
-        "get_primitives_dashboards_actions_example": get_primitives_dashboards_actions_example,
         # Integrations
         "get_primitives_integrations_function_manager_search_example": get_primitives_integrations_function_manager_search_example,
         "get_primitives_integrations_catalog_status_example": get_primitives_integrations_catalog_status_example,
@@ -2645,3 +2729,291 @@ def get_examples_for_environments(
         sections.append("### Mixed-Mode Examples\n" + get_mixed_examples())
 
     return "\n\n".join(sections)
+
+
+# =============================================================================
+# Canvas -- generative user interfaces
+# =============================================================================
+
+
+def get_canvas_kit_reference() -> str:
+    """The component vocabulary a canvas is authored against.
+
+    Inlined rather than left to be discovered. A canvas is typechecked before it
+    can be published, so a guessed component name is not a graceful degradation —
+    it is a failed build and another round trip. Six kilobytes of reference costs
+    far less than that loop, and only appears when canvas is in scope.
+
+    Generated from the kit's own type declarations by
+    ``scripts/generate_canvas_kit_api.py``; see that script for regeneration and
+    drift checking.
+    """
+    from pathlib import Path
+
+    digest = Path(__file__).resolve().parent.parent / "canvas_manager/canvas_kit_api.md"
+    if not digest.is_file():
+        return ""
+    return digest.read_text(encoding="utf8")
+
+
+def get_primitives_canvas_live_view_example() -> str:
+    """Canvas over a manager's own table, with live bindings."""
+    return '''
+# "Build me a tracker for my open tasks"
+#
+# One TSX module renders the whole view. The binding re-runs on every view, so
+# the tracker is current without any refresh machinery.
+from unify.canvas_manager.types import PrimitiveBinding
+
+result = await primitives.canvas.create_view(
+    tsx="""
+import {
+  Badge, Canvas, KpiRow, Section, Stack, Table, type CanvasViewProps,
+} from "@unity/canvas-kit";
+
+type Task = { name: string; due: string; status: string };
+
+// Type the prop and the rows. The canvas is typechecked before it can be
+// published, so an untyped `canvas` fails the build under `strict`.
+export default function Tracker({ canvas }: CanvasViewProps) {
+  const tasks = (canvas.data.tasks ?? []) as Task[];
+  const overdue = tasks.filter((t) => t.status === "overdue");
+
+  return (
+    <Canvas>
+      <Stack gap="lg">
+        <KpiRow items={[
+          { label: "Open", value: tasks.length },
+          { label: "Overdue", value: overdue.length, tone: "danger" },
+        ]} />
+        <Section title="Open tasks" description="Refreshed each time you open this.">
+          <Table
+            columns={[
+              { key: "name", header: "Task" },
+              { key: "due", header: "Due" },
+              { key: "status", header: "Status",
+                render: (row) => (
+                  <Badge tone={row.status === "overdue" ? "danger" : "default"}>
+                    {row.status}
+                  </Badge>
+                ) },
+            ]}
+            rows={tasks}
+          />
+        </Section>
+      </Stack>
+    </Canvas>
+  );
+}
+    """,
+    title="Open tasks",
+    bindings=[
+        PrimitiveBinding(
+            alias="tasks",
+            manager="tasks",
+            table="Tasks",
+            args={"operation": "filter", "filter": "status != 'done'",
+                  "order_by": "due", "limit": 200},
+        ),
+    ],
+)
+
+if not result.build.ok:
+    # Diagnostics are the compiler's own, so they name the line to fix.
+    notify(f"Canvas build failed: {result.build.diagnostics}")
+else:
+    notify(f"Tracker ready: {result.url}")
+'''
+
+
+def get_primitives_canvas_connected_apps_example() -> str:
+    """Canvas over connected third-party apps -- store first, then bind."""
+    return '''
+# "Show me our GitHub issues next to the HubSpot pipeline"
+#
+# A canvas can only display data that already lives in a table. Connected-app
+# data therefore has to be STORED FIRST -- a provider call takes seconds, rate
+# limits are per account rather than per viewer, and a call can come back needing
+# a reconnection that a rendered surface cannot resolve. Storing it is also the
+# only way to show two apps together, since providers cannot be joined directly.
+from unify.canvas_manager.types import PrimitiveBinding
+from unify.ingestion_manager.types import RowsSource, TableTarget
+
+# 1. Pull from each app and store it. Whatever the provider, data in hand is a
+#    RowsSource -- the integration call is just one way to obtain rows.
+issues = await primitives.integrations.github.list_issues(state="open", per_page=100)
+issues_run = await primitives.ingestion.submit(
+    RowsSource(
+        rows=[{"repo": i["repository"]["name"], "title": i["title"],
+               "opened": i["created_at"]} for i in issues.get("items", [])],
+    ),
+    TableTarget(
+        context="Data/GitHubIssues",
+        description="Open GitHub issues, refreshed hourly.",
+        # A stable key makes the refresh an upsert rather than an append, which is
+        # what a current-state view wants. Omit it to accumulate a time series.
+        unique_keys={"title": "str"},
+    ),
+)
+
+deals = await primitives.integrations.hubspot.list_deals()
+deals_run = await primitives.ingestion.submit(
+    RowsSource(rows=deals.get("results", [])),
+    TableTarget(context="Data/HubSpotDeals"),
+)
+
+# 2. The canvas is created against these tables, so wait for both before
+#    binding -- a binding to a table that does not exist yet fails at creation.
+for run in (issues_run, deals_run):
+    status = await primitives.ingestion.wait(run.run_id, timeout_s=300)
+    if status.state != "succeeded":
+        notify(f"Could not store the data: {status.next_step}")
+        return
+
+# 3. Keep it fresh. Without this the canvas shows whatever was stored once.
+await primitives.tasks.update(
+    "Create a recurring task every hour that re-runs the GitHub and HubSpot "
+    "pulls above and re-ingests them into Data/GitHubIssues and "
+    "Data/HubSpotDeals.",
+)
+
+# 4. Build the view over the stored tables.
+result = await primitives.canvas.create_view(
+    tsx="""
+import {
+  BarChart, Canvas, Card, CardContent, CardHeader, CardTitle, Grid, Table,
+  type CanvasViewProps,
+} from "@unity/canvas-kit";
+
+type Issue = { repo: string; count: number };
+type Deal = { dealname: string; amount: number };
+
+export default function Delivery({ canvas }: CanvasViewProps) {
+  return (
+    <Canvas>
+      <Grid columns={2}>
+        <Card>
+          <CardHeader><CardTitle>Open issues by repo</CardTitle></CardHeader>
+          <CardContent>
+            <BarChart data={(canvas.data.issues ?? []) as Issue[]} x="repo" y="count" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Pipeline</CardTitle></CardHeader>
+          <CardContent>
+            <Table
+              columns={[{ key: "dealname", header: "Deal" },
+                        { key: "amount", header: "Amount", numeric: true }]}
+              rows={(canvas.data.deals ?? []) as Deal[]}
+            />
+          </CardContent>
+        </Card>
+      </Grid>
+    </Canvas>
+  );
+}
+    """,
+    title="Delivery and pipeline",
+    bindings=[
+        PrimitiveBinding(alias="issues", manager="data", table="Data/GitHubIssues",
+                         args={"operation": "filter", "limit": 200}),
+        PrimitiveBinding(alias="deals", manager="data", table="Data/HubSpotDeals",
+                         args={"operation": "filter", "order_by": "amount",
+                               "descending": True, "limit": 50}),
+    ],
+)
+'''
+
+
+def get_primitives_canvas_actions_example() -> str:
+    """Canvas the viewer can act from, with validated input."""
+    return '''
+# "Give me somewhere to paste employee emails and send them an update"
+#
+# `input_schema` is the contract on both sides: ActionForm renders the whole form
+# from it, and the server re-validates against the same schema before anything
+# runs, because the frame is untrusted. Bounds on every array and string are
+# required -- they are the blast radius once a viewer supplies the arguments.
+from unify.canvas_manager.types import CanvasAction
+
+result = await primitives.canvas.create_view(
+    tsx="""
+import {
+  Canvas, Section, ActionForm, type CanvasViewProps,
+} from "@unity/canvas-kit";
+
+export default function BulkMail({ canvas }: CanvasViewProps) {
+  return (
+    <Canvas>
+      <Section title="Send an update"
+               description="Paste the recipients, write the message, send once.">
+        {/* Renders the fields, blocks submit until the required ones are filled,
+            and reports the outcome. Use `useCanvasAction(canvas, name)` instead
+            when the interaction needs to be bespoke. */}
+        <ActionForm canvas={canvas} action="bulk_send" />
+      </Section>
+    </Canvas>
+  );
+}
+    """,
+    title="Bulk update",
+    actions=[
+        CanvasAction(
+            name="bulk_send",
+            # The viewer reads this before consenting, so it says what happens.
+            label="Send to everyone listed",
+            function_name="send_bulk_email",
+            input_schema={
+                "type": "object",
+                "required": ["recipients", "subject", "body"],
+                "properties": {
+                    # `format: email` gives the recipient field address
+                    # validation and chip editing rather than a bare text box.
+                    "recipients": {"type": "array", "maxItems": 200,
+                                   "items": {"type": "string", "format": "email"}},
+                    "subject": {"type": "string", "maxLength": 200},
+                    # Over 200 characters renders as a textarea rather than a
+                    # single line.
+                    "body": {"type": "string", "maxLength": 10000},
+                },
+            },
+            destructive=True,
+            confirm="This sends real email to everyone listed.",
+        ),
+    ],
+)
+'''
+
+
+def get_primitives_canvas_revision_example() -> str:
+    """Revising a canvas after the user reacts to it."""
+    return """
+# "That chart is too small" -- revise in place, never create a second canvas.
+#
+# The token and URL are stable, so anywhere the canvas was already shared keeps
+# working. Edit from the stored source rather than from memory.
+record = await primitives.canvas.get_view(token)
+
+result = await primitives.canvas.update_view(
+    token,
+    tsx=record.tsx_source.replace("height={200}", "height={420}"),
+)
+
+if not result.build.ok:
+    # The previously published canvas is untouched, so the user still has a
+    # working view while this is corrected.
+    notify(f"Revision rejected: {result.build.diagnostics}")
+
+# The review pass renders the canvas in both themes and reports what a look at it
+# turned up. `screenshots` are file paths -- `display` them to see the canvas
+# yourself rather than trusting that it came out right.
+if result.review:
+    from PIL import Image
+
+    for shot in result.review.screenshots:
+        display(Image.open(shot))
+
+    if result.review.issues:
+        # Advisory, not a gate: decide whether they are worth another revision.
+        notify(f"Rendered, with notes: {result.review.issues}")
+"""

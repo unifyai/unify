@@ -49,6 +49,8 @@ if TYPE_CHECKING:
     from .blacklist_manager.base import BaseBlackListManager
     from .contact_manager.base import BaseContactManager
     from .conversation_manager.base import BaseConversationManagerHandle
+    from .canvas_manager.base import BaseCanvasManager
+    from .ingestion_manager.base import BaseIngestionManager
     from .dashboard_manager.base import BaseDashboardManager
     from .data_manager.base import BaseDataManager
     from .file_manager.managers.base import BaseFileManager
@@ -430,6 +432,42 @@ class ManagerRegistry:
         )
 
     @classmethod
+    def get_canvas_manager(
+        cls,
+        *,
+        _force_new: bool = False,
+        **kwargs: Any,
+    ) -> "BaseCanvasManager":
+        """Get the CanvasManager singleton (respects IMPL settings).
+
+        CanvasManager authors generative React views. It owns the Canvas/*
+        namespace.
+        """
+        return cls.get(
+            "canvas",
+            _force_new=_force_new,
+            **kwargs,
+        )
+
+    @classmethod
+    def get_ingestion_manager(
+        cls,
+        *,
+        _force_new: bool = False,
+        **kwargs: Any,
+    ) -> "BaseIngestionManager":
+        """Get the IngestionManager singleton (respects IMPL settings).
+
+        IngestionManager stores data and files from any source. It owns the
+        Ingestion/* namespace.
+        """
+        return cls.get(
+            "ingestion",
+            _force_new=_force_new,
+            **kwargs,
+        )
+
+    @classmethod
     def get_dashboard_manager(
         cls,
         *,
@@ -714,11 +752,13 @@ def _populate_registry() -> None:
     ManagerRegistry.register_settings("guidance", lambda: SETTINGS.guidance)
     ManagerRegistry.register_settings("secrets", lambda: SETTINGS.secret)
     ManagerRegistry.register_settings("web_search", lambda: SETTINGS.web)
+    ManagerRegistry.register_settings("canvas", lambda: SETTINGS.canvas)
     ManagerRegistry.register_settings("dashboards", lambda: SETTINGS.dashboard)
     ManagerRegistry.register_settings("data", lambda: SETTINGS.data)
     ManagerRegistry.register_settings("files", lambda: SETTINGS.file)
     ManagerRegistry.register_settings("functions", lambda: SETTINGS.function)
     ManagerRegistry.register_settings("images", lambda: SETTINGS.image)
+    ManagerRegistry.register_settings("ingestion", lambda: SETTINGS.ingestion)
     ManagerRegistry.register_settings("memory", lambda: SETTINGS.memory)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -820,6 +860,19 @@ def _populate_registry() -> None:
     ManagerRegistry.register_class("web_search", "simulated", SimulatedWebSearcher)
 
     # ─────────────────────────────────────────────────────────────────────────
+    # CanvasManager implementations
+    from .canvas_manager.canvas_manager import CanvasManager
+    from .canvas_manager.simulated import SimulatedCanvasManager
+
+    ManagerRegistry.register_class("canvas", "real", CanvasManager)
+    ManagerRegistry.register_class("canvas", "simulated", SimulatedCanvasManager)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # IngestionManager implementations
+    from .ingestion_manager.ingestion_manager import IngestionManager
+
+    ManagerRegistry.register_class("ingestion", "real", IngestionManager)
+
     # DashboardManager implementations
     # ─────────────────────────────────────────────────────────────────────────
     from .dashboard_manager.dashboard_manager import DashboardManager

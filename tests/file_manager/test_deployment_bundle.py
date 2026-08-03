@@ -140,7 +140,6 @@ def test_local_deployment_runner_records_successful_job(tmp_path):
         report_stage("ingest_data", "running", metadata={"file_count": 1})
         report_stage("ingest_data", "success")
         return DeploymentIngestionOutcome(
-            cost_ledger_path="/tmp/cost-ledger.jsonl",
             observability_refs=DeploymentObservabilityRefs(
                 progress_file="/tmp/progress.jsonl",
                 log_file="/tmp/run.log",
@@ -155,7 +154,6 @@ def test_local_deployment_runner_records_successful_job(tmp_path):
     assert final_job.stage_status["prepare_bundle"].status == "success"
     assert final_job.stage_status["ingest_data"].status == "success"
     assert final_job.stage_status["ingest_data"].metadata["file_count"] == 1
-    assert final_job.cost_ledger_path == "/tmp/cost-ledger.jsonl"
     assert final_job.observability_refs.progress_file == "/tmp/progress.jsonl"
     assert final_job.metadata["rows_ingested"] == 25
     assert job_store.job_path(job.job_id).exists()

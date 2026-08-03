@@ -188,6 +188,8 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Domain facts, typed knowledge claims | `KnowledgeManager_*` (top-level JSON tools, not primitives) |
 | Durable tasks (create, execute) | `primitives.tasks.*` / `TaskScheduler` |
 | Files (parse, query) | `primitives.files.*` |
+| Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
+| Generative UI (interactive views) | `primitives.canvas.*` |
 | Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |

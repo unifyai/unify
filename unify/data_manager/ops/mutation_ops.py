@@ -181,32 +181,24 @@ def update_rows_impl(
     if not logs:
         return 0
 
-    updated = 0
-    for log in logs:
-        log_id = log.id if hasattr(log, "id") else None
-        if log_id is None:
-            continue
-        if hasattr(log, "entries") and isinstance(log.entries, dict):
-            existing = dict(log.entries)
-        elif isinstance(log, dict):
-            existing = dict(log)
-        else:
-            continue
-        # Merge then strip authorship: existing rows carry immutable
-        # authoring_assistant_id, and Orchestra rejects overwrite payloads that
-        # include immutable fields even when the value is unchanged.
-        new_entries = strip_authoring_assistant_id(
-            {**existing, **cleaned_updates},
-        )
-        unisdk.update_logs(
-            logs=[log_id],
-            context=context,
-            entries=new_entries,
-            overwrite=True,
-        )
-        updated += 1
+    log_ids_to_update = [log.id for log in logs if getattr(log, "id", None) is not None]
+    if not log_ids_to_update:
+        return 0
 
-    return updated
+    # Only the caller's columns are sent. Orchestra applies a partial JSONB
+    # merge, so unspecified columns are preserved server-side — round-tripping
+    # the whole row here would re-submit every immutable field the row carries
+    # (auto-counted identity keys, authorship), and the backend rejects any
+    # update naming an immutable field even when its value is unchanged.
+    # ``overwrite=True`` is what permits changing an existing column's value;
+    # it does not mean row replacement.
+    unisdk.update_logs(
+        logs=log_ids_to_update,
+        context=context,
+        entries=cleaned_updates,
+        overwrite=True,
+    )
+    return len(log_ids_to_update)
 
 
 def update_by_ids_impl(

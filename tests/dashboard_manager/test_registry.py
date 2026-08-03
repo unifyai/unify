@@ -39,12 +39,25 @@ class TestPrimitivesRegistry:
     def test_dashboards_in_example_generators(self):
         assert "dashboards" in _EXAMPLE_GENERATORS
 
-    def test_dashboard_example_generator_names(self):
+    def test_only_the_amend_example_is_promoted(self):
+        """Authoring examples are withdrawn; canvas is the one way to author.
+
+        Two managers teaching how to produce visual output is how the actor ends
+        up building a tile when the user asked for a view. The composition
+        example stays because amending a board that already exists is still a
+        real request.
+        """
         names = _EXAMPLE_GENERATORS["dashboards"]
-        assert "get_primitives_dashboards_baked_in_example" in names
-        assert "get_primitives_dashboards_live_data_example" in names
-        assert "get_primitives_dashboards_composition_example" in names
-        assert "get_primitives_dashboards_actions_example" in names
+        assert names == ["get_primitives_dashboards_composition_example"]
+
+    def test_canvas_outranks_dashboards_in_discovery(self):
+        """Ranking is what decides which manager the actor reaches for first."""
+        # Specs sort ascending, so the smaller number is read first.
+        specs = {spec.manager_alias: spec for spec in _MANAGER_SPECS}
+        assert specs["canvas"].priority < specs["dashboards"].priority
+        assert specs["dashboards"].priority == max(
+            spec.priority for spec in _MANAGER_SPECS
+        )
 
     def test_dashboards_in_alias_to_getter(self):
         from unify.function_manager.primitives.runtime import _ALIAS_TO_GETTER
@@ -81,8 +94,17 @@ class TestPrimitivesDiscovery:
     def test_dashboard_manager_spec_metadata(self):
         spec = get_registry().get_manager_spec("dashboards")
         assert spec is not None
-        assert spec.domain == "Visualizations & Dashboards"
+        # The domain names this as superseded so the actor reading the tool
+        # surface can tell which of the two visual managers to author with.
+        assert "superseded by Canvas" in spec.domain
         assert "DashboardManager" in spec.primitive_class_path
+
+    def test_the_spec_steers_new_visual_work_to_canvas(self):
+        """The spec text is the only thing standing between a user asking for a
+        chart and the actor building a tile the product is moving away from."""
+        spec = get_registry().get_manager_spec("dashboards")
+        assert "primitives.canvas" in (spec.special_note or "")
+        assert "NEVER for new visual output" in spec.use_when
 
     def test_dashboard_primitives_collected(self):
         scope = PrimitiveScope.single("dashboards")

@@ -573,15 +573,19 @@ class CompositeReporter:
 
 
 def generate_progress_file_path() -> str:
-    """Generate an auto-generated progress file path with timestamp.
+    """Generate a timestamped progress file path beside the run ledger.
+
+    Shares one directory and one helper with the run ledger, so a run's
+    diagnostics stay together and the two defaults cannot drift apart.
 
     Returns
     -------
     str
-        Path in format: ./pipeline_progress_{timestamp}.jsonl
+        Absolute path under ``logs/file_manager_runs/``.
     """
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    return f"./pipeline_progress_{timestamp}.jsonl"
+    from unify.common.pipeline.run_ledger import generate_diagnostics_path
+
+    return generate_diagnostics_path("pipeline_progress")
 
 
 def create_reporter(
