@@ -5,9 +5,11 @@ the position the runtime tracks, the idempotency cache that lets a retry skip
 what already happened, and the retry loop that splices a patch into the source
 and runs it again.
 
-Symbolic throughout — no LLM — so a failure is a regression in the machinery
-rather than a judgement call. The patch author is stubbed; its own parsing
-contracts are covered separately.
+Symbolic throughout, so a failure here is a regression in the machinery
+rather than a judgement call: the patch is supplied directly, which pins what
+the mechanism does with a given correction. Whether a real model writes a
+usable correction in the first place is a different question, covered against
+a live LLM in ``test_live_steering_eval``.
 """
 
 from __future__ import annotations
