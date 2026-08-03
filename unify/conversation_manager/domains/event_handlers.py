@@ -44,6 +44,9 @@ from unify.conversation_manager.domains.task_execution import (
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
 )
+from unify.conversation_manager.domains.console_script_result import (
+    handle_console_script_result,
+)
 from unify.conversation_manager.domains.whatsapp_history import (
     whatsapp_sent_history_content,
 )
@@ -3559,6 +3562,19 @@ async def _(
         )
 
 
+@EventHandler.register(ConsoleScriptResult)
+async def _(
+    event: ConsoleScriptResult,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # Only a move that failed is worth a turn. A landed one is recorded for the
+    # next one, because the assistant already said what it was doing.
+    if await handle_console_script_result(event, cm):
+        await cm.request_llm_run(delay=0)
+
+
 @EventHandler.register(CoordinatorDelegate)
 async def _(
     event: CoordinatorDelegate,
@@ -4022,6 +4038,8 @@ _MEET_LOG_TYPES: dict[type, str] = {
     AssistantScreenShareStopped: "screen_share_off",
     UserScreenShareStarted: "user_screen_share",
     UserScreenShareStopped: "user_screen_share_off",
+    MeetScreenShareStarted: "meet_screen_share_on",
+    MeetScreenShareStopped: "meet_screen_share_off",
     UserWebcamStarted: "webcam_on",
     UserWebcamStopped: "webcam_off",
     UserRemoteControlStarted: "remote_control",
@@ -4033,6 +4051,8 @@ _MEET_INTERACTION_NOTIFICATIONS: dict[type, str] = {
     AssistantScreenShareStopped: "The user disabled assistant screen sharing — they can no longer see your desktop.",
     UserScreenShareStarted: "The user started sharing their screen with you.",
     UserScreenShareStopped: "The user stopped sharing their screen.",
+    MeetScreenShareStarted: "Someone in the meeting started sharing their screen with you.",
+    MeetScreenShareStopped: "Nobody in the meeting is sharing a screen any more.",
     UserWebcamStarted: "The user enabled their webcam — you can now see them.",
     UserWebcamStopped: "The user disabled their webcam.",
     UserRemoteControlStarted: "The user took remote control of your desktop — they now have mouse and keyboard control.",
@@ -4060,6 +4080,16 @@ _MEET_FAST_BRAIN_GUIDANCE: dict[type, str] = {
         "details. Do NOT guess or fabricate what is on their screen."
     ),
     UserScreenShareStopped: ("The user stopped sharing their screen."),
+    MeetScreenShareStarted: (
+        "Someone in the meeting is sharing their screen. Snapshots of it are "
+        "arriving in the background. If they point at something on it, "
+        "acknowledge naturally and wait for the details. Do NOT guess what is "
+        "on it."
+    ),
+    MeetScreenShareStopped: (
+        "The shared screen is gone. Anything you saw on it is history now, not "
+        "something you can still look at."
+    ),
     UserWebcamStarted: (
         "The user enabled their webcam. Visual context is being captured "
         "in the background. If they reference their appearance or something "
@@ -4082,6 +4112,8 @@ _MEET_STATE_FLAGS: dict[type, tuple[str, bool]] = {
     AssistantScreenShareStopped: ("assistant_screen_share_active", False),
     UserScreenShareStarted: ("user_screen_share_active", True),
     UserScreenShareStopped: ("user_screen_share_active", False),
+    MeetScreenShareStarted: ("meet_screen_share_active", True),
+    MeetScreenShareStopped: ("meet_screen_share_active", False),
     UserWebcamStarted: ("user_webcam_active", True),
     UserWebcamStopped: ("user_webcam_active", False),
     UserRemoteControlStarted: ("user_remote_control_active", True),
@@ -4095,6 +4127,8 @@ _MEET_STATE_FLAGS: dict[type, tuple[str, bool]] = {
         AssistantScreenShareStopped,
         UserScreenShareStarted,
         UserScreenShareStopped,
+        MeetScreenShareStarted,
+        MeetScreenShareStopped,
         UserWebcamStarted,
         UserWebcamStopped,
         UserRemoteControlStarted,
@@ -4107,6 +4141,8 @@ async def _(
         | AssistantScreenShareStopped
         | UserScreenShareStarted
         | UserScreenShareStopped
+        | MeetScreenShareStarted
+        | MeetScreenShareStopped
         | UserWebcamStarted
         | UserWebcamStopped
         | UserRemoteControlStarted
@@ -4151,6 +4187,20 @@ async def _(
 
     # Update state flag on the CM.
     setattr(cm, attr, value)
+
+    if isinstance(event, MeetScreenShareStopped):
+        # The buffer is peeked non-destructively and only cleared after a
+        # successful turn, so without this the frame from a screen that has just
+        # been taken down survives into the next turn and gets described as
+        # current. Utterance-paired frames stay: those answer a question somebody
+        # actually asked.
+        for source in ("google_meet", "teams_meet"):
+            dropped = cm.drop_unpaired_screenshots(source)
+            if dropped:
+                cm._session_logger.debug(
+                    log_type,
+                    f"Dropped {dropped} stale {source} screenshot(s)",
+                )
 
     if (
         isinstance(event, (UserWebcamStarted, UserWebcamStopped))

@@ -2541,7 +2541,12 @@ async def entrypoint(ctx: agents.JobContext):
             await asyncio.sleep(_MEET_SCREENSHARE_POLL_INTERVAL_S)
 
     def _sync_meet_screenshare_poller() -> None:
-        """Start or stop the poller to match whether anyone is presenting."""
+        """Start or stop the poller to match whether anyone is presenting.
+
+        Also announces the transition to the slow brain, which otherwise has no
+        way to know: it sees only frames arriving, so the absence of a frame is
+        indistinguishable from a turn that happened not to include one.
+        """
         nonlocal _meet_screenshare_task
         nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
 
@@ -2549,6 +2554,11 @@ async def entrypoint(ctx: agents.JobContext):
             _meet_screenshare_task = asyncio.create_task(
                 _meet_screenshare_poll_loop(),
             )
+            evt = MeetScreenShareStarted(
+                contact=contact,
+                reason="participant started sharing",
+            )
+            asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
             return
         if not _meet_sharing and _meet_screenshare_task is not None:
             _meet_screenshare_task.cancel()
@@ -2559,6 +2569,11 @@ async def entrypoint(ctx: agents.JobContext):
             # a stale snapshot in the fast brain's visual context outlives the
             # share and gets described as if it were still up.
             _clear_visual_context(source=channel)
+            evt = MeetScreenShareStopped(
+                contact=contact,
+                reason="participant stopped sharing",
+            )
+            asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
 
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):

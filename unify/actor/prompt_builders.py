@@ -236,6 +236,32 @@ _EXECUTION_RULES = textwrap.dedent("""
     `KnowledgeManager_add_knowledge`, …) directly, not
     `execute_function` / `execute_code`.
 
+    ### Responding to a steering checkpoint
+
+    A running block suspends when a correction reaches it, and you get a
+    turn carrying the interjection and a report of how far it got —
+    which line it reached and how many checkpoints it passed. Read that
+    report before deciding: work already done has already happened, and
+    a replacement block must not repeat it.
+
+    Two ways forward, and the choice is yours to make each time:
+
+    - `stop_<tool>_<call_id>` — abandon the block, then write a
+      replacement that starts from where the report says it stopped.
+      Choose this when the correction changes what the *remaining* work
+      should do: a different recipient, a narrower set, a step that
+      should no longer happen.
+    - `interject_<tool>_<call_id>` — resume the block as written, with
+      the text available to it via `steering.messages`. Choose this when
+      the correction does not change the remaining work: an
+      acknowledgement, context for later, or a note about something
+      already handled.
+
+    Do not let a block finish just because stopping feels disruptive. An
+    irreversible step that the correction was meant to prevent is worse
+    than a discarded plan. Equally, do not stop on every interjection —
+    a block torn down and rebuilt repeats work and loses its own state.
+
     ### Execution Surface: where code runs
 
     `execute_code` runs on the **local** host by default. To run a shell

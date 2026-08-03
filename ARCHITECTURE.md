@@ -87,6 +87,35 @@ When `handle.interject("also check trains")` is called, the message is placed in
 
 This is how the user can redirect an agent mid-task without the overhead of stopping and restarting from scratch.
 
+### Steering code that is already running
+
+**File:** `unify/actor/execution/steering.py`
+
+Between LLM turns is not enough on its own for `execute_code` and
+`execute_function`, whose work happens *inside* one tool call — a correction
+arriving four sends into a five-send loop would otherwise be able to kill the
+block but not correct it.
+
+Those tools declare `_interject_queue`, which is what makes the loop
+synthesise an `interject_<tool>_<call_id>` helper for them while they are
+still running (`ToolsData` reads steerability off the signature at schedule
+time). Inside the sandbox, an AST pass adds checkpoints between top-level
+statements, at the top of every loop body at any depth, and a proxy adds one
+before every `primitives.*` call — covering dispatches that sit inside a
+single statement, such as a comprehension or a `gather`. Stored functions are
+covered too when their implementation is synthesised as a preamble, so the
+function's own body is instrumented rather than only the call to it.
+
+A checkpoint that finds a message suspends the block and emits a notification,
+which gives the model a turn with a progress report: the line reached and the
+calls that already completed, with arguments. The model then either resumes
+(any further interjection) or abandons (`stop_*`, unwinding through ordinary
+cancellation). The checkpoint never classifies the message itself.
+
+A checkpoint only runs when the block yields. A synchronous blocking call
+holds the event loop for its duration, during which the interjection cannot
+arrive either, since the tool loop receiving it runs on that same loop.
+
 ---
 
 ## Steerable handles

@@ -755,6 +755,28 @@ class TestRenderStateWithTracking:
         assert "<in_flight_actions>" in result.full_render
         assert "<active_conversations>" in result.full_render
 
+    def test_forwards_meet_screen_share_flag(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """render_state accepts and forwards meet_screen_share_active.
+
+        ConversationManager passes this kwarg on every snapshot; the meet
+        screenshare fix originally added it only to
+        render_meet_interaction_state, so every render_state call raised
+        TypeError and no slow-brain turn could render a prompt.
+        """
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            google_meet_active=True,
+            meet_screen_share_active=True,
+        )
+        assert "<meet_shared_screen status='live'>" in result.full_render
+
     def test_tracks_messages_in_conversation(
         self,
         renderer,

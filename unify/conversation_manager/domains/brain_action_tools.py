@@ -1118,6 +1118,45 @@ class ConversationManagerBrainActionTools:
             ),
         }
 
+    async def start_meet_screenshare(self) -> dict[str, Any]:
+        """Share my desktop with everyone in the meeting, so they can watch me work.
+
+        Use this when showing is genuinely better than telling -- walking someone
+        through where a setting lives, or letting them watch a task run. What
+        participants see is my own machine, at a few frames a second: fine for
+        reading a screen, not for anything that depends on smooth motion.
+
+        Say what I am about to show before calling this. A screen appearing with
+        no explanation makes people hunt for what changed.
+        """
+        ok = await self._cm.call_manager.start_meet_screenshare()
+        if ok:
+            return {
+                "status": "ok",
+                "message": "Sharing my desktop with the meeting.",
+            }
+        return {
+            "status": "error",
+            "message": (
+                "Could not start sharing my desktop. Describe what I would have "
+                "shown instead of saying a screen is up."
+            ),
+        }
+
+    async def stop_meet_screenshare(self) -> dict[str, Any]:
+        """Stop sharing my desktop with the meeting.
+
+        Worth doing as soon as the thing I was showing is done: a stale screen
+        left up reads as inattention, and participants keep watching it.
+        """
+        ok = await self._cm.call_manager.stop_meet_screenshare()
+        if ok:
+            return {"status": "ok", "message": "Stopped sharing my desktop."}
+        return {
+            "status": "error",
+            "message": "Could not stop sharing -- my desktop may already be down.",
+        }
+
     async def _leave_google_meet(self) -> dict[str, Any]:
         """Disconnect the assistant from the active Google Meet session.
 
@@ -2528,6 +2567,15 @@ class ConversationManagerBrainActionTools:
             or self._cm.call_manager.has_active_teams_meet
         ):
             tools["send_meet_chat"] = self.send_meet_chat
+            # Only a managed desktop is ever shared. A user's own linked machine
+            # is not the assistant's to put in front of a room, so the tool is
+            # absent rather than failing when asked -- an assistant with no
+            # desktop should not be offering to show one.
+            if SESSION_DETAILS.assistant.has_managed_desktop:
+                if self._cm.call_manager.is_presenting_to_meet:
+                    tools["stop_meet_screenshare"] = self.stop_meet_screenshare
+                else:
+                    tools["start_meet_screenshare"] = self.start_meet_screenshare
         if self._cm.assistant_number:
             tools["send_sms"] = (
                 self.send_sms_to_boss if is_coordinator else self.send_sms
