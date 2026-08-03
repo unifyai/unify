@@ -379,6 +379,22 @@ def _parse_shell_script_metadata(source: str) -> Dict[str, Optional[str]]:
     }
 
 
+def _instrument_for_child(source: str) -> str:
+    """Ship steering probes with source bound for a venv subprocess.
+
+    The child runs the probes against shims ``venv_runner`` installs, which
+    read the control channel — so a loop that makes no primitive call is
+    still interruptible between dispatches. Source that does not parse ships
+    unchanged, so the child reports the SyntaxError exactly as an unsteered
+    run would.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    return ast.unparse(instrument(tree, tool_namespaces=set(DEFAULT_TOOL_NAMESPACES)))
+
+
 class _VenvConnection:
     """
     Manages a persistent connection to a venv subprocess in server mode.
@@ -526,12 +542,18 @@ class _VenvConnection:
                     f"Venv {self._venv_id} subprocess has died (returncode={self._process.returncode})",
                 )
 
+            steering = active_session()
+
             async def _attempt(source: str) -> dict:
                 """Send one execute request for *source* and relay its RPC."""
                 await self._write_message(
                     {
                         "type": "execute",
-                        "implementation": source,
+                        "implementation": (
+                            _instrument_for_child(source)
+                            if steering is not None
+                            else source
+                        ),
                         "call_kwargs": call_kwargs,
                         "is_async": is_async,
                         "env_overlay": env_overlay or {},
@@ -541,39 +563,68 @@ class _VenvConnection:
                 # Set when a correction interrupted this attempt; the child's
                 # completion is then an unwind to discard, not a result.
                 interrupted: Optional[ControlledInterruption] = None
+                # Corrections that land between dispatches reach the child
+                # through the control channel, not through an RPC reply.
+                watcher = (
+                    asyncio.create_task(
+                        steering.relay_corrections(source, self._write_message),
+                    )
+                    if steering is not None
+                    else None
+                )
 
-                while True:
-                    msg = await self._read_message()
-                    msg_type = msg.get("type")
+                try:
+                    while True:
+                        msg = await self._read_message()
+                        msg_type = msg.get("type")
 
-                    if msg_type == "complete":
-                        if interrupted is not None:
-                            raise interrupted
-                        return msg
+                        if msg_type == "complete":
+                            if interrupted is not None:
+                                raise interrupted
+                            child_interrupted = msg.get("interrupted")
+                            if child_interrupted:
+                                # The child unwound at an instrumented
+                                # checkpoint; discard the attempt and retry.
+                                raise ControlledInterruption(child_interrupted)
+                            return msg
 
-                    if msg_type == "rpc_call":
-                        # Handle RPC call from subprocess
-                        try:
-                            reply = await self._handle_rpc_call(
-                                msg,
-                                primitives=primitives,
-                                computer_primitives=computer_primitives,
+                        if msg_type == "rpc_call":
+                            # Handle RPC call from subprocess
+                            try:
+                                reply = await self._handle_rpc_call(
+                                    msg,
+                                    primitives=primitives,
+                                    computer_primitives=computer_primitives,
+                                )
+                            except ControlledInterruption as interruption:
+                                # The child is blocked on this reply, so
+                                # telling it to unwind here is the interrupt
+                                # probe realised without instrumentation.
+                                interrupted = interruption
+                                reply = {
+                                    "type": "rpc_interrupt",
+                                    "id": msg.get("id"),
+                                    "reason": str(interruption),
+                                }
+                            await self._write_message(reply)
+                        else:
+                            logger.warning(
+                                f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
                             )
-                        except ControlledInterruption as interruption:
-                            # The child is blocked on this reply, so telling
-                            # it to unwind here is the interrupt probe
-                            # realised without instrumentation.
-                            interrupted = interruption
-                            reply = {
-                                "type": "rpc_interrupt",
-                                "id": msg.get("id"),
-                                "reason": str(interruption),
-                            }
-                        await self._write_message(reply)
-                    else:
-                        logger.warning(
-                            f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
-                        )
+                finally:
+                    if watcher is not None:
+                        watcher.cancel()
+                        try:
+                            await watcher
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            # A control send can lose the race with the run
+                            # ending; the attempt's own outcome stands.
+                            logger.debug(
+                                "steering: correction watcher failed",
+                                exc_info=True,
+                            )
 
             async def _run(source: str) -> dict:
                 if timeout is None:
@@ -586,7 +637,6 @@ class _VenvConnection:
                     self._tainted = True
                     raise
 
-            steering = active_session()
             if steering is None:
                 return await _run(implementation)
             return await run_with_steering(implementation, _run, session=steering)
@@ -4939,10 +4989,18 @@ class FunctionManager(BaseFunctionManager):
     # 2. Listing -------------------------------------------------------- #
 
     def list_function_name_to_ids(self) -> Dict[str, int]:
-        """Return ``{name: function_id}`` without pulling implementations.
+        """Return the authoritative ``{name: function_id}`` catalogue.
 
         Used by deployment reconcile for guidance/task entrypoint resolution.
         Prefer this over :meth:`list_functions` when only ids are needed.
+
+        Deployment references are resolved independently of the current
+        runtime's discovery surface. A headless runtime can legitimately hide
+        desktop- or integration-gated functions from actor discovery, but
+        their stored ids must still be available when reconciling tasks that
+        execute in a different environment. Therefore compositional rows are
+        read without ``filter_scope`` or environment exclusions here; ordinary
+        list/filter/search operations remain scoped.
         """
 
         mapping: Dict[str, int] = {}
@@ -4950,7 +5008,6 @@ class FunctionManager(BaseFunctionManager):
             try:
                 logs = unisdk.get_logs(
                     context=context,
-                    filter=self._scoped_filter(None),
                     from_fields=["name", "function_id"],
                 )
             except Exception:
@@ -6519,11 +6576,15 @@ class FunctionManager(BaseFunctionManager):
 
         from unify.provider_proxy.session import build_sandbox_env
 
+        steering = active_session()
+
         async def _attempt(source: str) -> Dict[str, Any]:
             """Run one subprocess attempt at *source*, relaying its RPC."""
             execute_payload: Dict[str, Any] = {
                 "type": "execute",
-                "implementation": source,
+                "implementation": (
+                    _instrument_for_child(source) if steering is not None else source
+                ),
                 "call_kwargs": call_kwargs,
                 "is_async": is_async,
                 "env_overlay": env_overlay,
@@ -6541,9 +6602,12 @@ class FunctionManager(BaseFunctionManager):
                 env=build_sandbox_env(),
             )
 
+            async def _send(message: Dict[str, Any]) -> None:
+                process.stdin.write((json.dumps(message) + "\n").encode())
+                await process.stdin.drain()
+
             # Send initial execution request
-            process.stdin.write((json.dumps(execute_payload) + "\n").encode())
-            await process.stdin.drain()
+            await _send(execute_payload)
 
             # Handle bidirectional communication
             stderr_output = []
@@ -6560,6 +6624,13 @@ class FunctionManager(BaseFunctionManager):
             # Set when a correction interrupted this attempt; the child's
             # completion is then an unwind to discard, not a result.
             interrupted: Optional[ControlledInterruption] = None
+            # Corrections that land between dispatches reach the child
+            # through the control channel, not through an RPC reply.
+            watcher = (
+                asyncio.create_task(steering.relay_corrections(source, _send))
+                if steering is not None
+                else None
+            )
 
             try:
                 while True:
@@ -6617,14 +6688,18 @@ class FunctionManager(BaseFunctionManager):
                                 "error": str(e),
                             }
 
-                        process.stdin.write((json.dumps(response) + "\n").encode())
-                        await process.stdin.drain()
+                        await _send(response)
 
                     elif msg_type == "complete":
                         # Subprocess finished
                         await stderr_task
                         if interrupted is not None:
                             raise interrupted
+                        child_interrupted = msg.get("interrupted")
+                        if child_interrupted:
+                            # The child unwound at an instrumented checkpoint;
+                            # discard the attempt and retry.
+                            raise ControlledInterruption(child_interrupted)
                         return {
                             "result": msg.get("result"),
                             "error": msg.get("error"),
@@ -6644,6 +6719,20 @@ class FunctionManager(BaseFunctionManager):
                     "stderr": "".join(stderr_output),
                 }
             finally:
+                if watcher is not None:
+                    watcher.cancel()
+                    try:
+                        await watcher
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        # A control send can lose the race with the run
+                        # ending; the attempt's own outcome stands.
+                        logger.debug(
+                            "steering: correction watcher failed",
+                            exc_info=True,
+                        )
+
                 # Cancel stderr reader task
                 stderr_task.cancel()
                 try:
@@ -6658,7 +6747,6 @@ class FunctionManager(BaseFunctionManager):
         # One-shot subprocesses give a retry a clean slate: each attempt is a
         # fresh child, and the parent-side cache is what carries the completed
         # prefix across attempts.
-        steering = active_session()
         if steering is None:
             return await _attempt(implementation)
         return await run_with_steering(implementation, _attempt, session=steering)
