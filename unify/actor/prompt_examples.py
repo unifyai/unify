@@ -1227,8 +1227,10 @@ def get_primitives_dashboards_baked_in_example() -> str:
 
     return '''
 # ============================================================
-# primitives.dashboards is the ONLY way to produce visual output
-# (charts, plots, tables, KPI cards, dashboards).
+# SUPERSEDED: primitives.canvas is how visual output is produced now --
+# every chart, plot, table, KPI card, dashboard and interactive view. These
+# tile examples remain only to read and amend boards that already exist, and
+# go away with the manager once those are migrated.
 #
 # PREFER LIVE TILES (data_bindings + on_data) for production:
 #   - Data is fetched fresh at render time, not baked into HTML
@@ -2373,12 +2375,12 @@ def get_example_function_map() -> dict[str, callable]:
         "get_primitives_data_reduce_example": get_primitives_data_reduce_example,
         "get_primitives_ingestion_sources_example": get_primitives_ingestion_sources_example,
         "get_primitives_data_external_sync_example": get_primitives_data_external_sync_example,
-        # Dashboards
-        "get_primitives_dashboards_baked_in_example": get_primitives_dashboards_baked_in_example,
-        "get_primitives_dashboards_live_data_example": get_primitives_dashboards_live_data_example,
-        "get_primitives_dashboards_rich_live_data_example": get_primitives_dashboards_rich_live_data_example,
+        # Dashboards -- superseded by canvas and deliberately unregistered, so
+        # the prompt teaches one way to produce visual output rather than two.
+        # The generators stay callable for the tile-to-canvas migration and for
+        # the tests that pin their shape; they and the manager go together once
+        # existing tiles are migrated.
         "get_primitives_dashboards_composition_example": get_primitives_dashboards_composition_example,
-        "get_primitives_dashboards_actions_example": get_primitives_dashboards_actions_example,
         # Integrations
         "get_primitives_integrations_function_manager_search_example": get_primitives_integrations_function_manager_search_example,
         "get_primitives_integrations_catalog_status_example": get_primitives_integrations_catalog_status_example,
