@@ -1,35 +1,38 @@
-name: Flow Smoke
+name: Flow smoke release gate
 run-name: >-
   ${{
-    github.event_name == 'push' && 'Flow smoke (commit)' ||
-    'Flow smoke (manual)'
+    github.event_name == 'pull_request' && 'Flow smoke (staging → main gate)' ||
+    'Flow smoke (manual gate)'
   }}
 
-# Ad-hoc/manual runner for the live flow smoke suite, plus the cancel-latency
-# diagnostics below. Live end-to-end smoke of the core product flows in
-# tests/flows drives the real Unity brain through a local Orchestra, so every
-# run makes paid LLM calls and cannot be cache-replayed: the brain embeds
-# fresh per-run identifiers (task/log/context ids, timestamps) in later-turn
-# prompts, so read-only cache replay misses and fails. That is why the flows
-# must live here on a dedicated spend-acknowledged trigger rather than in the
-# normal read-only Tests matrix (the Tests discover job blocks tests/flows
-# for the same reason).
+# Dedicated staging -> main release gate for the live flow smoke suite. Live
+# end-to-end smoke of the core product flows in tests/flows drives the real
+# Unity brain through a local Orchestra, so every run makes paid LLM calls
+# and cannot be cache-replayed: the brain embeds fresh per-run identifiers
+# (task/log/context ids, timestamps) in later-turn prompts, so read-only
+# cache replay misses and fails.
 #
-# The staging -> main release gate lives in a separate workflow,
-# flow-smoke-release-gate.yml, which only triggers on pull_request(main) or
-# workflow_dispatch. It must stay separate: GitHub Actions publishes a
-# "skipped" check run for a job whose `if` evaluates false, and a skipped
-# required check is satisfied the same as a pass, so a gate job living in a
-# workflow that also triggers on push would attach a stale passing
-# "Flow smoke" to every ordinary commit -- letting a release PR merge on that
-# stale pass before the real pull_request-triggered run for the same SHA
-# finishes. Keeping the gate out of any push-triggered workflow means an
-# ordinary push produces no check run under that context at all.
+# This workflow exists to make the required "Flow smoke" context safe. It
+# must only ever trigger on pull_request(main) or workflow_dispatch -- never
+# push. GitHub Actions publishes a "skipped" check run for a job whose `if`
+# evaluates false, and branch protection treats a skipped required check as
+# satisfied. Scoping just the aggregator job's `if:` (as this used to do,
+# living in the same workflow as the push-triggered ad-hoc runner) still left
+# a skipped "Flow smoke" run on every ordinary push, which could satisfy the
+# release gate before the real pull_request-triggered run for the same SHA
+# finished -- the identical shape in orchestra let four releases merge with a
+# failing suite. Keeping this gate in a workflow with no push trigger at all
+# means an ordinary push produces no check run under this context whatsoever
+# -- pending, not a stale pass or a false block.
 #
-# Triggers here: a [run-flows] marker on any push, and manual dispatch
-# (LLM_SPEND_OK acknowledged, or CANCEL_SMOKE_OK for the diagnostics below).
+# flow-smoke.yml is the separate, non-gating ad-hoc runner for a [run-flows]
+# push, manual verification, and the cancel-latency diagnostics; it does not
+# define this context.
 
 on:
+  pull_request:
+    branches:
+    - main
   workflow_dispatch:
     inputs:
       timeout_minutes:
@@ -38,153 +41,29 @@ on:
         type: number
         default: 30
       confirm_llm_spend:
-        description: "LLM_SPEND_OK for live flows; CANCEL_SMOKE_OK for cancel-latency diagnostics (no LLM)"
+        description: "Type LLM_SPEND_OK to acknowledge this makes paid LLM calls"
         required: true
         type: string
-  push:
-    branches:
-    - '**'
 
 permissions:
   contents: read
   # Reading the cross-branch llm-cache-ndjson artifact.
   actions: read
 
-# Debouncer semantics: a running smoke completes; only the pending slot is
-# replaced.
 concurrency:
-  group: flow-smoke-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: false
+  group: flow-smoke-release-gate-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Cancel-latency diagnostics (no LLM). Dispatch with confirm_llm_spend=
-  # CANCEL_SMOKE_OK. Uses this workflow because it already exists on main
-  # (required for workflow_dispatch) and has a concurrency group independent
-  # of the Tests matrix — so hung Tests runs cannot block these experiments.
-  # ---------------------------------------------------------------------------
-  cancel-smoke-A:
-    name: "A: baseline sleep"
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Hang
-      run: |
-        set -u
-        echo "SMOKE_A start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        while true; do
-          echo "SMOKE_A heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sleep 10
-        done
-
-  cancel-smoke-B:
-    name: "B: tmux wait, no trap"
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Hang
-      run: |
-        set -u
-        echo "SMOKE_B start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        tmux new-session -d -s smoke_b "bash -c 'while true; do echo tmux_b \$(date -u +%H:%M:%S); sleep 10; done'"
-        while tmux has-session -t smoke_b 2>/dev/null; do
-          echo "SMOKE_B heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sleep 5
-        done
-        echo "SMOKE_B session ended unexpectedly"
-
-  cancel-smoke-C:
-    name: "C: tmux + kill-server trap"
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Hang
-      run: |
-        set -u
-        cleanup() {
-          echo "SMOKE_C caught signal $(date -u +%Y-%m-%dT%H:%M:%SZ) — kill-server"
-          tmux kill-server 2>/dev/null || true
-          exit 143
-        }
-        trap cleanup INT TERM
-        echo "SMOKE_C start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        tmux new-session -d -s smoke_c "bash -c 'while true; do echo tmux_c \$(date -u +%H:%M:%S); sleep 10; done'"
-        while tmux has-session -t smoke_c 2>/dev/null; do
-          echo "SMOKE_C heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sleep 5
-        done
-        echo "SMOKE_C session ended unexpectedly"
-
-  cancel-smoke-D:
-    name: "D: parallel_run-style trap"
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Hang
-      run: |
-        set -u
-        cleanup() {
-          local sig="${1:-TERM}"
-          echo "SMOKE_D caught signal ${sig} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          tmux list-panes -t smoke_d -F '#{pane_pid}' 2>/dev/null | while read -r pid; do
-            if [[ -n "$pid" ]]; then
-              kill -TERM "-$pid" 2>/dev/null || true
-            fi
-          done
-          sleep 0.1
-          tmux kill-session -t smoke_d 2>/dev/null || true
-          echo "SMOKE_D cleanup complete $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          exit 143
-        }
-        trap 'cleanup INT' INT
-        trap 'cleanup TERM' TERM
-        echo "SMOKE_D start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        tmux new-session -d -s smoke_d "bash -c 'while true; do echo tmux_d \$(date -u +%H:%M:%S); sleep 10; done'"
-        while tmux has-session -t smoke_d 2>/dev/null; do
-          echo "SMOKE_D heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sleep 5
-        done
-        echo "SMOKE_D session ended unexpectedly"
-
-  cancel-smoke-E:
-    name: "E: always() 120s after hang"
-    if: github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'CANCEL_SMOKE_OK'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-    - name: Hang
-      run: |
-        set -u
-        echo "SMOKE_E hang start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        while true; do
-          echo "SMOKE_E heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          sleep 10
-        done
-    - name: Slow always cleanup
-      if: always()
-      run: |
-        echo "SMOKE_E always-start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        sleep 120
-        echo "SMOKE_E always-done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    - name: Cancel-only cleanup
-      if: cancelled()
-      run: echo "SMOKE_E cancelled-cleanup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
   flows:
     name: Flow smoke (run)
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
     timeout-minutes: 60
-    # Run on: manual LLM_SPEND_OK dispatch, or a [run-flows] push.
-    # CANCEL_SMOKE_OK dispatches are handled by the cancel-smoke-* jobs above.
-    # The staging -> main PR case runs from flow-smoke-release-gate.yml instead.
+    # Run on: manual LLM_SPEND_OK dispatch, or a staging -> main PR.
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'LLM_SPEND_OK') ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-flows]'))
+      (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'staging')
     env:
       UNIFY_TESTS_RAND_PROJ: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
@@ -463,3 +342,23 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 14
+
+  # Single, stable required status check for staging->main releases.
+  flow-smoke-required:
+    name: Flow smoke
+    needs: flows
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the flow smoke to have passed
+      run: |
+        result="${{ needs.flows.result }}"
+        echo "flow smoke result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Flow smoke did not run for this commit, so the release"
+          echo "::error::gate cannot pass."
+        fi
+        exit 1
