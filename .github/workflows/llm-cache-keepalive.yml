@@ -1,0 +1,70 @@
+name: LLM Cache Keepalive
+run-name: LLM cache keepalive
+
+# Artifact retention is the ceiling on how long the shared LLM cache survives
+# untouched: the Actions cache is evictable, and nothing else outlives it. Once
+# the last llm-cache-ndjson expires, every entry has to be bought again from a
+# paid provider.
+#
+# Rolling the store forward costs nothing, though. Republishing what already
+# exists starts a fresh retention window, so this pulls the newest unexpired
+# artifact and uploads it again. No tests run and no provider is called, which
+# is why this may sit on a schedule while the refresh workflow stays behind its
+# LLM_SPEND_OK gate.
+#
+# Monthly against 90-day retention leaves two missed runs of slack.
+
+on:
+  schedule:
+  - cron: '17 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: llm-cache-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: Roll the cache artifact forward
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: Hydrate from the newest artifact
+      id: hydrate
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Republishing nothing would mint an empty artifact that then becomes
+        # the newest match every reader resolves to, so the answer stays "do
+        # not publish" unless a non-empty store actually arrives.
+        echo "publish=false" >> "$GITHUB_OUTPUT"
+        .github/scripts/hydrate_llm_cache.sh
+        if [ -s .cache.ndjson ]; then
+          entries=$(grep -c . .cache.ndjson || true)
+          if [ "${entries:-0}" -gt 0 ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Rolling ${entries} entries into a fresh retention window"
+          fi
+        else
+          echo "Nothing to roll forward: no unexpired artifact remains."
+          echo "::warning::No LLM cache artifact to keep alive. The store is gone and the next refresh will re-buy it."
+        fi
+
+    - name: Republish the cross-branch LLM cache artifact
+      if: steps.hydrate.outputs.publish == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 0
+        retention-days: 90
