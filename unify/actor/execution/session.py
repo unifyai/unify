@@ -35,8 +35,10 @@ from .capture import _stdout_parts, capture_sandbox_output
 from unify.function_manager.steering import (
     DEFAULT_TOOL_NAMESPACES,
     MemoisedDispatch,
-    current_session,
+    active_session,
+    bind_session,
     instrument,
+    restore_session,
     run_with_steering,
 )
 from .types import TextPart
@@ -663,10 +665,22 @@ class PythonExecutionSession:
                     ast.fix_missing_locations(tree)
                     code = ast.unparse(tree)
 
-                # Steering only exists while a call is in flight, so it is
-                # present exactly when the caller bound a session. Without one
-                # the block runs as it always did and pays nothing.
-                steering = current_session(self.global_state)
+                # Steering only exists while a call is in flight. The session
+                # arrives by context rather than on this object, because the
+                # sandbox that runs a block is often not the one that was
+                # current when the tool started — stateless mode, the default,
+                # builds a fresh one per call. Binding it here means every
+                # in-process Python path picks it up, whichever sandbox that
+                # turns out to be.
+                steering = active_session()
+                # Probes only. Memoising `primitives` is done further down,
+                # where it can be composed in the right order with the
+                # context-forwarding proxy.
+                steering_token = (
+                    bind_session(self.global_state, steering, tool_namespaces=[])
+                    if steering is not None
+                    else None
+                )
 
                 def _wrap_for_execution(body: str) -> str:
                     """Indent a block into the async wrapper it runs inside.
@@ -805,6 +819,8 @@ class PythonExecutionSession:
                     _SANDBOX_SPAWNED_HANDLES.reset(spawned_token)
                     if _orig_prims is not None:
                         self.global_state["primitives"] = _orig_prims
+                    if steering_token is not None:
+                        restore_session(self.global_state, steering_token)
 
             except asyncio.TimeoutError:
                 error = f"Python execution timed out after {timeout}s"

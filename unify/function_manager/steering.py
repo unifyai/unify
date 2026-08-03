@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
+import contextvars
 import logging
 import typing
 from dataclasses import dataclass, field
@@ -877,6 +879,34 @@ def restore_session(global_state: Dict[str, Any], token: Dict[str, Any]) -> None
             global_state.pop(name, None)
         else:
             global_state[name] = value
+
+
+#: The session for the call currently in flight.
+#:
+#: Binding by sandbox object does not work: only one execution path
+#: (``state_mode="stateful"``, ``session_id=0``) runs in the sandbox that was
+#: current when the tool started. Stateless — the default — builds a fresh one,
+#: and pooled modes fetch another, so a session bound at tool entry would never
+#: be seen by the code that actually runs. The contextvar follows the call
+#: instead, and whichever sandbox executes binds it into its own globals.
+_ACTIVE_SESSION: contextvars.ContextVar[Optional[SteeringSession]] = (
+    contextvars.ContextVar("unify_steering_session", default=None)
+)
+
+
+@contextlib.contextmanager
+def use_session(session: Optional[SteeringSession]) -> typing.Iterator[None]:
+    """Mark *session* as steering the call being made inside this block."""
+    token = _ACTIVE_SESSION.set(session)
+    try:
+        yield
+    finally:
+        _ACTIVE_SESSION.reset(token)
+
+
+def active_session() -> Optional[SteeringSession]:
+    """The session steering the current call, if there is one."""
+    return _ACTIVE_SESSION.get()
 
 
 def current_session(global_state: Dict[str, Any]) -> Optional[SteeringSession]:
