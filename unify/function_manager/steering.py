@@ -87,6 +87,21 @@ class ControlledInterruption(Exception):
     """
 
 
+class ExecutionStopped(Exception):
+    """A correction asked for the remaining work to be abandoned.
+
+    Distinct from :class:`ControlledInterruption`, which unwinds one attempt
+    so a patched retry can run: this ends the call. Callers surface it as the
+    call's outcome — what was already done stands, the rest never runs — not
+    as a failure traceback.
+    """
+
+    @property
+    def outcome(self) -> Dict[str, str]:
+        """The ordinary result value returned by execution boundaries."""
+        return {"status": "stopped", "reason": str(self)}
+
+
 @dataclass
 class Patch:
     """Replacement source for one function, and what it invalidates.
@@ -106,10 +121,18 @@ class Patch:
 
 @dataclass
 class InterruptionRequest:
-    """A decision about work that is currently running."""
+    """A decision about work that is currently running.
+
+    ``stop`` means the remaining work should be abandoned rather than
+    redirected — the decision when there is nothing a patch can rewrite (a
+    shell script, a block defining no functions) or when the correction
+    simply revokes the task. A stop fires at the next checkpoint wherever the
+    work runs, and ends the call instead of retrying it.
+    """
 
     reason: str
     patches: List[Patch] = field(default_factory=list)
+    stop: bool = False
 
     def targets(self, function_name: str) -> bool:
         return any(p.function_name == function_name for p in self.patches)
@@ -330,6 +353,9 @@ class SteeringSession:
         if self.runtime.paused:
             await self.runtime.wait_if_paused()
         await self._collect()
+        request = self.interruption
+        if request is not None and request.stop:
+            raise ControlledInterruption(request.reason or "steered")
 
     async def interrupt_point(self, func_name: str) -> None:
         """Raise if a pending correction targets *func_name*.
@@ -341,7 +367,7 @@ class SteeringSession:
         """
         await self._collect()
         request = self.interruption
-        if request is not None and request.targets(func_name):
+        if request is not None and (request.stop or request.targets(func_name)):
             raise ControlledInterruption(request.reason or "steered")
 
     async def around(self, label: str, awaitable: Any) -> Any:
@@ -386,7 +412,7 @@ class SteeringSession:
     async def relay_corrections(
         self,
         source: str,
-        send_control: typing.Callable[[Dict[str, Any]], typing.Awaitable[None]],
+        deliver: typing.Callable[["InterruptionRequest"], typing.Awaitable[None]],
         *,
         poll_interval: float = 0.05,
     ) -> None:
@@ -396,24 +422,16 @@ class SteeringSession:
         dispatches; a child inside a loop that makes no primitive call never
         gives the parent a chance to collect interjections, let alone act on
         them. This watches the intake while an attempt runs and, once a
-        correction targets the running block, pushes one interrupt directive
-        over *send_control* so the child's next instrumented checkpoint
-        raises. Runs until then, or until the attempt ends and cancels it.
+        correction applies to the running block, hands it to *deliver* — a
+        venv attempt pushes an interrupt directive down its control channel, a
+        shell attempt terminates the subprocess. Runs until then, or until the
+        attempt ends and cancels it.
         """
         while True:
             await self._collect()
             request = self.interruption
             if request is not None and _targets_running_block(request, source):
-                await send_control(
-                    {
-                        "type": "control",
-                        "action": "interrupt",
-                        "reason": request.reason or "steered",
-                        "functions": sorted(
-                            {patch.function_name for patch in request.patches},
-                        ),
-                    },
-                )
+                await deliver(request)
                 return
             await asyncio.sleep(poll_interval)
 
@@ -878,16 +896,20 @@ class MemoisedDispatch:
 def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
     """Whether a correction is aimed at the block running out-of-process.
 
-    In-process, ``_int(name)`` fires only inside the function a patch names.
-    The parent cannot see which function a child process is inside, so the
-    nearest sound reading is "the patch names a function this block defines":
-    firing early costs one replay-backed retry, whereas not firing would let
-    the remaining dispatches run under a correction that asked them not to.
+    A stop applies to whatever is running, whichever language it is written
+    in — that is its purpose, since it exists for exactly the source a patch
+    cannot name.
 
-    Source that is not Python — a shell script — defines nothing a patch can
-    name, so nothing fires; the patch author likewise refuses to author
-    patches for it. Shell tops out at pause and replay.
+    For patches: in-process, ``_int(name)`` fires only inside the function a
+    patch names. The parent cannot see which function a child process is
+    inside, so the nearest sound reading is "the patch names a function this
+    block defines": firing early costs one replay-backed retry, whereas not
+    firing would let the remaining dispatches run under a correction that
+    asked them not to. Source that is not Python defines nothing a patch can
+    name, so patches never fire on it.
     """
+    if request.stop:
+        return True
     if not request.patches:
         return False
     try:
@@ -900,6 +922,17 @@ def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     return any(patch.function_name in defined for patch in request.patches)
+
+
+def interrupt_directive(request: InterruptionRequest) -> Dict[str, Any]:
+    """The control-channel message telling a child to unwind for *request*."""
+    return {
+        "type": "control",
+        "action": "interrupt",
+        "reason": request.reason or "steered",
+        "stop": request.stop,
+        "functions": sorted({patch.function_name for patch in request.patches}),
+    }
 
 
 async def dispatch_with_steering(
@@ -1116,14 +1149,33 @@ async def run_with_steering(
     whole mechanism. Keeping the position would look up the replayed prefix
     under keys from the run that was abandoned; clearing the cache would
     re-execute side effects that have already happened.
+
+    A stop request ends the call instead: :class:`ExecutionStopped` carries
+    the reason out to the caller, with no retry to run.
     """
     current = source
     attempt = 0
     while True:
         try:
             session.bind_source(current)
+            await session.cp("Execution start")
             return await run_source(current)
         except ControlledInterruption as interruption:
+            request = session.interruption
+            session.interruption = None
+
+            if request is not None and request.stop:
+                session.notify(
+                    {
+                        "type": "steering_stop",
+                        "message": f"Stopped by correction: {request.reason}",
+                        "progress": session.progress(),
+                    },
+                )
+                raise ExecutionStopped(
+                    request.reason or str(interruption),
+                ) from interruption
+
             attempt += 1
             if attempt > max_retries:
                 raise RuntimeError(
@@ -1131,8 +1183,6 @@ async def run_with_steering(
                     f"(last: {interruption})",
                 ) from interruption
 
-            request = session.interruption
-            session.interruption = None
             applied_any = False
             for patch in request.patches if request else ():
                 spliced = splice_patch(current, patch)

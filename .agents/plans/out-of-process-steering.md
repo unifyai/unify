@@ -3,8 +3,10 @@
 **Status:** Phases 1 and 2 built and tested. Phase 1 — dispatch-boundary
 steering over the RPC channel — covers venv (one-shot and pooled) and shell.
 Phase 2 — instrumented child source plus a push control channel — closes the
-non-dispatching-loop gap for venv. Non-local surfaces turned out not to share
-the RPC transport at all (see below) and are out of scope for this mechanism.
+non-dispatching-loop gap for venv. Stop requests are also built and tested:
+they end in-process Python, venv Python, and shell execution cleanly while
+preserving completed work. Non-local surfaces do not share the RPC transport
+(see below) and need their own agent-service protocol work.
 
 Live steering — correcting a block of code while it is still running — works
 for every in-process Python path, at the dispatch boundary for venv and shell
@@ -36,9 +38,10 @@ no primitive call:
 - One-shot venv subprocesses — `FunctionManager.execute_in_venv`
 - Pooled persistent venv sessions — `_VenvConnection.execute`
 
-Shell scripts using the `unity-primitive` bridge get dispatch-boundary
-steering only — `FunctionManager.execute_shell_script` (cache and pause; see
-the boundaries section for why interrupts cannot fire on shell).
+Shell scripts using the `unity-primitive` bridge get dispatch-boundary cache
+and pause. They can also be stopped between dispatches: a stop request
+terminates the subprocess group and returns the same structured stopped
+outcome as Python execution. Function patches remain Python-only.
 
 **Not covered.** Non-local surfaces (`surface != "local"`), synchronous
 functions (no awaits, so no probes — parity with in-process), and blocking
@@ -60,7 +63,7 @@ docstring:
 {"type": "rpc_error",     "id": str, "error": str}                   # parent → child
 {"type": "rpc_interrupt", "id": str, "reason": str}                  # parent → child
 {"type": "control", "action": "interrupt",
- "reason": str, "functions": [str]}                                  # parent → child, unsolicited
+ "reason": str, "functions": [str], "stop": bool}                   # parent → child, unsolicited
 ```
 
 Every `primitives.*` call made inside a venv or shell child round-trips to the
@@ -83,8 +86,8 @@ One checkpoint, one convergence point, three loops that translate:
 
 - `dispatch_with_steering` (`steering.py`) is the parent-side checkpoint: it
   honours pause, collects interjections, raises `ControlledInterruption` when
-  a pending correction targets the running block, replays memoised dispatches,
-  and memoises fresh ones.
+  a pending correction targets the running block or requests a stop, replays
+  memoised dispatches, and memoises fresh ones.
 - `FunctionManager._handle_rpc_call` routes **every** RPC through that
   checkpoint before resolving the path (`_dispatch_rpc_path`). The plan's
   "two handlers, not one" risk — the pooled `_VenvConnection._handle_rpc_call`
@@ -164,8 +167,9 @@ Two constraints the reader thread has to honour, both learned the hard way:
 `SteeringSession.relay_corrections` runs alongside each attempt's message
 loop, collecting interjections while the child runs between dispatches —
 without it, nothing would even author a patch until the next RPC arrived. When
-a correction targets the running block it sends one directive and returns; the
-attempt's loops handle the rest through the same retry path as Phase 1.
+a correction targets the running block, or asks to stop it, the watcher sends
+one directive and returns; the attempt's loops handle a patch through the same
+retry path as Phase 1 and translate a stop into a clean terminal outcome.
 
 Tests: the "corrections between dispatches" section of
 `test_venv_steering.py` — a 2000-iteration loop with no primitive calls is cut
@@ -190,15 +194,13 @@ agent-service protocol itself (a streaming or bidirectional exec endpoint),
 which is a separate piece of work, not a third integration point on this
 mechanism.
 
-**Shell interrupts cannot fire.** Shell has no AST and no Python, so there is
-no function a patch can name: `_targets_running_block` finds nothing in shell
-source, and the patch author (`steering_patcher.LLMPatchAuthor`) already
-declines to author patches when the source defines no functions. Shell
-therefore gets dispatch memoisation and pause from the shared checkpoint, and
-nothing else. An interjection against a running shell script is recorded and
-reported, not acted on. Making shell stoppable would need its own decision
-path (e.g. "any interjection terminates the script"), which is a product
-question before it is a mechanism.
+**Shell patches cannot fire, but stops can.** Shell has no AST and no Python,
+so there is no function a patch can name: `_targets_running_block` finds
+nothing in shell source. The patch author can nevertheless decide that a
+correction revokes the task or makes all remaining work wrong and return a
+language-independent stop request. `execute_shell_script` then terminates the
+subprocess group. Corrections that need to alter and continue shell source are
+still recorded but cannot be applied live.
 
 **Child-local state across a retry** (was open question 2). One-shot venv
 retries run in a fresh subprocess — a genuinely clean slate, stronger than

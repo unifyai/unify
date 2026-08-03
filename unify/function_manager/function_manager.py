@@ -62,11 +62,13 @@ from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .steering import (
     DEFAULT_TOOL_NAMESPACES,
     ControlledInterruption,
+    ExecutionStopped,
     MemoisedDispatch,
     active_session,
     bind_session,
     dispatch_with_steering,
     instrument,
+    interrupt_directive,
     restore_session,
     run_with_steering,
 )
@@ -567,7 +569,12 @@ class _VenvConnection:
                 # through the control channel, not through an RPC reply.
                 watcher = (
                     asyncio.create_task(
-                        steering.relay_corrections(source, self._write_message),
+                        steering.relay_corrections(
+                            source,
+                            lambda request: self._write_message(
+                                interrupt_directive(request),
+                            ),
+                        ),
                     )
                     if steering is not None
                     else None
@@ -639,7 +646,19 @@ class _VenvConnection:
 
             if steering is None:
                 return await _run(implementation)
-            return await run_with_steering(implementation, _run, session=steering)
+            try:
+                return await run_with_steering(
+                    implementation,
+                    _run,
+                    session=steering,
+                )
+            except ExecutionStopped as stopped:
+                return {
+                    "result": stopped.outcome,
+                    "error": None,
+                    "stdout": "",
+                    "stderr": "",
+                }
 
     async def _handle_rpc_call(
         self,
@@ -6627,7 +6646,12 @@ class FunctionManager(BaseFunctionManager):
             # Corrections that land between dispatches reach the child
             # through the control channel, not through an RPC reply.
             watcher = (
-                asyncio.create_task(steering.relay_corrections(source, _send))
+                asyncio.create_task(
+                    steering.relay_corrections(
+                        source,
+                        lambda request: _send(interrupt_directive(request)),
+                    ),
+                )
                 if steering is not None
                 else None
             )
@@ -6749,7 +6773,19 @@ class FunctionManager(BaseFunctionManager):
         # prefix across attempts.
         if steering is None:
             return await _attempt(implementation)
-        return await run_with_steering(implementation, _attempt, session=steering)
+        try:
+            return await run_with_steering(
+                implementation,
+                _attempt,
+                session=steering,
+            )
+        except ExecutionStopped as stopped:
+            return {
+                "result": stopped.outcome,
+                "error": None,
+                "stdout": "",
+                "stderr": "",
+            }
 
     async def _terminate_process_group(
         self,
@@ -7685,6 +7721,8 @@ if __name__ == "__main__":
                         _run_implementation,
                         session=steering,
                     )
+        except ExecutionStopped as stopped:
+            result = stopped.outcome
         except Exception:
             error = traceback.format_exc()
         finally:
@@ -7895,6 +7933,15 @@ if __name__ == "__main__":
                 cwd=cwd,
                 start_new_session=use_process_group,
             )
+            steering = active_session()
+            stopped: Optional[ExecutionStopped] = None
+
+            async def stop_process(request: Any) -> None:
+                """Terminate the shell process when a correction abandons it."""
+                nonlocal stopped
+                stopped = ExecutionStopped(request.reason or "steered")
+                if process.returncode is None:
+                    await self._terminate_process_group(process, use_process_group)
 
             stdout_output: List[str] = []
             stderr_output: List[str] = []
@@ -7968,6 +8015,14 @@ if __name__ == "__main__":
                                 "id": request_id,
                                 "result": result,
                             }
+                        except ControlledInterruption:
+                            request = (
+                                steering.interruption if steering is not None else None
+                            )
+                            if request is None or not request.stop:
+                                raise
+                            await stop_process(request)
+                            return
                         except Exception as e:
                             logger.error(f"RPC error for {path}: {e}", exc_info=True)
                             response = {
@@ -8005,6 +8060,13 @@ if __name__ == "__main__":
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
             rpc_task = asyncio.create_task(accept_rpc_connections())
+            watcher = (
+                asyncio.create_task(
+                    steering.relay_corrections(implementation, stop_process),
+                )
+                if steering is not None
+                else None
+            )
 
             try:
                 # Wait for process to complete with timeout
@@ -8022,6 +8084,14 @@ if __name__ == "__main__":
 
                 # Wait for stdout/stderr to be fully read
                 await asyncio.gather(stdout_task, stderr_task)
+
+                if stopped is not None:
+                    return {
+                        "result": stopped.outcome,
+                        "error": None,
+                        "stdout": "".join(stdout_output),
+                        "stderr": "".join(stderr_output),
+                    }
 
                 # Build result
                 exit_code = process.returncode
@@ -8050,6 +8120,13 @@ if __name__ == "__main__":
 
             finally:
                 # Clean up
+                if watcher is not None:
+                    watcher.cancel()
+                    try:
+                        await watcher
+                    except asyncio.CancelledError:
+                        pass
+
                 rpc_task.cancel()
                 try:
                     await rpc_task

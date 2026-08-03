@@ -34,6 +34,7 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from .capture import _stdout_parts, capture_sandbox_output
 from unify.function_manager.steering import (
     DEFAULT_TOOL_NAMESPACES,
+    ExecutionStopped,
     MemoisedDispatch,
     active_session,
     bind_session,
@@ -822,6 +823,8 @@ class PythonExecutionSession:
                     if steering_token is not None:
                         restore_session(self.global_state, steering_token)
 
+            except ExecutionStopped as stopped:
+                result = stopped.outcome
             except asyncio.TimeoutError:
                 error = f"Python execution timed out after {timeout}s"
             except Exception:

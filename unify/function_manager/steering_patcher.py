@@ -8,10 +8,11 @@ and the decision is about *this source*, which the actor does not have in front
 of it.
 
 The output is deliberately narrow. A correction may rewrite one or more of the
-functions the block defines and may declare which cached calls are now stale.
-It may not do anything else — not call tools, not reach outside the block, not
-touch anything the block did not define. A correction is an edit to work in
-progress, not a new instruction.
+functions the block defines and may declare which cached calls are now stale,
+or it may stop the remaining work when continuing would contradict the
+correction. It may not do anything else — not call tools, not reach outside the
+block, not touch anything the block did not define. A correction is a decision
+about work in progress, not a new instruction.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from .steering import InterruptionRequest, Patch, SteeringSession
 logger = logging.getLogger(__name__)
 
 _SYSTEM = """\
-You are correcting a Python block that is running right now. It has been \
+You are correcting a code block that is running right now. It has been \
 suspended mid-execution so your edit can be applied.
 
 You are given the source, which of its functions are currently executing, and \
@@ -46,11 +47,17 @@ still covers earlier items is safe.
 - If the correction means an earlier call should now happen *differently*, \
 name it in `invalidate` so its record is discarded and it runs again. Use this \
 sparingly and never for something irreversible that already happened.
-- If the correction does not change any remaining work, return no patches.
+- Set `stop` to true when the correction revokes the task, or when remaining \
+work would now be wrong and there is no listed function you can rewrite. A \
+stop leaves completed work in place and abandons everything still pending.
+- If the correction does not change any remaining work, return false for \
+`stop` and no patches.
+- A stop and patches are mutually exclusive.
 
 Respond with JSON only:
 
 {"reason": "<short restatement of the correction>",
+ "stop": false,
  "patches": [{"function_name": "<name>",
               "source": "<complete def or async def>",
               "reason": "<what changed>",
@@ -82,7 +89,7 @@ def _build_user_prompt(
         *(f"  {text}" for text in interjections),
         "",
         "The running block:",
-        "```python",
+        "```",
         source,
         "```",
         "",
@@ -115,6 +122,7 @@ def _parse_decision(
         logger.warning("steering: patch author returned non-JSON")
         return None
 
+    stop = bool(payload.get("stop"))
     patches: List[Patch] = []
     for entry in payload.get("patches") or []:
         name = entry.get("function_name")
@@ -133,6 +141,11 @@ def _parse_decision(
             ),
         )
 
+    if stop:
+        return InterruptionRequest(
+            reason=str(payload.get("reason") or "stopped"),
+            stop=True,
+        )
     if not patches:
         return None
     return InterruptionRequest(
@@ -163,10 +176,6 @@ class LLMPatchAuthor:
         if not source:
             return None
         defined = _defined_functions(source)
-        if not defined:
-            # Nothing to rewrite. A block of bare statements can still be
-            # stopped, but there is no unit for a patch to replace.
-            return None
 
         prompt = _build_user_prompt(
             source=source,
@@ -194,6 +203,7 @@ def describe(request: InterruptionRequest) -> Dict[str, Any]:
     """A compact record of a correction, for progress reporting."""
     return {
         "reason": request.reason,
+        "stop": request.stop,
         "patches": [
             {
                 "function": patch.function_name,
