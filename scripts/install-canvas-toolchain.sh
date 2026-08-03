@@ -79,6 +79,11 @@ if [[ -z "$BRANDING_PATH" ]]; then
     echo ">> cloning branding@${BRANCH}"
     git clone --depth 1 --branch "$BRANCH" \
         https://github.com/unifyai/branding.git "$CLONED_DIR"
+    # packages/iso is a submodule, so a plain clone leaves it as an empty
+    # directory and npm then resolves @unity/iso from the public registry (404)
+    # instead of the workspace. Only this one is initialised; the repo's other
+    # submodule is editor tooling the build does not need.
+    git -C "$CLONED_DIR" submodule update --init --depth 1 packages/iso
     BRANDING_PATH="$CLONED_DIR"
 fi
 
@@ -116,8 +121,11 @@ BUILD_DIR="$(mktemp -d)/branding-build"
 mkdir -p "$BUILD_DIR/packages" "$BUILD_DIR/apps"
 cp "$BRANDING_PATH/package.json" "$BUILD_DIR/package.json"
 for workspace in packages/iso packages/brand packages/canvas-kit apps/canvas-host; do
-    if [[ ! -d "$BRANDING_PATH/$workspace" ]]; then
-        echo "missing workspace $workspace in $BRANDING_PATH" >&2
+    # package.json, not just the directory: an uninitialised submodule is an
+    # empty directory that passes -d and then fails npm resolution far away.
+    if [[ ! -f "$BRANDING_PATH/$workspace/package.json" ]]; then
+        echo "workspace $workspace in $BRANDING_PATH is missing or empty" \
+             "(uninitialised submodule?)" >&2
         cleanup_build
         exit 1
     fi
