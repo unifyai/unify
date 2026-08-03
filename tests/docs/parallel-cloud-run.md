@@ -122,7 +122,7 @@ parallel_cloud_run.sh tests/actor tests/contact_manager
 parallel_cloud_run.sh tests/actor/code_act.py
 
 # Override settings
-parallel_cloud_run.sh --env UNIFY_MODEL=gpt-5.2@openai tests/contact_manager
+parallel_cloud_run.sh --env UNIFY_MODEL=openai/gpt-5.2@openrouter tests/contact_manager
 ```
 
 Do not use `parallel_cloud_run.sh` for full-suite, uncached, or repeated LLM evals. Use `llm-cache-refresh.yml` for intentional paid LLM runs.

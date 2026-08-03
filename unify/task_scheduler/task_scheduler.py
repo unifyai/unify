@@ -1263,7 +1263,13 @@ class TaskScheduler(BaseTaskScheduler):
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
-                entrypoint_repair_attempts=1 if task.entrypoint is not None else 0,
+                # Deployment-owned tasks (custom_hash set) are healed by
+                # bundle resync, never by LLM repair — including when the
+                # entrypoint row itself is missing, where the per-function
+                # ownership guard has nothing left to inspect.
+                entrypoint_repair_attempts=(
+                    1 if task.entrypoint is not None and not task.custom_hash else 0
+                ),
                 entrypoint_repair_context=(
                     {
                         "task_run_context": entrypoint_kwargs.get(
@@ -1398,7 +1404,13 @@ class TaskScheduler(BaseTaskScheduler):
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
-            entrypoint_repair_attempts=1 if definition.entrypoint is not None else 0,
+            # Same ownership rule as the scheduled path: bundle-owned tasks
+            # never LLM-repair, even when the entrypoint row is gone.
+            entrypoint_repair_attempts=(
+                1
+                if definition.entrypoint is not None and not definition.custom_hash
+                else 0
+            ),
             entrypoint_repair_context=(
                 {
                     "task_run_context": entrypoint_kwargs.get(
@@ -3425,15 +3437,21 @@ class TaskScheduler(BaseTaskScheduler):
                 source_tasks = source_tasks or {}
                 synced_key = (tasks_context, source_id)
 
+                name_to_id = function_name_to_id or {}
                 return run_custom_sync(
                     adapter=_TaskSyncAdapter(
                         self,
-                        function_name_to_id=function_name_to_id or {},
+                        function_name_to_id=name_to_id,
                         source_id=source_id,
                     ),
                     source=source_tasks,
                     expected_hash=compute_custom_tasks_hash(
                         source_tasks=source_tasks,
+                        entrypoint_resolution={
+                            name: name_to_id.get(name)
+                            for entry in source_tasks.values()
+                            if (name := entry.get("entrypoint_function"))
+                        },
                     ),
                     stored_hash=self._get_stored_custom_tasks_hash(source_id),
                     already_synced=synced_key in self._custom_tasks_synced_sources,
@@ -3524,6 +3542,26 @@ class _TaskSyncAdapter(CustomSyncAdapter):
             )
             is None
         )
+
+    def derived_stale(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """The stored ``entrypoint`` is a function id resolved from
+        ``entrypoint_function`` at write time. When the functions store is
+        re-registered under new ids, the row dangles while its content
+        hash — which covers the name, never the id — still matches.
+        """
+        entrypoint_function = fields.get("entrypoint_function")
+        if not entrypoint_function:
+            return False
+        resolved = self._function_name_to_id.get(entrypoint_function)
+        if resolved is None:
+            return False
+        stored = live_row.get("entrypoint")
+        return stored is None or int(stored) != int(resolved)
 
     def insert(self, key: str, fields: Dict[str, Any]) -> None:
         self._scheduler._insert_custom_task(

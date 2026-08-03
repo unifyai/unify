@@ -1,27 +1,31 @@
 # Plan: steering out-of-process execution
 
-**Status:** planned, not started. In-process steering is shipped and tested.
+**Status:** Phase 1 built and tested — venv (one-shot and pooled) and shell.
+Phase 2 (instrumented child source) not started, deliberately. Non-local
+surfaces turned out not to share the RPC transport at all (see below) and are
+out of scope for this mechanism.
 
-Live steering — correcting a block of code while it is still running — works for
-every in-process Python path. This plan extends it to the three paths that run
-somewhere else: venv-backed functions, shell scripts, and non-local execution
-surfaces.
+Live steering — correcting a block of code while it is still running — works
+for every in-process Python path and, at the dispatch boundary, for code
+running in venv subprocesses and shell scripts. This document records how, and
+what was learned closing the plan's open questions.
 
-Read `unify/function_manager/steering.py` first. This plan assumes its four
-parts (probes, idempotency cache, retry via source splice, bounded lifetime)
-and reuses them rather than replacing them.
+Read `unify/function_manager/steering.py` first. Its four parts (probes,
+idempotency cache, retry via source splice, bounded lifetime) are reused
+out-of-process rather than replaced; the out-of-process entry point is
+`dispatch_with_steering` in the same module.
 
-## Read this before deciding how much to build
+## Read this before deciding how much more to build
 
-The work splits into two phases with very different costs, and **Phase 1 is
-worth doing on its own**. It is not groundwork for Phase 2; it is the whole
+The work split into two phases with very different costs, and **Phase 1 is
+worth having on its own**. It is not groundwork for Phase 2; it is the whole
 feature for most cases.
 
 Phase 1 makes out-of-process execution correctable at every side effect that
 goes through primitives, and that is the case the mechanism exists for — the
 reason to steer is to stop a side effect before it happens, and side effects
-are overwhelmingly primitive dispatches. It needs no changes inside the child
-process and it covers venv, shell and remote at once.
+are overwhelmingly primitive dispatches. It needed no changes to how the child
+executes code, and it covers venv and shell at once.
 
 Phase 2 closes one specific remaining gap: a loop in the child that does no
 primitive call, and so is invisible to the parent. It is venv-only, it is the
@@ -34,128 +38,102 @@ If Phase 2 never happens, this feature is not half-finished.
 
 ## Where things stand
 
-**Covered today.** Every in-process Python path, whichever sandbox it runs in:
+**Covered.** Every in-process Python path (statement-level, via AST probes):
 
 - `PythonExecutionSession.execute` — all state modes, including the `stateless`
   default that `execute_code` uses
 - `FunctionManager._execute_in_default_env` — the route that skips the sandbox
   entirely and runs a stored function directly
 
-Within those: loops, `if` and `try` arms at any depth; awaits nested inside
-expressions (comprehensions, `gather`); nested primitive namespaces such as
-`primitives.integrations.slack.send_message`; stored function bodies, because
-`execute_function` synthesises the implementation as a preamble.
+And every out-of-process path that round-trips primitives over JSON-RPC
+(dispatch-boundary, no instrumentation):
 
-**Not covered.** Three paths, all of which run the user's code in another
-process or on another machine:
+- One-shot venv subprocesses — `FunctionManager.execute_in_venv`
+- Pooled persistent venv sessions — `_VenvConnection.execute`
+- Shell scripts using the `unity-primitive` bridge —
+  `FunctionManager.execute_shell_script` (cache and pause only; see the
+  boundaries section for why interrupts cannot fire on shell)
 
-| Path | Entry | Runs where |
-|---|---|---|
-| Venv-backed Python | `venv_id` set on `execute_code` / a venv-backed stored function | subprocess via `VenvPool` |
-| Shell | `language` in `bash`/`zsh`/`sh`/`powershell` | subprocess via `ShellPool` |
-| Non-local surface | `surface != "local"` on `execute_code` | assistant desktop or user desktop, via `unify/actor/execution/targets` |
+**Not covered.** Non-local surfaces (`surface != "local"`), and any child-side
+work between dispatches (Phase 2).
 
 ---
 
-## The key finding: the channel already exists
+## The key finding: the channel already existed
 
-The obvious reading of this problem is "we need a bidirectional event stream to
-and from the child process". We already have one.
+The obvious reading of this problem was "we need a bidirectional event stream
+to and from the child process". We already had one.
 
 `unify/function_manager/venv_runner.py` documents the protocol in its module
 docstring:
 
 ```
-{"type": "rpc_call",   "id": str, "path": str, "kwargs": dict}   # child → parent
-{"type": "rpc_result", "id": str, "result": Any}                 # parent → child
-{"type": "rpc_error",  "id": str, "error": str}                  # parent → child
+{"type": "rpc_call",      "id": str, "path": str, "kwargs": dict}   # child → parent
+{"type": "rpc_result",    "id": str, "result": Any}                 # parent → child
+{"type": "rpc_error",     "id": str, "error": str}                  # parent → child
+{"type": "rpc_interrupt", "id": str, "reason": str}                 # parent → child
 ```
 
 Every `primitives.*` call made inside a venv or shell child round-trips to the
-parent and **blocks the child until the parent replies**. `shell_runner.py`
-speaks the same shape.
+parent and **blocks the child until the parent replies**. Two things follow,
+and they are the whole reason this was tractable:
 
-Two things follow, and they are the whole reason this is tractable:
+1. **The parent sees `path` and `kwargs` for every dispatch.** Those are
+   exactly the inputs to the cache key `(tool, serialized_args, occurrence)` —
+   and `path` is the same string in-process memoisation records, so entries
+   mean the same thing on both sides of the process boundary.
+2. **The child is suspended at every dispatch.** A checkpoint that fires at
+   side effects needed no new mechanism — just a new thing the parent is
+   allowed to say in reply (`rpc_interrupt`, the one message type added).
 
-1. **The parent already sees `path` and `kwargs` for every dispatch.** Those are
-   exactly the inputs to the cache key `(tool, serialized_args, occurrence)`.
-   The cache needs no new information and no child cooperation.
-2. **The child is already suspended at every dispatch.** A checkpoint that only
-   needs to fire at side effects therefore needs no new mechanism — just a new
-   thing the parent is allowed to say in reply.
+So the work was not building a channel. It was widening a reply.
 
-So the work is not building a channel. It is widening a reply, and moving the
-existing parent-side session to sit across it.
+### How Phase 1 is wired
 
-### Two handlers, not one
+One checkpoint, one convergence point, three loops that translate:
 
-There are **two** implementations of `_handle_rpc_call`, and both need the
-change:
+- `dispatch_with_steering` (`steering.py`) is the parent-side checkpoint: it
+  honours pause, collects interjections, raises `ControlledInterruption` when
+  a pending correction targets the running block, replays memoised dispatches,
+  and memoises fresh ones.
+- `FunctionManager._handle_rpc_call` routes **every** RPC through that
+  checkpoint before resolving the path (`_dispatch_rpc_path`). The plan's
+  "two handlers, not one" risk — the pooled `_VenvConnection._handle_rpc_call`
+  looking wired while doing nothing — was resolved structurally: it now
+  delegates to `FunctionManager._handle_rpc_call` instead of duplicating it,
+  so the pooled path cannot drift.
+- The two venv execute loops (one-shot `execute_in_venv`, pooled
+  `_VenvConnection.execute`) catch `ControlledInterruption` at the rpc_call
+  site, reply `rpc_interrupt` so the blocked child unwinds, discard the
+  child's completion, and re-raise into `run_with_steering` — which splices
+  the patch and re-sends `execute` with the new source. A one-shot retry is a
+  fresh subprocess; a pooled retry reuses the connection. Both replay the
+  completed prefix from the parent's cache.
+- The child (`venv_runner.py`) raises its own standalone
+  `ControlledInterruption` at the blocked call site when the reply is an
+  `rpc_interrupt`. That is the entire child-side change; the runner script is
+  re-synced into venvs by `prepare_venv` on every call, so parent and child
+  protocol versions cannot drift apart.
+- The interrupt-targeting question ("is the child inside the patched
+  function?") cannot be answered from the parent, so the nearest sound
+  reading is used: fire when a patch names any function the shipped source
+  defines (`_targets_running_block`). Firing early costs one replay-backed
+  retry; not firing would drop the correction.
 
-- `FunctionManager._handle_rpc_call` — used by `execute_in_venv` and
-  `execute_shell_script`
-- `_VenvConnection._handle_rpc_call` — used by the pooled persistent-venv path
-  (`_VenvConnection.execute` → nested `handle_rpc_loop`)
-
-Missing the second would leave pooled venv sessions silently unsteerable, which
-is the same class of bug as binding the session to the wrong sandbox object was
-in-process: it looks wired and does nothing.
-
----
-
-## Phase 1 — parent-side cache and interrupt (worth doing alone)
-
-One change, no child changes, and it benefits venv, shell and remote at once
-because all three converge on the RPC handler.
-
-**Cache.** In `_handle_rpc_call`, derive the key from `(path, kwargs)` and the
-active `SteeringSession`. On a hit, return the memoised result without
-dispatching. On a miss, dispatch and memoise. Replay then works out-of-process
-with no child involvement.
-
-**Interrupt.** Add one message type:
-
-```
-{"type": "rpc_interrupt", "id": str, "reason": str}   # parent → child
-```
-
-The child raises `ControlledInterruption` at that call site instead of returning
-a result. Since the child is already blocked on the reply, this is the `_int`
-probe realised without instrumentation.
-
-**Pause.** The parent delays the reply. Nothing to build.
-
-**Retry.** The parent splices the patch and re-sends `execute` with the new
-source. The re-run's `rpc_call`s hit the parent cache and return memoised
-results without re-dispatching. This is *cleaner* than in-process, where the
-cache and the code live on the same side and the ownership has to be reasoned
-about; here the parent unambiguously owns it.
-
-### What Phase 1 gets you
-
-Correction at every side effect that goes through primitives, plus replay, on
-all three out-of-process paths. That is most of what matters, because the reason
-to steer is to stop a side effect and side effects are overwhelmingly dispatches.
-
-### What Phase 1 does not get you
-
-A loop in the child that does no primitive call is invisible to the parent. Two
-sub-cases, and they are not equally important:
-
-- **Pure computation** — nothing to correct. Not a real loss.
-- **A direct third-party call**, e.g. `requests.post` inside the venv. A real
-  side effect the parent never sees. In-process, statement and loop probes catch
-  this; here nothing does.
+Tests: `tests/function_manager/python/test_venv_steering.py` (boundary units,
+one-shot flow, pooled flow — including that a pooled connection outlives the
+session that steered it) and `tests/function_manager/shell/test_shell_steering.py`.
 
 ---
 
-## Phase 2 — instrumented child source (venv only, optional)
+## Phase 2 — instrumented child source (venv only, not started)
 
-Full parity, and the only part with a performance question.
+Full parity inside non-dispatching loops, and the only part with a performance
+question.
 
-The parent holds the source before it ships it, so the existing AST pass can run
-parent-side and the child receives already-instrumented code. `_cp`, `_int` and
-`_around_cp` become shims in the child that consult the parent.
+The parent holds the source before it ships it, so the existing AST pass can
+run parent-side and the child receives already-instrumented code. `_cp`,
+`_int` and `_around_cp` become shims in the child that consult the parent.
 
 **The cost is the problem.** In-process a checkpoint is ~10 µs (measured). A
 round trip over a pipe is 0.1–1 ms. A per-iteration checkpoint on a
@@ -169,8 +147,10 @@ reads **non-blockingly** at each checkpoint:
 - idle cost ≈ a non-blocking pipe read, on the order of microseconds
 - a pending correction is a byte on that channel; the child then raises
 
-This is what makes per-iteration probes affordable out-of-process, and it is the
-piece to design carefully rather than the AST work, which is already written.
+This is what makes per-iteration probes affordable out-of-process, and it is
+the piece to design carefully rather than the AST work, which is already
+written. Build it when a real workload needs correction inside a
+non-dispatching loop.
 
 ---
 
@@ -178,55 +158,46 @@ piece to design carefully rather than the AST work, which is already written.
 
 State these as boundaries rather than as work items:
 
-**Shell** has no AST and no Python, so statement-level probes are not possible
-by any design. It tops out at dispatch-boundary steering (Phase 1), which it
-gets for free.
+**Non-local surfaces do not share the transport.** This was the plan's
+load-bearing open question, and the answer is no: `surface != "local"` routes
+through `unify/actor/execution/targets`, whose `AgentServiceExecClient` POSTs
+the whole command to the desktop agent-service `/api/exec` and blocks for a
+single JSON response — python is shipped as a base64'd `python3 -c` one-liner.
+There is no primitives round-trip, no mid-run message of any kind, and so no
+dispatch boundary to steer at. Steering a remote surface means changing the
+agent-service protocol itself (a streaming or bidirectional exec endpoint),
+which is a separate piece of work, not a third integration point on this
+mechanism.
 
-**Non-local surfaces** are dispatch-boundary in practice regardless of design:
-at 10–100 ms per network hop, per-iteration checkpoints are not viable. Phase 1
-applies; Phase 2 does not.
+**Shell interrupts cannot fire.** Shell has no AST and no Python, so there is
+no function a patch can name: `_targets_running_block` finds nothing in shell
+source, and the patch author (`steering_patcher.LLMPatchAuthor`) already
+declines to author patches when the source defines no functions. Shell
+therefore gets dispatch memoisation and pause from the shared checkpoint, and
+nothing else. An interjection against a running shell script is recorded and
+reported, not acted on. Making shell stoppable would need its own decision
+path (e.g. "any interjection terminates the script"), which is a product
+question before it is a mechanism.
 
-**Synchronous blocking code** remains opaque, exactly as in-process. A blocking
-call holds the loop for its duration, and during that window a correction cannot
-arrive. Out-of-process this is arguably *better*, since the parent is a separate
-process and stays responsive — but the child still cannot observe anything until
-it yields.
+**Child-local state across a retry** (was open question 2). One-shot venv
+retries run in a fresh subprocess — a genuinely clean slate, stronger than
+in-process. Pooled venv retries re-send `execute` on the same connection, so
+the persistent namespace still holds residue from the abandoned attempt —
+exactly the property in-process stateful sessions have. Accepted, not fixed.
 
-**Retraction** is still impossible. Replay records that a side effect happened;
-it cannot undo one. A patch redirects work that has not happened yet. This is
-unchanged by anything in this plan and should not be presented as a gap it
-closes.
+**Where the session lives for a pooled venv** (was open question 3). Resolved
+by the same contextvar that fixed this in-process: `active_session()` is read
+per `execute` call, inside the connection lock, so the session follows the
+call and a long-lived `_VenvConnection` never holds one. There is a test
+pinning that a later call on the same connection runs unsteered.
 
----
+**Synchronous blocking code** remains opaque, exactly as in-process. A
+blocking call holds the child between dispatches, and during that window a
+correction cannot land. (One extra wrinkle out-of-process: the child's RPC
+wait has a 300 s timeout, so a pause held longer than that fails the blocked
+call rather than extending it.)
 
-## Open questions to resolve before starting
-
-1. **Does `surface != "local"` use this RPC shape at all?** `_execute_on_surface`
-   routes through `unify/actor/execution/targets` and `ExecutionSurface`, which
-   has not been traced. If it uses a different transport, Phase 1 needs a third
-   integration point rather than riding on `_handle_rpc_call`.
-2. **Child-local state across a retry.** For `stateful` venv sessions, attempt 2
-   runs in a namespace still holding residue from attempt 1. In-process has the
-   same property, so this is not new — but out-of-process it is worth deciding
-   explicitly whether the retry reuses the child or replaces it.
-3. **Where the session lives for a pooled venv.** In-process the session travels
-   by contextvar and whichever sandbox runs binds it. The pooled-venv equivalent
-   needs the same "follows the call, not the connection" property, or a
-   long-lived `_VenvConnection` will outlive the session that bound it.
-
----
-
-## Suggested order
-
-1. Trace open question 1, so the scope of Phase 1 is known.
-2. Phase 1 in `FunctionManager._handle_rpc_call`, with tests on the venv path.
-3. Phase 1 in `_VenvConnection._handle_rpc_call`, with a test that specifically
-   covers a *pooled* session, since that is the one that silently no-ops if
-   missed.
-4. Shell coverage — same parent change, so mostly a test exercise confirming a
-   shell script's primitive calls are cached and interruptible.
-5. Phase 2 only if a real workload needs correction inside a non-dispatching
-   loop. Design the control channel first; the AST pass already exists.
-
-Steps 1-4 are the feature. Step 5 is a response to evidence, not a
-commitment made in advance — see the framing at the top of this document.
+**Retraction** is still impossible. Replay records that a side effect
+happened; it cannot undo one. A patch redirects work that has not happened
+yet. This is unchanged by anything here and should not be presented as a gap
+this closes.

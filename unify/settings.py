@@ -78,6 +78,8 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
     # ─────────────────────────────────────────────────────────────────────────
+    # OpenAI — speech-to-text and realtime voice only. OpenAI chat models are
+    # reached as ``openai/<id>@openrouter``, so this cannot satisfy LLM access.
     OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
@@ -101,6 +103,10 @@ class ProductionSettings(BaseSettings):
     # Infrastructure URLs
     # ─────────────────────────────────────────────────────────────────────────
     ORCHESTRA_URL: str = "https://api.unify.ai/v0"
+    # Console origin used to build user-facing links (canvas and dashboard
+    # views). Per-environment deployments override this or every shared link
+    # points at production Console regardless of where the row lives.
+    CONSOLE_URL: str = "https://console.unify.ai"
     UNITY_COORDINATOR_EMAIL_ADDRESS: str = "twin@unify.ai"
     # Catch-all domain for multiplayer twin alias addresses, and the Workspace
     # mailbox that receives them. Alias addresses have no Workspace user of
@@ -314,7 +320,6 @@ class ProductionSettings(BaseSettings):
         if not self.UNITY_VALIDATE_LLM_PROVIDERS:
             return
         available = {
-            "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
             "OPENROUTER_API_KEY": self.OPENROUTER_API_KEY,
@@ -322,7 +327,7 @@ class ProductionSettings(BaseSettings):
         if not any(available.values()):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
-                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+                "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
                 "and/or DEEPSEEK_API_KEY.",
             )
 

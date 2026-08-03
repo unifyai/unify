@@ -220,7 +220,7 @@ class TestChatCompletions:
         resp = client.post(
             "/unillm/chat/completions",
             json={
-                "model": "gpt-4o@openai",
+                "model": "openai/gpt-4o@openrouter",
                 "messages": [{"role": "user", "content": "hi"}],
             },
         )
@@ -238,7 +238,7 @@ class TestChatCompletions:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-bad"},
@@ -272,7 +272,7 @@ class TestChatCompletions:
         fake_response.model_dump.return_value = {
             "id": "chatcmpl-1",
             "object": "chat.completion",
-            "model": "gpt-4o@openai",
+            "model": "openai/gpt-4o@openrouter",
             "choices": [
                 {"index": 0, "message": {"role": "assistant", "content": "ok"}},
             ],
@@ -293,7 +293,7 @@ class TestChatCompletions:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-test"},
@@ -305,7 +305,7 @@ class TestChatCompletions:
         kwargs = MockAsync.call_args.kwargs
         assert kwargs["api_key"] == "sk-test"
         # AsyncUnify was called as positional model + kwargs.
-        assert MockAsync.call_args.args[0] == "gpt-4o@openai"
+        assert MockAsync.call_args.args[0] == "openai/gpt-4o@openrouter"
 
     def test_stream_returns_sse_with_done_marker(
         self,
@@ -338,7 +338,7 @@ class TestChatCompletions:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": True,
                 },
@@ -377,7 +377,7 @@ class TestChatCompletions:
             client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 42,
                 },
@@ -500,7 +500,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-test"},
@@ -538,7 +538,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": True,
                 },
@@ -605,7 +605,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-caller"},
@@ -679,7 +679,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-test"},
@@ -731,7 +731,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-test"},
@@ -756,7 +756,10 @@ class TestSpendingEnforcement:
             os.environ["UNIFY_KEY"] = "sk-runtime"
             with patch("unify.spending_limits._check_user_limit", _boom):
                 return await check_spending_limits_callback(
-                    LimitCheckRequest(model="gpt-4o@openai", endpoint="chat"),
+                    LimitCheckRequest(
+                        model="openai/gpt-4o@openrouter",
+                        endpoint="chat",
+                    ),
                 )
 
         assert asyncio.run(_run()).allowed is True
@@ -805,7 +808,7 @@ class TestSpendingEnforcement:
             resp = client.post(
                 "/unillm/chat/completions",
                 json={
-                    "model": "gpt-4o@openai",
+                    "model": "openai/gpt-4o@openrouter",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
                 headers={"Authorization": "Bearer sk-test"},
@@ -850,7 +853,10 @@ class TestSpendingEnforcement:
             os.environ["UNIFY_KEY"] = "sk-runtime"
             with patch("unify.spending_limits._check_user_limit", _no_api_access):
                 return await check_spending_limits_callback(
-                    LimitCheckRequest(model="gpt-4o@openai", endpoint="chat"),
+                    LimitCheckRequest(
+                        model="openai/gpt-4o@openrouter",
+                        endpoint="chat",
+                    ),
                 )
 
         assert asyncio.run(_run()).allowed is True
