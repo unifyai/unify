@@ -124,6 +124,49 @@ _log = FastBrainLogger()
 # but both are just as multi-party.
 MULTI_PARTY_CHANNELS = ("google_meet", "teams_meet", "unify_meet")
 
+# The assistant's desktop, published into the meeting room for the Recall bot's
+# screenshare page to render. 1280x720 because that is both the page's fixed
+# viewport and Recall's output ceiling on every variant -- sending more pixels
+# than that just costs conversion time to have them scaled back down.
+_DESKTOP_SHARE_WIDTH = 1280
+_DESKTOP_SHARE_HEIGHT = 720
+
+# A live desktop capture costs ~500ms on the agent-service, so this is close to
+# the practical ceiling anyway. A shared desktop is read, not watched: legibility
+# matters and motion smoothness does not.
+_DESKTOP_SHARE_FPS = 2.0
+
+
+def _desktop_frame(jpeg_b64: str) -> "rtc.VideoFrame | None":
+    """One base64 JPEG desktop capture as a LiveKit frame, or None if unreadable.
+
+    Pure and blocking, so callers run it off the event loop -- decoding a
+    full-resolution screenshot on the loop that also carries the assistant's audio
+    would stutter the voice to save a thread.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    try:
+        raw = base64.b64decode(jpeg_b64)
+        with Image.open(io.BytesIO(raw)) as img:
+            resized = img.convert("RGBA").resize(
+                (_DESKTOP_SHARE_WIDTH, _DESKTOP_SHARE_HEIGHT),
+                Image.LANCZOS,
+            )
+            data = resized.tobytes()
+    except (ValueError, TypeError, OSError):
+        return None
+    return rtc.VideoFrame(
+        width=_DESKTOP_SHARE_WIDTH,
+        height=_DESKTOP_SHARE_HEIGHT,
+        type=rtc.VideoBufferType.RGBA,
+        data=data,
+    )
+
+
 # How often to re-read the screen a meeting participant is sharing. Recall sends
 # frames at 2fps and the relay stores one a second, so polling faster only costs
 # round trips; polling much slower would leave the frame behind the conversation
@@ -1420,6 +1463,12 @@ async def entrypoint(ctx: agents.JobContext):
     _meet_last_pushed_frame: str | None = None
     _meet_last_push_at: float = 0.0
     _meet_fetch_misses: int = 0
+    # Outbound: the assistant's own desktop, published for the bot's screenshare
+    # page to render. Only alive between an explicit start and stop, so a meeting
+    # where nobody asks to see the desktop publishes nothing.
+    _desktop_share_task: asyncio.Task | None = None
+    _desktop_share_source: rtc.VideoSource | None = None
+    _desktop_share_sid: str = ""
     _meet_display_name: str = ""
     _meet_last_speaker_id: str | None = None
     _meet_speech_windows = MeetSpeakerWindows()
@@ -2228,6 +2277,7 @@ async def entrypoint(ctx: agents.JobContext):
             await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
         if _meet_screenshare_task is not None:
             await utils.aio.cancel_and_wait(_meet_screenshare_task)
+        await _stop_desktop_share()
         await screen_capture.close()
         await webcam_capture.close()
         # Unify Meet rooms belong to the call session, never to one agent:
@@ -2559,6 +2609,79 @@ async def entrypoint(ctx: agents.JobContext):
             # a stale snapshot in the fast brain's visual context outlives the
             # share and gets described as if it were still up.
             _clear_visual_context(source=channel)
+
+    async def _desktop_share_loop() -> None:
+        """Publish the assistant's desktop into the room until cancelled.
+
+        The bot's screenshare surface can only render a webpage, so the desktop
+        travels as an ordinary LiveKit video track that the hosted page subscribes
+        to. Going via the room rather than letting the page reach the VM is what
+        keeps the desktop off the public internet.
+        """
+        interval = 1.0 / _DESKTOP_SHARE_FPS
+        while True:
+            started = time.monotonic()
+            entry = await capture_assistant_screenshot(
+                utterance="",
+                cached=False,
+                fb_logger=_log,
+                agent_service_url=_agent_service_url,
+                http_session=_screenshot_http_session,
+            )
+            if entry is not None and _desktop_share_source is not None:
+                frame = await asyncio.to_thread(_desktop_frame, entry.b64)
+                if frame is not None:
+                    _desktop_share_source.capture_frame(frame)
+            # Pace on elapsed time: a capture that took 500ms should not also wait
+            # a full interval on top, or the meeting sees half the frame rate the
+            # assistant thinks it is sending.
+            await asyncio.sleep(max(0.0, interval - (time.monotonic() - started)))
+
+    async def _start_desktop_share() -> bool:
+        """Publish the desktop track. Idempotent; True once a track is live."""
+        nonlocal _desktop_share_task, _desktop_share_source, _desktop_share_sid
+
+        if _desktop_share_task is not None:
+            return True
+        source = rtc.VideoSource(_DESKTOP_SHARE_WIDTH, _DESKTOP_SHARE_HEIGHT)
+        track = rtc.LocalVideoTrack.create_video_track("assistant-desktop", source)
+        publication = await ctx.room.local_participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_SCREENSHARE),
+        )
+        _desktop_share_source = source
+        _desktop_share_sid = publication.sid
+        _desktop_share_task = asyncio.create_task(_desktop_share_loop())
+        _log.screenshot("Desktop share: publishing to the meeting")
+        return True
+
+    async def _stop_desktop_share() -> None:
+        """Unpublish the desktop track and stop capturing. Idempotent."""
+        nonlocal _desktop_share_task, _desktop_share_source, _desktop_share_sid
+
+        if _desktop_share_task is not None:
+            await utils.aio.cancel_and_wait(_desktop_share_task)
+            _desktop_share_task = None
+        if _desktop_share_sid:
+            try:
+                await ctx.room.local_participant.unpublish_track(_desktop_share_sid)
+            except Exception as exc:  # noqa: BLE001 - teardown must reach its end
+                _log.screenshot(f"Desktop share: unpublish failed: {exc!r}")
+            _desktop_share_sid = ""
+        _desktop_share_source = None
+
+    def on_desktop_share(data: dict) -> None:
+        """Start or stop publishing the desktop, as the slow brain asks.
+
+        The tool runs in the CM, but only this process is in the LiveKit room, so
+        the decision arrives over IPC and the publishing happens here.
+        """
+        if bool(data.get("active")):
+            asyncio.create_task(_start_desktop_share())
+        else:
+            asyncio.create_task(_stop_desktop_share())
+
+    event_broker.register_callback("app:call:desktop_share", on_desktop_share)
 
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
