@@ -332,7 +332,8 @@ def test_code_act_prompt_includes_reasoning_helper_decision_guidance():
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in prompt
     assert "Use `list_llms()` to inspect" in prompt
     assert "Supported UniLLM endpoints currently registered" not in prompt
-    assert "gpt-4.1-nano@openai" in prompt
+    assert "openai/gpt-5.4-mini@openrouter" in prompt
+    assert "Reach OpenAI models through `@openrouter`" in prompt
     assert "Do not put benchmark browsing or" in prompt
 
 
@@ -353,7 +354,7 @@ def test_code_act_prompt_includes_reasoning_examples_and_antipatterns():
         "deterministic pre-filter, semantic reasoning only for the hard subset"
         in prompt
     )
-    assert 'model="gpt-4.1-nano@openai"' in prompt
+    assert 'model="openai/gpt-5.4-mini@openrouter"' in prompt
 
 
 @pytest.mark.timeout(30)

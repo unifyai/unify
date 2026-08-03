@@ -86,7 +86,7 @@ async def test_bound_injector_routes_manager_clar_to_per_call_queues():
             await call_down.put("acme/repo")
 
         answerer = asyncio.create_task(_answer())
-        with CodeActActor._sandbox_clarification_binding(
+        with CodeActActor._sandbox_call_binding(
             clarification_up_q=call_up,
             clarification_down_q=call_down,
         ):
@@ -108,7 +108,7 @@ def test_execute_code_and_execute_function_accept_clarification_kwargs():
     src = inspect.getsource(CodeActActor._build_tools)
     assert "_clarification_up_q: asyncio.Queue[str] | None = None" in src
     assert src.count("_clarification_up_q: asyncio.Queue[str] | None = None") >= 2
-    assert "with self._sandbox_clarification_binding(" in src
+    assert "with self._sandbox_call_binding(" in src
 
 
 # ---------------------------------------------------------------------------
