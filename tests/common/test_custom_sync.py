@@ -139,6 +139,30 @@ def test_adoption_wins_over_collision_and_insert():
     assert result.adopted == 1
 
 
+def test_derived_stale_forces_update_despite_matching_hash():
+    class _DerivedAdapter(_RecordingAdapter):
+        def derived_stale(self, key, live_row, fields):
+            return live_row.get("entrypoint") != fields.get("resolved_entrypoint")
+
+    adapter = _DerivedAdapter(
+        live=[
+            _row("dangling", "s", entrypoint=1),
+            _row("aligned", "s", entrypoint=2),
+        ],
+    )
+    result = reconcile_custom_rows(
+        source={
+            "dangling": _row("dangling", "s", resolved_entrypoint=29),
+            "aligned": _row("aligned", "s", resolved_entrypoint=2),
+        },
+        adapter=adapter,
+    )
+    assert ("update", "dangling") in adapter.calls
+    assert ("update", "aligned") not in adapter.calls
+    assert result.updated == 1
+    assert result.unchanged == 1
+
+
 def test_no_prune_keeps_removed_rows():
     adapter = _RecordingAdapter(live=[_row("stale", "x")])
     adapter.prune = False

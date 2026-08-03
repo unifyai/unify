@@ -287,3 +287,33 @@ async def test_sync_writes_tags_onto_the_row_and_clears_them_on_removal(
     scheduler.sync_custom_tasks(source_tasks=collect_custom_tasks(path=untagged_dir))
     rows = scheduler._filter_tasks(filter="custom_key == 'ops/daily-check'", limit=1)
     assert not rows[0].tags
+
+
+def test_task_adapter_derived_stale_detects_repointed_entrypoint():
+    """A stored entrypoint id must track the function it was resolved from.
+
+    The content hash covers ``entrypoint_function`` (the name), never the
+    resolved id, so a re-registered functions store leaves the row dangling
+    with a matching hash; ``derived_stale`` is what forces the re-point.
+    """
+    from types import SimpleNamespace
+
+    from unify.task_scheduler.task_scheduler import _TaskSyncAdapter
+
+    scheduler_stub = SimpleNamespace(_custom_task_sync_workers=lambda: 1)
+    adapter = _TaskSyncAdapter(
+        scheduler_stub,
+        function_name_to_id={"run_gtm_stargazer_enrich_tick": 29},
+    )
+    fields = {"entrypoint_function": "run_gtm_stargazer_enrich_tick"}
+
+    assert adapter.derived_stale("k", {"entrypoint": 1}, fields)
+    assert adapter.derived_stale("k", {"entrypoint": None}, fields)
+    assert not adapter.derived_stale("k", {"entrypoint": 29}, fields)
+    # Unresolvable names are the writer's warning to raise, not churn here.
+    assert not adapter.derived_stale(
+        "k",
+        {"entrypoint": 1},
+        {"entrypoint_function": "run_unknown"},
+    )
+    assert not adapter.derived_stale("k", {"entrypoint": 1}, {})
