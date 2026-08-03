@@ -218,14 +218,28 @@ def collect_custom_tasks(
 
 def compute_custom_tasks_hash(
     source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
+    *,
+    entrypoint_resolution: Optional[Dict[str, Optional[int]]] = None,
 ) -> str:
-    """Compute an aggregate hash of custom task entries."""
+    """Aggregate fingerprint of the custom task entries and their derived
+    entrypoint resolution.
+
+    Per-entry ``custom_hash`` covers authored source fields only, so it is
+    blind to the functions store being re-registered under new ids. Folding
+    the ``entrypoint_function`` → ``function_id`` resolution into the
+    aggregate makes a function renumbering invalidate the stored hash,
+    which forces the per-key pass whose ``derived_stale`` check re-points
+    dangling rows.
+    """
     tasks = source_tasks if source_tasks is not None else {}
     if not tasks:
         return ""
 
-    sorted_hashes = [tasks[key]["custom_hash"] for key in sorted(tasks.keys())]
-    combined = "|".join(sorted_hashes)
+    parts = [tasks[key]["custom_hash"] for key in sorted(tasks.keys())]
+    parts += [
+        f"{name}={fid}" for name, fid in sorted((entrypoint_resolution or {}).items())
+    ]
+    combined = "|".join(parts)
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
