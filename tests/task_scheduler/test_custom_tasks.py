@@ -317,3 +317,27 @@ def test_task_adapter_derived_stale_detects_repointed_entrypoint():
         {"entrypoint_function": "run_unknown"},
     )
     assert not adapter.derived_stale("k", {"entrypoint": 1}, {})
+
+
+def test_entrypoint_resolution_participates_in_the_sync_hash():
+    """A function renumbering must invalidate the stored aggregate hash,
+    or the reconcile short-circuits and dangling entrypoints never heal."""
+    tasks = {
+        "ops/daily-check": {
+            "custom_hash": "abc",
+            "entrypoint_function": "run_daily_check",
+        },
+    }
+    base = compute_custom_tasks_hash(
+        source_tasks=tasks,
+        entrypoint_resolution={"run_daily_check": 1},
+    )
+    renumbered = compute_custom_tasks_hash(
+        source_tasks=tasks,
+        entrypoint_resolution={"run_daily_check": 29},
+    )
+    assert base != renumbered
+    assert base == compute_custom_tasks_hash(
+        source_tasks=tasks,
+        entrypoint_resolution={"run_daily_check": 1},
+    )

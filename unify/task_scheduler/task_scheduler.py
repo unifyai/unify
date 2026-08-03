@@ -3437,15 +3437,21 @@ class TaskScheduler(BaseTaskScheduler):
                 source_tasks = source_tasks or {}
                 synced_key = (tasks_context, source_id)
 
+                name_to_id = function_name_to_id or {}
                 return run_custom_sync(
                     adapter=_TaskSyncAdapter(
                         self,
-                        function_name_to_id=function_name_to_id or {},
+                        function_name_to_id=name_to_id,
                         source_id=source_id,
                     ),
                     source=source_tasks,
                     expected_hash=compute_custom_tasks_hash(
                         source_tasks=source_tasks,
+                        entrypoint_resolution={
+                            name: name_to_id.get(name)
+                            for entry in source_tasks.values()
+                            if (name := entry.get("entrypoint_function"))
+                        },
                     ),
                     stored_hash=self._get_stored_custom_tasks_hash(source_id),
                     already_synced=synced_key in self._custom_tasks_synced_sources,
