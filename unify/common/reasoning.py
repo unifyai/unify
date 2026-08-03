@@ -100,12 +100,9 @@ def get_llm_model_selection_context() -> str:
         Pass model overrides as UniLLM endpoint strings, e.g.
         `model="openai/gpt-5.4-mini@openrouter"`.
 
-        Reach OpenAI models through `@openrouter`, never through `@openai`.
-        The two suffixes are different providers: `@openai` is a native OpenAI
-        endpoint, and that account is inactive, so those calls burn a minute of
-        retries against a billing error before failing. `list_llms()` reports
-        every endpoint the runtime knows about, including native `@openai`
-        ones — being listed is not the same as being routable.
+        Reach OpenAI models through `@openrouter`, as
+        `openai/<model-id>@openrouter`. There is no `@openai` provider; every
+        endpoint `list_llms()` reports is routable.
 
         For durable or recurring stored functions, choose `model=` deliberately.
         Do not silently inherit the default high-reasoning model for bounded,

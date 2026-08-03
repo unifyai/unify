@@ -282,7 +282,9 @@ class TestUnityToUnillmHierarchy:
             unity_ctx = unity_span.get_span_context()
 
             # Simulate what unillm.logger.llm_span does
-            with unillm_tracer.start_as_current_span("LLM gpt-4@openai") as llm_span:
+            with unillm_tracer.start_as_current_span(
+                "LLM openai/gpt-4o@openrouter",
+            ) as llm_span:
                 llm_ctx = llm_span.get_span_context()
 
                 # Same trace
@@ -364,7 +366,9 @@ class TestFullStackHierarchy:
 
         # Unity -> Unillm -> Unify
         with logger.unity_span("Actor.act") as unity_span:
-            with unillm_tracer.start_as_current_span("LLM gpt-4@openai") as llm_span:
+            with unillm_tracer.start_as_current_span(
+                "LLM openai/gpt-4o@openrouter",
+            ) as llm_span:
                 with unify_tracer.start_as_current_span("GET projects") as http_span:
                     pass
 

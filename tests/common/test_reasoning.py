@@ -141,7 +141,7 @@ def test_llm_query_prompt_context_includes_model_selection_guidance():
     assert "ARC Prize leaderboard: https://arcprize.org/leaderboard" in context
     assert "Use `list_llms()` to inspect" in context
     assert "Supported UniLLM endpoints currently registered" not in context
-    assert "gpt-5.5@openai, gpt-5.5" not in context
+    assert "openai/gpt-5.5@openrouter, gpt-5.5" not in context
     assert "Do not put benchmark browsing or" in context
     assert (
         "Pass screenshots, photos, or image paths through ``images=[...]``" in context
@@ -151,13 +151,19 @@ def test_llm_query_prompt_context_includes_model_selection_guidance():
 def test_list_llms_returns_registered_endpoint_strings():
     endpoints = reasoning.list_llms()
 
-    assert "gpt-4.1-nano@openai" in endpoints
-    assert "gpt-5.5@openai" in endpoints
+    assert "openai/gpt-5.5@openrouter" in endpoints
+    assert "claude-opus-5@anthropic" in endpoints
     assert all("@" in endpoint for endpoint in endpoints)
 
 
 def test_list_llms_filters_by_provider():
-    endpoints = reasoning.list_llms("openai")
+    endpoints = reasoning.list_llms("openrouter")
 
-    assert "gpt-5.5@openai" in endpoints
-    assert all(endpoint.endswith("@openai") for endpoint in endpoints)
+    assert "openai/gpt-5.5@openrouter" in endpoints
+    assert all(endpoint.endswith("@openrouter") for endpoint in endpoints)
+
+
+def test_list_llms_has_no_native_openai_provider():
+    """OpenAI models are reached through OpenRouter, so @openai is not listed."""
+    assert reasoning.list_llms("openai") == []
+    assert not any(endpoint.endswith("@openai") for endpoint in reasoning.list_llms())

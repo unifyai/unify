@@ -175,7 +175,7 @@ The `-e/--env KEY=VALUE` flag sets environment variables for all pytest sessions
 parallel_run --env UNILLM_CACHE=false tests/contact_manager/test_ask.py
 
 # Multiple overrides (flag can be repeated)
-parallel_run -e UNIFY_MODEL=gpt-5.2@openai -e UNIFY_DELETE_CONTEXT_ON_EXIT=true tests/contact_manager
+parallel_run -e UNIFY_MODEL=openai/gpt-5.2@openrouter -e UNIFY_DELETE_CONTEXT_ON_EXIT=true tests/contact_manager
 
 # Use isolated random projects (each session gets its own project)
 parallel_run --env UNIFY_TESTS_RAND_PROJ=true --env UNIFY_TESTS_DELETE_PROJ_ON_EXIT=true tests
@@ -193,7 +193,7 @@ Settings are organized in two classes with inheritance:
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `UNIFY_MODEL` | str | `gpt-5.2@openai` | LLM model to use |
+| `UNIFY_MODEL` | str | `openai/gpt-5.2@openrouter` | LLM model to use |
 | `UNILLM_CACHE` | bool/str | `true` | Enable/disable LLM response caching |
 | `LLM_IO_DEBUG` | bool | `true` | Log full LLM request/response payloads |
 | `UNITY_TERMINAL_LOG` | bool | `true` | Enable/disable terminal (console) logging |
