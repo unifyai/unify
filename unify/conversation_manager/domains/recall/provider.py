@@ -30,6 +30,7 @@ from unify.conversation_manager.domains.recall.client import (
     RecallBotState,
     meet_bridge_base_url,
 )
+from unify.session_details import SESSION_DETAILS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +41,12 @@ LOGGER = logging.getLogger(__name__)
 _BRIDGE_TOKEN_TTL = timedelta(hours=4)
 
 _BRIDGE_IDENTITY_PREFIX = "recall-bridge"
+
+# Distinct from the bridge's, and that is the whole point: LiveKit evicts a
+# duplicate identity, so a desktop page joining under the bridge's name would
+# kick the page carrying audio and leave the assistant silent for the rest of the
+# meeting. Never derive one of these prefixes from the other.
+_DESKTOP_IDENTITY_PREFIX = "recall-screenshare"
 
 # Recall's own sub_codes are stable strings, but they are not phrased for a
 # person. Map the ones a user can act on; anything else passes through so an
@@ -120,6 +127,12 @@ class RecallMeetProvider:
                     "unify_assistant_id": self._assistant_id,
                 },
                 capture_participant_video=self._capture_participant_video,
+                # Decided here because the variant is fixed for the bot's whole
+                # life: an assistant with a managed desktop may be asked to share
+                # it at any point, and there is no upgrading the bot at that
+                # moment. An assistant with no desktop can never share, so it pays
+                # nothing.
+                may_screenshare=SESSION_DETAILS.assistant.has_managed_desktop,
             )
         except RecallError as exc:
             LOGGER.error("[recall] %s join failed: %s", channel, exc)
@@ -175,12 +188,77 @@ class RecallMeetProvider:
             LOGGER.warning("[recall] chat send failed for %s: %s", session_id, exc)
             return False
 
+    async def present(
+        self,
+        *,
+        channel: str = "",
+        session_id: str,
+        room_name: str,
+    ) -> bool:
+        """Put the assistant's desktop on the bot's screenshare surface.
+
+        The desktop itself arrives over LiveKit: the pod publishes it into
+        ``room_name`` and the page this points the bot at subscribes to it. Recall
+        only ever learns a URL carrying a subscribe-only token, so the VM stays
+        unreachable from the internet.
+        """
+        _ = channel
+        try:
+            page_url = self._desktop_page_url(room_name)
+        except RuntimeError as exc:
+            LOGGER.error("[recall] could not mint a desktop token: %s", exc)
+            return False
+        try:
+            await self._client.start_screenshare(session_id, page_url)
+            return True
+        except RecallError as exc:
+            LOGGER.warning("[recall] present failed for %s: %s", session_id, exc)
+            return False
+
+    async def stop_present(self, *, channel: str = "", session_id: str) -> bool:
+        """Drop the screenshare surface, leaving the audio bridge alone."""
+        _ = channel
+        try:
+            await self._client.stop_screenshare(session_id)
+            return True
+        except RecallError as exc:
+            LOGGER.warning("[recall] stop-present failed for %s: %s", session_id, exc)
+            return False
+
+    def _desktop_page_url(self, room_name: str) -> str:
+        """Tokenised URL for the desktop page, scoped to one room.
+
+        Narrower than the bridge's grant in every direction that matters: it may
+        subscribe and nothing else. A page that could publish would be able to put
+        audio or video into the call, and this one exists only to display.
+        """
+
+        server_url, api_key, api_secret = _livekit_credentials()
+        base = meet_bridge_base_url()
+        if not base:
+            raise RuntimeError("MEET_BRIDGE_PAGE_URL must be set")
+
+        token = (
+            AccessToken(api_key, api_secret)
+            .with_identity(f"{_DESKTOP_IDENTITY_PREFIX}-{room_name}")
+            .with_name("Unify desktop")
+            .with_grants(
+                VideoGrants(
+                    room_join=True,
+                    room=room_name,
+                    can_publish=False,
+                    can_subscribe=True,
+                    can_publish_data=False,
+                ),
+            )
+            .with_ttl(_BRIDGE_TOKEN_TTL)
+            .to_jwt()
+        )
+        query = urlencode({"url": server_url, "token": token})
+        return f"{base}/desktop?{query}"
+
     def _bridge_url(self, room_name: str, display_name: str) -> str:
-        server_url = (os.environ.get("LIVEKIT_URL") or "").strip()
-        api_key = (os.environ.get("LIVEKIT_API_KEY") or "").strip()
-        api_secret = (os.environ.get("LIVEKIT_API_SECRET") or "").strip()
-        if not server_url or not api_key or not api_secret:
-            raise RuntimeError("LIVEKIT_URL / _API_KEY / _API_SECRET must all be set")
+        server_url, api_key, api_secret = _livekit_credentials()
 
         token = (
             AccessToken(api_key, api_secret)
@@ -223,6 +301,17 @@ class RecallMeetProvider:
         query = urlencode({"room": room_name, "token": secret})
         separator = "&" if "?" in self._relay_url else "?"
         return f"{self._relay_url}{separator}{query}"
+
+
+def _livekit_credentials() -> tuple[str, str, str]:
+    """Server URL and signing key pair, or a hard failure naming what is missing."""
+
+    server_url = (os.environ.get("LIVEKIT_URL") or "").strip()
+    api_key = (os.environ.get("LIVEKIT_API_KEY") or "").strip()
+    api_secret = (os.environ.get("LIVEKIT_API_SECRET") or "").strip()
+    if not server_url or not api_key or not api_secret:
+        raise RuntimeError("LIVEKIT_URL / _API_KEY / _API_SECRET must all be set")
+    return server_url, api_key, api_secret
 
 
 def _participant_video_enabled() -> bool:

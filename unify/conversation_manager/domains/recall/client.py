@@ -202,6 +202,7 @@ class RecallClient:
         metadata: Mapping[str, Any] | None = None,
         as_screenshare: bool = False,
         capture_participant_video: bool = False,
+        may_screenshare: bool = False,
     ) -> RecallBotState:
         """Dispatch a bot to one meeting and return its initial state.
 
@@ -209,6 +210,11 @@ class RecallClient:
         screenshare when ``as_screenshare``) and supplies both directions of
         audio. It must already carry the LiveKit room token: the bot loads it
         verbatim and cannot be handed credentials any other way.
+
+        ``may_screenshare`` says this call *might* later put a second page on the
+        screenshare surface. It only affects the variant, and it has to be decided
+        here because the variant is fixed for the bot's whole life -- there is no
+        upgrading it at the moment somebody asks to share.
         """
 
         surface = "screenshare" if as_screenshare else "camera"
@@ -249,10 +255,20 @@ class RecallClient:
             # subscribing the event without declaring the artifact yields
             # nothing.
             payload["recording_config"]["video_separate_png"] = {}
-            # Recall's prose says separate participant video requires the
-            # four-core variant while their own PNG example omits it. Paying the
-            # surcharge (+$0.10/hr on plan) is the cheaper of the two mistakes:
-            # the other one is a meeting where the assistant is silently blind.
+        if capture_participant_video or may_screenshare:
+            # CPU headroom, wanted for either of two independent reasons, and the
+            # variant cannot be changed later so both are decided here.
+            #
+            # Participant video: Recall's prose says separate per-participant
+            # video requires the four-core variant while their own PNG example
+            # omits it. Paying the surcharge (+$0.10/hr on plan) is the cheaper of
+            # the two mistakes; the other is a meeting where the assistant is
+            # silently blind.
+            #
+            # Screensharing: a second rendered page competes with the bridge for
+            # the default variant's 250 millicores, which Recall names as the
+            # cause of choppy output. Kept separate from the flag above so turning
+            # participant video off does not quietly degrade sharing too.
             payload["variant"] = {
                 "google_meet": VARIANT_WEB_4_CORE,
                 "microsoft_teams": VARIANT_WEB_4_CORE,
@@ -321,6 +337,45 @@ class RecallClient:
         if to:
             payload["to"] = to
         await self._request("POST", f"/bot/{bot_id}/send_chat_message", json=payload)
+
+    async def start_screenshare(self, bot_id: str, page_url: str) -> None:
+        """Put ``page_url`` on the bot's screenshare surface, mid-call.
+
+        Sends the screenshare surface **only**. The camera is deliberately absent:
+        it is the page bridging audio, and this endpoint's merge-vs-replace
+        behaviour is undocumented, so naming the camera at all risks reloading or
+        replacing the page that carries the assistant's voice. Recall states the
+        camera cannot be turned off while output media is on, so there is nothing
+        to preserve by re-sending it either.
+
+        The previous implementation of this always re-sent the camera URL, and
+        losing audio mid-meeting is the failure that got it withdrawn.
+        """
+
+        await self._request(
+            "POST",
+            f"/bot/{bot_id}/output_media/",
+            json={
+                "screenshare": {
+                    "kind": "webpage",
+                    "config": {"url": page_url},
+                },
+            },
+        )
+
+    async def stop_screenshare(self, bot_id: str) -> None:
+        """Drop the screenshare surface, leaving the camera running.
+
+        ``DELETE`` with the surface named is the documented stop. Clearing it by
+        re-POSTing a camera-only body -- what the withdrawn implementation did --
+        is not, and depends on the same undocumented merge behaviour.
+        """
+
+        await self._request(
+            "DELETE",
+            f"/bot/{bot_id}/output_media/",
+            json={"screenshare": True},
+        )
 
     async def _request(
         self,

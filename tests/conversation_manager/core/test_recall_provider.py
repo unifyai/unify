@@ -325,3 +325,112 @@ async def test_state_returns_none_on_api_failure() -> None:
     provider = _provider()
     provider._client.get_bot = AsyncMock(side_effect=RecallError("nope"))
     assert await provider.state(channel="google_meet", session_id="bot_1") is None
+
+
+# ---------------------------------------------------------------------------
+# Outbound screenshare (the assistant's own desktop)
+# ---------------------------------------------------------------------------
+
+
+def _desktop_token_claims(provider) -> dict:
+    """Decode the LiveKit grant handed to the desktop page."""
+    page_url = provider._client.start_screenshare.call_args.args[1]
+    query = parse_qs(urlparse(page_url).query)
+    return jwt.decode(
+        query["token"][0],
+        LIVEKIT_ENV["LIVEKIT_API_SECRET"],
+        algorithms=["HS256"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_desktop_page_never_shares_the_bridge_identity() -> None:
+    """LiveKit evicts a duplicate identity, so this is not a cosmetic difference.
+
+    A desktop page joining under the bridge's name would kick the page carrying
+    audio out of the room and leave the assistant silent for the rest of the
+    meeting -- the failure that got the first screenshare implementation
+    withdrawn.
+    """
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock()
+    env = dict(LIVEKIT_ENV)
+    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
+    with patch.dict("os.environ", env, clear=False):
+        await provider.join(
+            channel="google_meet",
+            meeting_url="https://meet.google.com/abc",
+            display_name="Unify",
+            room_name="unity_25_gmeet",
+        )
+        assert await provider.present(
+            channel="google_meet",
+            session_id="bot_1",
+            room_name="unity_25_gmeet",
+        )
+
+    bridge_url = provider._client.create_bot.call_args.kwargs["bridge_page_url"]
+    bridge_identity = jwt.decode(
+        parse_qs(urlparse(bridge_url).query)["token"][0],
+        LIVEKIT_ENV["LIVEKIT_API_SECRET"],
+        algorithms=["HS256"],
+    )["sub"]
+
+    assert _desktop_token_claims(provider)["sub"] != bridge_identity
+
+
+@pytest.mark.asyncio
+async def test_the_desktop_page_can_only_watch() -> None:
+    """It exists to display. Publish rights would let it put media in the call."""
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock()
+    env = dict(LIVEKIT_ENV)
+    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
+    with patch.dict("os.environ", env, clear=False):
+        assert await provider.present(
+            channel="google_meet",
+            session_id="bot_1",
+            room_name="unity_25_gmeet",
+        )
+
+    grants = _desktop_token_claims(provider)["video"]
+    assert grants["room"] == "unity_25_gmeet"
+    assert grants["roomJoin"] is True
+    assert grants.get("canSubscribe") is True
+    assert grants.get("canPublish") in (False, None)
+    assert grants.get("canPublishData") in (False, None)
+    assert grants.get("roomAdmin") in (False, None)
+
+
+@pytest.mark.asyncio
+async def test_present_reports_failure_rather_than_raising() -> None:
+    """The assistant must be able to say it could not share.
+
+    Claiming a screen is up when none is buys a participant hunting for it.
+    """
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock(side_effect=RecallError("nope"))
+    env = dict(LIVEKIT_ENV)
+    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
+    with patch.dict("os.environ", env, clear=False):
+        assert (
+            await provider.present(
+                channel="google_meet",
+                session_id="bot_1",
+                room_name="unity_25_gmeet",
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_stop_present_delegates_and_survives_a_gone_bot() -> None:
+    provider = _provider()
+    provider._client.stop_screenshare = AsyncMock()
+    assert await provider.stop_present(channel="google_meet", session_id="bot_1")
+    assert provider._client.stop_screenshare.call_args.args[0] == "bot_1"
+
+    provider._client.stop_screenshare = AsyncMock(side_effect=RecallError("gone"))
+    assert (
+        await provider.stop_present(channel="google_meet", session_id="bot_1") is False
+    )
