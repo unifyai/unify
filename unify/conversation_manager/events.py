@@ -2287,6 +2287,40 @@ class UserScreenShareStopped(Event):
 
 
 @dataclass
+class MeetScreenShareStarted(Event):
+    """Someone in a browser meeting started sharing their screen.
+
+    Distinct from ``UserScreenShareStarted``, which is the Console surface: that
+    one also gates the desktop fast path and web-session listing, which have no
+    business turning on because a stranger in a Google Meet shared a slide. This
+    one says only that a shared screen is now reaching the assistant.
+
+    Deliberately carries no sharer name: attribution rides the frame's own label,
+    which is where the model needs it, and at the moment this fires the first
+    frame has not arrived yet -- so any name here would be blank or the previous
+    presenter's.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:meet_screen_share_started"
+
+    reason: str = ""
+
+
+@dataclass
+class MeetScreenShareStopped(Event):
+    """Nobody in the browser meeting is sharing a screen any more.
+
+    Without this the assistant keeps describing the last frame it saw: the state
+    block that says a share is live is otherwise driven by the meeting being in
+    progress, which stays true until hangup.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:meet_screen_share_stopped"
+
+    reason: str = ""
+
+
+@dataclass
 class UserWebcamStarted(Event):
     """User enabled their webcam during a Unify Meet session.
 

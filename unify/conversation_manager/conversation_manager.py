@@ -430,6 +430,11 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # meet interaction state (screen share / webcam / remote control)
         self.assistant_screen_share_active: bool = False
         self.user_screen_share_active: bool = False
+        # Someone in a browser meeting is sharing a screen with us. Kept apart
+        # from ``user_screen_share_active`` because that one also gates the
+        # desktop fast path and web-session listing, which should not switch on
+        # because a stranger in a Google Meet put up a slide.
+        self.meet_screen_share_active: bool = False
         self.user_webcam_active: bool = False
         self.user_remote_control_active: bool = False
         # Flag names above that a frontend has reported on. A frontend is
@@ -911,6 +916,23 @@ class ConversationManager(metaclass=SingletonABCMeta):
         peek) are preserved for the next turn.
         """
         del self._screenshot_buffer[:count]
+
+    def drop_unpaired_screenshots(self, source: str) -> int:
+        """Forget buffered frames from *source* that no utterance depends on.
+
+        Called when a visual source goes away. An unpaired frame is "what this
+        source shows now", so once the source is gone it shows nothing and holding
+        the last one lets the next turn describe a screen that has been taken
+        down. Frames paired with an utterance are kept: those are evidence for a
+        specific thing somebody said, and remain true after the screen goes.
+        """
+        before = len(self._screenshot_buffer)
+        self._screenshot_buffer = [
+            entry
+            for entry in self._screenshot_buffer
+            if entry.source != source or entry.utterance
+        ]
+        return before - len(self._screenshot_buffer)
 
     async def _register_screenshots_background(
         self,
@@ -2210,6 +2232,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
+                meet_screen_share_active=self.meet_screen_share_active,
                 active_web_sessions=web_sessions,
                 managers_initialized=self.initialized,
                 vm_ready=self.vm_ready,
@@ -3843,6 +3866,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
+                meet_screen_share_active=self.meet_screen_share_active,
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,
