@@ -99,6 +99,29 @@ WAIT_POLL_WINDOW_SECONDS = 600.0
 WAIT_POLL_FREE_BUDGET = 5
 WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS = 60
 WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS = 600
+
+# Meet-interaction surfaces, split by whose lifetime owns them. Every surface in
+# ``_MEET_STATE_FLAGS`` (the event-handler registry that applies them) belongs to
+# exactly one of the two groups below, which a test checks against that registry.
+#
+# Call-scoped surfaces exist only for the duration of one call, so a call
+# boundary closes them. Each maps to the screenshot sources it feeds, because
+# closing a surface and keeping its frames leaves the two disagreeing: the flag
+# says nobody is sharing while the buffer still offers the screen as current.
+CALL_SCOPED_MEET_SURFACES: dict[str, tuple[str, ...]] = {
+    "user_screen_share_active": ("user",),
+    "user_webcam_active": ("webcam",),
+    "meet_screen_share_active": ("google_meet", "teams_meet"),
+}
+# The assistant's own desktop is not call-scoped: the Console's Desktop tab
+# opens it with no call in sight and reports its own close on unmount. Clearing
+# these at a call boundary would tell the assistant nobody is watching while
+# that pane is still open, and would hand back control the user still holds.
+DESKTOP_SCOPED_MEET_SURFACES = (
+    "assistant_screen_share_active",
+    "user_remote_control_active",
+)
+
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
         "act",
@@ -427,7 +450,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             None  # SnapshotState with element tracking for incremental diff computation
         )
 
-        # meet interaction state (screen share / webcam / remote control)
+        # meet interaction state (screen share / webcam / remote control).
+        # Each flag below is classified as call- or desktop-scoped by the
+        # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
+        # closes.
         self.assistant_screen_share_active: bool = False
         self.user_screen_share_active: bool = False
         # Someone in a browser meeting is sharing a screen with us. Kept apart
@@ -749,6 +775,38 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ``act(persist=True)`` session when one isn't already running.
         """
         return self.assistant_screen_share_active
+
+    def reset_meet_surfaces(self) -> None:
+        """Close the call-scoped meet surfaces at a call boundary.
+
+        These flags describe surfaces shared during one call, but they live on
+        the CM, which outlives every call in the pod. Left alone they leak
+        forward: a share still marked active after hangup, or a webcam whose
+        "stopped" event never arrived because the Console unmounted first.
+
+        The frontend-ownership entries go with them, and that is the expensive
+        half. Ownership records which surfaces a frontend has spoken for, so
+        that track-inferred events stop overriding it — right within a call,
+        wrong across them. A 1:1 Console call claims both user surfaces; an org
+        call has no frontend reporting on either, so a stale claim leaves the
+        assistant capturing frames from a share it never registers as started.
+
+        Each surface's unpaired frames go too, for the reason
+        ``MeetScreenShareStopped`` already drops its own: an unpaired frame means
+        "what this source shows now", so once the source is gone it shows
+        nothing. Frames paired with an utterance stay — those are evidence for
+        something somebody said, and remain true after the screen goes.
+
+        Only ``CALL_SCOPED_MEET_SURFACES`` is touched — see
+        ``DESKTOP_SCOPED_MEET_SURFACES`` for why the assistant's own desktop
+        must survive a call boundary.
+        """
+
+        for surface, screenshot_sources in CALL_SCOPED_MEET_SURFACES.items():
+            setattr(self, surface, False)
+            self._frontend_reported_meet_surfaces.discard(surface)
+            for source in screenshot_sources:
+                self.drop_unpaired_screenshots(source)
 
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
