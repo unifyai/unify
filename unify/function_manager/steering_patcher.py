@@ -175,12 +175,7 @@ class LLMPatchAuthor:
             defined=defined,
         )
         client = self._client_factory()
-        raw = await client.generate(
-            [
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-        )
+        raw = await client.generate(user_message=prompt, system_message=_SYSTEM)
         return _parse_decision(str(raw), defined=defined)
 
 
