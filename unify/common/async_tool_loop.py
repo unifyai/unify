@@ -992,6 +992,7 @@ def start_async_tool_loop(
     max_consecutive_failures: int = 3,
     prune_tool_duplicates=True,
     interrupt_llm_with_interjections: bool = True,
+    interrupt_llm_on_tool_completion: bool = True,
     propagate_chat_context: ChatContextPropagation = ChatContextPropagation.LLM_DECIDES,
     parent_chat_context: Optional[list[dict]] = None,
     caller_description: Optional[str] = None,
@@ -1055,6 +1056,20 @@ def start_async_tool_loop(
         If ``True``, raises ``asyncio.TimeoutError`` or ``RuntimeError``
         when the timeout or max_steps limit is exceeded. If ``False``,
         the loop terminates gracefully with a summary message.
+
+    interrupt_llm_on_tool_completion : bool, default True
+        Whether a background tool finishing mid-reasoning cancels the in-flight
+        LLM step so the next one starts with that result. Keeping this ``True``
+        is what guarantees the model never reasons on stale context.
+
+        Set it ``False`` only for loops that fan out to many short tools whose
+        completions are staggered: there, each completion kills a reasoning step
+        the provider has already billed, so a batch of N tools discards up to
+        N-1 paid steps. With it ``False`` the step is allowed to finish and be
+        used, and the tool result reaches the model on the following turn
+        instead. That trades a turn of freshness for the cost of the step, which
+        is only worth it where nobody is waiting on the latency —
+        ``WebSearcher.ask`` is the motivating case.
 
     persist : bool, default False
         If ``True``, the loop does not terminate when the LLM produces content
@@ -1139,6 +1154,7 @@ def start_async_tool_loop(
                 max_consecutive_failures=max_consecutive_failures,
                 prune_tool_duplicates=prune_tool_duplicates,
                 interrupt_llm_with_interjections=interrupt_llm_with_interjections,
+                interrupt_llm_on_tool_completion=interrupt_llm_on_tool_completion,
                 propagate_chat_context=propagate_chat_context,
                 parent_chat_context=parent_chat_context,
                 caller_description=caller_description,
@@ -1222,6 +1238,7 @@ def start_async_tool_loop(
         "max_consecutive_failures": max_consecutive_failures,
         "prune_tool_duplicates": prune_tool_duplicates,
         "interrupt_llm_with_interjections": interrupt_llm_with_interjections,
+        "interrupt_llm_on_tool_completion": interrupt_llm_on_tool_completion,
         "propagate_chat_context": propagate_chat_context,
         "parent_chat_context": parent_chat_context,
         "caller_description": caller_description,
