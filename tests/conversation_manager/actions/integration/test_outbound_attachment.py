@@ -165,7 +165,7 @@ async def test_generate_image_and_send_as_attachment(initialized_cm_codeact):
     b64 = base64.b64encode(image_bytes).decode()
     data_url = f"data:image/png;base64,{b64}"
 
-    client = new_llm_client("gpt-4o-mini@openai")
+    client = new_llm_client("openai/gpt-4o-mini@openrouter")
     judge_text = await client.generate(
         messages=[
             {

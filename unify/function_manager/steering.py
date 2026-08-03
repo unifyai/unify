@@ -29,6 +29,13 @@ call begins and discarded when it returns. Nothing survives into the next call,
 which is what keeps the positional cache key sound: the surrounding code cannot
 have changed underneath it, because the block is still the one that is running.
 
+Code that runs in another process — a venv subprocess, a shell script — is
+steered without instrumentation, because its JSON-RPC protocol already blocks
+the child at every primitive dispatch until the parent replies. The parent
+treats each reply as a checkpoint (:func:`dispatch_with_steering`) and re-sends
+patched source on retry; only dispatches are visible, so a loop that makes no
+primitive call cannot be paused or corrected out-of-process.
+
 What this deliberately does not do
 ----------------------------------
 Replay records that a side effect happened; it cannot undo one. A patch
@@ -827,6 +834,76 @@ class MemoisedDispatch:
             self._session,
             name,
         )
+
+
+# ---------------------------------------------------------------------------
+# Out-of-process dispatch
+# ---------------------------------------------------------------------------
+def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
+    """Whether a correction is aimed at the block running out-of-process.
+
+    In-process, ``_int(name)`` fires only inside the function a patch names.
+    The parent cannot see which function a child process is inside, so the
+    nearest sound reading is "the patch names a function this block defines":
+    firing early costs one replay-backed retry, whereas not firing would let
+    the remaining dispatches run under a correction that asked them not to.
+
+    Source that is not Python — a shell script — defines nothing a patch can
+    name, so nothing fires; the patch author likewise refuses to author
+    patches for it. Shell tops out at pause and replay.
+    """
+    if not request.patches:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return any(patch.function_name in defined for patch in request.patches)
+
+
+async def dispatch_with_steering(
+    session: Optional[SteeringSession],
+    tool: str,
+    kwargs: dict,
+    dispatch: typing.Callable[[], typing.Awaitable[Any]],
+) -> Any:
+    """One out-of-process dispatch, steered from the parent side.
+
+    A child process making a ``primitives.*`` call is blocked until the
+    parent replies, which makes the reply the checkpoint: pause holds here,
+    a pending correction interrupts here, and a dispatch the previous attempt
+    already made replays from the cache instead of running again. The child
+    needs no instrumentation for any of this — the suspension is a property
+    of the RPC protocol itself.
+
+    ``tool`` is the RPC path (``contacts.ask``), which is the same string the
+    in-process :class:`MemoisedDispatch` records, so cache entries mean the
+    same thing whichever side of the process boundary made them.
+
+    Raises :class:`ControlledInterruption` when a pending correction targets
+    the running block. The caller owns translating that into an
+    ``rpc_interrupt`` reply so the child unwinds, and re-raising it into the
+    retry loop; the request itself stays pending, because consuming it is
+    :func:`run_with_steering`'s job.
+    """
+    if session is None:
+        return await dispatch()
+    await session.cp(f"RPC: {tool}")
+    request = session.interruption
+    if request is not None and _targets_running_block(request, session.source):
+        raise ControlledInterruption(request.reason or "steered")
+    key = make_cache_key(session, tool, (), kwargs)
+    hit = session.cache.get(key)
+    if hit is not None:
+        return hit["result"]
+    result = await dispatch()
+    session.cache.put(key, result, tool=tool)
+    return result
 
 
 # ---------------------------------------------------------------------------

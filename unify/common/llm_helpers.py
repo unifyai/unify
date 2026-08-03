@@ -1,4 +1,6 @@
 from __future__ import annotations
+import base64
+import binascii
 import json
 import asyncio
 import inspect
@@ -37,10 +39,33 @@ DEFAULT_TOOL_SCHEMA_STRICT = False
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Recursively collect *every* base-64 image that lives under "image" key
+def _is_b64_image(value: str) -> bool:
+    """True when *value* is base64 whose decoded head carries a PNG or JPEG magic.
+
+    Payloads use "image" keys for plenty of non-image strings (asset URNs,
+    URLs, schema fragments); promoting those into image_url content blocks
+    ships garbage that providers reject as invalid base64. Magic bytes are
+    the only reliable discriminator, so anything undecodable or unrecognized
+    stays in the textual payload instead.
+    """
+    head = value[:44]
+    if len(head) < 8:
+        return False
+    try:
+        raw = base64.b64decode(head, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return raw[:2] == b"\xff\xd8" or raw[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# Recursively collect *every* base-64 image that lives under an "image" key
 def _collect_images(obj, acc: list[str]) -> None:
     if isinstance(obj, dict):
-        if "image" in obj and isinstance(obj["image"], str):
+        if (
+            "image" in obj
+            and isinstance(obj["image"], str)
+            and _is_b64_image(obj["image"])
+        ):
             acc.append(obj["image"])
         for v in obj.values():
             _collect_images(v, acc)
@@ -75,8 +100,14 @@ def _strip_image_keys(obj):
                 obj_copy["content"] = new_content
                 return obj_copy
 
-        # Standard recursive dictionary copy
-        return {k: _strip_image_keys(v) for k, v in obj.items() if k != "image"}
+        # Standard recursive dictionary copy; only actual base64 images are
+        # stripped — non-image "image" values stay in the textual view since
+        # _collect_images never promotes them to blocks.
+        return {
+            k: _strip_image_keys(v)
+            for k, v in obj.items()
+            if not (k == "image" and isinstance(v, str) and _is_b64_image(v))
+        }
     elif isinstance(obj, list):
         return [_strip_image_keys(v) for v in obj]
     else:

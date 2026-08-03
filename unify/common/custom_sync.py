@@ -236,6 +236,21 @@ class CustomSyncAdapter:
         next reconcile retries."""
         return True
 
+    def derived_stale(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """Return True when a field the writer derives from another store
+        (e.g. a function name resolved to a numeric id) no longer matches
+        its referent, forcing an update despite an unchanged content hash.
+
+        The content hash fingerprints the authored source only, so it is
+        blind to the referenced store being rewritten underneath the row.
+        """
+        return False
+
     def find_adoptable(
         self,
         key: str,
@@ -298,8 +313,14 @@ def _upsert_one(
     if key in live:
         live_row = live[key]
         if live_row.get("custom_hash") == fields.get("custom_hash"):
-            logger.debug("Custom %s unchanged: %s", adapter.kind, key)
-            return "unchanged"
+            if not adapter.derived_stale(key, live_row, fields):
+                logger.debug("Custom %s unchanged: %s", adapter.kind, key)
+                return "unchanged"
+            logger.info(
+                "Custom %s source unchanged but derived fields stale; " "updating: %s",
+                adapter.kind,
+                key,
+            )
         if not adapter.should_update(key, live_row, fields):
             logger.warning(
                 "Skipping update for custom %s key=%s this pass",

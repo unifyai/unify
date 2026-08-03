@@ -603,7 +603,7 @@ Each `.jsonl` file contains one JSON object per line, representing a span:
 
 ```json
 {"service": "unity", "trace_id": "099b207f...", "span_id": "a1b2c3d4", "parent_span_id": null, "name": "ContactManager.ask", "start_time": "2026-01-01T14:30:22.123Z", "end_time": "2026-01-01T14:30:25.456Z", "duration_ms": 3333, "attributes": {...}}
-{"service": "unillm", "trace_id": "099b207f...", "span_id": "e5f6g7h8", "parent_span_id": "a1b2c3d4", "name": "LLM gpt-5.2@openai", "start_time": "...", ...}
+{"service": "unillm", "trace_id": "099b207f...", "span_id": "e5f6g7h8", "parent_span_id": "a1b2c3d4", "name": "LLM openai/gpt-5.2@openrouter", "start_time": "...", ...}
 {"service": "unify", "trace_id": "099b207f...", "span_id": "i9j0k1l2", "parent_span_id": "e5f6g7h8", "name": "POST /v0/chat/completions", "start_time": "...", ...}
 {"service": "orchestra", "trace_id": "099b207f...", "span_id": "m3n4o5p6", "parent_span_id": "i9j0k1l2", "name": "POST /v0/chat/completions", "start_time": "...", ...}
 ```

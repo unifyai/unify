@@ -10,10 +10,10 @@ Run tests across all combinations of settings values. This is useful for:
 
 ```bash
 # Grid search across models
-grid_search.sh --env UNIFY_MODEL="gpt-4o@openai|claude-sonnet-4-20250514@anthropic" tests/contact_manager/
+grid_search.sh --env UNIFY_MODEL="openai/gpt-4o@openrouter|claude-sonnet-4-20250514@anthropic" tests/contact_manager/
 
 # Grid search across models AND cache settings (2×2 = 4 combinations)
-grid_search.sh --env UNIFY_MODEL="gpt-4o@openai|claude-sonnet-4-20250514@anthropic" --env UNILLM_CACHE="true|false" tests/
+grid_search.sh --env UNIFY_MODEL="openai/gpt-4o@openrouter|claude-sonnet-4-20250514@anthropic" --env UNILLM_CACHE="true|false" tests/
 ```
 
 ---
@@ -102,7 +102,7 @@ Generates 2 runs:
 
 ```bash
 grid_search.sh \
-  --env UNIFY_MODEL="gpt-4o@openai|claude-sonnet-4-20250514@anthropic|gemini-2.5-pro@google" \
+  --env UNIFY_MODEL="openai/gpt-4o@openrouter|claude-sonnet-4-20250514@anthropic|google/gemini-2.5-pro@openrouter" \
   --env UNILLM_CACHE="false" \
   --eval-only \
   tests/contact_manager/
@@ -125,7 +125,7 @@ This generates 4 runs (2×2 grid) testing all combinations of these two feature 
 
 ```bash
 grid_search.sh -n \
-  --env UNIFY_MODEL="gpt-4o@openai|claude-sonnet-4-20250514@anthropic" \
+  --env UNIFY_MODEL="openai/gpt-4o@openrouter|claude-sonnet-4-20250514@anthropic" \
   --env UNILLM_CACHE="true|false" \
   tests/
 ```
@@ -136,21 +136,21 @@ Output:
 Grid Search Configuration
 =========================
 Grid variables:
-  UNIFY_MODEL: gpt-4o@openai | claude-sonnet-4-20250514@anthropic
+  UNIFY_MODEL: openai/gpt-4o@openrouter | claude-sonnet-4-20250514@anthropic
   UNILLM_CACHE: true | false
 
 Total combinations: 4
 
 Generated runs:
-  [1/4] UNIFY_MODEL=gpt-4o@openai UNILLM_CACHE=true
-  [2/4] UNIFY_MODEL=gpt-4o@openai UNILLM_CACHE=false
+  [1/4] UNIFY_MODEL=openai/gpt-4o@openrouter UNILLM_CACHE=true
+  [2/4] UNIFY_MODEL=openai/gpt-4o@openrouter UNILLM_CACHE=false
   [3/4] UNIFY_MODEL=claude-sonnet-4-20250514@anthropic UNILLM_CACHE=true
   [4/4] UNIFY_MODEL=claude-sonnet-4-20250514@anthropic UNILLM_CACHE=false
 
 Dry run - commands that would be executed:
 
-  parallel_run --env UNIFY_MODEL=gpt-4o@openai --env UNILLM_CACHE=true --tags UNIFY_MODEL=gpt-4o@openai,UNILLM_CACHE=true tests/
-  parallel_run --env UNIFY_MODEL=gpt-4o@openai --env UNILLM_CACHE=false --tags UNIFY_MODEL=gpt-4o@openai,UNILLM_CACHE=false tests/
+  parallel_run --env UNIFY_MODEL=openai/gpt-4o@openrouter --env UNILLM_CACHE=true --tags UNIFY_MODEL=openai/gpt-4o@openrouter,UNILLM_CACHE=true tests/
+  parallel_run --env UNIFY_MODEL=openai/gpt-4o@openrouter --env UNILLM_CACHE=false --tags UNIFY_MODEL=openai/gpt-4o@openrouter,UNILLM_CACHE=false tests/
   ...
 ```
 
@@ -188,7 +188,7 @@ Grid search composes with all `parallel_run` features:
 ```bash
 # Grid + eval-only + repeat for statistical sampling
 grid_search.sh \
-  --env UNIFY_MODEL="gpt-4o@openai|claude-sonnet-4-20250514@anthropic" \
+  --env UNIFY_MODEL="openai/gpt-4o@openrouter|claude-sonnet-4-20250514@anthropic" \
   --env UNILLM_CACHE="false" \
   --eval-only \
   --repeat 5 \
