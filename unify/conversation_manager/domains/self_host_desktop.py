@@ -60,6 +60,7 @@ async def apply_managed_desktop_ready(
     browser_desktop_url: str,
     api_desktop_url: str,
     vm_type: str,
+    desktop_secret: str = "",
     timestamp: datetime | None = None,
     publish_console_ready: bool = True,
     request_llm: bool = True,
@@ -75,6 +76,8 @@ async def apply_managed_desktop_ready(
 
     if api_desktop_url:
         SESSION_DETAILS.assistant.desktop_url = api_desktop_url
+    if desktop_secret:
+        SESSION_DETAILS.assistant.desktop_secret = desktop_secret
 
     _t0 = time.perf_counter()
     await asyncio.to_thread(
@@ -82,6 +85,7 @@ async def apply_managed_desktop_ready(
         cm.assistant_id,
         cm.user_id,
         liveview_url,
+        desktop_secret or None,
     )
     log_startup_timing(
         LOGGER,
@@ -165,6 +169,7 @@ async def apply_managed_desktop_ready(
             liveview_base,
             liveview_url,
             vm_type,
+            liveview_password=desktop_secret or None,
         )
         log_startup_timing(
             LOGGER,

@@ -22,4 +22,8 @@ def test_prompt_context_includes_data_efficiency_rule():
     context = get_registry().prompt_context(scope)
     assert "Orchestra / `Data/*` efficiency" in context
     assert "reduce" in context
-    assert "unisdk.get_logs" in context
+    # The rule used to be phrased as "do not use raw unisdk.get_logs". That
+    # naming was dropped when raw UniSDK stopped being taught at all, so
+    # assert the behaviour the rule now states rather than a spelling of the
+    # thing it warns against.
+    assert "do not read another assistant's private contexts" in context

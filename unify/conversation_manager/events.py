@@ -1829,6 +1829,8 @@ class AssistantDesktopReady(Event):
     binding_id: str = ""
     desktop_url: str = ""
     vm_type: str = ""
+    # Per-binding VNC password. Falls back to unify_key when absent (old bindings).
+    desktop_secret: str = ""
 
 
 @dataclass

@@ -1186,6 +1186,9 @@ class CommsManager:
                         or "",
                         vm_type=event.get("vm_type")
                         or SESSION_DETAILS.assistant.desktop_mode,
+                        desktop_secret=event.get("desktop_secret")
+                        or SESSION_DETAILS.assistant.desktop_secret
+                        or "",
                     ),
                 }
 

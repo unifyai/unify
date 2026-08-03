@@ -16,6 +16,7 @@ from unify.conversation_manager.domains.recall.provider import (
     RecallMeetProvider,
     _default_relay_url,
 )
+from unify.session_details import SESSION_DETAILS
 
 LIVEKIT_ENV = {
     "LIVEKIT_URL": "wss://livekit.example.com",
@@ -405,6 +406,54 @@ async def test_the_page_url_is_signed_so_it_cannot_frame_anything_else() -> None
         hashlib.sha256,
     ).hexdigest()
     assert query["sig"] == expected
+
+
+@pytest.mark.asyncio
+async def test_present_prefers_the_desktop_secret_over_the_unify_key() -> None:
+    """The per-binding secret is the intended credential; the key is a
+    fallback for bindings minted before the secret existed."""
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch.object(SESSION_DETAILS.assistant, "desktop_secret", "binding-secret"),
+        patch.object(SESSION_DETAILS, "_unify_key", "the-unify-key"),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await provider.present(channel="google_meet", session_id="bot_1")
+
+    query = _page_query(provider)
+    assert query["password"] == "binding-secret"  # pragma: allowlist secret
+
+
+@pytest.mark.asyncio
+async def test_present_falls_back_to_the_unify_key_without_a_desktop_secret() -> None:
+    """Old bindings without a minted secret keep working on the legacy
+    convention."""
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch.object(SESSION_DETAILS.assistant, "desktop_secret", None),
+        patch.object(SESSION_DETAILS, "_unify_key", "the-unify-key"),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await provider.present(channel="google_meet", session_id="bot_1")
+
+    query = _page_query(provider)
+    assert query["password"] == "the-unify-key"  # pragma: allowlist secret
 
 
 @pytest.mark.asyncio

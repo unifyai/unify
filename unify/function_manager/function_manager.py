@@ -58,6 +58,15 @@ from ..common.builtins import builtins_project
 from .builtins_catalog import BUILTINS_PRIMITIVES_CONTEXT
 from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
+from .steering import (
+    DEFAULT_TOOL_NAMESPACES,
+    MemoisedDispatch,
+    active_session,
+    bind_session,
+    instrument,
+    restore_session,
+    run_with_steering,
+)
 from .dependency_analysis import (
     collect_dependencies_from_function_node,
     detect_third_party_imports,
@@ -7455,44 +7464,101 @@ if __name__ == "__main__":
         # methods called from composed functions receive _parent_chat_context
         # (mirroring the PythonExecutionSession.execute() pattern).
         _orig_prims = globals_dict.get("primitives")
-        if _parent_chat_context is not None and _orig_prims is not None:
+        _wrapped_prims = _orig_prims
+        if _parent_chat_context is not None and _wrapped_prims is not None:
             from .primitives.context_proxy import ContextForwardingProxy
 
-            globals_dict["primitives"] = ContextForwardingProxy(
-                _orig_prims,
+            _wrapped_prims = ContextForwardingProxy(
+                _wrapped_prims,
                 _parent_chat_context=_parent_chat_context,
             )
+
+        # Steering, when a call is in flight. This path runs a stored function
+        # directly rather than through the sandbox, so without its own probes
+        # the same function would be correctable or not depending purely on
+        # which route reached it.
+        steering = active_session()
+        steering_token = None
+        if steering is not None:
+            steering_token = bind_session(
+                globals_dict,
+                steering,
+                tool_namespaces=[],
+            )
+            if _wrapped_prims is not None:
+                # Outermost, so memoisation sees a dispatch before context
+                # forwarding does.
+                _wrapped_prims = MemoisedDispatch(_wrapped_prims, steering)
+
+        if _wrapped_prims is not _orig_prims:
+            globals_dict["primitives"] = _wrapped_prims
 
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
         result = None
         error = None
 
-        try:
-            # Extract function name from implementation
-            tree = ast.parse(implementation)
-            func_name = None
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    func_name = node.name
-                    break
+        async def _run_implementation(source: str) -> Any:
+            """Define the function from *source* and call it.
 
-            if not func_name:
+            Name and asyncness are re-derived per attempt: a correction
+            rewrites the definition, and nothing guarantees the replacement
+            keeps the shape the caller was told about.
+            """
+            attempt_tree = ast.parse(source)
+            definition = next(
+                (
+                    node
+                    for node in attempt_tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ),
+                None,
+            )
+            if definition is None:
                 raise ValueError("No function definition found in implementation")
 
+            to_exec = source
+            if steering is not None:
+                to_exec = ast.unparse(
+                    instrument(
+                        attempt_tree,
+                        tool_namespaces=set(DEFAULT_TOOL_NAMESPACES),
+                    ),
+                )
+
+            exec(to_exec, globals_dict)
+            fn = globals_dict.get(definition.name)
+            if fn is None:
+                raise ValueError(
+                    f"Function '{definition.name}' not found after exec",
+                )
+            if isinstance(definition, ast.AsyncFunctionDef) or is_async:
+                return await fn(**call_kwargs)
+            return fn(**call_kwargs)
+
+        try:
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                exec(implementation, globals_dict)
-                fn = globals_dict.get(func_name)
-                if fn is None:
-                    raise ValueError(f"Function '{func_name}' not found after exec")
-
-                if is_async:
-                    result = await fn(**call_kwargs)
+                if steering is None:
+                    result = await _run_implementation(implementation)
                 else:
-                    result = fn(**call_kwargs)
-
+                    result = await run_with_steering(
+                        implementation,
+                        _run_implementation,
+                        session=steering,
+                    )
         except Exception:
             error = traceback.format_exc()
+        finally:
+            # Stateful sessions reuse this dict across calls, so the probes and
+            # the memoised namespace must not outlive the call that installed
+            # them.
+            if _wrapped_prims is not _orig_prims:
+                if _orig_prims is None:
+                    globals_dict.pop("primitives", None)
+                else:
+                    globals_dict["primitives"] = _orig_prims
+            if steering_token is not None:
+                restore_session(globals_dict, steering_token)
 
         return {
             "result": self._make_json_serializable(result),

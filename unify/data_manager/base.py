@@ -1023,6 +1023,44 @@ class BaseDataManager(BaseStateManager):
 
         Use ``deliver="sync"`` for latency-sensitive ticks; otherwise enqueue
         async and let ``POST /admin/external_writes/drain`` deliver.
+
+        Parameters
+        ----------
+        context : str
+            Context path of the table the write belongs to.
+        payload : dict
+            Body handed to the external system, shaped by the binding.
+        idempotency_key : str
+            Caller-chosen key that makes the write exactly-once. Re-enqueuing
+            with the same key will not deliver twice, so derive it from the
+            thing being written (a row id plus the change), never from a
+            timestamp or a random value.
+        field_name : str, optional
+            Name of an ``external_entry`` column whose binding — including
+            ``auth_secret_ref`` — is loaded server-side. Preferred over
+            passing ``binding`` inline.
+        connector_id : str, optional
+            Explicit connector to deliver through, when the column's binding
+            does not name one.
+        binding : dict, optional
+            Inline write binding, for cases with no ``external_entry`` column.
+            ``auth_secret_ref`` must name an existing entry in the owning
+            ``Secrets`` vault; never inline an API key here.
+        log_event_ids : list[int], optional
+            Log rows this write is attributed to, for tracing delivery back to
+            the change that caused it.
+        deliver : str, default ``"async"``
+            ``"async"`` enqueues for the drain job. ``"sync"`` delivers inline
+            and surfaces provider failures to this call, at the cost of its
+            latency.
+        destination : str | None, optional
+            Which Data root holds the table: ``"personal"`` (default) or
+            ``"team:<id>"``.
+
+        Returns
+        -------
+        dict
+            The enqueued outbox entry, including its delivery status.
         """
 
     # ──────────────────────────────────────────────────────────────────────────
