@@ -1,6 +1,7 @@
 import argparse
+import hashlib
 from pathlib import Path
-from typing import List
+from typing import Iterator, List
 
 CACHE_READ_FILE_NAME = ".cache_write.ndjson"
 CACHE_WRITE_FILE_NAME = ".cache.ndjson"
@@ -14,30 +15,17 @@ def find_cache_files(artifacts_dir: Path) -> List[Path]:
     return sorted(files)
 
 
-def _read_nonempty_lines(path: Path) -> List[str]:
+def _read_nonempty_lines(path: Path) -> Iterator[str]:
     if not path.exists() or not path.is_file():
-        return []
+        return
     with path.open("r", encoding="utf-8") as f:
-        lines = []
-        for line in f.readlines():
+        for line in f:
             if line.strip():
                 # Ensure each line ends with newline to prevent concatenation
                 # when merging files (last line of a file may lack trailing \n)
                 if not line.endswith("\n"):
                     line = line + "\n"
-                lines.append(line)
-        return lines
-
-
-def _merge_unique_preserve_order(*sequences: List[str]) -> List[str]:
-    seen = set()
-    merged: List[str] = []
-    for seq in sequences:
-        for line in seq:
-            if line not in seen:
-                seen.add(line)
-                merged.append(line)
-    return merged
+                yield line
 
 
 def concatenate_files(
@@ -47,22 +35,39 @@ def concatenate_files(
 ) -> int:
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1) Start from the previously consolidated global cache (if any)
-    base_lines = _read_nonempty_lines(existing_cache_file)
+    # Streamed rather than read into lists. Inputs here include the whole
+    # upstream store as well as the base, and a cache entry is large -- the
+    # median is around 100 KB -- so holding two full copies in memory would
+    # scale with the store instead of with its entry count. Dedupe on a digest
+    # per line: 32 bytes each, so the only resident structure stays in the
+    # megabytes however far the store grows.
+    seen: set[bytes] = set()
+    written = 0
 
-    # 2) Read all diff files
-    diff_lines: List[str] = []
-    for input_path in input_files:
-        non_empty_lines = _read_nonempty_lines(input_path)
-        diff_lines.extend(non_empty_lines)
-        print(f"Found {len(non_empty_lines)} diff lines in {input_path}")
+    # Written to a sibling first so a crash mid-merge cannot leave a truncated
+    # store behind: the output is usually the base being read.
+    staging = output_file.with_name(output_file.name + ".merging")
+    with staging.open("w", encoding="utf-8") as out_f:
+        # Base first, then the diffs, so first-seen order is preserved.
+        for line in _read_nonempty_lines(existing_cache_file):
+            digest = hashlib.sha256(line.encode("utf-8")).digest()
+            if digest not in seen:
+                seen.add(digest)
+                out_f.write(line)
+                written += 1
 
-    # 3) Merge uniquely while preserving first-seen order: base first, then new diffs
-    merged_lines = _merge_unique_preserve_order(base_lines, diff_lines)
+        for input_path in input_files:
+            found = 0
+            for line in _read_nonempty_lines(input_path):
+                found += 1
+                digest = hashlib.sha256(line.encode("utf-8")).digest()
+                if digest not in seen:
+                    seen.add(digest)
+                    out_f.write(line)
+                    written += 1
+            print(f"Found {found} diff lines in {input_path}")
 
-    # 4) Write once
-    with output_file.open("w", encoding="utf-8") as out_f:
-        out_f.writelines(merged_lines)
+    staging.replace(output_file)
 
     # Indexed backends rebuild from fingerprint; drop any stale sidecar so
     # the next process does not serve offsets against the replaced file.
@@ -75,7 +80,7 @@ def concatenate_files(
             sidecar.unlink()
             print(f"Removed stale index sidecar: {sidecar}")
 
-    return len(merged_lines)
+    return written
 
 
 def main() -> int:
