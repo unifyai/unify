@@ -116,6 +116,13 @@ class WebSearcher(BaseWebSearcher):
             handle_cls=(
                 ReadOnlyAskGuardHandle if SETTINGS.UNITY_READONLY_ASK_GUARD else None
             ),
+            # A single ask fans out to several searches at once and they return
+            # at different times, so letting each completion cancel the
+            # in-flight reasoning step discards most of the steps this loop pays
+            # for. Nothing here is user-facing -- only the final answer is --
+            # so the freshness is worth less than the step. Interjections still
+            # pre-empt, since those mean somebody is actively steering.
+            interrupt_llm_on_tool_completion=False,
             clarification_queues=_clar_queues,
             on_clarification_request=_on_clar_req,
             on_clarification_answer=_on_clar_ans,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import pytest
 
 from unify.common.async_tool_loop import start_async_tool_loop
@@ -21,31 +20,6 @@ pytestmark = pytest.mark.llm_call
 # ────────────────────────────────────────────────────────────────────────────
 
 _WAIT_LOG_MESSAGE = "Assistant chose `wait` – no-op; not persisting to transcript."
-
-
-async def _wait_for_wait_tool_log(
-    caplog,
-    *,
-    timeout: float = 300.0,
-    poll: float = 0.05,
-):
-    """Poll for the `wait` tool log message in caplog.records."""
-    import time as _time
-
-    def _count_wait_logs():
-        return sum(1 for r in caplog.records if _WAIT_LOG_MESSAGE in r.getMessage())
-
-    start_ts = _time.perf_counter()
-    baseline = _count_wait_logs()
-
-    while _time.perf_counter() - start_ts < timeout:
-        if _count_wait_logs() > baseline:
-            return
-        await asyncio.sleep(poll)
-
-    raise TimeoutError(
-        f"Timed out after {timeout}s waiting for `wait` tool log message",
-    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -83,7 +57,7 @@ async def very_slow_task() -> str:
 @_handle_project
 async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
     llm_config,
-    caplog,
+    monkeypatch,
 ) -> None:
     """
     When two tools are requested in one turn and only the fast one completes,
@@ -121,6 +95,18 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
 
     tools = {"fast_task": fast_task, "very_slow_task": gated_very_slow_task}
 
+    import unify.common._async_tool.loop as _loop_mod
+
+    wait_logged = asyncio.Event()
+    original_info = _loop_mod.LoopLogger.info
+
+    def _capture_wait_log(self, msg, prefix=""):
+        if _WAIT_LOG_MESSAGE in msg:
+            wait_logged.set()
+        return original_info(self, msg, prefix)
+
+    monkeypatch.setattr(_loop_mod.LoopLogger, "info", _capture_wait_log)
+
     handle = start_async_tool_loop(
         client,
         message="Please run fast_task and very_slow_task, triggering them both **immediately** (at the same time)",
@@ -128,42 +114,18 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
         interrupt_llm_with_interjections=True,
     )
 
-    # The async-tool-loop `wait` log emission goes through Unity's
-    # `unity` logger (unify/logger.py:LOGGER), which is configured with
-    # `propagate=False` since 5ed695ffe (2026-02-20 "Consolidate logging
-    # into unify.logger as single authority"). pytest's `caplog`
-    # attaches its handler to the ROOT logger only; `set_level(level,
-    # logger=name)` adjusts the named logger's level but does NOT
-    # attach a handler to it. With propagate=False, no record ever
-    # reaches the root handler, so caplog never sees it. Attach
-    # caplog's handler directly to the "unity" logger for the duration
-    # of this test so `_wait_for_wait_tool_log` actually finds the
-    # "Assistant chose `wait`" emission. Remove it in the finally
-    # block so the handler doesn't leak across tests.
-    _unity_logger = logging.getLogger("unify")
-    _unity_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="unify")
-    caplog.set_level(logging.INFO)
-    caplog.clear()
+    # Wait for fast_task result to be processed.
+    await _wait_for_tool_result(client, "fast_task", min_results=1)
 
-    try:
-        # Wait for fast_task result to be processed
-        await _wait_for_tool_result(client, "fast_task", min_results=1)
+    # `wait` is deliberately pruned from the transcript, so observe the loop's
+    # logger method directly instead of depending on pytest logging handlers.
+    await asyncio.wait_for(wait_logged.wait(), timeout=120.0)
 
-        # Wait for the LLM to call `wait` after seeing the partial result.
-        # We watch the log rather than client.messages because `wait` calls are
-        # intentionally pruned from the transcript to avoid clutter.
-        # This avoids race conditions with fixed delays that might not be long
-        # enough for uncached LLM responses.
-        await _wait_for_wait_tool_log(caplog, timeout=120.0)
+    # Now release the gate so very_slow_task can complete.
+    very_slow_gate.set()
 
-        # Now release the gate so very_slow_task can complete
-        very_slow_gate.set()
-
-        # Wait for the loop to complete
-        await handle.result()
-    finally:
-        _unity_logger.removeHandler(caplog.handler)
+    # Wait for the loop to complete.
+    await handle.result()
 
     # ── Assertions ───────────────────────────────────────────────────────
 
@@ -191,12 +153,7 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
     ]
 
     # 1) Assert that `wait` was called (via loop logger)
-    wait_logged = any(
-        "Assistant chose `wait` – no-op; not persisting to transcript."
-        in r.getMessage()
-        for r in caplog.records
-    )
-    assert wait_logged, (
+    assert wait_logged.is_set(), (
         "Expected LLM to call `wait` while very_slow_task was pending, but no "
         "`wait` log was found. This may indicate the LLM did not follow the prompt "
         "instructions to call `wait` when partial results are available."
@@ -238,6 +195,80 @@ async def test_wait_called_and_pruned_when_other_tool_is_very_slow(
             {tc.get("function", {}).get("name") for tc in (m.get("tool_calls") or [])},
         )
         for m in assistant_tool_msgs
+    )
+
+
+@pytest.mark.asyncio
+@_handle_project
+async def test_late_tool_completion_spares_llm_step_when_preemption_disabled(
+    llm_config,
+    monkeypatch,
+) -> None:
+    """
+    With ``interrupt_llm_on_tool_completion=False`` the same late completion that
+    pre-empts the reasoning step in the test below must leave it alone, because
+    the provider has already been billed for it.
+
+    Asserts the two halves of that contract:
+
+    - no in-flight LLM step is ever cancelled, and
+    - both tool results still reach the transcript, so the model answers with
+      the late result rather than without it.
+    """
+    import unify.common._async_tool.loop as _loop_mod
+
+    _real_generate = _loop_mod.generate_with_preprocess
+    stats = {"started": 0, "cancelled": 0}
+
+    async def _counting_generate(*args, **kwargs):
+        stats["started"] += 1
+        try:
+            return await _real_generate(*args, **kwargs)
+        except asyncio.CancelledError:
+            stats["cancelled"] += 1
+            raise
+
+    monkeypatch.setattr(_loop_mod, "generate_with_preprocess", _counting_generate)
+
+    system_prompt = (
+        "You have access to two tools called 'fast_task' and 'slow_task'. "
+        "Always invoke *both* tools in the same assistant turn and wait for "
+        "their results before replying to the user. Do not send any other "
+        "assistant messages in between."
+    )
+
+    client = new_llm_client(
+        **llm_config,
+        system_message=system_prompt,
+    )
+
+    handle = start_async_tool_loop(
+        client,
+        message="Please run fast_task and slow_task, triggering them both **immediately** (at the same time)",
+        tools={"fast_task": fast_task, "slow_task": slow_task},
+        interrupt_llm_with_interjections=True,
+        interrupt_llm_on_tool_completion=False,
+    )
+    assert handle._loop_config["interrupt_llm_on_tool_completion"] is False
+
+    await handle.result()
+
+    assert stats["started"] >= 2, "expected at least an initial and a final LLM step"
+    assert stats["cancelled"] == 0, (
+        f"a late tool completion cancelled {stats['cancelled']} in-flight LLM "
+        "step(s) despite interrupt_llm_on_tool_completion=False; those steps are "
+        "billed by the provider and discarded"
+    )
+
+    non_stub_tools = [
+        m
+        for m in client.messages
+        if m.get("role") == "tool" and not _is_synthetic_check_status_tool_msg(m)
+    ]
+    tool_names = {m["name"] for m in non_stub_tools}
+    assert {"fast_task", "slow_task"}.issubset(tool_names), (
+        "the late tool result never reached the transcript, so the model "
+        f"concluded without it (saw {sorted(tool_names)})"
     )
 
 
