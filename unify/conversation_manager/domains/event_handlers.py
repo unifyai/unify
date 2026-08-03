@@ -555,6 +555,12 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         ):
             return
 
+    # Past the guards above this is a new call, so its shared surfaces start
+    # closed. Also reset on hangup, but this is the one that holds: a frontend
+    # event landing during the previous teardown re-dirties the state after
+    # that reset has already run.
+    cm.reset_meet_surfaces()
+
     boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id))
@@ -2305,6 +2311,7 @@ async def _(
     cm.call_manager.unify_meet_exchange_id = UNASSIGNED
     cm.call_manager.google_meet_exchange_id = UNASSIGNED
     cm.call_manager.teams_meet_exchange_id = UNASSIGNED
+    cm.reset_meet_surfaces()
 
     sender_name = _get_sender_name(contact)
     if isinstance(event, GoogleMeetEnded):
