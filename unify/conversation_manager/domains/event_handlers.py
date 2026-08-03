@@ -3920,6 +3920,7 @@ async def _(
         browser_desktop_url=browser_desktop_url,
         api_desktop_url=api_desktop_url,
         vm_type=event.vm_type,
+        desktop_secret=event.desktop_secret,
         timestamp=event.timestamp,
     )
 
