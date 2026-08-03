@@ -30,6 +30,10 @@ from unify.conversation_manager.domains.recall.client import (
     RecallBotState,
     meet_bridge_base_url,
 )
+from unify.conversation_manager.domains.self_host_desktop import (
+    desktop_proxy_healthy,
+    resolve_desktop_urls,
+)
 from unify.session_details import SESSION_DETAILS
 
 LOGGER = logging.getLogger(__name__)
@@ -41,12 +45,6 @@ LOGGER = logging.getLogger(__name__)
 _BRIDGE_TOKEN_TTL = timedelta(hours=4)
 
 _BRIDGE_IDENTITY_PREFIX = "recall-bridge"
-
-# Distinct from the bridge's, and that is the whole point: LiveKit evicts a
-# duplicate identity, so a desktop page joining under the bridge's name would
-# kick the page carrying audio and leave the assistant silent for the rest of the
-# meeting. Never derive one of these prefixes from the other.
-_DESKTOP_IDENTITY_PREFIX = "recall-screenshare"
 
 # Recall's own sub_codes are stable strings, but they are not phrased for a
 # person. Map the ones a user can act on; anything else passes through so an
@@ -188,25 +186,32 @@ class RecallMeetProvider:
             LOGGER.warning("[recall] chat send failed for %s: %s", session_id, exc)
             return False
 
-    async def present(
-        self,
-        *,
-        channel: str = "",
-        session_id: str,
-        room_name: str,
-    ) -> bool:
-        """Put the assistant's desktop on the bot's screenshare surface.
+    async def present(self, *, channel: str = "", session_id: str) -> bool:
+        """Put the assistant's live desktop on the bot's screenshare surface.
 
-        The desktop itself arrives over LiveKit: the pod publishes it into
-        ``room_name`` and the page this points the bot at subscribes to it. Recall
-        only ever learns a URL carrying a subscribe-only token, so the VM stays
-        unreachable from the internet.
+        The bot renders a page of ours which frames the managed VM's own noVNC
+        liveview, so the meeting sees the real desktop at VNC's frame rate rather
+        than a reconstruction of it.
+
+        Health is checked first because entitlement is not liveness: an assistant
+        can be entitled to a desktop whose VM is down, and the failure mode there
+        is a noVNC error dialog on the meeting's main stage.
         """
         _ = channel
+        browser_url, api_url = resolve_desktop_urls()
+        if not browser_url:
+            LOGGER.error("[recall] no managed desktop URL; cannot present")
+            return False
+        if not await desktop_proxy_healthy(api_url):
+            LOGGER.warning(
+                "[recall] desktop proxy is not serving noVNC; not presenting",
+            )
+            return False
+
         try:
-            page_url = self._desktop_page_url(room_name)
+            page_url = self._desktop_page_url(browser_url)
         except RuntimeError as exc:
-            LOGGER.error("[recall] could not mint a desktop token: %s", exc)
+            LOGGER.error("[recall] could not build the desktop page URL: %s", exc)
             return False
         try:
             await self._client.start_screenshare(session_id, page_url)
@@ -225,36 +230,44 @@ class RecallMeetProvider:
             LOGGER.warning("[recall] stop-present failed for %s: %s", session_id, exc)
             return False
 
-    def _desktop_page_url(self, room_name: str) -> str:
-        """Tokenised URL for the desktop page, scoped to one room.
+    def _desktop_page_url(self, browser_desktop_url: str) -> str:
+        """URL of the page that frames the managed desktop's noVNC liveview.
 
-        Narrower than the bridge's grant in every direction that matters: it may
-        subscribe and nothing else. A page that could publish would be able to put
-        audio or video into the call, and this one exists only to display.
+        Wrapped in a page of ours rather than handing Recall the liveview
+        directly, so the framing decisions -- scaling the VM's resolution into the
+        bot's fixed viewport, hiding the VNC chrome, and swallowing noVNC's own
+        error dialogs -- are ours to make. All three would otherwise be visible on
+        the meeting's main stage.
         """
 
-        server_url, api_key, api_secret = _livekit_credentials()
         base = meet_bridge_base_url()
         if not base:
             raise RuntimeError("MEET_BRIDGE_PAGE_URL must be set")
 
-        token = (
-            AccessToken(api_key, api_secret)
-            .with_identity(f"{_DESKTOP_IDENTITY_PREFIX}-{room_name}")
-            .with_name("Unify desktop")
-            .with_grants(
-                VideoGrants(
-                    room_join=True,
-                    room=room_name,
-                    can_publish=False,
-                    can_subscribe=True,
-                    can_publish_data=False,
-                ),
-            )
-            .with_ttl(_BRIDGE_TOKEN_TTL)
-            .to_jwt()
+        secret = (os.environ.get("RECALL_RELAY_SECRET") or "").strip()
+        if not secret:
+            raise RuntimeError("RECALL_RELAY_SECRET must be set to sign the page URL")
+
+        liveview = f"{browser_desktop_url.rstrip('/')}/desktop/custom.html"
+        # The VNC password is the assistant's own API key, which is how Console
+        # reaches the same surface.
+        password = SESSION_DETAILS.unify_key
+        query = urlencode(
+            {
+                "liveview": liveview,
+                "password": password,
+                # The page is unauthenticated -- Recall's browser loads it with no
+                # credential of ours -- so without this it would frame any URL
+                # anyone handed it, on our own domain. Signing binds it to URLs
+                # this pod minted.
+                #
+                # MIRRORED: ``sign_liveview`` in unity-deploy's
+                # ``communication/meet_desktop_page.py``. Two repos, one
+                # construction; a mismatch is a 403 the assistant reports as "could
+                # not share".
+                "sig": _sign_liveview(liveview, password, secret),
+            },
         )
-        query = urlencode({"url": server_url, "token": token})
         return f"{base}/desktop?{query}"
 
     def _bridge_url(self, room_name: str, display_name: str) -> str:
@@ -301,6 +314,20 @@ class RecallMeetProvider:
         query = urlencode({"room": room_name, "token": secret})
         separator = "&" if "?" in self._relay_url else "?"
         return f"{self._relay_url}{separator}{query}"
+
+
+def _sign_liveview(liveview: str, password: str, secret: str) -> str:
+    """Signature the desktop page checks before framing a liveview URL.
+
+    MIRRORED: ``sign_liveview`` in unity-deploy's
+    ``communication/meet_desktop_page.py``. Change both together.
+    """
+
+    import hashlib
+    import hmac
+
+    payload = f"{liveview}\x00{password}".encode()
+    return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
 def _livekit_credentials() -> tuple[str, str, str]:

@@ -332,74 +332,104 @@ async def test_state_returns_none_on_api_failure() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _desktop_token_claims(provider) -> dict:
-    """Decode the LiveKit grant handed to the desktop page."""
+DESKTOP_ENV = {
+    "MEET_BRIDGE_PAGE_URL": BRIDGE,
+    "RECALL_RELAY_SECRET": "relay-secret",  # pragma: allowlist secret
+}
+
+
+def _presenting_provider():
+    """A provider whose managed desktop is entitled, healthy and reachable."""
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock()
+    return provider
+
+
+def _page_query(provider) -> dict:
     page_url = provider._client.start_screenshare.call_args.args[1]
-    query = parse_qs(urlparse(page_url).query)
-    return jwt.decode(
-        query["token"][0],
-        LIVEKIT_ENV["LIVEKIT_API_SECRET"],
-        algorithms=["HS256"],
-    )
+    return {k: v[0] for k, v in parse_qs(urlparse(page_url).query).items()}
 
 
 @pytest.mark.asyncio
-async def test_the_desktop_page_never_shares_the_bridge_identity() -> None:
-    """LiveKit evicts a duplicate identity, so this is not a cosmetic difference.
+async def test_present_frames_the_managed_desktop_liveview() -> None:
+    """The meeting sees the real desktop, not a reconstruction of it."""
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        assert await provider.present(channel="google_meet", session_id="bot_1")
 
-    A desktop page joining under the bridge's name would kick the page carrying
-    audio out of the room and leave the assistant silent for the rest of the
-    meeting -- the failure that got the first screenshare implementation
-    withdrawn.
+    query = _page_query(provider)
+    assert query["liveview"] == "https://vm.example.com/desktop/custom.html"
+    assert query["sig"], "the page refuses an unsigned liveview"
+
+
+@pytest.mark.asyncio
+async def test_the_page_url_is_signed_so_it_cannot_frame_anything_else() -> None:
+    """The page is unauthenticated: Recall loads it with no credential of ours.
+
+    Unsigned, it would frame any URL anyone handed it on our own domain. The
+    signature must be reproducible by the page, and must cover the liveview -- a
+    signature over something else would let the URL be swapped.
     """
-    provider = _provider()
-    provider._client.start_screenshare = AsyncMock()
-    env = dict(LIVEKIT_ENV)
-    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
-    with patch.dict("os.environ", env, clear=False):
-        await provider.join(
-            channel="google_meet",
-            meeting_url="https://meet.google.com/abc",
-            display_name="Unify",
-            room_name="unity_25_gmeet",
-        )
-        assert await provider.present(
-            channel="google_meet",
-            session_id="bot_1",
-            room_name="unity_25_gmeet",
-        )
+    import hashlib
+    import hmac
 
-    bridge_url = provider._client.create_bot.call_args.kwargs["bridge_page_url"]
-    bridge_identity = jwt.decode(
-        parse_qs(urlparse(bridge_url).query)["token"][0],
-        LIVEKIT_ENV["LIVEKIT_API_SECRET"],
-        algorithms=["HS256"],
-    )["sub"]
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await provider.present(channel="google_meet", session_id="bot_1")
 
-    assert _desktop_token_claims(provider)["sub"] != bridge_identity
+    query = _page_query(provider)
+    payload = f"{query['liveview']}\x00{query.get('password', '')}".encode()
+    expected = hmac.new(
+        DESKTOP_ENV["RECALL_RELAY_SECRET"].encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    assert query["sig"] == expected
 
 
 @pytest.mark.asyncio
-async def test_the_desktop_page_can_only_watch() -> None:
-    """It exists to display. Publish rights would let it put media in the call."""
-    provider = _provider()
-    provider._client.start_screenshare = AsyncMock()
-    env = dict(LIVEKIT_ENV)
-    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
-    with patch.dict("os.environ", env, clear=False):
-        assert await provider.present(
-            channel="google_meet",
-            session_id="bot_1",
-            room_name="unity_25_gmeet",
-        )
+async def test_present_refuses_when_the_desktop_is_not_serving() -> None:
+    """Entitlement is not liveness.
 
-    grants = _desktop_token_claims(provider)["video"]
-    assert grants["room"] == "unity_25_gmeet"
-    assert grants["roomJoin"] is True
-    assert grants.get("canSubscribe") is True
-    assert grants.get("canPublish") in (False, None)
-    assert grants.get("canPublishData") in (False, None)
-    assert grants.get("roomAdmin") in (False, None)
+    A dead VM would otherwise put noVNC's own error dialog on the meeting's main
+    stage, which reads as the assistant being broken rather than the desktop.
+    """
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        assert (
+            await provider.present(channel="google_meet", session_id="bot_1") is False
+        )
+    provider._client.start_screenshare.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -410,16 +440,19 @@ async def test_present_reports_failure_rather_than_raising() -> None:
     """
     provider = _provider()
     provider._client.start_screenshare = AsyncMock(side_effect=RecallError("nope"))
-    env = dict(LIVEKIT_ENV)
-    env["MEET_BRIDGE_PAGE_URL"] = BRIDGE
-    with patch.dict("os.environ", env, clear=False):
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
         assert (
-            await provider.present(
-                channel="google_meet",
-                session_id="bot_1",
-                room_name="unity_25_gmeet",
-            )
-            is False
+            await provider.present(channel="google_meet", session_id="bot_1") is False
         )
 
 

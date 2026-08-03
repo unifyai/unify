@@ -90,13 +90,13 @@ class MeetProvider(Protocol):
     async def state(self, *, channel: str, session_id: str) -> MeetState | None:
         """Current meeting state, or None when the session is unknown."""
 
-    async def present(self, *, channel: str, session_id: str, room_name: str) -> bool:
+    async def present(self, *, channel: str, session_id: str) -> bool:
         """Start sharing the assistant's desktop with the meeting.
 
-        The backend decides how a desktop reaches the meeting; the caller only
-        supplies the room it is being published into. Returns False when the
-        backend could not start, so the assistant can say so rather than claim to
-        be sharing a screen nobody can see.
+        How a desktop reaches the meeting is entirely the backend's business, so
+        nothing about the transport appears here. Returns False when it could not
+        start, so the assistant can say so rather than claim to be sharing a screen
+        nobody can see.
         """
 
     async def stop_present(self, *, channel: str, session_id: str) -> bool:
