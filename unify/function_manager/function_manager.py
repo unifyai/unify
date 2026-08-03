@@ -46,6 +46,7 @@ from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.custom_sync import (
     CustomSyncAdapter,
     CustomSyncPartialFailure,
+    managed_rows_filter,
     run_custom_sync,
 )
 from ..common.sync_lease import exclusive_sync_lease
@@ -8081,9 +8082,10 @@ for _method_name in (
 class _VenvSyncAdapter(CustomSyncAdapter):
     """Storage mechanics for the custom venvs reconcile.
 
-    Venv identity is the name (``custom_key == name``). Rows written
-    before the ``custom_key`` column existed are matched by name and
-    stamped on their next content change.
+    Venv identity is the name (``custom_key == name``). Legacy rows with
+    a null ``custom_key`` are matched by name, and same-named rows outside
+    the managed index are adopted in place so their ``venv_id`` survives:
+    function rows hold that id.
     """
 
     kind = "venvs"
@@ -8094,13 +8096,16 @@ class _VenvSyncAdapter(CustomSyncAdapter):
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._venvs_ctx,
-            filter="custom_hash != None",
+            filter=managed_rows_filter(self.source_id),
             exclude_fields=list_private_fields(self._manager._venvs_ctx),
         )
         rows: List[Dict[str, Any]] = []
         for lg in logs:
             entries = dict(lg.entries or {})
-            entries.setdefault("custom_key", entries.get("name"))
+            # A null custom_key would survive setdefault and drop the row
+            # from the managed index — see _FunctionSyncAdapter.live_rows.
+            if not entries.get("custom_key"):
+                entries["custom_key"] = entries.get("name")
             rows.append(entries)
         return rows
 
@@ -8121,11 +8126,13 @@ class _VenvSyncAdapter(CustomSyncAdapter):
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
         self._manager._delete_custom_venv_by_name(str(live_row["name"]))
 
-    def find_collision(
+    def find_adoptable(
         self,
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        """Claim any same-named row rather than reinserting, preserving
+        the ``venv_id`` that function rows reference."""
         existing = unisdk.get_logs(
             context=self._manager._venvs_ctx,
             filter=f"name == '{fields['name']}'",
@@ -8133,13 +8140,7 @@ class _VenvSyncAdapter(CustomSyncAdapter):
         )
         if not existing:
             return None
-        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
-
-    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        unisdk.delete_logs(
-            context=self._manager._venvs_ctx,
-            logs=[live_row["_log_id"]],
-        )
+        return dict(existing[0].entries or {})
 
 
 class _FunctionSyncAdapter(CustomSyncAdapter):
@@ -8147,8 +8148,10 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
 
     Function identity is the name (``custom_key == name``) — the
     call-site contract — so a rename is a delete-and-create by design.
-    Legacy rows without the ``custom_key`` column are matched by name
-    and stamped on their next content change.
+    Legacy rows carrying a null ``custom_key`` are matched by name, and
+    same-named rows outside the managed index are adopted in place so
+    their ``function_id`` survives: task entrypoints hold that id, and a
+    delete-and-reinsert would orphan every one of them.
     """
 
     kind = "functions"
@@ -8165,13 +8168,17 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._compositional_ctx,
-            filter="custom_hash != None",
+            filter=managed_rows_filter(self.source_id),
             exclude_fields=list_private_fields(self._manager._compositional_ctx),
         )
         rows: List[Dict[str, Any]] = []
         for lg in logs:
             entries = dict(lg.entries or {})
-            entries.setdefault("custom_key", entries.get("name"))
+            # The column may exist with a null value on legacy rows, which
+            # setdefault would keep — and a null key drops the row from the
+            # managed index, sending every entry down the reinsert path.
+            if not entries.get("custom_key"):
+                entries["custom_key"] = entries.get("name")
             rows.append(entries)
         return rows
 
@@ -8199,11 +8206,17 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
         self._manager._delete_custom_function_by_name(str(live_row["name"]))
 
-    def find_collision(
+    def find_adoptable(
         self,
         key: str,
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
+        """Claim any same-named row rather than reinserting.
+
+        Adoption updates in place via ``function_id``, so references held
+        by task entrypoints stay valid; the update stamps
+        ``custom_key``/``custom_hash``/``source_id`` alongside the body.
+        """
         existing = unisdk.get_logs(
             context=self._manager._compositional_ctx,
             filter=f"name == '{fields['name']}'",
@@ -8211,10 +8224,4 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         )
         if not existing:
             return None
-        return {"_log_id": existing[0].id, **dict(existing[0].entries or {})}
-
-    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
-        unisdk.delete_logs(
-            context=self._manager._compositional_ctx,
-            logs=[live_row["_log_id"]],
-        )
+        return dict(existing[0].entries or {})

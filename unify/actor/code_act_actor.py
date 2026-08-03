@@ -5353,18 +5353,29 @@ class CodeActActor(BaseCodeActActor):
                         if attempts_remaining <= 0:
                             raise
                         attempts_remaining -= 1
-                        await self._repair_symbolic_entrypoint(
-                            entrypoint_id=entrypoint_id,
-                            request=request,
-                            entrypoint_kwargs=kwargs_for_entrypoint,
-                            failure=exc,
-                            repair_context=(
-                                entrypoint_repair_context
-                                if isinstance(entrypoint_repair_context, dict)
-                                else None
-                            ),
-                            destination=destination,
-                        )
+                        try:
+                            await self._repair_symbolic_entrypoint(
+                                entrypoint_id=entrypoint_id,
+                                request=request,
+                                entrypoint_kwargs=kwargs_for_entrypoint,
+                                failure=exc,
+                                repair_context=(
+                                    entrypoint_repair_context
+                                    if isinstance(entrypoint_repair_context, dict)
+                                    else None
+                                ),
+                                destination=destination,
+                            )
+                        except Exception as repair_exc:
+                            # The entrypoint failure is the actionable
+                            # record; a broken or refused repair pass must
+                            # not displace it in the execution row.
+                            logger.warning(
+                                "Symbolic entrypoint repair for %s failed: %s",
+                                entrypoint_id,
+                                repair_exc,
+                            )
+                            raise exc from repair_exc
 
             delegate_token = current_task_execution_delegate.set(
                 task_execution_delegate,
