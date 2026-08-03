@@ -139,7 +139,14 @@ class LocalFileSystemAdapter(BaseFileSystemAdapter):
         except ValueError:
             pass
         if not resolved.exists():
-            candidate = (self._root / str(p).lstrip("/")).resolve()
+            # The managed VM exposes this same synced tree at /Unity/Local, so a
+            # path captured VM-side must be re-rooted against that prefix rather
+            # than appended to it: appending produced <root>/Unity/Local/... and
+            # reported the file missing while it sat in the workspace all along.
+            text = str(p)
+            if text.startswith("/Unity/Local/"):
+                text = text[len("/Unity/Local/") :]
+            candidate = (self._root / text.lstrip("/")).resolve()
             try:
                 candidate.relative_to(self._root)
                 return candidate
