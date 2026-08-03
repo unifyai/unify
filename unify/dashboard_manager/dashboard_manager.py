@@ -102,21 +102,11 @@ def _get_active_project() -> str:
 
 
 def _build_tile_url(token: str) -> str:
-    console_url = getattr(SETTINGS, "CONSOLE_URL", "https://console.unify.ai")
-    if isinstance(console_url, str):
-        console_url = console_url.rstrip("/")
-    else:
-        console_url = "https://console.unify.ai"
-    return f"{console_url}/tile/view/{token}"
+    return f"{SETTINGS.CONSOLE_URL.rstrip('/')}/tile/view/{token}"
 
 
 def _build_dashboard_url(token: str) -> str:
-    console_url = getattr(SETTINGS, "CONSOLE_URL", "https://console.unify.ai")
-    if isinstance(console_url, str):
-        console_url = console_url.rstrip("/")
-    else:
-        console_url = "https://console.unify.ai"
-    return f"{console_url}/dashboard/view/{token}"
+    return f"{SETTINGS.CONSOLE_URL.rstrip('/')}/dashboard/view/{token}"
 
 
 def _require_dashboard_context(context: Optional[str], suffix: str) -> str:
