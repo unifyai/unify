@@ -89,32 +89,42 @@ This is how the user can redirect an agent mid-task without the overhead of stop
 
 ### Steering code that is already running
 
-**File:** `unify/actor/execution/steering.py`
+**Files:** `unify/function_manager/steering.py`, `steering_patcher.py`
 
-Between LLM turns is not enough on its own for `execute_code` and
-`execute_function`, whose work happens *inside* one tool call — a correction
-arriving four sends into a five-send loop would otherwise be able to kill the
-block but not correct it.
+Between LLM turns is not enough for `execute_code` and `execute_function`,
+whose work happens *inside* one tool call. A correction arriving four sends
+into a five-send loop must reach the loop, not merely kill it.
 
-Those tools declare `_interject_queue`, which is what makes the loop
-synthesise an `interject_<tool>_<call_id>` helper for them while they are
-still running (`ToolsData` reads steerability off the signature at schedule
-time). Inside the sandbox, an AST pass adds checkpoints between top-level
-statements, at the top of every loop body at any depth, and a proxy adds one
-before every `primitives.*` call — covering dispatches that sit inside a
-single statement, such as a comprehension or a `gather`. Stored functions are
-covered too when their implementation is synthesised as a preamble, so the
-function's own body is instrumented rather than only the call to it.
+This is an execution-engine concern rather than an actor one — it applies
+wherever Python runs — and it exists only while a call is in flight. Four
+parts:
 
-A checkpoint that finds a message suspends the block and emits a notification,
-which gives the model a turn with a progress report: the line reached and the
-calls that already completed, with arguments. The model then either resumes
-(any further interjection) or abandons (`stop_*`, unwinding through ordinary
-cancellation). The checkpoint never classifies the message itself.
+- **Probes.** An AST pass injects `_cp` (yield, honour pause, take
+  corrections) and `_int` (raise if a patch targets this function) at function
+  entry and at the top of every loop iteration, plus loop and branch context
+  probes, and `_around_cp` around awaited dispatches — including awaits nested
+  inside expressions, so a comprehension or a `gather` is covered too.
+- **An idempotency cache.** Every dispatch through a tool namespace is
+  memoised under `(tool, args, occurrence)`. The key deliberately excludes
+  execution position: the commonest correction narrows a loop with a filter,
+  which puts every surviving call inside a new branch, and a positional key
+  would change their identity and re-send everything already sent.
+- **Retry in place.** `ControlledInterruption` unwinds to a retry loop that
+  splices the patched function into the *source* — not the namespace, which
+  re-running the block would overwrite — and runs again. Completed dispatches
+  replay, so execution reaches the first real change having redone nothing.
+- **A bounded lifetime.** Cache, patches and probes are created when the call
+  begins and discarded when it returns. That bound is what makes the rest
+  sound: no cache key can outlive the execution it describes.
 
-A checkpoint only runs when the block yields. A synchronous blocking call
-holds the event loop for its duration, during which the interjection cannot
-arrive either, since the tool loop receiving it runs on that same loop.
+The patch itself is written by an LLM owned by the execution engine
+(`steering_patcher`), given the running source and the calls already
+completed, and restricted to rewriting functions the block defines.
+
+Two limits. Replay records that a side effect happened; it cannot undo one, so
+invalidation is explicit rather than inferred. And a probe only runs when the
+block yields — synchronous blocking work holds the event loop, and during that
+window the correction cannot even arrive.
 
 ---
 
