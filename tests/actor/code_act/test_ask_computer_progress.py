@@ -11,7 +11,7 @@ pytestmark = pytest.mark.llm_call
 
 
 class _DummyLoopClient:
-    endpoint = "gpt-4o-mini@openai"
+    endpoint = "openai/gpt-4o-mini@openrouter"
 
     def __init__(self) -> None:
         self.messages = [

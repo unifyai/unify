@@ -1404,7 +1404,7 @@ class E2ETestConfig:
     test_user_id: str = "test-user-001"
     test_assistant_first_name: str = "SpendingTest"
     test_assistant_surname: str = "Assistant"
-    model: str = "gpt-4o-mini@openai"
+    model: str = "openai/gpt-4o-mini@openrouter"
     test_agent_id: _Optional[str] = None
 
     @classmethod
@@ -1682,7 +1682,7 @@ class TestE2ESpendingLimits:
 
         request = LimitCheckRequest(
             model="gpt-4o-mini",
-            endpoint="gpt-4o-mini@openai",
+            endpoint="openai/gpt-4o-mini@openrouter",
         )
 
         response = await check_spending_limits_callback(request)

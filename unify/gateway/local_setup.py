@@ -346,11 +346,6 @@ CHANNEL_SETUPS: tuple[ChannelSetup, ...] = (
                 required=False,
             ),
             CredentialSpec(
-                "OPENAI_API_KEY",
-                "OpenAI API key for native *@openai model calls",
-                required=False,
-            ),
-            CredentialSpec(
                 "ANTHROPIC_API_KEY",
                 "Anthropic API key for local model calls",
                 required=False,

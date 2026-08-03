@@ -199,7 +199,7 @@ async def test_llm_call_publishes_event():
     install_llm_event_hook()
 
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[
                 {"role": "user", "content": "Say 'test123' exactly [llm_events_test]"},
@@ -228,7 +228,7 @@ async def test_llm_call_captures_full_response():
     install_llm_event_hook()
 
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[{"role": "user", "content": "Say 'hi' [full_response_test]"}],
         )
@@ -264,7 +264,7 @@ async def test_llm_call_with_tools():
     ]
 
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[{"role": "user", "content": "What is 2+2? [tools_test]"}],
             tools=tools,
@@ -288,7 +288,7 @@ async def test_multiple_sequential_llm_calls():
     install_llm_event_hook()
 
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
 
         # Make three calls
         await client.generate(
@@ -315,7 +315,7 @@ async def test_llm_events_searchable_in_eventbus():
     """LLM events should be searchable after publishing."""
     install_llm_event_hook()
 
-    client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+    client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
     await client.generate(
         messages=[{"role": "user", "content": "Searchable test [search_test]"}],
     )
@@ -352,7 +352,7 @@ async def test_llm_event_includes_cost_fields():
     unique_id = str(uuid.uuid4())[:8]
 
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[{"role": "user", "content": f"Say 'cost test' [{unique_id}]"}],
         )
@@ -467,7 +467,7 @@ async def test_hook_works_when_installed_from_different_thread():
 
     # Now make LLM call from main thread and verify event is captured
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[{"role": "user", "content": "Cross-thread test [xthread]"}],
         )
@@ -513,7 +513,7 @@ async def test_hook_works_when_installed_via_asyncio_to_thread():
 
     # Make LLM call from main async context
     async with capture_events("LLM") as captured:
-        client = unillm.AsyncUnify("gpt-4.1-nano@openai", cache=True)
+        client = unillm.AsyncUnify("openai/gpt-4.1-nano@openrouter", cache=True)
         await client.generate(
             messages=[{"role": "user", "content": "asyncio.to_thread test [tothread]"}],
         )

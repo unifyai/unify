@@ -39,12 +39,24 @@ class TestLLMProviderValidation:
         """Validation succeeds when at least one credential is set."""
         settings = ProductionSettings(
             UNITY_VALIDATE_LLM_PROVIDERS=True,
+            OPENAI_API_KEY="",
+            ANTHROPIC_API_KEY="sk-ant-test",
+            DEEPSEEK_API_KEY="",
+            OPENROUTER_API_KEY="",
+        )
+        settings.validate_llm_providers()
+
+    def test_validation_rejects_openai_only_credentials(self):
+        """OpenAI chat models route via OpenRouter, so its key grants no access."""
+        settings = ProductionSettings(
+            UNITY_VALIDATE_LLM_PROVIDERS=True,
             OPENAI_API_KEY="sk-test",
             ANTHROPIC_API_KEY="",
             DEEPSEEK_API_KEY="",
             OPENROUTER_API_KEY="",
         )
-        settings.validate_llm_providers()
+        with pytest.raises(RuntimeError):
+            settings.validate_llm_providers()
 
     def test_validation_passes_when_openrouter_credential_provided(self):
         """Validation accepts OpenRouter for *@openrouter platform defaults."""

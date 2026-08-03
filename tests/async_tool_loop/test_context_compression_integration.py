@@ -891,7 +891,7 @@ async def test_compression_restart_omits_parent_chat_context(monkeypatch):
     )
     handle._client = MagicMock()
     handle._client.messages = [{"role": "user", "content": "loop"}]
-    handle._client.endpoint = "gpt-4o@openai"
+    handle._client.endpoint = "openai/gpt-4o@openrouter"
     handle._loop_config = {
         "loop_id": "test-loop",
         "parent_lineage": [],

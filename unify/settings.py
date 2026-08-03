@@ -78,6 +78,8 @@ class ProductionSettings(BaseSettings):
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Provider Credentials
     # ─────────────────────────────────────────────────────────────────────────
+    # OpenAI — speech-to-text and realtime voice only. OpenAI chat models are
+    # reached as ``openai/<id>@openrouter``, so this cannot satisfy LLM access.
     OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     DEEPSEEK_API_KEY: SecretStr = SecretStr("")
@@ -314,7 +316,6 @@ class ProductionSettings(BaseSettings):
         if not self.UNITY_VALIDATE_LLM_PROVIDERS:
             return
         available = {
-            "OPENAI_API_KEY": self.OPENAI_API_KEY,
             "ANTHROPIC_API_KEY": self.ANTHROPIC_API_KEY,
             "DEEPSEEK_API_KEY": self.DEEPSEEK_API_KEY,
             "OPENROUTER_API_KEY": self.OPENROUTER_API_KEY,
@@ -322,7 +323,7 @@ class ProductionSettings(BaseSettings):
         if not any(available.values()):
             raise RuntimeError(
                 "At least one LLM provider credential is required. "
-                "Set OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+                "Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
                 "and/or DEEPSEEK_API_KEY.",
             )
 

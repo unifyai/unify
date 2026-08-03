@@ -97,7 +97,7 @@ class TestEvalTransformation:
 
 
 class TestMakeUpdateTool:
-    _ENDPOINT = "gpt-4o@openai"
+    _ENDPOINT = "openai/gpt-4o@openrouter"
 
     def test_overwrite_entry(self):
         entries = {
@@ -310,7 +310,7 @@ class TestCompressAndRebuild:
         result = await compress_and_rebuild(
             state,
             messages,
-            "gpt-4o@openai",
+            "openai/gpt-4o@openrouter",
             original_tools,
         )
 
@@ -349,7 +349,12 @@ class TestCompressAndRebuild:
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": "response"},
         ]
-        await compress_and_rebuild(state, pass1_messages, "gpt-4o@openai", {})
+        await compress_and_rebuild(
+            state,
+            pass1_messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         assert state.count == 1
         assert len(state.entries) == 2
@@ -364,7 +369,12 @@ class TestCompressAndRebuild:
             {"role": "user", "content": "follow-up"},
             {"role": "assistant", "content": "answer"},
         ]
-        await compress_and_rebuild(state, pass2_messages, "gpt-4o@openai", {})
+        await compress_and_rebuild(
+            state,
+            pass2_messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         assert state.count == 2
         mock_received = call_log["messages"]
@@ -415,7 +425,12 @@ class TestCompressAndRebuild:
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi there"},
         ]
-        result = await compress_and_rebuild(state, messages, "gpt-4o@openai", {})
+        result = await compress_and_rebuild(
+            state,
+            messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         non_compressed_sys = [
             m for m in result.system_msgs if not m.get("_compressed_message")
@@ -447,7 +462,12 @@ class TestCompressAndRebuild:
             },
             {"role": "assistant", "content": "I see a red pixel."},
         ]
-        result1 = await compress_and_rebuild(state, pass1_messages, "gpt-4o@openai", {})
+        result1 = await compress_and_rebuild(
+            state,
+            pass1_messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         assert 0 in state.image_registry
         assert 0 in state.live_image_ids
@@ -484,7 +504,12 @@ class TestCompressAndRebuild:
             )
 
         monkeypatch.setattr(_cc_mod, "compress_messages", _pass2_mock)
-        await compress_and_rebuild(state, pass2_messages, "gpt-4o@openai", {})
+        await compress_and_rebuild(
+            state,
+            pass2_messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         assert state.next_image_id == 2
         assert 0 in state.image_registry and 1 in state.image_registry
@@ -500,7 +525,12 @@ class TestCompressAndRebuild:
             {"role": "assistant", "content": "msg-one"},
             {"role": "user", "content": "msg-two"},
         ]
-        result = await compress_and_rebuild(state, messages, "gpt-4o@openai", {})
+        result = await compress_and_rebuild(
+            state,
+            messages,
+            "openai/gpt-4o@openrouter",
+            {},
+        )
 
         unpack = result.tools["unpack_messages"]
         single = json.loads(unpack(0))
@@ -733,7 +763,7 @@ class TestMultiPassCompression:
             result = loop.run_until_complete(
                 compress_messages(
                     new_messages,
-                    "gpt-4o@openai",
+                    "openai/gpt-4o@openrouter",
                     prior_entries=prior,
                     raw_archives=archives,
                     new_indices=[2],
@@ -754,7 +784,7 @@ class TestMultiPassCompression:
             asyncio.get_event_loop().run_until_complete(
                 compress_messages(
                     [{"role": "user", "content": "a"}],
-                    "gpt-4o@openai",
+                    "openai/gpt-4o@openrouter",
                     new_indices=[0, 1],
                 ),
             )

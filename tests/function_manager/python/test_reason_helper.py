@@ -79,9 +79,9 @@ def test_venv_runner_list_llms_routes_through_runtime_rpc(
 
     def fake_rpc_call(path: str, kwargs: dict[str, Any]) -> list[str]:
         calls.append((path, kwargs))
-        return ["gpt-5.5@openai"]
+        return ["openai/gpt-5.5@openrouter"]
 
     monkeypatch.setattr(venv_runner, "rpc_call_sync", fake_rpc_call)
 
-    assert venv_runner.list_llms("openai") == ["gpt-5.5@openai"]
+    assert venv_runner.list_llms("openai") == ["openai/gpt-5.5@openrouter"]
     assert calls == [("runtime.list_llms", {"provider": "openai"})]

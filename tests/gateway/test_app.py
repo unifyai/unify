@@ -251,7 +251,7 @@ def test_unillm_route_mounted_without_admin_auth(
     resp = client_no_lifespan.post(
         "/unillm/chat/completions",
         json={
-            "model": "gpt-4o@openai",
+            "model": "openai/gpt-4o@openrouter",
             "messages": [{"role": "user", "content": "hi"}],
         },
     )

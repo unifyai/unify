@@ -126,7 +126,8 @@ async def chat_completions(
     forwarding to UniLLM.
 
     The model should be specified in UniLLM format: ``model@provider``
-    (e.g. ``claude-sonnet-4-20250514@anthropic``, ``gpt-4o@openai``).
+    (e.g. ``claude-sonnet-4-20250514@anthropic``,
+    ``openai/gpt-4o@openrouter``).
     """
     api_key = _extract_api_key(request)
     user_info = await _authenticate_user_api_key(api_key)
