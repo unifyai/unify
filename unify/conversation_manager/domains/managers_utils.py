@@ -103,6 +103,10 @@ _MESSAGE_PRODUCING_EVENTS = {
     "OutboundGoogleMeetUtterance",
     "InboundTeamsMeetUtterance",
     "OutboundTeamsMeetUtterance",
+    "GoogleMeetChatMessage",
+    "TeamsMeetChatMessage",
+    "GoogleMeetChatSent",
+    "TeamsMeetChatSent",
     "AssistantTurnInjected",
     "FastBrainNotification",
     "PhoneCallReceived",
@@ -629,6 +633,44 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     timestamp=ts,
                 )
 
+            # --- Browser-meet chat ---
+            # The `<meeting chat>` prefix is reproduced rather than inferred: the
+            # thread is flat text to the brain, so a rehydrated line without it
+            # reads as something the participant said out loud.
+            case "GoogleMeetChatMessage" | "TeamsMeetChatMessage":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    # The typist, not the call's contact. Anyone in the meeting
+                    # can type, and unlike every case above, the event carries
+                    # the real name -- resolving it from the contact would
+                    # attribute a third participant's message to whoever the
+                    # call is with.
+                    sender_name=cm_event.sender_name,
+                    thread_name=(
+                        Medium.GOOGLE_MEET
+                        if payload_cls == "GoogleMeetChatMessage"
+                        else Medium.TEAMS_MEET
+                    ),
+                    message_content=f"<meeting chat> {cm_event.content}",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "GoogleMeetChatSent" | "TeamsMeetChatSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    # Ignored for an assistant role, which renders as "You" --
+                    # passed for symmetry with every other case here.
+                    sender_name=sender_name,
+                    thread_name=(
+                        Medium.GOOGLE_MEET
+                        if payload_cls == "GoogleMeetChatSent"
+                        else Medium.TEAMS_MEET
+                    ),
+                    message_content=f"<meeting chat> {cm_event.content}",
+                    role="assistant",
+                    timestamp=ts,
+                )
+
             # --- Fast brain notification ---
             case "FastBrainNotification":
                 if cm.call_manager.has_active_google_meet:
@@ -929,11 +971,26 @@ async def actor_watch_notifications(
 
     Each type is published as a distinct CM event so the brain can tell
     them apart.
+
+    Drain guarantee: a notification enqueued in the instant before
+    ``handle.done()`` flips to ``True`` must still be observed -- the
+    producer side always enqueues before signalling completion, but the
+    ``while not handle.done()`` check races that signal. Once ``done()``
+    is observed ``True``, keep polling with a short timeout (instead of
+    exiting immediately) until the queue is actually empty.
     """
-    while not handle.done():
+    _DRAIN_TIMEOUT = 0.1
+
+    while True:
+        already_done = handle.done()
         try:
-            notif = await asyncio.wait_for(handle.next_notification(), timeout=30)
+            notif = await asyncio.wait_for(
+                handle.next_notification(),
+                timeout=_DRAIN_TIMEOUT if already_done else 30,
+            )
         except asyncio.TimeoutError:
+            if already_done:
+                break
             continue
 
         # Determine whether this is a turn-complete response or a progress
@@ -982,12 +1039,14 @@ async def actor_watch_notifications(
                 if isinstance(notif, dict)
                 else False
             )
+            kind = notif.get("type", "") if isinstance(notif, dict) else ""
             await event_broker.publish(
                 "app:actor:notification",
                 ActorNotification(
                     handle_id=handle_id,
                     response=msg,
                     completed=completed,
+                    kind=kind,
                 ).to_json(),
             )
 

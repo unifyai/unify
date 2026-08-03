@@ -57,6 +57,21 @@ EXCLUDE_DIRS = {
 # editing entries reshapes the matrix; bumps to the GitHub Actions
 # concurrency directive may also be needed if the matrix grows
 # substantially.
+#
+# Groups do not have to enumerate the directory. Whatever a split leaves
+# unnamed is still collected, in LEFTOVER_GROUP_SIZE-file batches, because
+# the alternative was silence: naming ten of tests/task_scheduler's
+# fifty-eight files meant the other forty-eight had never run in CI at
+# all, and a broken call site sat in one of them through a green suite.
+# A missing *listed* file already raises; an unlisted one used to be
+# invisible, which is the worse direction for a config nobody re-reads.
+# How many unnamed files share one matrix slot. Small enough that a slow
+# batch does not stall the matrix, large enough that adding a test file
+# does not add a VM. Files that turn out to be heavy belong in a named
+# group above, weighed against the anchors — this is the safety net, not
+# the balancing mechanism.
+LEFTOVER_GROUP_SIZE = 12
+
 SPLIT_DIRS: dict[str, list[list[str]]] = {
     "tests/task_scheduler": [
         # Group A — the heaviest single file (23 funcs heavily
@@ -231,6 +246,38 @@ def has_test_subdirs(directory):
     return False
 
 
+def split_dir_entries(directory):
+    """Return the matrix entries for a directory registered in SPLIT_DIRS.
+
+    Every named group becomes one entry, and whatever the groups leave
+    unnamed follows in LEFTOVER_GROUP_SIZE-file batches so no test file in
+    the directory can go uncollected.
+    """
+    dir_key = str(directory)
+    entries = []
+    named = set()
+
+    for group in SPLIT_DIRS[dir_key]:
+        files = [directory / fname for fname in group]
+        missing = [f for f in files if not f.exists()]
+        if missing:
+            raise RuntimeError(
+                f"SPLIT_DIRS entry for {dir_key} references files "
+                f"that do not exist: {[str(m) for m in missing]}. "
+                f"Update SPLIT_DIRS in discover_test_paths.py or "
+                f"restore the files.",
+            )
+        named.update(group)
+        entries.append(" ".join(str(f) for f in files))
+
+    leftovers = [f for f in get_direct_test_files(directory) if f.name not in named]
+    for start in range(0, len(leftovers), LEFTOVER_GROUP_SIZE):
+        batch = leftovers[start : start + LEFTOVER_GROUP_SIZE]
+        entries.append(" ".join(str(f) for f in batch))
+
+    return entries
+
+
 def get_direct_test_files(directory):
     """Get test_*.py files directly in this directory (not recursive)."""
     return sorted(
@@ -251,19 +298,8 @@ def collect_paths(directory, paths):
     # in SPLIT_DIRS, emit one matrix entry per pre-defined file group
     # rather than the single leaf-bundle the default algorithm would
     # produce.
-    dir_key = str(directory)
-    if dir_key in SPLIT_DIRS:
-        for group in SPLIT_DIRS[dir_key]:
-            files = [directory / fname for fname in group]
-            missing = [f for f in files if not f.exists()]
-            if missing:
-                raise RuntimeError(
-                    f"SPLIT_DIRS entry for {dir_key} references files "
-                    f"that do not exist: {[str(m) for m in missing]}. "
-                    f"Update SPLIT_DIRS in discover_test_paths.py or "
-                    f"restore the files.",
-                )
-            paths.append(" ".join(str(f) for f in files))
+    if str(directory) in SPLIT_DIRS:
+        paths.extend(split_dir_entries(directory))
         return
 
     has_files = has_test_files(directory)
@@ -309,20 +345,8 @@ def expand_path(path_str):
         # SPLIT_DIRS override (see top-of-module rationale): emit one
         # matrix entry per pre-defined file group so a too-large cluster
         # fits in the per-job timeout budget.
-        dir_key = str(path)
-        if dir_key in SPLIT_DIRS:
-            for group in SPLIT_DIRS[dir_key]:
-                files = [path / fname for fname in group]
-                missing = [f for f in files if not f.exists()]
-                if missing:
-                    raise RuntimeError(
-                        f"SPLIT_DIRS entry for {dir_key} references files "
-                        f"that do not exist: {[str(m) for m in missing]}. "
-                        f"Update SPLIT_DIRS in discover_test_paths.py or "
-                        f"restore the files.",
-                    )
-                paths.append(" ".join(str(f) for f in files))
-            return paths
+        if str(path) in SPLIT_DIRS:
+            return split_dir_entries(path)
 
         # Check if this directory itself is a leaf or needs expansion
         has_files = has_test_files(path)

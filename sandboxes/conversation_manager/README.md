@@ -102,7 +102,7 @@ In ``allowlist`` mode:
 - **Outside** a task run: only allowlisted action/tool names (default ``act``,
   ``execute_code``, and ``execute_function``) are written to ``Events/*``.
 - **Inside** an ``ActiveTask`` (``CURRENT_TASK_RUN_LINEAGE`` / payload
-  ``run_key`` + ``task_id``/``instance_id``): the full ManagerMethod + ToolLoop
+  ``run_key`` + ``task_id``): the full ManagerMethod + ToolLoop
   tree is persisted and stamped for join from ``Tasks/Executions``.
 
 `EVENTBUS_ORCHESTRA_PERSIST_MODE=all` (default) restores legacy “write every

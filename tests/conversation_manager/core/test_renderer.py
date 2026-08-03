@@ -755,6 +755,28 @@ class TestRenderStateWithTracking:
         assert "<in_flight_actions>" in result.full_render
         assert "<active_conversations>" in result.full_render
 
+    def test_forwards_meet_screen_share_flag(
+        self,
+        renderer,
+        contact_index,
+        notification_bar,
+    ):
+        """render_state accepts and forwards meet_screen_share_active.
+
+        ConversationManager passes this kwarg on every snapshot; the meet
+        screenshare fix originally added it only to
+        render_meet_interaction_state, so every render_state call raised
+        TypeError and no slow-brain turn could render a prompt.
+        """
+        result = renderer.render_state(
+            contact_index,
+            notification_bar,
+            in_flight_actions={},
+            google_meet_active=True,
+            meet_screen_share_active=True,
+        )
+        assert "<meet_shared_screen status='live'>" in result.full_render
+
     def test_tracks_messages_in_conversation(
         self,
         renderer,
@@ -1606,3 +1628,33 @@ class TestParticipantTimezones:
         # Match pattern like "12:30 PM (America/New_York)" or "1:30 AM (America/Los_Angeles)"
         pattern = r"\d{1,2}:\d{2} [AP]M \(America/"
         assert re.search(pattern, result), f"Time format not found in: {result}"
+
+    def test_current_time_reads_the_freezable_clock(self):
+        """The timezone block must go through ``prompt_helpers.now``.
+
+        That helper is the seam the suite freezes, and this block renders into
+        the transcript once per participant group. Reading the clock directly
+        here puts the wall-clock minute into every prompt, which changes the
+        LLM cache key on each run and makes cached flows miss.
+        """
+        from unify.conversation_manager.domains.renderer import (
+            _get_current_time_in_timezone,
+        )
+
+        # The autouse stub freezes now() at 2025-06-13 12:00 UTC.
+        assert _get_current_time_in_timezone("UTC") == "12:00 PM"
+        assert _get_current_time_in_timezone("America/New_York") == "8:00 AM"
+
+    def test_current_time_is_stable_across_repeated_renders(self):
+        """Repeated reads within a run must not drift.
+
+        ``UNITY_INCREMENTING_TIMESTAMPS`` advances the stub by microseconds so
+        **NEW** markers order correctly; at minute precision that must still
+        render one identical string, or a single prompt disagrees with itself.
+        """
+        from unify.conversation_manager.domains.renderer import (
+            _get_current_time_in_timezone,
+        )
+
+        rendered = {_get_current_time_in_timezone("Europe/London") for _ in range(5)}
+        assert rendered == {"1:00 PM"}

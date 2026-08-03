@@ -2541,7 +2541,12 @@ async def entrypoint(ctx: agents.JobContext):
             await asyncio.sleep(_MEET_SCREENSHARE_POLL_INTERVAL_S)
 
     def _sync_meet_screenshare_poller() -> None:
-        """Start or stop the poller to match whether anyone is presenting."""
+        """Start or stop the poller to match whether anyone is presenting.
+
+        Also announces the transition to the slow brain, which otherwise has no
+        way to know: it sees only frames arriving, so the absence of a frame is
+        indistinguishable from a turn that happened not to include one.
+        """
         nonlocal _meet_screenshare_task
         nonlocal _meet_latest_screenshot, _meet_screenshare_sharer
 
@@ -2549,6 +2554,11 @@ async def entrypoint(ctx: agents.JobContext):
             _meet_screenshare_task = asyncio.create_task(
                 _meet_screenshare_poll_loop(),
             )
+            evt = MeetScreenShareStarted(
+                contact=contact,
+                reason="participant started sharing",
+            )
+            asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
             return
         if not _meet_sharing and _meet_screenshare_task is not None:
             _meet_screenshare_task.cancel()
@@ -2559,6 +2569,11 @@ async def entrypoint(ctx: agents.JobContext):
             # a stale snapshot in the fast brain's visual context outlives the
             # share and gets described as if it were still up.
             _clear_visual_context(source=channel)
+            evt = MeetScreenShareStopped(
+                contact=contact,
+                reason="participant stopped sharing",
+            )
+            asyncio.create_task(event_broker.publish(evt.topic, evt.to_json()))
 
     @session.on("conversation_item_added")
     def _on_chat_item_added(ev):
@@ -3301,6 +3316,41 @@ async def entrypoint(ctx: agents.JobContext):
     assistant._register_reply_continuation = _register_reply_continuation
     assistant._finalize_reply_hang_up = _finalize_reply_hang_up
 
+    # Console moves for the line about to be spoken, set when the slow brain's
+    # notification arrives. A single slot, because a newer slow-brain line
+    # supersedes an older one (see ``_queued_speech.clear()``) and its moves
+    # must be superseded with it rather than fire against the wrong words.
+    _pending_console_steps: list = []
+
+    def _publish_console_script(script_id: str, spoken_text: str) -> None:
+        """Hand Console the moves to make while this line plays.
+
+        Sent before playout begins and complete in one message, so the whole
+        sequence runs with no further round trip. Console aligns each move
+        against the synchronized transcript it is already receiving, which is
+        also what makes a barge-in drop the moves not yet reached.
+        """
+        nonlocal _pending_console_steps
+        steps = _pending_console_steps
+        _pending_console_steps = []
+        if not steps:
+            return
+
+        async def _send() -> None:
+            await ctx.room.local_participant.publish_data(
+                json.dumps(
+                    {
+                        "type": "console_script",
+                        "scriptId": script_id,
+                        "spokenText": spoken_text,
+                        "steps": steps,
+                    },
+                ).encode(),
+                topic="console_actions",
+            )
+
+        asyncio.create_task(_send())
+
     def _speak_now(
         text: "str | AsyncIterable[str]",
         notification_id: str,
@@ -3318,6 +3368,7 @@ async def entrypoint(ctx: agents.JobContext):
                 },
             )
             _log.notification_say(text, notification_source=notification_source)
+            _publish_console_script(notification_id, text)
             handle = session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
             _register_interruptible_tts(
                 handle,
@@ -3527,6 +3578,7 @@ async def entrypoint(ctx: agents.JobContext):
     def on_notification(data: dict) -> None:
         """Handle notifications from conversation manager."""
         nonlocal assistant_screen_share_active, _agent_service_url
+        nonlocal _pending_console_steps
         if data.get("event_name") == "AssistantTurnInjected":
             payload = data.get("payload") or {}
             apply_assistant_turn_injection(str(payload.get("content") or ""))
@@ -3580,6 +3632,7 @@ async def entrypoint(ctx: agents.JobContext):
         # — and so a spoken turn without guidance clears any stale note.
         if notification_source == "slow_brain" and should_speak:
             assistant._fast_brain_guidance = payload.get("fast_brain_guidance", "")
+            _pending_console_steps = list(payload.get("console_steps") or [])
         notification_id = content_trace_id("guid", message or spoken_message)
         triggers_turn = notification_source not in (
             "meet_interaction",

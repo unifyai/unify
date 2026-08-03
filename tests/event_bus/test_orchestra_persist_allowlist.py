@@ -133,7 +133,6 @@ async def test_allowlist_buffers_full_tree_under_task_run_lineage(monkeypatch):
 
     with task_run_lineage_scope(
         task_id=42,
-        instance_id=7,
         run_key="live:scheduled:1:42:deadbeef:once",
     ):
         await bus.publish(
@@ -166,7 +165,6 @@ async def test_allowlist_buffers_full_tree_under_task_run_lineage(monkeypatch):
     for entries, _ctx in buffered:
         assert entries.get("run_key") == "live:scheduled:1:42:deadbeef:once"
         assert entries.get("task_id") == 42
-        assert entries.get("instance_id") == 7
 
 
 @pytest.mark.asyncio

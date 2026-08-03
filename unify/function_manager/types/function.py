@@ -148,6 +148,14 @@ class Function(AuthoredRow):
     )
 
     # Source-defined custom function tracking
+    custom_key: Optional[str] = Field(
+        None,
+        description=(
+            "Stable sync identity of a source-defined custom function. "
+            "Defined to equal the function name (the call-site contract). "
+            "None for user-added functions or primitives."
+        ),
+    )
     custom_hash: Optional[str] = Field(
         None,
         description=(

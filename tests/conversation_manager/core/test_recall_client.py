@@ -525,3 +525,97 @@ async def test_realtime_endpoints_are_nested_under_recording_config() -> None:
     assert endpoints[0]["url"] == "wss://comms/meet/events?room=r&token=t"
     # The compliance pin shares this dict with three features now.
     assert payload["recording_config"]["retention"] is None
+
+
+# ---------------------------------------------------------------------------
+# Outbound screenshare (the assistant's own desktop)
+# ---------------------------------------------------------------------------
+
+
+def _request_call(session) -> tuple[str, str]:
+    """The (method, path) of the last request, with the region base stripped.
+
+    The client hands ``session.request`` a fully-qualified URL; the path is what
+    these tests are pinning.
+    """
+    method, url = session.request.call_args.args[:2]
+    return method, url.replace("https://us-west-2.recall.ai/api/v1", "")
+
+
+@pytest.mark.asyncio
+async def test_start_screenshare_never_names_the_camera() -> None:
+    """The camera is the page bridging audio, and must not be touched.
+
+    Merge-vs-replace on this endpoint is undocumented, so naming the camera at
+    all risks replacing or reloading the page carrying the assistant's voice.
+    Recall also states the camera cannot be turned off while output media is on,
+    so there is nothing to preserve by re-sending it. The withdrawn
+    implementation re-sent it on every change; losing audio mid-meeting is what
+    got it withdrawn.
+    """
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).start_screenshare(
+            "bot_1",
+            "https://comms/meet/desktop?t=x",
+        )
+
+    method, path = _request_call(session)
+    payload = _create_payload(session)
+    assert (method, path) == ("POST", "/bot/bot_1/output_media/")
+    assert set(payload) == {"screenshare"}, "camera must be absent"
+    assert payload["screenshare"]["kind"] == "webpage"
+    assert payload["screenshare"]["config"]["url"] == "https://comms/meet/desktop?t=x"
+
+
+@pytest.mark.asyncio
+async def test_stop_screenshare_deletes_only_the_screenshare_surface() -> None:
+    """DELETE with the surface named is the documented stop.
+
+    Clearing it by re-POSTing a camera-only body -- what the withdrawn version
+    did -- is undocumented and leans on the same merge behaviour.
+    """
+    session = _mock_session(status=204, text="")
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).stop_screenshare("bot_1")
+
+    method, path = _request_call(session)
+    assert (method, path) == ("DELETE", "/bot/bot_1/output_media/")
+    assert _create_payload(session) == {"screenshare": True}
+
+
+@pytest.mark.asyncio
+async def test_a_desktop_capable_assistant_gets_render_headroom() -> None:
+    """Two rendered pages do not fit in the default variant's 250 millicores.
+
+    The variant is fixed for the bot's whole life, so it has to be chosen at join
+    -- there is no upgrading at the moment somebody asks to share.
+    """
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+            may_screenshare=True,
+        )
+
+    payload = _create_payload(session)
+    assert payload["variant"]["google_meet"] == "web_4_core"
+    # Headroom only. Requesting participant video is a separate decision and must
+    # not ride along on it.
+    assert "video_separate_png" not in payload["recording_config"]
+
+
+@pytest.mark.asyncio
+async def test_an_assistant_with_no_desktop_pays_for_no_headroom() -> None:
+    """It can never share, so the surcharge would buy nothing."""
+    session = _mock_session(body={"id": "bot_1"})
+    with patch("aiohttp.ClientSession", return_value=session):
+        await _client(session).create_bot(
+            meeting_url="https://meet.google.com/abc",
+            bot_name="Unify",
+            bridge_page_url="https://comms/meet/bridge?token=t",
+        )
+
+    assert "variant" not in _create_payload(session)

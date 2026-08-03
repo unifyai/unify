@@ -25,9 +25,11 @@ import asyncio
 import logging
 import os
 import zoneinfo
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, AsyncIterator, List, Optional
 
 from unisdk.async_admin import AsyncSpendClient, SpendRequestError
 
@@ -38,7 +40,86 @@ logger = logging.getLogger(__name__)
 
 LIMIT_CHECK_TIMEOUT = 5.0
 
+#: Providers an account may only reach once it has real payment history.
+#:
+#: These are the models whose per-call cost is high enough that a signup's
+#: free grant buys a meaningful amount of them, which makes them the ones
+#: worth farming an account for. Requiring payment first removes the return
+#: on creating the account at all, rather than trying to detect the misuse
+#: afterwards.
+#:
+#: Provider-scoped rather than model-scoped on purpose: a per-model list has
+#: to be revised every time a vendor ships, and the gap between the ship and
+#: the revision is the exposure.
+PAYMENT_GATED_PROVIDERS = frozenset(
+    p.strip().lower()
+    for p in os.environ.get("PAYMENT_GATED_PROVIDERS", "anthropic").split(",")
+    if p.strip()
+)
+
 _spend_client: Optional[AsyncSpendClient] = None
+_spend_client_key: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class _CallerContext:
+    """Per-request caller identity for limit checks with no assistant session.
+
+    The assistant runtime identifies its caller process-wide (``UNIFY_KEY``
+    plus ``SESSION_DETAILS``), but a multi-tenant host — the gateway's
+    ``/unillm/chat/completions`` proxy — serves a different user on every
+    request and must not read either. Setting this contextvar redirects
+    :func:`_get_api_key` and :func:`_get_spend_client` at the caller for the
+    duration of one request.
+    """
+
+    api_key: str
+    user_id: Optional[str] = None
+    org_id: Optional[int] = None
+    client: Optional[AsyncSpendClient] = None
+
+
+_CALLER: ContextVar[Optional[_CallerContext]] = ContextVar(
+    "unify_limit_check_caller",
+    default=None,
+)
+
+
+@asynccontextmanager
+async def caller_context(
+    api_key: str,
+    *,
+    user_id: Optional[str] = None,
+    org_id: Optional[int] = None,
+) -> AsyncIterator[None]:
+    """Scope limit checks to one caller's API key for the enclosed block.
+
+    Wrap any host-side LLM call made on behalf of an authenticated third
+    party in this, so the balance / trial-cap / spending-cap gates resolve
+    against *their* wallet rather than the host process's ``UNIFY_KEY``.
+
+    The spend client is created and closed per request rather than cached
+    per key: a public endpoint sees unbounded distinct keys, and a keyed
+    cache would grow without limit and hold a connection pool open for
+    every caller that ever hit the process.
+    """
+    client = AsyncSpendClient(api_key=api_key, timeout=LIMIT_CHECK_TIMEOUT)
+    token = _CALLER.set(
+        _CallerContext(
+            api_key=api_key,
+            user_id=user_id,
+            org_id=org_id,
+            client=client,
+        ),
+    )
+    try:
+        yield
+    finally:
+        _CALLER.reset(token)
+        try:
+            await client.close()
+        except Exception as e:  # pragma: no cover - close is best-effort
+            logger.warning(f"Failed to close spend client: {type(e).__name__}: {e}")
 
 
 def _charges_billing() -> bool:
@@ -50,19 +131,37 @@ def _charges_billing() -> bool:
 
 
 def _get_api_key() -> Optional[str]:
-    """Get the user API key for Orchestra calls."""
+    """Get the user API key for Orchestra calls.
+
+    An active :func:`caller_context` wins over the process key so a
+    multi-tenant host checks the caller's wallet, not its own.
+    """
+    caller = _CALLER.get()
+    if caller is not None:
+        return caller.api_key
     return os.getenv("UNIFY_KEY")
 
 
 def _get_spend_client() -> AsyncSpendClient:
-    """Get or create the shared AsyncSpendClient for limit checks."""
-    global _spend_client
+    """Get or create the AsyncSpendClient for limit checks.
+
+    Inside a :func:`caller_context` this is that request's own client.
+    Otherwise it is the process-wide client, recreated when ``UNIFY_KEY``
+    changes so a client cached under a stale key never authenticates
+    later checks.
+    """
+    caller = _CALLER.get()
+    if caller is not None and caller.client is not None:
+        return caller.client
+
+    global _spend_client, _spend_client_key
     api_key = _get_api_key()
-    if _spend_client is None or _spend_client.closed:
+    if _spend_client is None or _spend_client.closed or _spend_client_key != api_key:
         _spend_client = AsyncSpendClient(
             api_key=api_key,
             timeout=LIMIT_CHECK_TIMEOUT,
         )
+        _spend_client_key = api_key
     return _spend_client
 
 
@@ -85,6 +184,18 @@ class _LimitCheckResult:
     # endpoint didn't surface the field — older Orchestra builds — in
     # which case we fall back to the legacy CREDITS-mode behaviour.
     billing_mode: Optional[str] = None
+    # Account frozen server-side (admin freeze, card gate, abuse sweep).
+    account_suspended: bool = False
+    # Trial daily-burn ceiling: populated by Orchestra only for accounts
+    # with no real payment history.
+    trial_daily_spend: Optional[float] = None
+    trial_daily_cap: Optional[float] = None
+    # The check could not be completed (Orchestra unreachable or errored).
+    # Distinct from a clean 404, which legitimately means "no limit set".
+    check_failed: bool = False
+    # Whether this account may spend outside the Console. Only the
+    # multi-tenant (proxy) path acts on it.
+    api_access_allowed: bool = True
 
 
 @dataclass(frozen=True)
@@ -120,12 +231,21 @@ def _parse_spend_result(
     limit_set_at = data.get("limit_set_at")
     credit_balance = data.get("credit_balance")
     billing_mode = data.get("billing_mode")
+    gate_fields = {
+        "account_suspended": bool(data.get("account_suspended", False)),
+        "trial_daily_spend": data.get("trial_daily_spend"),
+        "trial_daily_cap": data.get("trial_daily_cap"),
+        # Defaults True so an Orchestra build predating the field — or an
+        # endpoint that doesn't carry it — never silently locks the API.
+        "api_access_allowed": bool(data.get("api_access_allowed", True)),
+    }
 
     if limit is None:
         return _LimitCheckResult(
             exceeded=False,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
+            **gate_fields,
         )
 
     return _LimitCheckResult(
@@ -139,6 +259,7 @@ def _parse_spend_result(
         organization_id=organization_id,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
+        **gate_fields,
     )
 
 
@@ -226,10 +347,10 @@ async def _check_assistant_limit(
         if e.status == 404:
             return _LimitCheckResult(exceeded=False)
         logger.warning(f"Failed to check assistant limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
     except Exception as e:
         logger.warning(f"Failed to check assistant limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
 
 
 async def _check_user_limit(
@@ -245,10 +366,10 @@ async def _check_user_limit(
         if e.status == 404:
             return _LimitCheckResult(exceeded=False)
         logger.warning(f"Failed to check user limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
     except Exception as e:
         logger.warning(f"Failed to check user limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
 
 
 async def _check_member_limit(
@@ -274,10 +395,10 @@ async def _check_member_limit(
         if e.status == 404:
             return _LimitCheckResult(exceeded=False)
         logger.warning(f"Failed to check member limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
     except Exception as e:
         logger.warning(f"Failed to check member limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
 
 
 async def _check_org_limit(
@@ -298,10 +419,10 @@ async def _check_org_limit(
         if e.status == 404:
             return _LimitCheckResult(exceeded=False)
         logger.warning(f"Failed to check org limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
     except Exception as e:
         logger.warning(f"Failed to check org limit: {type(e).__name__}: {e}")
-        return _LimitCheckResult(exceeded=False)
+        return _LimitCheckResult(exceeded=False, check_failed=True)
 
 
 async def _notify_limit_reached(
@@ -349,6 +470,28 @@ async def _notify_limit_reached(
         logger.warning(f"Failed to send spending limit notification: {e}")
 
 
+def _provider_of(model: str) -> Optional[str]:
+    """Extract the provider from a UniLLM ``model@provider`` endpoint.
+
+    The model half may itself contain ``/`` (``openai/gpt-5.6-terra``) and
+    the provider is always the trailing segment, so split on the last ``@``.
+    Returns ``None`` for a bare model name, which routes by UniLLM's own
+    default rather than naming a provider here.
+    """
+    _, sep, provider = model.rpartition("@")
+    if not sep:
+        return None
+    return provider.strip().lower() or None
+
+
+def _payment_gated(model: str, *, never_paid: bool) -> bool:
+    """Whether this call is for a paid-only provider on an unpaid account."""
+    if not never_paid:
+        return False
+    provider = _provider_of(model)
+    return provider is not None and provider in PAYMENT_GATED_PROVIDERS
+
+
 async def check_spending_limits_callback(
     request: "LimitCheckRequest",
 ) -> "LimitCheckResponse":
@@ -378,26 +521,38 @@ async def check_spending_limits_callback(
     user_id = SESSION_DETAILS.user_id
     org_id = SESSION_DETAILS.org_id  # None for personal context
 
+    # A multi-tenant host (the gateway proxy) has no session; its caller
+    # identity arrives per request instead. SESSION_DETAILS is a process
+    # singleton there and would either be empty or — worse, if some other
+    # code path ever populated it — describe the wrong tenant.
+    caller = _CALLER.get()
+    if caller is not None:
+        user_id = caller.user_id or ""
+        org_id = caller.org_id
+        agent_id = None
+
     timezone = "UTC"
     if SESSION_DETAILS.assistant:
         timezone = SESSION_DETAILS.assistant.timezone or "UTC"
-
-    if not agent_id or not user_id:
-        logger.debug("Spending limit check skipped: missing context")
-        return LimitCheckResponse(allowed=True)
 
     month = _get_current_month(timezone)
 
     checks: List[asyncio.Task] = []
 
-    checks.append(
-        asyncio.create_task(
-            _check_assistant_limit(agent_id, month),
-        ),
-    )
+    # The raw-API path (gateway/CLI usage with a bare UNIFY_KEY) carries no
+    # assistant session, but the ``/user/spend`` endpoint resolves the key
+    # owner's wallet server-side, so the balance/cap gates always apply.
+    # Skipping the check when session context is missing would fail open —
+    # exactly the channel free-credit farmers extract through.
+    if agent_id:
+        checks.append(
+            asyncio.create_task(
+                _check_assistant_limit(agent_id, month),
+            ),
+        )
 
     is_org_context = org_id is not None
-    if is_org_context:
+    if is_org_context and user_id:
         checks.append(
             asyncio.create_task(
                 _check_member_limit(user_id, org_id, month),
@@ -411,7 +566,7 @@ async def check_spending_limits_callback(
     else:
         checks.append(
             asyncio.create_task(
-                _check_user_limit(user_id, month),
+                _check_user_limit(user_id or "api-key-owner", month),
             ),
         )
 
@@ -427,16 +582,30 @@ async def check_spending_limits_callback(
 
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
+    account_suspended = False
+    trial_daily_spend: Optional[float] = None
+    trial_daily_cap: Optional[float] = None
+    check_failed = False
+    api_access_allowed = True
 
     for result in results:
         if isinstance(result, Exception):
             logger.warning(f"Limit check failed with exception: {result}")
+            check_failed = True
             continue
+
+        check_failed = check_failed or result.check_failed
+        api_access_allowed = api_access_allowed and result.api_access_allowed
 
         if credit_balance is None and result.credit_balance is not None:
             credit_balance = result.credit_balance
         if billing_mode is None and result.billing_mode is not None:
             billing_mode = result.billing_mode
+        account_suspended = account_suspended or result.account_suspended
+        if trial_daily_spend is None and result.trial_daily_spend is not None:
+            trial_daily_spend = result.trial_daily_spend
+        if trial_daily_cap is None and result.trial_daily_cap is not None:
+            trial_daily_cap = result.trial_daily_cap
 
         if result.exceeded:
             current = (
@@ -458,6 +627,83 @@ async def check_spending_limits_callback(
                 entity_id=result.entity_id,
                 entity_name=result.entity_name,
             )
+
+    # Fail closed for a multi-tenant caller whose limits could not be
+    # verified. The runtime deliberately fails open here — an Orchestra
+    # blip should not stall a paying customer's assistant mid-task — but
+    # on a public endpoint spending money against a wallet we just failed
+    # to read, "allow" is an abuse channel: induce the error, spend freely.
+    # Availability of someone else's trial credits is not worth protecting.
+    if check_failed and caller is not None:
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                "Unable to verify account spending limits. " "Please retry shortly."
+            ),
+        )
+
+    # Console-only free credits. Applies solely to the multi-tenant path:
+    # a caller context means someone reached the platform through the
+    # public API, and an account still on free money is not entitled to
+    # that route. The runtime has no caller context, so Console-driven
+    # work is untouched — spending free credits there is the point.
+    if caller is not None and not api_access_allowed:
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                "This account's free credits can only be spent through the "
+                "Unify Console. Add a payment method to enable API access."
+            ),
+        )
+
+    # Hard deny for server-side frozen accounts (admin freeze, card-gate
+    # sweep, abuse-fingerprint sweep).
+    if account_suspended:
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                "This account is suspended. Add a payment method or "
+                "contact support to restore access."
+            ),
+        )
+
+    # Paid-only providers. ``trial_daily_cap`` is Orchestra's never-paid
+    # marker: it is populated only for accounts with no real payment
+    # history, and is already NULL for internal accounts and for orgs
+    # holding an admin-granted free trial, so those keep full model access
+    # without a second exemption list here.
+    #
+    # Unlike the Console-only gate above this applies on every surface,
+    # including the runtime. An account that has never paid cannot reach
+    # these providers from the Console either — that is the point, since
+    # the Console is where the free grant is meant to be spent and these
+    # models are what make spending it worthwhile.
+    if _payment_gated(request.model, never_paid=trial_daily_cap is not None):
+        provider = _provider_of(request.model)
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                f"{provider} models require a payment method on this "
+                "account. Add one to enable them, or switch this assistant "
+                "to one of the included models."
+            ),
+        )
+
+    # Trial daily-burn ceiling (never-paid accounts only): bounds how fast
+    # trial credits can be extracted regardless of remaining balance.
+    if (
+        trial_daily_cap is not None
+        and trial_daily_spend is not None
+        and trial_daily_spend >= trial_daily_cap
+    ):
+        return LimitCheckResponse(
+            allowed=False,
+            reason=(
+                f"Daily trial spend limit reached (${trial_daily_spend:.2f} "
+                f"of ${trial_daily_cap:.2f} today). It resets at midnight "
+                "UTC; subscribe with a payment method to lift it."
+            ),
+        )
 
     # Credit-balance gate. METERED accounts pay by monthly invoice via
     # ``monthly_metered_invoicer`` and intentionally have a zero wallet
@@ -503,6 +749,35 @@ def install_limit_check_hook() -> None:
         pass
     except Exception as e:
         logger.debug(f"Failed to install limit check hook: {e}")
+
+
+def install_multi_tenant_limit_check_hook() -> None:
+    """Install the limit-check hook in a host that serves many callers.
+
+    Identical to :func:`install_limit_check_hook` except that it does not
+    require a process-wide ``UNIFY_KEY``. A multi-tenant host (the
+    gateway's ``/unillm/chat/completions`` proxy) authenticates a
+    different user on every request and supplies that user's key through
+    :func:`caller_context`; there may be no process key at all.
+
+    Requiring one at install time is not a harmless extra check — it is
+    why the proxy shipped enforcing no spending limits whatsoever: the
+    hook was never installed, and UniLLM treats a missing hook as
+    "allowed".
+    """
+    if not _charges_billing():
+        logger.debug("Limit check hook not installed: platform billing disabled")
+        return
+
+    try:
+        import unillm
+
+        unillm.set_limit_check_hook(check_spending_limits_callback)
+        logger.info("Multi-tenant limit check hook installed")
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning(f"Failed to install multi-tenant limit check hook: {e}")
 
 
 def uninstall_limit_check_hook() -> None:

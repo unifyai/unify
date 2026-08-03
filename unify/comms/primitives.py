@@ -23,7 +23,11 @@ import uuid
 from typing import TYPE_CHECKING, Any, Mapping
 
 from unify.common.hierarchical_logger import DEFAULT_ICON
-from unify.common.plain_text import normalize_outbound_plain_text
+from unify.common.plain_text import (
+    PLACEHOLDER_CONTENT_ERROR,
+    is_placeholder_outbound_content,
+    normalize_outbound_plain_text,
+)
 from unify.common.prompt_helpers import now as prompt_now
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.domains import comms_utils
@@ -793,6 +797,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
 
@@ -995,6 +1001,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
 
@@ -1357,6 +1365,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:discord_message_sent"
@@ -1526,6 +1536,8 @@ class CommsPrimitives:
             _coerce_contact_id(contact_id) if contact_id is not None else None
         )
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         offline_reservation = None
         resolved_contact = self._normalize_optional_contact(normalized_contact_id)
         if resolved_contact is not None:
@@ -1689,6 +1701,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         contact = self._get_contact(contact_id=contact_id)
@@ -1907,6 +1921,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:ms_teams_bot_message_sent"
 
@@ -2030,6 +2046,8 @@ class CommsPrimitives:
         """
         contact_id = _coerce_contact_id(contact_id)
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:ms_teams_bot_channel_message_sent"
 
@@ -2169,6 +2187,8 @@ class CommsPrimitives:
             _coerce_contact_id(contact_id) if contact_id is not None else None
         )
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         team_id = team_id or self._assistant_slack_team_id()
         offline_reservation = None
         resolved_contact = self._normalize_optional_contact(normalized_contact_id)
@@ -2358,6 +2378,8 @@ class CommsPrimitives:
             why the send could not complete.
         """
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         offline_reservation = None
         is_channel = bool(channel_id and team_id)
         is_chat_reply = bool(chat_id) and not is_channel
@@ -3260,6 +3282,8 @@ class CommsPrimitives:
             None if contact_id is None else _coerce_contact_id(contact_id)
         )
         content = normalize_outbound_plain_text(content)
+        if is_placeholder_outbound_content(content):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         if (team_id is not None or group_id is not None) and attachment_filepath:
             return {
                 "error": "Team/group chat messages do not support attachments. "
@@ -3716,6 +3740,8 @@ class CommsPrimitives:
             why the email could not be sent.
         """
         body = normalize_outbound_plain_text(body)
+        if is_placeholder_outbound_content(body):
+            return {"error": PLACEHOLDER_CONTENT_ERROR}
         from unify.file_manager.filesystem_adapters.local_adapter import (
             LocalFileSystemAdapter,
         )

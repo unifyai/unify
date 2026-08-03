@@ -325,3 +325,145 @@ async def test_state_returns_none_on_api_failure() -> None:
     provider = _provider()
     provider._client.get_bot = AsyncMock(side_effect=RecallError("nope"))
     assert await provider.state(channel="google_meet", session_id="bot_1") is None
+
+
+# ---------------------------------------------------------------------------
+# Outbound screenshare (the assistant's own desktop)
+# ---------------------------------------------------------------------------
+
+
+DESKTOP_ENV = {
+    "MEET_BRIDGE_PAGE_URL": BRIDGE,
+    "RECALL_RELAY_SECRET": "relay-secret",  # pragma: allowlist secret
+}
+
+
+def _presenting_provider():
+    """A provider whose managed desktop is entitled, healthy and reachable."""
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock()
+    return provider
+
+
+def _page_query(provider) -> dict:
+    page_url = provider._client.start_screenshare.call_args.args[1]
+    return {k: v[0] for k, v in parse_qs(urlparse(page_url).query).items()}
+
+
+@pytest.mark.asyncio
+async def test_present_frames_the_managed_desktop_liveview() -> None:
+    """The meeting sees the real desktop, not a reconstruction of it."""
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        assert await provider.present(channel="google_meet", session_id="bot_1")
+
+    query = _page_query(provider)
+    assert query["liveview"] == "https://vm.example.com/desktop/custom.html"
+    assert query["sig"], "the page refuses an unsigned liveview"
+
+
+@pytest.mark.asyncio
+async def test_the_page_url_is_signed_so_it_cannot_frame_anything_else() -> None:
+    """The page is unauthenticated: Recall loads it with no credential of ours.
+
+    Unsigned, it would frame any URL anyone handed it on our own domain. The
+    signature must be reproducible by the page, and must cover the liveview -- a
+    signature over something else would let the URL be swapped.
+    """
+    import hashlib
+    import hmac
+
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        await provider.present(channel="google_meet", session_id="bot_1")
+
+    query = _page_query(provider)
+    payload = f"{query['liveview']}\x00{query.get('password', '')}".encode()
+    expected = hmac.new(
+        DESKTOP_ENV["RECALL_RELAY_SECRET"].encode(),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    assert query["sig"] == expected
+
+
+@pytest.mark.asyncio
+async def test_present_refuses_when_the_desktop_is_not_serving() -> None:
+    """Entitlement is not liveness.
+
+    A dead VM would otherwise put noVNC's own error dialog on the meeting's main
+    stage, which reads as the assistant being broken rather than the desktop.
+    """
+    provider = _presenting_provider()
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        assert (
+            await provider.present(channel="google_meet", session_id="bot_1") is False
+        )
+    provider._client.start_screenshare.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_present_reports_failure_rather_than_raising() -> None:
+    """The assistant must be able to say it could not share.
+
+    Claiming a screen is up when none is buys a participant hunting for it.
+    """
+    provider = _provider()
+    provider._client.start_screenshare = AsyncMock(side_effect=RecallError("nope"))
+    with (
+        patch.dict("os.environ", DESKTOP_ENV, clear=False),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.resolve_desktop_urls",
+            return_value=("https://vm.example.com", "https://vm.example.com"),
+        ),
+        patch(
+            "unify.conversation_manager.domains.recall.provider.desktop_proxy_healthy",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        assert (
+            await provider.present(channel="google_meet", session_id="bot_1") is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_stop_present_delegates_and_survives_a_gone_bot() -> None:
+    provider = _provider()
+    provider._client.stop_screenshare = AsyncMock()
+    assert await provider.stop_present(channel="google_meet", session_id="bot_1")
+    assert provider._client.stop_screenshare.call_args.args[0] == "bot_1"
+
+    provider._client.stop_screenshare = AsyncMock(side_effect=RecallError("gone"))
+    assert (
+        await provider.stop_present(channel="google_meet", session_id="bot_1") is False
+    )

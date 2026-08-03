@@ -30,6 +30,11 @@ from unify.conversation_manager.domains.recall.client import (
     RecallBotState,
     meet_bridge_base_url,
 )
+from unify.conversation_manager.domains.self_host_desktop import (
+    desktop_proxy_healthy,
+    resolve_desktop_urls,
+)
+from unify.session_details import SESSION_DETAILS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -120,6 +125,12 @@ class RecallMeetProvider:
                     "unify_assistant_id": self._assistant_id,
                 },
                 capture_participant_video=self._capture_participant_video,
+                # Decided here because the variant is fixed for the bot's whole
+                # life: an assistant with a managed desktop may be asked to share
+                # it at any point, and there is no upgrading the bot at that
+                # moment. An assistant with no desktop can never share, so it pays
+                # nothing.
+                may_screenshare=SESSION_DETAILS.assistant.has_managed_desktop,
             )
         except RecallError as exc:
             LOGGER.error("[recall] %s join failed: %s", channel, exc)
@@ -175,12 +186,92 @@ class RecallMeetProvider:
             LOGGER.warning("[recall] chat send failed for %s: %s", session_id, exc)
             return False
 
+    async def present(self, *, channel: str = "", session_id: str) -> bool:
+        """Put the assistant's live desktop on the bot's screenshare surface.
+
+        The bot renders a page of ours which frames the managed VM's own noVNC
+        liveview, so the meeting sees the real desktop at VNC's frame rate rather
+        than a reconstruction of it.
+
+        Health is checked first because entitlement is not liveness: an assistant
+        can be entitled to a desktop whose VM is down, and the failure mode there
+        is a noVNC error dialog on the meeting's main stage.
+        """
+        _ = channel
+        browser_url, api_url = resolve_desktop_urls()
+        if not browser_url:
+            LOGGER.error("[recall] no managed desktop URL; cannot present")
+            return False
+        if not await desktop_proxy_healthy(api_url):
+            LOGGER.warning(
+                "[recall] desktop proxy is not serving noVNC; not presenting",
+            )
+            return False
+
+        try:
+            page_url = self._desktop_page_url(browser_url)
+        except RuntimeError as exc:
+            LOGGER.error("[recall] could not build the desktop page URL: %s", exc)
+            return False
+        try:
+            await self._client.start_screenshare(session_id, page_url)
+            return True
+        except RecallError as exc:
+            LOGGER.warning("[recall] present failed for %s: %s", session_id, exc)
+            return False
+
+    async def stop_present(self, *, channel: str = "", session_id: str) -> bool:
+        """Drop the screenshare surface, leaving the audio bridge alone."""
+        _ = channel
+        try:
+            await self._client.stop_screenshare(session_id)
+            return True
+        except RecallError as exc:
+            LOGGER.warning("[recall] stop-present failed for %s: %s", session_id, exc)
+            return False
+
+    def _desktop_page_url(self, browser_desktop_url: str) -> str:
+        """URL of the page that frames the managed desktop's noVNC liveview.
+
+        Wrapped in a page of ours rather than handing Recall the liveview
+        directly, so the framing decisions -- scaling the VM's resolution into the
+        bot's fixed viewport, hiding the VNC chrome, and swallowing noVNC's own
+        error dialogs -- are ours to make. All three would otherwise be visible on
+        the meeting's main stage.
+        """
+
+        base = meet_bridge_base_url()
+        if not base:
+            raise RuntimeError("MEET_BRIDGE_PAGE_URL must be set")
+
+        secret = (os.environ.get("RECALL_RELAY_SECRET") or "").strip()
+        if not secret:
+            raise RuntimeError("RECALL_RELAY_SECRET must be set to sign the page URL")
+
+        liveview = f"{browser_desktop_url.rstrip('/')}/desktop/custom.html"
+        # The VNC password is the assistant's own API key, which is how Console
+        # reaches the same surface.
+        password = SESSION_DETAILS.unify_key
+        query = urlencode(
+            {
+                "liveview": liveview,
+                "password": password,
+                # The page is unauthenticated -- Recall's browser loads it with no
+                # credential of ours -- so without this it would frame any URL
+                # anyone handed it, on our own domain. Signing binds it to URLs
+                # this pod minted.
+                #
+                # MIRRORED: ``sign_liveview`` in unity-deploy's
+                # ``communication/meet_desktop_page.py``. Two repos, one
+                # construction; a mismatch is a 403 the assistant reports as "could
+                # not share".
+                "sig": _sign_liveview(liveview, password, secret),
+            },
+        )
+        return f"{base}/desktop?{query}"
+
     def _bridge_url(self, room_name: str, display_name: str) -> str:
-        server_url = (os.environ.get("LIVEKIT_URL") or "").strip()
-        api_key = (os.environ.get("LIVEKIT_API_KEY") or "").strip()
-        api_secret = (os.environ.get("LIVEKIT_API_SECRET") or "").strip()
-        if not server_url or not api_key or not api_secret:
-            raise RuntimeError("LIVEKIT_URL / _API_KEY / _API_SECRET must all be set")
+        server_url, api_key, api_secret = _livekit_credentials()
 
         token = (
             AccessToken(api_key, api_secret)
@@ -223,6 +314,31 @@ class RecallMeetProvider:
         query = urlencode({"room": room_name, "token": secret})
         separator = "&" if "?" in self._relay_url else "?"
         return f"{self._relay_url}{separator}{query}"
+
+
+def _sign_liveview(liveview: str, password: str, secret: str) -> str:
+    """Signature the desktop page checks before framing a liveview URL.
+
+    MIRRORED: ``sign_liveview`` in unity-deploy's
+    ``communication/meet_desktop_page.py``. Change both together.
+    """
+
+    import hashlib
+    import hmac
+
+    payload = f"{liveview}\x00{password}".encode()
+    return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+
+
+def _livekit_credentials() -> tuple[str, str, str]:
+    """Server URL and signing key pair, or a hard failure naming what is missing."""
+
+    server_url = (os.environ.get("LIVEKIT_URL") or "").strip()
+    api_key = (os.environ.get("LIVEKIT_API_KEY") or "").strip()
+    api_secret = (os.environ.get("LIVEKIT_API_SECRET") or "").strip()
+    if not server_url or not api_key or not api_secret:
+        raise RuntimeError("LIVEKIT_URL / _API_KEY / _API_SECRET must all be set")
+    return server_url, api_key, api_secret
 
 
 def _participant_video_enabled() -> bool:
