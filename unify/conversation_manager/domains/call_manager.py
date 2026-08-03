@@ -1313,10 +1313,9 @@ class LivekitCallManager:
     async def start_meet_screenshare(self) -> bool:
         """Share the assistant's desktop with the active browser meeting.
 
-        Two systems have to agree, in this order: the pod starts publishing its
-        desktop into the room, *then* the bot is pointed at the page that renders
-        it. Reversed, the bot loads a page with no track yet and the meeting is
-        shown a placeholder before the desktop appears.
+        The desktop is the managed VM's own liveview, framed by a page the bot
+        renders, so putting it up is a single call to the meeting backend -- there
+        is nothing on this side to start or keep running.
         """
         session_id = self._meet_session_id
         channel = self._call_channel or ""
@@ -1329,26 +1328,15 @@ class LivekitCallManager:
         if self._meet_presenting:
             return True
 
-        await self._set_desktop_share(True)
         ok = await self.meet_provider.present(
             channel=channel,
             session_id=session_id,
-            room_name=self.room_name,
         )
-        if not ok:
-            # Nothing is being shown, so nothing should be published either.
-            await self._set_desktop_share(False)
-            return False
-        self._meet_presenting = True
-        return True
+        self._meet_presenting = ok
+        return ok
 
     async def stop_meet_screenshare(self) -> bool:
-        """Stop sharing the desktop, leaving the meeting and its audio intact.
-
-        The reverse order of starting: drop the surface first, then stop
-        publishing. Unpublishing first would leave the meeting looking at a frozen
-        or black share for as long as the API call takes.
-        """
+        """Stop sharing the desktop, leaving the meeting and its audio intact."""
         session_id = self._meet_session_id
         channel = self._call_channel or ""
         if not session_id or not self._meet_presenting:
@@ -1358,22 +1346,11 @@ class LivekitCallManager:
             channel=channel,
             session_id=session_id,
         )
-        await self._set_desktop_share(False)
+        # Cleared either way: a failed stop leaves the surface up, but claiming to
+        # still be presenting would hide the ``start`` tool behind an idempotence
+        # guard and make the state unrecoverable for the rest of the meeting.
         self._meet_presenting = False
         return ok
-
-    async def _set_desktop_share(self, active: bool) -> None:
-        """Tell the voice worker to start or stop publishing the desktop.
-
-        The tool runs here, but only the worker process is in the LiveKit room,
-        so the decision crosses over IPC.
-        """
-        if self._socket_server is None:
-            return
-        await self._socket_server.queue_for_clients(
-            "app:call:desktop_share",
-            json.dumps({"active": bool(active)}),
-        )
 
     async def _watch_meet_state(self, channel: str) -> None:
         """Track the meeting backend's own view of the session.
@@ -1472,6 +1449,11 @@ class LivekitCallManager:
         self._meet_session_id = None
         self._meet_joining = False
         self._meet_lobby_waiting = False
+        # Per-meeting, like the flags above. This manager outlives individual
+        # meetings, so leaving it set would make the next one start believing it
+        # is already presenting: the start tool would be replaced by the stop
+        # tool, and starting would return success without putting anything up.
+        self._meet_presenting = False
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED
