@@ -161,7 +161,7 @@ async def classify_with_small_model(email_text: str):
     return await query_llm(
         email_text,
         system="Return a compact category and confidence for email triage.",
-        model="openai/gpt-4.1-nano@openrouter",
+        model="openai/gpt-5.4-mini@openrouter",
         temperature=0.0,
     )
 
@@ -195,7 +195,7 @@ async def draft_replies_for_messages(messages: list[dict]) -> list[dict]:
             f"From: {message.get('from')}\n\n"
             f"{message.get('body')}",
             response_format=DraftDecision,
-            model="openai/gpt-4.1-nano@openrouter",
+            model="openai/gpt-5.4-mini@openrouter",
             temperature=0.0,
         )
         drafts.append({

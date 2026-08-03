@@ -63,8 +63,8 @@ def list_llms(provider: str | None = None) -> list[str]:
     """Return supported UniLLM endpoint strings available in this runtime.
 
     Endpoint strings use ``model@provider`` form, such as
-    ``"openai/gpt-4.1-nano@openrouter"``. Pass ``provider`` to filter to one provider,
-    e.g. ``list_llms("openai")``.
+    ``"openai/gpt-5.4-mini@openrouter"``. Pass ``provider`` to filter to one
+    provider, e.g. ``list_llms("openrouter")``.
 
     Use this helper when choosing a concrete ``model=`` value for
     ``query_llm(...)``. Do not hardcode assumptions about which endpoints are
@@ -98,7 +98,14 @@ def get_llm_model_selection_context() -> str:
         ### Choosing A Model For `query_llm(...)`
 
         Pass model overrides as UniLLM endpoint strings, e.g.
-        `model="openai/gpt-4.1-nano@openrouter"`.
+        `model="openai/gpt-5.4-mini@openrouter"`.
+
+        Reach OpenAI models through `@openrouter`, never through `@openai`.
+        The two suffixes are different providers: `@openai` is a native OpenAI
+        endpoint, and that account is inactive, so those calls burn a minute of
+        retries against a billing error before failing. `list_llms()` reports
+        every endpoint the runtime knows about, including native `@openai`
+        ones — being listed is not the same as being routable.
 
         For durable or recurring stored functions, choose `model=` deliberately.
         Do not silently inherit the default high-reasoning model for bounded,
@@ -118,8 +125,8 @@ def get_llm_model_selection_context() -> str:
         model shopping inside the hot path of a recurring task.
 
         Use `list_llms()` to inspect the supported endpoint strings registered
-        in the current runtime. Use `list_llms("openai")` or another provider
-        name when you only need endpoints for one provider.
+        in the current runtime. Use `list_llms("openrouter")` or another
+        provider name when you only need endpoints for one provider.
 
         Practical defaults:
         - Use cheap/fast models for bounded classification, routing, extraction,
@@ -245,7 +252,7 @@ async def query_llm(
             "in the user's voice. Return null for draft_reply when no reply is needed.\\n"
             f"Subject: {subject}\\nFrom: {sender}\\nBody: {body}",
             response_format=EmailDraftDecision,
-            model="openai/gpt-4.1-nano@openrouter",
+            model="openai/gpt-5.4-mini@openrouter",
         )
 
     Custom rubric with ``system`` for consistent bulk classification::
