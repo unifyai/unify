@@ -24,6 +24,7 @@ from unify.function_manager.steering import (
     AROUND_CP_FN,
     CP_FN,
     ControlledInterruption,
+    ExecutionStopped,
     InterruptionRequest,
     Patch,
     SteeringSession,
@@ -51,7 +52,23 @@ async def run_block(source: str, session: SteeringSession, namespace: dict) -> o
     return await namespace["__w"]()
 
 
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
+
+
 # ── probes ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_plain_checkpoint_fires_a_stop_request():
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("abandon this")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with pytest.raises(ControlledInterruption, match="abandon this"):
+        await session.cp("before a bare statement")
+
+
 def test_loop_body_is_probed_before_its_side_effect():
     out = built("for v in vendors:\n    await primitives.comms.send(v)\n")
     body = out.split("for v in vendors:\n")[1]
@@ -388,6 +405,52 @@ async def test_correction_that_cannot_be_applied_surfaces():
             run_source,
             session=session,
         )
+
+
+@pytest.mark.asyncio
+async def test_stop_request_ends_without_a_retry():
+    notifications: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(notification_q=notifications)
+    session.interruption = InterruptionRequest(reason="no longer needed", stop=True)
+
+    async def run_source(_: str):
+        raise ControlledInterruption("no longer needed")
+
+    with pytest.raises(ExecutionStopped, match="no longer needed") as exc_info:
+        await run_with_steering(
+            "value = 1\n",
+            run_source,
+            session=session,
+        )
+
+    assert exc_info.value.outcome == {
+        "status": "stopped",
+        "reason": "no longer needed",
+    }
+    assert session.retries == 0
+    assert (await notifications.get())["type"] == "steering_stop"
+
+
+@pytest.mark.asyncio
+async def test_in_process_stop_is_a_clean_execution_result():
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("do not run this")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+    sandbox = PythonExecutionSession()
+
+    try:
+        from unify.function_manager.steering import use_session
+
+        with use_session(session):
+            out = await sandbox.execute("value = 1\n")
+    finally:
+        await sandbox.close()
+
+    assert out["error"] is None
+    assert out["result"] == {
+        "status": "stopped",
+        "reason": "do not run this",
+    }
 
 
 @pytest.mark.asyncio

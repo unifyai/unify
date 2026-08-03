@@ -22,7 +22,8 @@ The main process can also push a control directive at any time, outside the
 request/response rhythm. A directive is not a reply: it is read by the
 checkpoint shims that parent-instrumented source calls between dispatches.
 
-    {"type": "control", "action": "interrupt", "reason": str, "functions": [str]}
+    {"type": "control", "action": "interrupt",
+     "reason": str, "functions": [str], "stop": bool}
 
 Final response from subprocess:
     {"type": "complete", "result": Any, "error": str|null, "stdout": str, "stderr": str}
@@ -119,6 +120,7 @@ _main_msgs: Queue = Queue()
 #: point: a checkpoint costs one attribute read, not an RPC round trip.
 _interrupt_reason: str | None = None
 _interrupt_functions: frozenset = frozenset()
+_interrupt_stop: bool = False
 
 
 class ControlledInterruption(Exception):
@@ -143,17 +145,19 @@ def send_message(msg: dict) -> None:
 
 def _apply_control(msg: dict) -> None:
     """Record a control directive where the checkpoints will see it."""
-    global _interrupt_reason, _interrupt_functions
+    global _interrupt_reason, _interrupt_functions, _interrupt_stop
     if msg.get("action") == "interrupt":
         _interrupt_functions = frozenset(msg.get("functions") or ())
+        _interrupt_stop = bool(msg.get("stop"))
         _interrupt_reason = str(msg.get("reason") or "steered")
 
 
 def _clear_interrupt() -> None:
     """Forget a consumed interrupt so the next (patched) run starts clean."""
-    global _interrupt_reason, _interrupt_functions
+    global _interrupt_reason, _interrupt_functions, _interrupt_stop
     _interrupt_reason = None
     _interrupt_functions = frozenset()
+    _interrupt_stop = False
 
 
 def _fail_pending_rpc(error: str) -> None:
@@ -498,18 +502,25 @@ class _ChildRuntime:
 
 
 async def _cp(label: str = "") -> None:
-    """Cooperative checkpoint; a yield point and nothing more.
+    """Cooperative checkpoint for control that applies to the whole block.
 
     Pause is not propagated to subprocesses: the parent already holds RPC
     replies while paused, and nothing in the runtime drives a pause between
     dispatches.
     """
-    return
+    if _interrupt_reason is not None and _interrupt_stop:
+        raise ControlledInterruption(_interrupt_reason)
 
 
 async def _int(func_name: str) -> None:
-    """Raise if the parent's pending correction targets *func_name*."""
-    if _interrupt_reason is not None and func_name in _interrupt_functions:
+    """Raise if the parent's pending correction targets *func_name*.
+
+    A stop directive targets whatever is running, so it fires at every
+    checkpoint regardless of the enclosing function.
+    """
+    if _interrupt_reason is not None and (
+        _interrupt_stop or func_name in _interrupt_functions
+    ):
         raise ControlledInterruption(_interrupt_reason)
 
 

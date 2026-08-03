@@ -35,6 +35,7 @@ from unify.function_manager.steering import (
     InterruptionRequest,
     Patch,
     SteeringSession,
+    interrupt_directive,
     use_session,
 )
 
@@ -106,6 +107,10 @@ async def _author(*, interjections, session):
         reason=interjections[0],
         patches=[Patch(function_name="notify_vendors", source=EU_ONLY_PATCH)],
     )
+
+
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
 
 
 @pytest.fixture
@@ -293,6 +298,36 @@ async def test_one_shot_venv_run_is_unchanged_without_a_session(
         _cleanup_venv(fm, venv_id)
 
 
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_ends_a_one_shot_venv_run_cleanly(function_manager_factory):
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the sends")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    try:
+        with use_session(session):
+            out = await fm.execute_in_venv(
+                venv_id=venv_id,
+                implementation=IMPLEMENTATION,
+                call_kwargs={"vendors": list(VENDORS)},
+                is_async=True,
+                primitives=_Prims(comms),
+            )
+
+        assert out["error"] is None
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "cancel the sends",
+        }
+        assert comms.sent == []
+    finally:
+        _cleanup_venv(fm, venv_id)
+
+
 # ── the full loop, pooled persistent connection ─────────────────────────────
 @_handle_project
 @pytest.mark.asyncio
@@ -329,6 +364,41 @@ async def test_correction_reaches_a_pooled_venv_run(function_manager_factory):
         assert "eu-delta" in comms.sent
         assert session.cache.hits >= 1, "the retry redid the prefix"
         assert out["result"] == ["sent:eu-alpha", "sent:eu-delta"]
+    finally:
+        await pool.close()
+        _cleanup_venv(fm, venv_id)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_ends_a_pooled_venv_run_cleanly(function_manager_factory):
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+    await fm.prepare_venv(venv_id=venv_id)
+    pool = VenvPool()
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the sends")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    try:
+        with use_session(session):
+            out = await pool.execute_in_venv(
+                venv_id=venv_id,
+                implementation=IMPLEMENTATION,
+                call_kwargs={"vendors": list(VENDORS)},
+                is_async=True,
+                session_id=0,
+                primitives=_Prims(comms),
+                function_manager=fm,
+            )
+
+        assert out["error"] is None
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "cancel the sends",
+        }
+        assert comms.sent == []
     finally:
         await pool.close()
         _cleanup_venv(fm, venv_id)
@@ -397,13 +467,33 @@ async def test_child_int_shim_raises_only_for_targeted_functions():
 
 
 @pytest.mark.asyncio
+async def test_child_checkpoint_raises_for_a_stop_directive():
+    from unify.function_manager import venv_runner
+
+    venv_runner._apply_control(
+        {
+            "type": "control",
+            "action": "interrupt",
+            "reason": "cancel the run",
+            "functions": [],
+            "stop": True,
+        },
+    )
+    try:
+        with pytest.raises(venv_runner.ControlledInterruption, match="cancel the run"):
+            await venv_runner._cp("before a bare statement")
+    finally:
+        venv_runner._clear_interrupt()
+
+
+@pytest.mark.asyncio
 async def test_relay_sends_one_directive_when_a_correction_targets():
     queue: asyncio.Queue = asyncio.Queue()
     session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
     sent: list = []
 
-    async def _send_control(message):
-        sent.append(message)
+    async def _send_control(request):
+        sent.append(interrupt_directive(request))
 
     relay = asyncio.create_task(
         session.relay_corrections(
@@ -428,8 +518,8 @@ async def test_relay_ignores_corrections_that_target_nothing_here():
     session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
     sent: list = []
 
-    async def _send_control(message):
-        sent.append(message)
+    async def _send_control(request):
+        sent.append(interrupt_directive(request))
 
     relay = asyncio.create_task(
         session.relay_corrections(
