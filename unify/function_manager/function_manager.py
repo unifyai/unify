@@ -4989,10 +4989,18 @@ class FunctionManager(BaseFunctionManager):
     # 2. Listing -------------------------------------------------------- #
 
     def list_function_name_to_ids(self) -> Dict[str, int]:
-        """Return ``{name: function_id}`` without pulling implementations.
+        """Return the authoritative ``{name: function_id}`` catalogue.
 
         Used by deployment reconcile for guidance/task entrypoint resolution.
         Prefer this over :meth:`list_functions` when only ids are needed.
+
+        Deployment references are resolved independently of the current
+        runtime's discovery surface. A headless runtime can legitimately hide
+        desktop- or integration-gated functions from actor discovery, but
+        their stored ids must still be available when reconciling tasks that
+        execute in a different environment. Therefore compositional rows are
+        read without ``filter_scope`` or environment exclusions here; ordinary
+        list/filter/search operations remain scoped.
         """
 
         mapping: Dict[str, int] = {}
@@ -5000,7 +5008,6 @@ class FunctionManager(BaseFunctionManager):
             try:
                 logs = unisdk.get_logs(
                     context=context,
-                    filter=self._scoped_filter(None),
                     from_fields=["name", "function_id"],
                 )
             except Exception:
