@@ -16,6 +16,7 @@ During execution, subprocess can send RPC requests:
 Main process responds with:
     {"type": "rpc_result", "id": str, "result": Any}
     {"type": "rpc_error", "id": str, "error": str}
+    {"type": "rpc_interrupt", "id": str, "reason": str}
 
 Final response from subprocess:
     {"type": "complete", "result": Any, "error": str|null, "stdout": str, "stderr": str}
@@ -101,6 +102,16 @@ _stdin_lock = threading.Lock()
 _stdout_lock = threading.Lock()
 
 
+class ControlledInterruption(Exception):
+    """Raised at a blocked RPC call site when the parent interrupts the run.
+
+    The parent holds a correction for this block and wants the attempt to
+    unwind so it can re-send patched source. Calls the attempt already
+    completed replay from the parent's cache on the re-run, so unwinding here
+    does not repeat their effects.
+    """
+
+
 def send_message(msg: dict) -> None:
     """Send a JSON message to stdout (to main process)."""
     with _stdout_lock:
@@ -141,6 +152,8 @@ def rpc_call_sync(path: str, kwargs: dict) -> Any:
         # Wait for response
         response = response_queue.get(timeout=300)  # 5 minute timeout
 
+        if response.get("type") == "rpc_interrupt":
+            raise ControlledInterruption(response.get("reason") or "interrupted")
         if response.get("type") == "rpc_error":
             raise RuntimeError(f"RPC error: {response.get('error')}")
 
@@ -901,7 +914,7 @@ def run_with_rpc_loop(
                 line = sys.__stdin__.readline()
                 if line:
                     msg = json.loads(line.strip())
-                    if msg.get("type") in ("rpc_result", "rpc_error"):
+                    if msg.get("type") in ("rpc_result", "rpc_error", "rpc_interrupt"):
                         dispatch_rpc_response(msg)
         except Exception:
             # On Windows or if select fails, just do blocking read with thread check
@@ -1037,7 +1050,7 @@ def run_server_with_rpc_loop(
                 line = sys.__stdin__.readline()
                 if line:
                     msg = json.loads(line.strip())
-                    if msg.get("type") in ("rpc_result", "rpc_error"):
+                    if msg.get("type") in ("rpc_result", "rpc_error", "rpc_interrupt"):
                         dispatch_rpc_response(msg)
         except Exception:
             pass
