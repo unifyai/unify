@@ -102,3 +102,21 @@ async def test_delete(tmp_path):
     # Test deleting a non-existent file
     with pytest.raises(FileNotFoundError):
         ad.delete("non_existent_file.txt")
+
+
+def test_abspath_maps_managed_vm_paths_into_the_workspace(tmp_path):
+    """A VM-side ``/Unity/Local/...`` path addresses the pod's synced tree.
+
+    The two machines expose the same synced tree at different absolute roots, so
+    re-rooting a VM path verbatim yielded ``<root>/Unity/Local/...`` and failed
+    the send with "File not found" while the file sat in the workspace.
+    """
+    root = tmp_path / "root"
+    (root / "Outputs").mkdir(parents=True)
+    (root / "Outputs" / "shot.jpg").write_bytes(b"jpeg")
+    ad = LocalFileSystemAdapter(root.as_posix())
+
+    assert ad._abspath("/Unity/Local/Outputs/shot.jpg") == root / "Outputs" / "shot.jpg"
+    assert ad.get_file("/Unity/Local/Outputs/shot.jpg").name == "shot.jpg"
+    # Workspace identities from _relativize keep re-rooting as before.
+    assert ad._abspath("/Outputs/shot.jpg") == root / "Outputs" / "shot.jpg"
