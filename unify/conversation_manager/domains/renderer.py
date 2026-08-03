@@ -607,6 +607,7 @@ class Renderer:
         user_remote_control_active: bool = False,
         google_meet_active: bool = False,
         teams_meet_active: bool = False,
+        meet_screen_share_active: bool = False,
         active_web_sessions: list | None = None,
         managers_initialized: bool = True,
         vm_ready: bool = True,
@@ -649,6 +650,7 @@ class Renderer:
             user_remote_control_active=user_remote_control_active,
             google_meet_active=google_meet_active,
             teams_meet_active=teams_meet_active,
+            meet_screen_share_active=meet_screen_share_active,
         )
         _meet_ms = _mark_step()
 
