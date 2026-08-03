@@ -319,6 +319,62 @@ def test_task_adapter_derived_stale_detects_repointed_entrypoint():
     assert not adapter.derived_stale("k", {"entrypoint": 1}, {})
 
 
+@_handle_project
+@pytest.mark.asyncio
+@pytest.mark.requires_orchestra
+async def test_unresolved_entrypoint_update_preserves_stored_id(
+    task_scheduler_factory,
+    tmp_path,
+):
+    """A filtered lookup must never turn a symbolic task agentic.
+
+    Resolution can be temporarily incomplete when the reconciling runtime
+    cannot discover a function that executes elsewhere. Updating other task
+    fields in that state must leave the last known entrypoint intact.
+    """
+    from unify.function_manager.function_manager import FunctionManager
+
+    function_manager = FunctionManager(include_primitives=False)
+    function_manager.add_functions(
+        implementations="def run_elsewhere():\n    return 'ok'\n",
+    )
+    function_id = function_manager.list_function_name_to_ids()["run_elsewhere"]
+
+    tasks_dir = tmp_path / "entrypoint-preservation"
+    tasks_dir.mkdir()
+
+    def write_source(description):
+        row = {
+            "key": "ops/runs-elsewhere",
+            "name": "Runs elsewhere",
+            "description": description,
+            "repeat": [{"frequency": "daily"}],
+            "entrypoint_function": "run_elsewhere",
+        }
+        (tasks_dir / TASKS_JSONL_FILENAME).write_text(json.dumps(row) + "\n")
+        return collect_custom_tasks(path=tasks_dir)
+
+    scheduler = task_scheduler_factory()
+    scheduler.sync_custom_tasks(
+        source_tasks=write_source("Version one."),
+        function_name_to_id={"run_elsewhere": function_id},
+    )
+
+    scheduler._custom_tasks_synced_sources.clear()
+    scheduler.sync_custom_tasks(
+        source_tasks=write_source("Version two."),
+        function_name_to_id={},
+    )
+
+    rows = scheduler._filter_tasks(
+        filter="custom_key == 'ops/runs-elsewhere'",
+        limit=1,
+    )
+    assert len(rows) == 1
+    assert rows[0].entrypoint == function_id
+    assert rows[0].description == "Version two."
+
+
 def test_entrypoint_resolution_participates_in_the_sync_hash():
     """A function renumbering must invalidate the stored aggregate hash,
     or the reconcile short-circuits and dangling entrypoints never heal."""

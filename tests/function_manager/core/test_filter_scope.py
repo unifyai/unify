@@ -57,6 +57,29 @@ def test_filter_scope_filters_list_functions():
     assert "hello_world" not in listing
 
 
+@_handle_project
+def test_entrypoint_id_catalogue_ignores_runtime_discovery_scope():
+    """Deployment references resolve against storage, not actor visibility.
+
+    A runtime can hide functions because an integration is disabled or an
+    execution environment is unavailable. That must affect discovery only:
+    task reconciliation still needs the stored ids for functions that execute
+    in another environment.
+    """
+    fm_all = _FM()
+    fm_all.add_functions(implementations=[_PY_ALPHA, _PY_BETA])
+    fm_all.add_functions(implementations=_SH_HELLO, language="sh")
+    all_ids = fm_all.list_function_name_to_ids()
+
+    fm_scoped = _FM(
+        filter_scope="language == 'python'",
+        exclude_compositional_ids={all_ids["alpha"], all_ids["hello_world"]},
+    )
+
+    assert set(fm_scoped.list_functions()) == {"beta"}
+    assert fm_scoped.list_function_name_to_ids() == all_ids
+
+
 # --------------------------------------------------------------------------- #
 #  filter_functions                                                            #
 # --------------------------------------------------------------------------- #

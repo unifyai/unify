@@ -1,12 +1,18 @@
 """Steering venv-backed execution from the parent side of the RPC channel.
 
-Out-of-process code needs no instrumentation to be steered: every
-``primitives.*`` call round-trips to the parent and blocks the child until the
-reply arrives, so the reply itself is the checkpoint. These tests assert that
-the parent memoises those dispatches for replay, interrupts the child at a
-dispatch when a correction lands, and re-runs the patched source — on both the
-one-shot subprocess path and the pooled persistent-connection path, since the
-pooled path is the one that would no-op silently if its handler were missed.
+Out-of-process code needs no instrumentation to be steered at its side
+effects: every ``primitives.*`` call round-trips to the parent and blocks the
+child until the reply arrives, so the reply itself is the checkpoint. These
+tests assert that the parent memoises those dispatches for replay, interrupts
+the child at a dispatch when a correction lands, and re-runs the patched
+source — on both the one-shot subprocess path and the pooled
+persistent-connection path, since the pooled path is the one that would no-op
+silently if its handler were missed.
+
+Between dispatches the child is invisible to the RPC channel, so the parent
+additionally ships instrumented source and pushes interrupt directives over a
+control channel; the tests at the end pin that a correction reaches a loop
+that makes no primitive call at all.
 
 The mechanism is asserted with the patch supplied directly; whether a real
 model writes a usable one is the eval question, covered on the in-process
@@ -323,6 +329,217 @@ async def test_correction_reaches_a_pooled_venv_run(function_manager_factory):
         assert "eu-delta" in comms.sent
         assert session.cache.hits >= 1, "the retry redid the prefix"
         assert out["result"] == ["sent:eu-alpha", "sent:eu-delta"]
+    finally:
+        await pool.close()
+        _cleanup_venv(fm, venv_id)
+
+
+# ── corrections between dispatches (instrumented child source) ─────────────
+COMPUTE_LOOP_IMPLEMENTATION = (
+    "async def crunch_numbers():\n"
+    "    await primitives.comms.send(to='started')\n"
+    "    total = 0\n"
+    "    for i in range(2000):\n"
+    "        total += i\n"
+    "        await asyncio.sleep(0.005)\n"
+    "    await primitives.comms.send(to='finished')\n"
+    "    return total\n"
+)
+
+CUT_SHORT_PATCH = (
+    "async def crunch_numbers():\n"
+    "    await primitives.comms.send(to='started')\n"
+    "    await primitives.comms.send(to='cut-short')\n"
+    "    return -1\n"
+)
+
+
+async def _cut_short_author(*, interjections, session):
+    return InterruptionRequest(
+        reason=interjections[0],
+        patches=[Patch(function_name="crunch_numbers", source=CUT_SHORT_PATCH)],
+    )
+
+
+def test_instrumented_source_carries_probes():
+    from unify.function_manager.function_manager import _instrument_for_child
+
+    shipped = _instrument_for_child(COMPUTE_LOOP_IMPLEMENTATION)
+    assert "_cp(" in shipped and "_int(" in shipped
+
+
+def test_unparseable_source_ships_unchanged():
+    from unify.function_manager.function_manager import _instrument_for_child
+
+    source = "def broken(\n"
+    assert _instrument_for_child(source) == source
+
+
+@pytest.mark.asyncio
+async def test_child_int_shim_raises_only_for_targeted_functions():
+    from unify.function_manager import venv_runner
+
+    venv_runner._apply_control(
+        {
+            "type": "control",
+            "action": "interrupt",
+            "reason": "stop",
+            "functions": ["crunch_numbers"],
+        },
+    )
+    try:
+        with pytest.raises(venv_runner.ControlledInterruption):
+            await venv_runner._int("crunch_numbers")
+        await venv_runner._int("unrelated")
+        await venv_runner._cp("still a plain yield point")
+    finally:
+        venv_runner._clear_interrupt()
+
+
+@pytest.mark.asyncio
+async def test_relay_sends_one_directive_when_a_correction_targets():
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
+    sent: list = []
+
+    async def _send_control(message):
+        sent.append(message)
+
+    relay = asyncio.create_task(
+        session.relay_corrections(
+            COMPUTE_LOOP_IMPLEMENTATION,
+            _send_control,
+            poll_interval=0.01,
+        ),
+    )
+    await queue.put("cut it short")
+    await asyncio.wait_for(relay, timeout=2.0)
+
+    assert len(sent) == 1
+    directive = sent[0]
+    assert directive["action"] == "interrupt"
+    assert directive["functions"] == ["crunch_numbers"]
+    assert session.interruption is not None, "the retry loop owns consuming it"
+
+
+@pytest.mark.asyncio
+async def test_relay_ignores_corrections_that_target_nothing_here():
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
+    sent: list = []
+
+    async def _send_control(message):
+        sent.append(message)
+
+    relay = asyncio.create_task(
+        session.relay_corrections(
+            "async def other_function():\n    return 1\n",
+            _send_control,
+            poll_interval=0.01,
+        ),
+    )
+    await queue.put("cut it short")
+    await asyncio.sleep(0.1)
+    relay.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await relay
+
+    assert sent == []
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_correction_reaches_a_non_dispatching_loop_one_shot(
+    function_manager_factory,
+):
+    """The loop makes no primitive call, so only an instrumented checkpoint
+    fed by the control channel can see the correction arrive."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
+    steerer = _patch_after(comms, 1, queue, "cut it short")
+
+    try:
+        with use_session(session):
+            out = await fm.execute_in_venv(
+                venv_id=venv_id,
+                implementation=COMPUTE_LOOP_IMPLEMENTATION,
+                call_kwargs={},
+                is_async=True,
+                primitives=_Prims(comms),
+            )
+        await steerer
+
+        assert out["error"] is None, out["error"]
+        assert session.retries == 1
+        # The loop was cut short: its trailing dispatch never ran.
+        assert "finished" not in comms.sent
+        # Replayed, not re-sent.
+        assert comms.sent.count("started") == 1
+        assert "cut-short" in comms.sent
+        assert out["result"] == -1
+        assert session.cache.hits >= 1, "the retry redid the prefix"
+    finally:
+        _cleanup_venv(fm, venv_id)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_correction_reaches_a_non_dispatching_loop_pooled(
+    function_manager_factory,
+):
+    """Same, on the persistent child — whose interrupt state must also come
+    back clean for the very next request on that connection."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+    await fm.prepare_venv(venv_id=venv_id)
+    pool = VenvPool()
+
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
+    steerer = _patch_after(comms, 1, queue, "cut it short")
+
+    try:
+        with use_session(session):
+            out = await pool.execute_in_venv(
+                venv_id=venv_id,
+                implementation=COMPUTE_LOOP_IMPLEMENTATION,
+                call_kwargs={},
+                is_async=True,
+                session_id=0,
+                primitives=_Prims(comms),
+                function_manager=fm,
+            )
+        await steerer
+
+        assert out["error"] is None, out["error"]
+        assert session.retries == 1
+        assert "finished" not in comms.sent
+        assert comms.sent.count("started") == 1
+        assert "cut-short" in comms.sent
+        assert out["result"] == -1
+
+        # A fresh steered call on the same connection: instrumented probes
+        # run against the same child, and a stale directive would interrupt
+        # it immediately.
+        later = _Comms()
+        later_session = SteeringSession()
+        with use_session(later_session):
+            again = await pool.execute_in_venv(
+                venv_id=venv_id,
+                implementation=IMPLEMENTATION,
+                call_kwargs={"vendors": list(VENDORS)},
+                is_async=True,
+                session_id=0,
+                primitives=_Prims(later),
+                function_manager=fm,
+            )
+        assert again["error"] is None, again["error"]
+        assert later.sent == VENDORS, "a stale directive steered this call"
     finally:
         await pool.close()
         _cleanup_venv(fm, venv_id)
