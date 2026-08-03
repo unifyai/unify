@@ -544,11 +544,18 @@ jobs:
     # is what stops a refresh from *shrinking* the store. On 29 July one
     # restored nothing, merged its own 52 entries, and published that over a
     # 9586-entry history.
-    - name: Hydrate .cache.ndjson from the cross-branch artifact
-      if: steps.cache-read.outputs.cache-matched-key == ''
+    # Staged as a diff and merged, not restored on a miss. The artifact is a
+    # separate lineage from the branch-scoped Actions cache, and this job
+    # republishes it: restoring 52 entries from a branch and uploading those as
+    # the newest artifact would shadow a far larger one, which is the same
+    # most-recently-created trap the Actions cache has. Merging makes what this
+    # job publishes a superset of both, so the upload is always safe to make.
+    - name: Stage the cross-branch artifact for consolidation
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: .github/scripts/hydrate_llm_cache.sh
+      run: |
+        mkdir -p cache-artifacts/upstream
+        .github/scripts/hydrate_llm_cache.sh cache-artifacts/upstream/.cache_write.ndjson
 
     - name: Download cache diffs from matrix shards
       uses: actions/download-artifact@v4
@@ -567,15 +574,19 @@ jobs:
         # all when the file is missing, so neither case may abort the step.
         entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
         restored=$(entries .cache.ndjson)
-        # Decided here rather than in the step condition so that dying before
-        # the comparison leaves the answer at "do not publish".
+        # Decided here rather than in the step conditions so that dying before
+        # the comparison leaves both answers at "do not publish".
         echo "publish=false" >> "$GITHUB_OUTPUT"
+        echo "has_entries=false" >> "$GITHUB_OUTPUT"
         python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
         # actions/cache/save fails if the path is absent.
         touch .cache.ndjson
         merged=$(entries .cache.ndjson)
         if (( merged > restored )); then
           echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        if (( merged > 0 )); then
+          echo "has_entries=true" >> "$GITHUB_OUTPUT"
         fi
         echo "Consolidated entry count: $merged (restored $restored)"
         ls -lh .cache.ndjson
@@ -594,8 +605,14 @@ jobs:
     # is branch-scoped, so a promotion PR into main cannot restore it. Retention
     # is also the ceiling on how long the store survives with no refresh, since
     # nothing else outlives eviction.
+    #
+    # Gated on having entries rather than on growth, unlike the Actions save.
+    # The upstream artifact was merged in above, so this store is a superset of
+    # the newest one and cannot shadow it -- and requiring growth would mean a
+    # repo with no artifact yet never published a first one, because a refresh
+    # that hits every key grows nothing.
     - name: Publish the cross-branch LLM cache artifact
-      if: steps.consolidate.outputs.publish == 'true'
+      if: steps.consolidate.outputs.has_entries == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: llm-cache-ndjson

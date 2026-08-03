@@ -427,19 +427,13 @@ jobs:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-    # The Actions copy above is branch-scoped and evictable, so the completions
-    # this gate paid for only outlive the branch as an artifact. Retention is
-    # the ceiling on how long the store survives without a refresh.
-    - name: Publish the cross-branch LLM cache artifact
-      if: always() && steps.consolidate.outputs.publish == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: llm-cache-ndjson
-        path: .cache.ndjson
-        if-no-files-found: error
-        include-hidden-files: true
-        compression-level: 0
-        retention-days: 90
+    # This job deliberately does not publish llm-cache-ndjson. Readers resolve
+    # that name to the most recently created one, so a publisher whose store is
+    # not a superset of the current artifact shadows it -- and this job's store
+    # is whatever its own branch happened to restore. Only the refresh merges
+    # the upstream artifact back in, so only the refresh can publish safely.
+    # What this gate buys still reaches the Actions cache above, and the next
+    # refresh folds it onward from there.
 
     - name: Stop local orchestra
       if: always()
