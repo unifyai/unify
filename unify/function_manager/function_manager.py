@@ -60,9 +60,11 @@ from ..common.tool_outcome import ToolErrorException
 from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .steering import (
     DEFAULT_TOOL_NAMESPACES,
+    ControlledInterruption,
     MemoisedDispatch,
     active_session,
     bind_session,
+    dispatch_with_steering,
     instrument,
     restore_session,
     run_with_steering,
@@ -496,6 +498,12 @@ class _VenvConnection:
         """
         Execute a function in the persistent venv subprocess.
 
+        While a steering session is in flight, each RPC reply doubles as a
+        checkpoint and a correction re-sends the (patched) source over the
+        same connection, replaying already-completed dispatches from the
+        parent's cache. The session arrives by contextvar so it follows the
+        call rather than this long-lived connection.
+
         Args:
             implementation: The function source code.
             call_kwargs: Keyword arguments to pass to the function.
@@ -517,48 +525,70 @@ class _VenvConnection:
                     f"Venv {self._venv_id} subprocess has died (returncode={self._process.returncode})",
                 )
 
-            # Send execute request
-            await self._write_message(
-                {
-                    "type": "execute",
-                    "implementation": implementation,
-                    "call_kwargs": call_kwargs,
-                    "is_async": is_async,
-                    "env_overlay": env_overlay or {},
-                },
-            )
+            async def _attempt(source: str) -> dict:
+                """Send one execute request for *source* and relay its RPC."""
+                await self._write_message(
+                    {
+                        "type": "execute",
+                        "implementation": source,
+                        "call_kwargs": call_kwargs,
+                        "is_async": is_async,
+                        "env_overlay": env_overlay or {},
+                    },
+                )
 
-            # Handle bidirectional RPC until we get a complete message
-            async def handle_rpc_loop() -> dict:
+                # Set when a correction interrupted this attempt; the child's
+                # completion is then an unwind to discard, not a result.
+                interrupted: Optional[ControlledInterruption] = None
+
                 while True:
                     msg = await self._read_message()
                     msg_type = msg.get("type")
 
                     if msg_type == "complete":
+                        if interrupted is not None:
+                            raise interrupted
                         return msg
 
                     if msg_type == "rpc_call":
                         # Handle RPC call from subprocess
-                        rpc_result = await self._handle_rpc_call(
-                            msg,
-                            primitives=primitives,
-                            computer_primitives=computer_primitives,
-                        )
-                        await self._write_message(rpc_result)
+                        try:
+                            reply = await self._handle_rpc_call(
+                                msg,
+                                primitives=primitives,
+                                computer_primitives=computer_primitives,
+                            )
+                        except ControlledInterruption as interruption:
+                            # The child is blocked on this reply, so telling
+                            # it to unwind here is the interrupt probe
+                            # realised without instrumentation.
+                            interrupted = interruption
+                            reply = {
+                                "type": "rpc_interrupt",
+                                "id": msg.get("id"),
+                                "reason": str(interruption),
+                            }
+                        await self._write_message(reply)
                     else:
                         logger.warning(
                             f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
                         )
 
-            if timeout is not None:
+            async def _run(source: str) -> dict:
+                if timeout is None:
+                    return await _attempt(source)
                 try:
-                    return await asyncio.wait_for(handle_rpc_loop(), timeout=timeout)
+                    return await asyncio.wait_for(_attempt(source), timeout=timeout)
                 except asyncio.TimeoutError:
                     # After a timeout, the subprocess is in an unknown state.
                     # Mark it as tainted so the pool recreates it on next use.
                     self._tainted = True
                     raise
-            return await handle_rpc_loop()
+
+            steering = active_session()
+            if steering is None:
+                return await _run(implementation)
+            return await run_with_steering(implementation, _run, session=steering)
 
     async def _handle_rpc_call(
         self,
@@ -566,62 +596,31 @@ class _VenvConnection:
         primitives: Optional[Any],
         computer_primitives: Optional[Any],
     ) -> dict:
-        """Handle an RPC call from the subprocess."""
+        """Answer one RPC message from the subprocess.
+
+        Dispatch, memoisation and interrupts are shared with the one-shot
+        path via :meth:`FunctionManager._handle_rpc_call`, so a pooled session
+        cannot drift into being silently unsteerable. A
+        :class:`ControlledInterruption` propagates to the execute loop, which
+        owns telling the child to unwind.
+        """
         request_id = msg.get("id")
-        path = msg.get("path", "")
-        kwargs = msg.get("kwargs", {})
-
         try:
-            parts = path.split(".")
-            if len(parts) == 2:
-                namespace, method = parts
-                if namespace == "runtime" and method == "query_llm":
-                    from unify.common.reasoning import query_llm
-
-                    result = await query_llm(**kwargs)
-                    return {
-                        "type": "rpc_result",
-                        "id": request_id,
-                        "result": self._function_manager._make_json_serializable(
-                            result,
-                        ),
-                    }
-                if namespace == "runtime" and method == "list_llms":
-                    from unify.common.reasoning import list_llms
-
-                    result = list_llms(provider=kwargs.get("provider"))
-                    return {"type": "rpc_result", "id": request_id, "result": result}
-                if namespace == "runtime" and method == "get_oauth_access_token":
-                    from unify.common.runtime_oauth import get_oauth_access_token
-
-                    provider = kwargs.get("provider")
-                    min_ttl_seconds = int(kwargs.get("min_ttl_seconds", 300))
-                    result = get_oauth_access_token(
-                        provider,
-                        min_ttl_seconds=min_ttl_seconds,
-                    )
-                    return {"type": "rpc_result", "id": request_id, "result": result}
-                if namespace == "computer" and computer_primitives is not None:
-                    fn = getattr(computer_primitives, method, None)
-                elif primitives is not None:
-                    manager = getattr(primitives, namespace, None)
-                    fn = getattr(manager, method, None) if manager else None
-                else:
-                    fn = None
-
-                if fn is not None and callable(fn):
-                    result = fn(**kwargs)
-                    if asyncio.iscoroutine(result):
-                        result = await result
-                    return {"type": "rpc_result", "id": request_id, "result": result}
-
-            return {
-                "type": "rpc_error",
-                "id": request_id,
-                "error": f"Unknown RPC path: {path}",
-            }
+            result = await self._function_manager._handle_rpc_call(
+                path=msg.get("path", ""),
+                kwargs=msg.get("kwargs", {}),
+                primitives=primitives,
+                computer_primitives=computer_primitives,
+            )
+        except ControlledInterruption:
+            raise
         except Exception as e:
             return {"type": "rpc_error", "id": request_id, "error": str(e)}
+        return {
+            "type": "rpc_result",
+            "id": request_id,
+            "result": self._function_manager._make_json_serializable(result),
+        }
 
     async def get_state(self, timeout: float = 30.0) -> Dict[str, Any]:
         """
@@ -6290,6 +6289,13 @@ class FunctionManager(BaseFunctionManager):
         """
         Handle an RPC call from a subprocess.
 
+        Every out-of-process execution path — one-shot venv, pooled venv, and
+        shell — converges here, so this is where a steering session sees a
+        subprocess's dispatches: while a call is in flight they are memoised
+        for replay, pause holds the reply, and a pending correction raises
+        :class:`ControlledInterruption` for the caller to translate into an
+        ``rpc_interrupt`` message.
+
         Args:
             path: The RPC path (e.g., "contacts.ask", "computer.click")
             kwargs: The keyword arguments for the call
@@ -6299,6 +6305,31 @@ class FunctionManager(BaseFunctionManager):
         Returns:
             The result of the RPC call
         """
+
+        async def _dispatch() -> Any:
+            return await self._dispatch_rpc_path(
+                path=path,
+                kwargs=kwargs,
+                primitives=primitives,
+                computer_primitives=computer_primitives,
+            )
+
+        return await dispatch_with_steering(
+            active_session(),
+            path,
+            kwargs,
+            _dispatch,
+        )
+
+    async def _dispatch_rpc_path(
+        self,
+        *,
+        path: str,
+        kwargs: Dict[str, Any],
+        primitives: Optional[Any],
+        computer_primitives: Optional[Any],
+    ) -> Any:
+        """Resolve one RPC path against the runtime and primitives and call it."""
         parts = path.split(".", 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid RPC path: {path}")
@@ -6378,6 +6409,11 @@ class FunctionManager(BaseFunctionManager):
         3. Handles bidirectional RPC for primitives and computer_primitives
         4. Returns the result from the subprocess
 
+        While a steering session is in flight, each RPC reply doubles as a
+        checkpoint and a correction re-runs the (patched) source in a fresh
+        subprocess, replaying already-completed dispatches from the parent's
+        cache.
+
         Args:
             venv_id: The virtual environment to use.
             implementation: The function source code.
@@ -6401,18 +6437,7 @@ class FunctionManager(BaseFunctionManager):
         python_path = await self.prepare_venv(venv_id=venv_id)
         runner_path = self._get_venv_runner_path(venv_id)
 
-        # Prepare initial execution request
-        execute_payload: Dict[str, Any] = {
-            "type": "execute",
-            "implementation": implementation,
-            "call_kwargs": call_kwargs,
-            "is_async": is_async,
-            "env_overlay": env_overlay or self._get_runtime_oauth_env_overlay(),
-        }
-        if initial_state is not None:
-            execute_payload["initial_state"] = initial_state
-
-        execute_msg = json.dumps(execute_payload) + "\n"
+        env_overlay = env_overlay or self._get_runtime_oauth_env_overlay()
 
         # Execute in subprocess with bidirectional communication
         # Use start_new_session=True to create a new process group, allowing
@@ -6493,124 +6518,149 @@ class FunctionManager(BaseFunctionManager):
 
         from unify.provider_proxy.session import build_sandbox_env
 
-        process = await asyncio.create_subprocess_exec(
-            str(python_path),
-            str(runner_path),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=use_process_group,
-            env=build_sandbox_env(),
-        )
+        async def _attempt(source: str) -> Dict[str, Any]:
+            """Run one subprocess attempt at *source*, relaying its RPC."""
+            execute_payload: Dict[str, Any] = {
+                "type": "execute",
+                "implementation": source,
+                "call_kwargs": call_kwargs,
+                "is_async": is_async,
+                "env_overlay": env_overlay,
+            }
+            if initial_state is not None:
+                execute_payload["initial_state"] = initial_state
 
-        # Send initial execution request
-        process.stdin.write(execute_msg.encode())
-        await process.stdin.drain()
+            process = await asyncio.create_subprocess_exec(
+                str(python_path),
+                str(runner_path),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=use_process_group,
+                env=build_sandbox_env(),
+            )
 
-        # Handle bidirectional communication
-        stderr_output = []
+            # Send initial execution request
+            process.stdin.write((json.dumps(execute_payload) + "\n").encode())
+            await process.stdin.drain()
 
-        async def read_stderr():
-            """Read stderr in background."""
-            while True:
-                line = await process.stderr.readline()
-                if not line:
-                    break
-                stderr_output.append(line.decode())
+            # Handle bidirectional communication
+            stderr_output = []
 
-        stderr_task = asyncio.create_task(read_stderr())
+            async def read_stderr():
+                """Read stderr in background."""
+                while True:
+                    line = await process.stderr.readline()
+                    if not line:
+                        break
+                    stderr_output.append(line.decode())
 
-        try:
-            while True:
-                # Read next message from subprocess
-                line = await process.stdout.readline()
-                if not line:
-                    # Process ended without sending complete message
-                    await stderr_task
-                    return {
-                        "result": None,
-                        "error": "Subprocess ended unexpectedly",
-                        "stdout": "",
-                        "stderr": "".join(stderr_output),
-                    }
+            stderr_task = asyncio.create_task(read_stderr())
+            # Set when a correction interrupted this attempt; the child's
+            # completion is then an unwind to discard, not a result.
+            interrupted: Optional[ControlledInterruption] = None
 
-                try:
-                    msg = json.loads(line.decode().strip())
-                except json.JSONDecodeError as e:
-                    continue  # Skip malformed lines
-
-                msg_type = msg.get("type")
-
-                if msg_type == "rpc_call":
-                    # Handle RPC call from subprocess
-                    request_id = msg.get("id")
-                    path = msg.get("path", "")
-                    rpc_kwargs = msg.get("kwargs", {})
+            try:
+                while True:
+                    # Read next message from subprocess
+                    line = await process.stdout.readline()
+                    if not line:
+                        # Process ended without sending complete message
+                        await stderr_task
+                        if interrupted is not None:
+                            raise interrupted
+                        return {
+                            "result": None,
+                            "error": "Subprocess ended unexpectedly",
+                            "stdout": "",
+                            "stderr": "".join(stderr_output),
+                        }
 
                     try:
-                        result = await self._handle_rpc_call(
-                            path=path,
-                            kwargs=rpc_kwargs,
-                            primitives=primitives,
-                            computer_primitives=computer_primitives,
-                        )
-                        response = (
-                            json.dumps(
-                                {
-                                    "type": "rpc_result",
-                                    "id": request_id,
-                                    "result": self._make_json_serializable(result),
-                                },
-                            )
-                            + "\n"
-                        )
-                    except Exception as e:
-                        response = (
-                            json.dumps(
-                                {
-                                    "type": "rpc_error",
-                                    "id": request_id,
-                                    "error": str(e),
-                                },
-                            )
-                            + "\n"
-                        )
+                        msg = json.loads(line.decode().strip())
+                    except json.JSONDecodeError:
+                        continue  # Skip malformed lines
 
-                    process.stdin.write(response.encode())
-                    await process.stdin.drain()
+                    msg_type = msg.get("type")
 
-                elif msg_type == "complete":
-                    # Subprocess finished
+                    if msg_type == "rpc_call":
+                        # Handle RPC call from subprocess
+                        request_id = msg.get("id")
+
+                        try:
+                            result = await self._handle_rpc_call(
+                                path=msg.get("path", ""),
+                                kwargs=msg.get("kwargs", {}),
+                                primitives=primitives,
+                                computer_primitives=computer_primitives,
+                            )
+                            response = {
+                                "type": "rpc_result",
+                                "id": request_id,
+                                "result": self._make_json_serializable(result),
+                            }
+                        except ControlledInterruption as interruption:
+                            # The child is blocked on this reply, so telling
+                            # it to unwind here is the interrupt probe
+                            # realised without instrumentation.
+                            interrupted = interruption
+                            response = {
+                                "type": "rpc_interrupt",
+                                "id": request_id,
+                                "reason": str(interruption),
+                            }
+                        except Exception as e:
+                            response = {
+                                "type": "rpc_error",
+                                "id": request_id,
+                                "error": str(e),
+                            }
+
+                        process.stdin.write((json.dumps(response) + "\n").encode())
+                        await process.stdin.drain()
+
+                    elif msg_type == "complete":
+                        # Subprocess finished
+                        await stderr_task
+                        if interrupted is not None:
+                            raise interrupted
+                        return {
+                            "result": msg.get("result"),
+                            "error": msg.get("error"),
+                            "stdout": msg.get("stdout", ""),
+                            "stderr": msg.get("stderr", "") + "".join(stderr_output),
+                        }
+
+            except (asyncio.CancelledError, ControlledInterruption):
+                # Cancellation unwinds to the caller and an interruption to
+                # the retry loop, both after cleanup in the finally block.
+                raise
+            except Exception as e:
+                return {
+                    "result": None,
+                    "error": f"RPC error: {e}",
+                    "stdout": "",
+                    "stderr": "".join(stderr_output),
+                }
+            finally:
+                # Cancel stderr reader task
+                stderr_task.cancel()
+                try:
                     await stderr_task
-                    return {
-                        "result": msg.get("result"),
-                        "error": msg.get("error"),
-                        "stdout": msg.get("stdout", ""),
-                        "stderr": msg.get("stderr", "") + "".join(stderr_output),
-                    }
+                except asyncio.CancelledError:
+                    pass
 
-        except asyncio.CancelledError:
-            # Task was cancelled (e.g., Actor.stop() was called)
-            # Re-raise after cleanup in finally block
-            raise
-        except Exception as e:
-            return {
-                "result": None,
-                "error": f"RPC error: {e}",
-                "stdout": "",
-                "stderr": "".join(stderr_output),
-            }
-        finally:
-            # Cancel stderr reader task
-            stderr_task.cancel()
-            try:
-                await stderr_task
-            except asyncio.CancelledError:
-                pass
+                # Ensure process and all its children are terminated
+                if process.returncode is None:
+                    await self._terminate_process_group(process, use_process_group)
 
-            # Ensure process and all its children are terminated
-            if process.returncode is None:
-                await self._terminate_process_group(process, use_process_group)
+        # One-shot subprocesses give a retry a clean slate: each attempt is a
+        # fresh child, and the parent-side cache is what carries the completed
+        # prefix across attempts.
+        steering = active_session()
+        if steering is None:
+            return await _attempt(implementation)
+        return await run_with_steering(implementation, _attempt, session=steering)
 
     async def _terminate_process_group(
         self,
