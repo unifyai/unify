@@ -297,6 +297,9 @@ class AssistantDetails:
     desktop_mode: str = "none"
     managed_desktop_status: str | None = None
     desktop_url: str | None = None  # URL for managed VM desktop access
+    # Per-binding VNC password for the managed desktop. Falls back to
+    # unify_key when absent (old bindings, pre-rebind).
+    desktop_secret: str | None = None
     # Per-user desktops keyed by owner_user_id. A shared assistant can be linked
     # to a different machine for each user who works with it.
     user_desktops: dict[str, UserDesktopLink] = field(default_factory=dict)
@@ -706,6 +709,9 @@ class SessionDetails:
         os.environ["ASSISTANT_DESKTOP_URL"] = _runtime_str(
             self.assistant.desktop_url,
         )
+        os.environ["ASSISTANT_DESKTOP_SECRET"] = _runtime_str(
+            self.assistant.desktop_secret,
+        )
         os.environ["ASSISTANT_USER_DESKTOPS"] = _encode_user_desktops(
             self.assistant.user_desktops,
         )
@@ -820,6 +826,8 @@ class SessionDetails:
             self.assistant.desktop_mode = val
         if val := os.environ.get("ASSISTANT_DESKTOP_URL"):
             self.assistant.desktop_url = val if val else None
+        if val := os.environ.get("ASSISTANT_DESKTOP_SECRET"):
+            self.assistant.desktop_secret = val if val else None
         if val := os.environ.get("ASSISTANT_USER_DESKTOPS"):
             self.assistant.user_desktops = _decode_user_desktops(val)
         if val := os.environ.get("ASSISTANT_IS_COORDINATOR"):
