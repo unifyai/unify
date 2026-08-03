@@ -166,7 +166,17 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "and set ``destructive=True`` with ``confirm`` text for anything "
             "irreversible -- Console shows that outside the frame with the real "
             "arguments. Prefer ``update_view`` over creating a second canvas: the "
-            "URL is stable, so anywhere it was shared keeps working."
+            "URL is stable, so anywhere it was shared keeps working. "
+            "VERIFY WITH YOUR EYES: ``result.review.screenshots`` holds light and "
+            "dark captures of what was actually published -- ``display()`` them "
+            "and judge the result against what the user asked for before "
+            "declaring the work done; a canvas that compiles can still be empty, "
+            "clipped or unreadable. ``review.verdict`` and ``review.issues`` are "
+            "advisory; a verdict starting 'skipped' means nothing was rendered, "
+            "so say so rather than claiming it was reviewed. "
+            "SHARE THE URL: include ``result.url`` in your user-facing reply -- "
+            "pasting it into chat is what embeds the live canvas there, and it "
+            "is the link the user opens and returns to."
         ),
     ),
     ManagerSpec(

@@ -508,9 +508,14 @@ def _render_and_critique(**kwargs: Any) -> ReviewReport:
 
     Kept separate from ``_render`` so the mechanical half stays testable without a
     model, and so a critique failure cannot be confused with a render failure.
+
+    A report with no screenshots is returned as-is: those are the skip paths
+    (no browser), and letting the critique's default verdict overwrite theirs
+    once disguised a pod whose chromium could not launch as a canvas that had
+    genuinely rendered.
     """
     report = _render(**kwargs)
-    if not report.rendered:
+    if not report.rendered or not report.screenshots:
         return report
 
     verdict, issues = _critique(report.screenshots)
