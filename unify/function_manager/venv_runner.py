@@ -18,14 +18,23 @@ Main process responds with:
     {"type": "rpc_error", "id": str, "error": str}
     {"type": "rpc_interrupt", "id": str, "reason": str}
 
+The main process can also push a control directive at any time, outside the
+request/response rhythm. A directive is not a reply: it is read by the
+checkpoint shims that parent-instrumented source calls between dispatches.
+
+    {"type": "control", "action": "interrupt", "reason": str, "functions": [str]}
+
 Final response from subprocess:
     {"type": "complete", "result": Any, "error": str|null, "stdout": str, "stderr": str}
 
-The script:
-1. Reads initial execution request from stdin
-2. Sets up proxy objects for primitives and computer_primitives
-3. Executes the function, handling RPC calls as they occur
-4. Returns the final result
+An interrupted run's completion additionally carries {"interrupted": str}, so
+the parent can tell an unwound attempt from a genuine failure.
+
+A single daemon thread owns stdin for the process lifetime and routes each
+message to whoever is waiting on it: RPC replies to their blocked callers,
+control directives into checkpoint-visible state, and runner commands
+(execute / get_state / shutdown) to the main thread. Function execution
+happens on the main thread.
 """
 
 import asyncio
@@ -98,17 +107,29 @@ def _setup_signal_handlers() -> None:
 # Global state for RPC communication
 _rpc_responses: Dict[str, Queue] = {}
 _rpc_lock = threading.Lock()
-_stdin_lock = threading.Lock()
 _stdout_lock = threading.Lock()
+
+#: Messages that drive the runner itself (execute / get_state / shutdown),
+#: queued by the stdin reader for main()/main_server() to consume. None is
+#: the EOF sentinel.
+_main_msgs: Queue = Queue()
+
+#: The pending interrupt directive, written only by the stdin reader thread
+#: and read by the checkpoint shims. Keeping it as plain module state is the
+#: point: a checkpoint costs one attribute read, not an RPC round trip.
+_interrupt_reason: str | None = None
+_interrupt_functions: frozenset = frozenset()
 
 
 class ControlledInterruption(Exception):
-    """Raised at a blocked RPC call site when the parent interrupts the run.
+    """Raised inside the run when the parent interrupts it.
 
     The parent holds a correction for this block and wants the attempt to
     unwind so it can re-send patched source. Calls the attempt already
     completed replay from the parent's cache on the re-run, so unwinding here
-    does not repeat their effects.
+    does not repeat their effects. Raised either by a blocked RPC call site
+    receiving ``rpc_interrupt``, or by an instrumented ``_int`` checkpoint
+    seeing a control directive.
     """
 
 
@@ -120,13 +141,75 @@ def send_message(msg: dict) -> None:
         sys.__stdout__.flush()
 
 
-def read_message() -> dict:
-    """Read a JSON message from stdin (from main process)."""
-    with _stdin_lock:
-        line = sys.__stdin__.readline()
-        if not line:
-            raise EOFError("stdin closed")
-        return json.loads(line.strip())
+def _apply_control(msg: dict) -> None:
+    """Record a control directive where the checkpoints will see it."""
+    global _interrupt_reason, _interrupt_functions
+    if msg.get("action") == "interrupt":
+        _interrupt_functions = frozenset(msg.get("functions") or ())
+        _interrupt_reason = str(msg.get("reason") or "steered")
+
+
+def _clear_interrupt() -> None:
+    """Forget a consumed interrupt so the next (patched) run starts clean."""
+    global _interrupt_reason, _interrupt_functions
+    _interrupt_reason = None
+    _interrupt_functions = frozenset()
+
+
+def _fail_pending_rpc(error: str) -> None:
+    """Unblock every caller waiting on an RPC reply that can no longer come."""
+    with _rpc_lock:
+        for response_queue in _rpc_responses.values():
+            response_queue.put({"type": "rpc_error", "error": error})
+
+
+def _stdin_reader_loop() -> None:
+    """Route every stdin message to whoever is waiting on it.
+
+    One blocking reader owns stdin for the process lifetime, which is what
+    lets control directives arrive outside the request/response rhythm: a
+    select loop over buffered readline cannot, because a directive glued to
+    an RPC reply sits invisible in the TextIO buffer where select never
+    fires again.
+
+    Reads the raw descriptor rather than the buffered text wrapper: a
+    blocking ``readline`` holds the wrapper's lock, and a fork()ed
+    multiprocessing child that inherits the held lock deadlocks in its own
+    bootstrap when it closes ``sys.stdin``. ``os.read`` holds no Python-level
+    lock while it waits.
+    """
+    fd = sys.__stdin__.fileno()
+    buffer = b""
+    while True:
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            _fail_pending_rpc("stdin closed")
+            _main_msgs.put(None)
+            return
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            if not line.strip():
+                continue
+            try:
+                msg = json.loads(line.decode())
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                _main_msgs.put({"type": "_invalid_json", "error": str(e)})
+                continue
+            msg_type = msg.get("type")
+            if msg_type in ("rpc_result", "rpc_error", "rpc_interrupt"):
+                dispatch_rpc_response(msg)
+            elif msg_type == "control":
+                _apply_control(msg)
+            else:
+                _main_msgs.put(msg)
+
+
+def _start_stdin_reader() -> None:
+    threading.Thread(target=_stdin_reader_loop, daemon=True).start()
 
 
 def rpc_call_sync(path: str, kwargs: dict) -> Any:
@@ -381,6 +464,65 @@ def get_oauth_access_token(provider: str, *, min_ttl_seconds: int = 300) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Steering Checkpoint Shims
+# ────────────────────────────────────────────────────────────────────────────
+# The parent instruments the source it ships when a steering session is in
+# flight, so a loop that makes no primitive call still runs a probe every
+# iteration. In-process those probes consult the session; here they consult
+# the control state the stdin reader maintains, which costs an attribute read
+# when nothing is pending — the reason a directive is pushed down the channel
+# rather than fetched with a per-checkpoint round trip.
+
+
+class _ChildRuntime:
+    """Receives the position probes instrumented source emits.
+
+    Position feeds the cache key in-process; out-of-process the parent keys
+    dispatches by occurrence alone, so these only need to exist and be free.
+    """
+
+    def push_path_context(self, context_id: str) -> None:
+        pass
+
+    def pop_path_context(self) -> None:
+        pass
+
+    def start_loop_context(self, loop_id: str) -> None:
+        pass
+
+    def increment_loop_iteration(self, loop_id: str) -> None:
+        pass
+
+    def end_loop_context(self, loop_id: str) -> None:
+        pass
+
+
+async def _cp(label: str = "") -> None:
+    """Cooperative checkpoint; a yield point and nothing more.
+
+    Pause is not propagated to subprocesses: the parent already holds RPC
+    replies while paused, and nothing in the runtime drives a pause between
+    dispatches.
+    """
+    return
+
+
+async def _int(func_name: str) -> None:
+    """Raise if the parent's pending correction targets *func_name*."""
+    if _interrupt_reason is not None and func_name in _interrupt_functions:
+        raise ControlledInterruption(_interrupt_reason)
+
+
+async def _around_cp(label: str, awaitable: Any) -> Any:
+    """Bracket one awaited dispatch, mirroring the in-process probe."""
+    await _cp(f"Before: {label}")
+    try:
+        return await awaitable
+    finally:
+        await _cp(f"After: {label}")
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Execution Environment
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -500,6 +642,12 @@ def create_safe_globals(is_async: bool = True):
         "query_llm": query_llm,
         "list_llms": list_llms,
         "get_oauth_access_token": get_oauth_access_token,
+        # Steering probes: parent-instrumented source calls these; inert
+        # until a control directive arrives.
+        "_cp": _cp,
+        "_int": _int,
+        "_around_cp": _around_cp,
+        "runtime": _ChildRuntime(),
     }
 
     # Try to add pydantic if available in this venv
@@ -542,6 +690,7 @@ def execute_sync_in_globals(
     stderr_capture = io.StringIO()
     result = None
     error = None
+    interrupted = None
 
     try:
         # Extract function name from implementation BEFORE exec
@@ -558,15 +707,23 @@ def execute_sync_in_globals(
 
             result = fn(**call_kwargs)
 
+    except ControlledInterruption as ci:
+        # An unwind the parent asked for, not a failure: mark it so the
+        # parent can discard this attempt and re-run the patched source.
+        interrupted = str(ci) or "interrupted"
+        error = traceback.format_exc()
     except Exception:
         error = traceback.format_exc()
 
-    return {
+    out = {
         "result": result,
         "error": error,
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
     }
+    if interrupted is not None:
+        out["interrupted"] = interrupted
+    return out
 
 
 async def execute_async(implementation: str, call_kwargs: dict) -> dict:
@@ -601,6 +758,7 @@ async def execute_async_in_globals(
     stderr_capture = io.StringIO()
     result = None
     error = None
+    interrupted = None
 
     try:
         # Extract function name from implementation BEFORE exec
@@ -619,15 +777,23 @@ async def execute_async_in_globals(
         with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
             result = await fn(**call_kwargs)
 
+    except ControlledInterruption as ci:
+        # An unwind the parent asked for, not a failure: mark it so the
+        # parent can discard this attempt and re-run the patched source.
+        interrupted = str(ci) or "interrupted"
+        error = traceback.format_exc()
     except Exception:
         error = traceback.format_exc()
 
-    return {
+    out = {
         "result": result,
         "error": error,
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
     }
+    if interrupted is not None:
+        out["interrupted"] = interrupted
+    return out
 
 
 def make_json_serializable(obj):
@@ -851,106 +1017,58 @@ def apply_env_overlay(env_overlay: dict | None) -> None:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def run_with_rpc_loop(
+def _run_request(
     implementation: str,
     call_kwargs: dict,
     is_async: bool,
-    initial_state: dict = None,
+    globals_dict: dict,
 ) -> dict:
+    """Run one execute request on the main thread.
+
+    The stdin reader thread keeps routing RPC replies and control directives
+    while this blocks, so calls into the parent resolve and interrupts land
+    mid-run.
     """
-    Run a function with RPC support.
-
-    This handles bidirectional communication:
-    - Executes the function in a separate thread
-    - Main thread handles RPC responses from stdin
-
-    Args:
-        implementation: Function source code to execute.
-        call_kwargs: Keyword arguments to pass to the function.
-        is_async: Whether the function is async.
-        initial_state: Optional serialized state to inject before execution
-            (used for read_only mode to inherit state from persistent session).
-    """
-    result_queue: Queue = Queue()
-
-    def execute_function():
-        """Execute the function and put result in queue."""
-        try:
-            # Create globals with optional initial state injection
-            globals_dict = create_safe_globals(is_async=is_async)
-            if initial_state:
-                inject_state_into_globals(initial_state, globals_dict)
-
-            if is_async:
-                res = asyncio.run(
-                    execute_async_in_globals(implementation, call_kwargs, globals_dict),
-                )
-            else:
-                res = execute_sync_in_globals(implementation, call_kwargs, globals_dict)
-            result_queue.put(res)
-        except Exception:
-            result_queue.put(
-                {
-                    "result": None,
-                    "error": traceback.format_exc(),
-                    "stdout": "",
-                    "stderr": "",
-                },
+    _clear_interrupt()
+    try:
+        if is_async:
+            return asyncio.run(
+                execute_async_in_globals(implementation, call_kwargs, globals_dict),
             )
-
-    # Start function execution in a thread
-    exec_thread = threading.Thread(target=execute_function, daemon=True)
-    exec_thread.start()
-
-    # Main thread handles RPC responses
-    while exec_thread.is_alive():
-        # Check for RPC responses with a timeout so we can check if thread is done
-        try:
-            # Use select or polling to check stdin with timeout
-            import select
-
-            readable, _, _ = select.select([sys.__stdin__], [], [], 0.1)
-            if readable:
-                line = sys.__stdin__.readline()
-                if line:
-                    msg = json.loads(line.strip())
-                    if msg.get("type") in ("rpc_result", "rpc_error", "rpc_interrupt"):
-                        dispatch_rpc_response(msg)
-        except Exception:
-            # On Windows or if select fails, just do blocking read with thread check
-            pass
-
-    # Get the result
-    return result_queue.get(timeout=1)
+        return execute_sync_in_globals(implementation, call_kwargs, globals_dict)
+    except Exception:
+        return {
+            "result": None,
+            "error": traceback.format_exc(),
+            "stdout": "",
+            "stderr": "",
+        }
 
 
 def main():
     """Main entry point for one-shot runner mode."""
     # Set up signal handlers for graceful shutdown
     _setup_signal_handlers()
+    _start_stdin_reader()
 
-    # Read initial execution request from stdin
-    try:
-        line = sys.__stdin__.readline()
-        if not line:
-            send_message(
-                {
-                    "type": "complete",
-                    "result": None,
-                    "error": "No input received",
-                    "stdout": "",
-                    "stderr": "",
-                },
-            )
-            sys.exit(1)
-
-        input_data = json.loads(line.strip())
-    except json.JSONDecodeError as e:
+    input_data = _main_msgs.get()
+    if input_data is None:
         send_message(
             {
                 "type": "complete",
                 "result": None,
-                "error": f"Invalid JSON input: {e}",
+                "error": "No input received",
+                "stdout": "",
+                "stderr": "",
+            },
+        )
+        sys.exit(1)
+    if input_data.get("type") == "_invalid_json":
+        send_message(
+            {
+                "type": "complete",
+                "result": None,
+                "error": f"Invalid JSON input: {input_data.get('error')}",
                 "stdout": "",
                 "stderr": "",
             },
@@ -976,13 +1094,11 @@ def main():
     initial_state = input_data.get("initial_state")
     apply_env_overlay(input_data.get("env_overlay"))
 
-    # Execute with RPC support, optionally with initial state
-    result = run_with_rpc_loop(
-        implementation,
-        call_kwargs,
-        is_async,
-        initial_state=initial_state,
-    )
+    globals_dict = create_safe_globals(is_async=is_async)
+    if initial_state:
+        inject_state_into_globals(initial_state, globals_dict)
+
+    result = _run_request(implementation, call_kwargs, is_async, globals_dict)
 
     # Make result JSON-serializable
     result["result"] = make_json_serializable(result["result"])
@@ -1001,64 +1117,6 @@ def main():
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def run_server_with_rpc_loop(
-    implementation: str,
-    call_kwargs: dict,
-    is_async: bool,
-    globals_dict: dict,
-) -> dict:
-    """
-    Run a function with RPC support using a persistent globals dict.
-
-    This handles bidirectional communication:
-    - Executes the function in a separate thread
-    - Main thread handles RPC responses from stdin
-    """
-    result_queue: Queue = Queue()
-
-    def execute_function():
-        """Execute the function and put result in queue."""
-        try:
-            if is_async:
-                res = asyncio.run(
-                    execute_async_in_globals(implementation, call_kwargs, globals_dict),
-                )
-            else:
-                res = execute_sync_in_globals(implementation, call_kwargs, globals_dict)
-            result_queue.put(res)
-        except Exception:
-            result_queue.put(
-                {
-                    "result": None,
-                    "error": traceback.format_exc(),
-                    "stdout": "",
-                    "stderr": "",
-                },
-            )
-
-    # Start function execution in a thread
-    exec_thread = threading.Thread(target=execute_function, daemon=True)
-    exec_thread.start()
-
-    # Main thread handles RPC responses
-    while exec_thread.is_alive():
-        try:
-            import select
-
-            readable, _, _ = select.select([sys.__stdin__], [], [], 0.1)
-            if readable:
-                line = sys.__stdin__.readline()
-                if line:
-                    msg = json.loads(line.strip())
-                    if msg.get("type") in ("rpc_result", "rpc_error", "rpc_interrupt"):
-                        dispatch_rpc_response(msg)
-        except Exception:
-            pass
-
-    # Get the result
-    return result_queue.get(timeout=1)
-
-
 def main_server():
     """
     Persistent server mode entry point.
@@ -1072,6 +1130,7 @@ def main_server():
             {"type": "execute", "implementation": str, "call_kwargs": dict, "is_async": bool}
             {"type": "get_state"}
             {"type": "shutdown"}
+            {"type": "control", "action": "interrupt", ...}  (mid-execute)
 
         Output messages:
             {"type": "complete", "result": Any, "error": str|null, "stdout": str, "stderr": str}
@@ -1079,6 +1138,7 @@ def main_server():
             {"type": "ack"}  (response to shutdown)
     """
     _setup_signal_handlers()
+    _start_stdin_reader()
 
     # Send ready signal so parent knows we're listening
     send_message({"type": "ready"})
@@ -1089,26 +1149,21 @@ def main_server():
     base_globals = create_safe_globals(is_async=True)
 
     while True:
-        try:
-            line = sys.__stdin__.readline()
-            if not line:
-                # stdin closed, exit gracefully
-                break
-
-            input_data = json.loads(line.strip())
-        except json.JSONDecodeError as e:
+        input_data = _main_msgs.get()
+        if input_data is None:
+            # stdin closed, exit gracefully
+            break
+        if input_data.get("type") == "_invalid_json":
             send_message(
                 {
                     "type": "complete",
                     "result": None,
-                    "error": f"Invalid JSON input: {e}",
+                    "error": f"Invalid JSON input: {input_data.get('error')}",
                     "stdout": "",
                     "stderr": "",
                 },
             )
             continue
-        except EOFError:
-            break
 
         msg_type = input_data.get("type", "execute")
 
@@ -1143,13 +1198,7 @@ def main_server():
         is_async = input_data.get("is_async", True)
         apply_env_overlay(input_data.get("env_overlay"))
 
-        # Execute with RPC support using persistent globals
-        result = run_server_with_rpc_loop(
-            implementation,
-            call_kwargs,
-            is_async,
-            globals_dict,
-        )
+        result = _run_request(implementation, call_kwargs, is_async, globals_dict)
 
         # Make result JSON-serializable
         result["result"] = make_json_serializable(result["result"])

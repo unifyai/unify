@@ -29,12 +29,14 @@ call begins and discarded when it returns. Nothing survives into the next call,
 which is what keeps the positional cache key sound: the surrounding code cannot
 have changed underneath it, because the block is still the one that is running.
 
-Code that runs in another process — a venv subprocess, a shell script — is
-steered without instrumentation, because its JSON-RPC protocol already blocks
-the child at every primitive dispatch until the parent replies. The parent
-treats each reply as a checkpoint (:func:`dispatch_with_steering`) and re-sends
-patched source on retry; only dispatches are visible, so a loop that makes no
-primitive call cannot be paused or corrected out-of-process.
+Code that runs in another process is steered at two grains. Every primitive
+dispatch already blocks the child on the parent's JSON-RPC reply, so the reply
+is a checkpoint (:func:`dispatch_with_steering`) — venv and shell both get
+this without instrumentation. Between dispatches, venv children additionally
+run parent-instrumented source whose probes read a pushed control directive
+(:meth:`SteeringSession.relay_corrections`), so a loop that makes no primitive
+call is still interruptible; on retry the parent re-sends patched source
+either way.
 
 What this deliberately does not do
 ----------------------------------
@@ -380,6 +382,40 @@ class SteeringSession:
 
     def note_applied(self, patch: Patch) -> None:
         self._applied.append(patch)
+
+    async def relay_corrections(
+        self,
+        source: str,
+        send_control: typing.Callable[[Dict[str, Any]], typing.Awaitable[None]],
+        *,
+        poll_interval: float = 0.05,
+    ) -> None:
+        """Deliver corrections to code running where no checkpoint can look.
+
+        Out-of-process, the parent's checkpoints fire only when the child
+        dispatches; a child inside a loop that makes no primitive call never
+        gives the parent a chance to collect interjections, let alone act on
+        them. This watches the intake while an attempt runs and, once a
+        correction targets the running block, pushes one interrupt directive
+        over *send_control* so the child's next instrumented checkpoint
+        raises. Runs until then, or until the attempt ends and cancels it.
+        """
+        while True:
+            await self._collect()
+            request = self.interruption
+            if request is not None and _targets_running_block(request, source):
+                await send_control(
+                    {
+                        "type": "control",
+                        "action": "interrupt",
+                        "reason": request.reason or "steered",
+                        "functions": sorted(
+                            {patch.function_name for patch in request.patches},
+                        ),
+                    },
+                )
+                return
+            await asyncio.sleep(poll_interval)
 
     def notify(self, payload: Dict[str, Any]) -> None:
         if self._notification_q is None:

@@ -1,38 +1,21 @@
 # Plan: steering out-of-process execution
 
-**Status:** Phase 1 built and tested — venv (one-shot and pooled) and shell.
-Phase 2 (instrumented child source) not started, deliberately. Non-local
-surfaces turned out not to share the RPC transport at all (see below) and are
-out of scope for this mechanism.
+**Status:** Phases 1 and 2 built and tested. Phase 1 — dispatch-boundary
+steering over the RPC channel — covers venv (one-shot and pooled) and shell.
+Phase 2 — instrumented child source plus a push control channel — closes the
+non-dispatching-loop gap for venv. Non-local surfaces turned out not to share
+the RPC transport at all (see below) and are out of scope for this mechanism.
 
 Live steering — correcting a block of code while it is still running — works
-for every in-process Python path and, at the dispatch boundary, for code
-running in venv subprocesses and shell scripts. This document records how, and
+for every in-process Python path, at the dispatch boundary for venv and shell
+subprocesses, and between dispatches for venv. This document records how, and
 what was learned closing the plan's open questions.
 
 Read `unify/function_manager/steering.py` first. Its four parts (probes,
 idempotency cache, retry via source splice, bounded lifetime) are reused
-out-of-process rather than replaced; the out-of-process entry point is
-`dispatch_with_steering` in the same module.
-
-## Read this before deciding how much more to build
-
-The work split into two phases with very different costs, and **Phase 1 is
-worth having on its own**. It is not groundwork for Phase 2; it is the whole
-feature for most cases.
-
-Phase 1 makes out-of-process execution correctable at every side effect that
-goes through primitives, and that is the case the mechanism exists for — the
-reason to steer is to stop a side effect before it happens, and side effects
-are overwhelmingly primitive dispatches. It needed no changes to how the child
-executes code, and it covers venv and shell at once.
-
-Phase 2 closes one specific remaining gap: a loop in the child that does no
-primitive call, and so is invisible to the parent. It is venv-only, it is the
-only part with a performance question, and it should be built when a real
-workload needs it rather than for completeness.
-
-If Phase 2 never happens, this feature is not half-finished.
+out-of-process rather than replaced; the out-of-process entry points are
+`dispatch_with_steering` and `SteeringSession.relay_corrections` in the same
+module.
 
 ---
 
@@ -45,17 +28,21 @@ If Phase 2 never happens, this feature is not half-finished.
 - `FunctionManager._execute_in_default_env` — the route that skips the sandbox
   entirely and runs a stored function directly
 
-And every out-of-process path that round-trips primitives over JSON-RPC
-(dispatch-boundary, no instrumentation):
+Venv subprocesses, with the same statement-level probes the in-process paths
+get — the parent instruments the source before shipping it, and interrupts
+land both at RPC replies and, via the control channel, inside loops that make
+no primitive call:
 
 - One-shot venv subprocesses — `FunctionManager.execute_in_venv`
 - Pooled persistent venv sessions — `_VenvConnection.execute`
-- Shell scripts using the `unity-primitive` bridge —
-  `FunctionManager.execute_shell_script` (cache and pause only; see the
-  boundaries section for why interrupts cannot fire on shell)
 
-**Not covered.** Non-local surfaces (`surface != "local"`), and any child-side
-work between dispatches (Phase 2).
+Shell scripts using the `unity-primitive` bridge get dispatch-boundary
+steering only — `FunctionManager.execute_shell_script` (cache and pause; see
+the boundaries section for why interrupts cannot fire on shell).
+
+**Not covered.** Non-local surfaces (`surface != "local"`), synchronous
+functions (no awaits, so no probes — parity with in-process), and blocking
+calls between checkpoints.
 
 ---
 
@@ -68,10 +55,12 @@ to and from the child process". We already had one.
 docstring:
 
 ```
-{"type": "rpc_call",      "id": str, "path": str, "kwargs": dict}   # child → parent
-{"type": "rpc_result",    "id": str, "result": Any}                 # parent → child
-{"type": "rpc_error",     "id": str, "error": str}                  # parent → child
-{"type": "rpc_interrupt", "id": str, "reason": str}                 # parent → child
+{"type": "rpc_call",      "id": str, "path": str, "kwargs": dict}    # child → parent
+{"type": "rpc_result",    "id": str, "result": Any}                  # parent → child
+{"type": "rpc_error",     "id": str, "error": str}                   # parent → child
+{"type": "rpc_interrupt", "id": str, "reason": str}                  # parent → child
+{"type": "control", "action": "interrupt",
+ "reason": str, "functions": [str]}                                  # parent → child, unsolicited
 ```
 
 Every `primitives.*` call made inside a venv or shell child round-trips to the
@@ -126,31 +115,63 @@ session that steered it) and `tests/function_manager/shell/test_shell_steering.p
 
 ---
 
-## Phase 2 — instrumented child source (venv only, not started)
+## Phase 2 — instrumented child source over a push control channel
 
-Full parity inside non-dispatching loops, and the only part with a performance
-question.
+Phase 1 fires only when the child dispatches; a loop that makes no primitive
+call is invisible. Phase 2 closes that for venv: the parent ships instrumented
+source, and a correction reaches the child as a pushed directive its next
+checkpoint reads at in-process cost.
 
-The parent holds the source before it ships it, so the existing AST pass can
-run parent-side and the child receives already-instrumented code. `_cp`,
-`_int` and `_around_cp` become shims in the child that consult the parent.
+**Instrumentation is parent-side and shared.** `_instrument_for_child`
+(`function_manager.py`) runs the same AST pass in-process code uses, on the
+clean source each attempt ships — the patch splice always happens on
+uninstrumented source, exactly as in-process. Source that does not parse ships
+unchanged so the child reports the SyntaxError normally.
 
-**The cost is the problem.** In-process a checkpoint is ~10 µs (measured). A
-round trip over a pipe is 0.1–1 ms. A per-iteration checkpoint on a
-1000-iteration loop turns ~10 ms of overhead into up to a second of pure IPC.
-Naively making every checkpoint an RPC is not viable.
+**The child runs the probes against shims, not the parent.** `venv_runner`
+installs `_cp` / `_int` / `_around_cp` / `runtime` in the sandbox globals.
+`runtime` is a no-op position sink (out-of-process the cache keys by
+occurrence alone); `_int(name)` raises the child's `ControlledInterruption`
+when a pending directive names `name`. An interrupted run's completion carries
+an `"interrupted"` marker, which the parent's execute loops translate back
+into the retry.
 
-**The fix is a second channel.** Keep the existing RPC channel
-request/response, and add a one-way parent→child control channel that the child
-reads **non-blockingly** at each checkpoint:
+**The "second channel" needed no second pipe.** The plan expected a dedicated
+control fd read non-blockingly per checkpoint (~µs). What shipped is cheaper:
+control directives are multiplexed onto stdin, and a single daemon thread owns
+the descriptor for the child's lifetime, routing RPC replies to their blocked
+callers, directives into module state, and runner commands to the main thread.
+An idle checkpoint pair (`_cp` + `_int`) is then two attribute reads —
+**0.1 µs/iteration measured**, against ~10 µs in-process and the 0.1–1 ms
+round trip the plan ruled out. The performance question dissolved rather than
+needing tuning.
 
-- idle cost ≈ a non-blocking pipe read, on the order of microseconds
-- a pending correction is a byte on that channel; the child then raises
+Two constraints the reader thread has to honour, both learned the hard way:
 
-This is what makes per-iteration probes affordable out-of-process, and it is
-the piece to design carefully rather than the AST work, which is already
-written. Build it when a real workload needs correction inside a
-non-dispatching loop.
+- **It must read the raw fd (`os.read`), not buffered `readline`.** A thread
+  blocked in `readline` holds the TextIOWrapper lock; a fork()ed
+  multiprocessing child inherits that held lock from a thread it doesn't
+  have, and deadlocks in its own bootstrap closing `sys.stdin`. This is also
+  what makes unsolicited directives deliverable at all — a select-over-
+  buffered-readline loop leaves a directive glued to an RPC reply invisible
+  in the buffer.
+- **Interrupt state clears on each `execute`.** A pooled child is persistent;
+  a directive consumed by attempt N must not fire at attempt N+1's first
+  probe. Ordering is safe because directive and execute share one pipe and
+  one reader.
+
+**The parent side is a watcher, not a poller of the child.**
+`SteeringSession.relay_corrections` runs alongside each attempt's message
+loop, collecting interjections while the child runs between dispatches —
+without it, nothing would even author a patch until the next RPC arrived. When
+a correction targets the running block it sends one directive and returns; the
+attempt's loops handle the rest through the same retry path as Phase 1.
+
+Tests: the "corrections between dispatches" section of
+`test_venv_steering.py` — a 2000-iteration loop with no primitive calls is cut
+short mid-run on both the one-shot and pooled paths, replaying its completed
+prefix, and a stale directive provably does not leak into the next request on
+the same pooled connection.
 
 ---
 
@@ -193,9 +214,16 @@ pinning that a later call on the same connection runs unsteered.
 
 **Synchronous blocking code** remains opaque, exactly as in-process. A
 blocking call holds the child between dispatches, and during that window a
-correction cannot land. (One extra wrinkle out-of-process: the child's RPC
-wait has a 300 s timeout, so a pause held longer than that fails the blocked
-call rather than extending it.)
+correction cannot land; synchronous ``def``s get no await probes on either
+side of the boundary. (One extra wrinkle out-of-process: the child's RPC wait
+has a 300 s timeout, so a pause held longer than that fails the blocked call
+rather than extending it.)
+
+**Pause is not propagated between dispatches.** The parent holds RPC replies
+while paused, which stalls the child at its next dispatch, but the child's
+``_cp`` shim is a plain yield point. Nothing in the runtime drives
+``SteeringRuntime.pause`` today; if something starts to, the control channel
+is where a pause directive would ride.
 
 **Retraction** is still impossible. Replay records that a side effect
 happened; it cannot undo one. A patch redirects work that has not happened
