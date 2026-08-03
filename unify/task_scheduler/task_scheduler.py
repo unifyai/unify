@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import functools
 import logging
 import os
@@ -40,8 +39,17 @@ from ..common.context_registry import (
     TEAM_DESTINATION_PREFIX,
     TableContext,
 )
+from ..common.custom_sync import (
+    DEPLOYMENT_SOURCE_ID,
+    CustomSyncAdapter,
+    managed_rows_filter,
+    require_consumed,
+    run_custom_sync,
+    stored_hash_field,
+)
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.filter_utils import normalize_filter_expr
+from ..common.sync_lease import exclusive_sync_lease
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.llm_client import new_llm_client
 from ..common.llm_helpers import methods_to_tool_dict
@@ -72,10 +80,8 @@ from .machine_state import (
     consume_live_task_run_provenance,
     find_running_execution_for_task,
     find_terminal_execution_for_task,
-    latest_scheduled_occurrence_for_task,
     latest_task_run_reference_for_source,
     peek_live_task_run_provenance,
-    project_task_occurrence,
     remember_live_task_run_provenance,
     update_task_run_record,
 )
@@ -107,11 +113,9 @@ from .types.activated_by import ActivatedBy
 from .types.meta import TaskMeta
 from .types.priority import Priority
 from .types.repetition import (
-    deterministic_jitter_seconds,
     Frequency,
     RepeatPattern,
     Weekday,
-    next_repeated_start_at,
     normalize_repeat_patterns,
 )
 from .types.schedule import Schedule
@@ -345,8 +349,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores: Dict[str, TasksStore] = {}
         self._active_task_root_context: Optional[str] = None
-        self._custom_tasks_synced = False
-        self._custom_tasks_synced_contexts: set[str] = set()
+        self._custom_tasks_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = threading.RLock()
         self._provision_storage()
 
@@ -767,8 +770,7 @@ class TaskScheduler(BaseTaskScheduler):
         self._personal_tasks_context = self._ctx
         self._meta_ctx = ContextRegistry.get_context(self, TASKS_META_TABLE)
         self._root_stores.clear()
-        self._custom_tasks_synced = False
-        self._custom_tasks_synced_contexts.clear()
+        self._custom_tasks_synced_sources.clear()
         self._provision_storage()
 
     def _task_id_to_log_id_map(self, task_ids: List[int]) -> Dict[int, int]:
@@ -789,32 +791,20 @@ class TaskScheduler(BaseTaskScheduler):
                 id_map[int(task_id)] = int(lg.id)
         return id_map
 
-    def _get_log_by_task_instance(
-        self,
-        *,
-        task_id: int,
-        instance_id: int,
-    ) -> unisdk.Log:
-        """Return the physical task row for one logical task instance."""
+    def _get_task_log(self, *, task_id: int) -> unisdk.Log:
+        """Return the physical Tasks definition row for one task_id."""
 
         task = self._get_task_or_raise(task_id)
         with self._use_task_destination(task.destination):
-            row_filter = f"task_id == {task_id}"
-            if instance_id != 0:
-                row_filter = f"task_id == {task_id} and instance_id == {instance_id}"
             log_objs = self._store.get_rows(
-                filter=row_filter,
+                filter=f"task_id == {task_id}",
                 limit=2,
                 return_ids_only=False,
             )
         if not log_objs:
-            raise ValueError(
-                f"No task row found for task_id={task_id}, instance_id={instance_id}.",
-            )
+            raise ValueError(f"No task row found for task_id={task_id}.")
         if len(log_objs) != 1:
-            raise ValueError(
-                f"Ambiguous task rows for task_id={task_id}, instance_id={instance_id}.",
-            )
+            raise ValueError(f"Ambiguous task rows for task_id={task_id}.")
         return log_objs[0]
 
     def _get_task_for_source_log_id(
@@ -1201,7 +1191,6 @@ class TaskScheduler(BaseTaskScheduler):
                 ),
                 destination=task.destination,
                 task_name=task.name,
-                task_description=task.description,
                 attempt_token=trigger_attempt_token,
             )
         if task_run_provenance and task_run_provenance.source_task_log_id is not None:
@@ -1250,7 +1239,9 @@ class TaskScheduler(BaseTaskScheduler):
                 state=ExecutionState.running.value,
             )
 
-        self._project_next_occurrence(task)
+        # The successor is projected by Orchestra when this run is marked
+        # running: recurrence is a ledger invariant, not something each
+        # dispatcher must remember to do.
 
         # Extend the ancestor chain for the duration of starting the child run,
         # so a spawned run that calls back into TaskScheduler.execute with this
@@ -1269,7 +1260,6 @@ class TaskScheduler(BaseTaskScheduler):
                 _clarification_up_q=_clarification_up_q,
                 _clarification_down_q=_clarification_down_q,
                 task_id=task_id,
-                instance_id=0,
                 scheduler=self,
                 entrypoint=task.entrypoint,
                 entrypoint_kwargs=entrypoint_kwargs,
@@ -1332,10 +1322,7 @@ class TaskScheduler(BaseTaskScheduler):
         if not self._task_has_provider_event_trigger(definition):
             raise ProviderEventDispatchValidationError("task_trigger_mismatch")
 
-        source_task_log_id = self._get_log_by_task_instance(
-            task_id=definition.task_id,
-            instance_id=0,
-        ).id
+        source_task_log_id = self._get_task_log(task_id=definition.task_id).id
 
         provenance = TaskRunProvenance(
             assistant_id=str(request.assistant_id),
@@ -1350,7 +1337,6 @@ class TaskScheduler(BaseTaskScheduler):
             source_ref=request.receipt_id,
             attempt_token=request.operation_id,
             task_name=definition.name,
-            task_description=definition.description,
         )
         remember_live_task_run_provenance(provenance)
 
@@ -1409,7 +1395,6 @@ class TaskScheduler(BaseTaskScheduler):
             fallback_actor,
             task_description=task_request,
             task_id=definition.task_id,
-            instance_id=0,
             scheduler=self,
             entrypoint=definition.entrypoint,
             entrypoint_kwargs=entrypoint_kwargs,
@@ -1471,104 +1456,6 @@ class TaskScheduler(BaseTaskScheduler):
             description=description,
             destination=destination,
         )
-
-    def _project_next_occurrence(self, task: Task) -> bool:
-        """Create the Execution row for this task's next occurrence.
-
-        ``schedule.start_at`` is the series anchor and is never rewritten. The
-        next slot is derived from the newest occurrence the run ledger already
-        knows about, so every concurrent run computes the same timestamp; that
-        timestamp is baked into ``run_key``, and create-or-adopt turns the
-        second writer into an adopter instead of a racer. Nothing is written to
-        the definition, which is why a definition now carries authored intent
-        only.
-
-        Returns True when a next occurrence exists (or the task is armed by a
-        trigger and needs none), False when recurrence is exhausted.
-        """
-
-        if task.trigger is not None:
-            return True
-        if task.repeat is None or task.schedule_start_at is None:
-            return False
-
-        latest = latest_scheduled_occurrence_for_task(
-            task_id=int(task.task_id),
-            destination=task.destination,
-        )
-        previous_start = task.schedule_start_at
-        if latest:
-            try:
-                parsed = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-            except ValueError:
-                parsed = None
-            if parsed is not None:
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                if parsed > previous_start:
-                    previous_start = parsed
-        next_start_at = next_repeated_start_at(
-            previous_start=previous_start,
-            patterns=task.repeat,
-            current_occurrence_index=0,
-            now=previous_start,
-        )
-        if next_start_at is None:
-            return False
-        # The ledger records the *canonical* slot. Jitter spreads dispatch, it
-        # does not redefine the occurrence: baking it into scheduled_for makes
-        # the recorded time unrecoverable (the offset is seeded on the slot it
-        # is applied to), so each step would measure from a jittered value and
-        # the series would drift. Dispatch applies the offset instead.
-        scheduled_for = next_start_at.isoformat()
-        dispatch_offset = deterministic_jitter_seconds(
-            task_id=int(task.task_id),
-            slot=next_start_at,
-            patterns=task.repeat,
-        )
-
-        assistant_id = str(
-            SESSION_DETAILS.assistant.agent_id
-            or SESSION_DETAILS.assistant_context
-            or "",
-        ).strip()
-        if not assistant_id:
-            # Executions are assistant-owned; without one there is no ledger to
-            # project the next occurrence into.
-            return False
-        try:
-            project_task_occurrence(
-                TaskRunProvenance(
-                    assistant_id=assistant_id,
-                    task_id=int(task.task_id),
-                    wake=Wake.scheduled,
-                    delivery=Delivery.offline if task.offline else Delivery.live,
-                    source_task_log_id=self._source_task_log_id(int(task.task_id)),
-                    revision=(
-                        str(task.task_revision)
-                        if task.task_revision is not None
-                        else None
-                    ),
-                    destination=task.destination,
-                    scheduled_for=scheduled_for,
-                    dispatch_offset_seconds=dispatch_offset,
-                    entrypoint=task.entrypoint,
-                    task_name=task.name,
-                    task_description=task.description,
-                ),
-            )
-        except Exception:
-            # A run already in flight must not fail because the *next*
-            # occurrence could not be projected. Loud, because a series that
-            # stops projecting silently stops recurring.
-            logger.exception(
-                "Failed to project next occurrence (task_id=%s, scheduled_for=%s); "
-                "the series will not advance until this succeeds.",
-                task.task_id,
-                scheduled_for,
-            )
-            return False
-        return True
 
     def _one_shot_already_ran(self, task: Task) -> Any | None:
         """The terminal execution of a finished one-shot, if it has run.
@@ -1780,6 +1667,7 @@ class TaskScheduler(BaseTaskScheduler):
         enabled: bool = True,
         destination: str | None = None,
         _root_applied: bool = False,
+        _sync_identity: Optional[Dict[str, Any]] = None,
     ) -> ToolOutcome:
         """Create a single task with the given name and description.
 
@@ -1788,6 +1676,11 @@ class TaskScheduler(BaseTaskScheduler):
         ``entrypoint``), background offline execution, an optional per-attempt
         runtime bound (``max_runtime_seconds``), and an enabled flag.
         Returns a ``ToolOutcome`` containing the newly assigned ``task_id``.
+
+        ``_sync_identity`` carries the custom-sync row identity
+        (``custom_key``/``custom_hash`` and sync-owned extras) so
+        deployment-owned rows are born with their identity in the same
+        write as the rest of the row.
         """
 
         if not _root_applied:
@@ -1812,6 +1705,7 @@ class TaskScheduler(BaseTaskScheduler):
                     enabled=enabled,
                     destination=effective_destination,
                     _root_applied=True,
+                    _sync_identity=_sync_identity,
                 )
 
         if not name or not description:
@@ -1877,8 +1771,20 @@ class TaskScheduler(BaseTaskScheduler):
         if trigger is not None and isinstance(trigger, ProviderEventTrigger):
             created = typed_tasks_client.create_task(payload=task_details)
             task_id = int(created["task_id"])
+            if _sync_identity:
+                # The sealed provider-event façade owns the create payload
+                # shape, so identity is stamped immediately after creation
+                # rather than in-band.
+                log_ids = self._store.get_rows(
+                    filter=f"task_id == {task_id}",
+                    return_ids_only=True,
+                )
+                self._write_log_entries(logs=log_ids, entries=dict(_sync_identity))
         else:
-            log = self._store.log(entries=task_details, new=True)
+            entries = (
+                {**task_details, **_sync_identity} if _sync_identity else task_details
+            )
+            log = self._store.log(entries=entries, new=True)
             task_id = int(log.entries["task_id"])
             if self._num_tasks_cached is not None:
                 self._num_tasks_cached += 1
@@ -3180,7 +3086,11 @@ class TaskScheduler(BaseTaskScheduler):
         meta_context = self._meta_context_for_destination(destination)
         return data_context, meta_context, destination in (None, "personal")
 
-    def _get_stored_custom_tasks_hash(self) -> str:
+    def _get_stored_custom_tasks_hash(
+        self,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> str:
+        field = stored_hash_field("custom_tasks_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3188,12 +3098,18 @@ class TaskScheduler(BaseTaskScheduler):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_tasks_hash", "") or ""
+                return logs[0].entries.get(field, "") or ""
         except Exception as exc:
             logger.warning("Failed to read custom tasks hash: %s", exc)
         return ""
 
-    def _store_custom_tasks_hash(self, hash_value: str) -> None:
+    def _store_custom_tasks_hash(
+        self,
+        hash_value: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> None:
+        field = stored_hash_field("custom_tasks_hash", source_id)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3204,35 +3120,29 @@ class TaskScheduler(BaseTaskScheduler):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_tasks_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_tasks_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as exc:
             logger.warning("Failed to store custom tasks hash: %s", exc)
 
-    def _get_custom_tasks_from_db(self) -> Dict[str, Dict[str, Any]]:
+    def _delete_custom_task_by_key(
+        self,
+        custom_key: str,
+        *,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> bool:
         logs = unisdk.get_logs(
             context=self._ctx,
-            filter="custom_hash != None",
-            limit=1000,
-            exclude_fields=list_private_fields(self._ctx),
-        )
-        return {
-            lg.entries.get("custom_key"): lg.entries
-            for lg in logs
-            if lg.entries.get("custom_key")
-        }
-
-    def _delete_custom_task_by_key(self, custom_key: str) -> bool:
-        logs = unisdk.get_logs(
-            context=self._ctx,
-            filter=f"custom_key == '{custom_key}' and custom_hash != None",
+            filter=(
+                f"custom_key == '{custom_key}' and " f"{managed_rows_filter(source_id)}"
+            ),
             limit=1,
         )
         if not logs:
@@ -3258,6 +3168,7 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
+        source_id = payload.pop("source_id", DEPLOYMENT_SOURCE_ID)
         # Destination routing is owned by sync_custom_tasks / sync_custom: the
         # caller has already scoped self._ctx to the target root. Per-row
         # destination is grouping metadata only (same as guidance/contacts).
@@ -3280,6 +3191,7 @@ class TaskScheduler(BaseTaskScheduler):
         )
         name = payload.pop("name")
         description = payload.pop("description")
+        require_consumed(payload, kind="tasks", custom_key=custom_key)
 
         entrypoint = None
         if entrypoint_function:
@@ -3297,6 +3209,13 @@ class TaskScheduler(BaseTaskScheduler):
             if current_destination in (None, PERSONAL_DESTINATION)
             else current_destination
         )
+        sync_identity: Dict[str, Any] = {
+            "custom_key": custom_key,
+            "custom_hash": custom_hash,
+            "source_id": source_id,
+        }
+        if tags is not None:
+            sync_identity["tags"] = tags
         result = self._create_task(
             name=name,
             description=description,
@@ -3314,25 +3233,9 @@ class TaskScheduler(BaseTaskScheduler):
             enabled=False,
             destination=destination_arg,
             _root_applied=True,
+            _sync_identity=sync_identity,
         )
-        task_id = int(result["details"]["task_id"])
-        log_ids = self._store.get_rows(
-            filter=f"task_id == {task_id}",
-            return_ids_only=True,
-        )
-        sync_entries: Dict[str, Any] = {
-            "custom_key": custom_key,
-            "custom_hash": custom_hash,
-            "requires_filesystem": requires_filesystem,
-            "requires_computer": requires_computer,
-        }
-        if tags is not None:
-            sync_entries["tags"] = tags
-        self._write_log_entries(
-            logs=log_ids,
-            entries=sync_entries,
-        )
-        return task_id
+        return int(result["details"]["task_id"])
 
     def _update_custom_task(
         self,
@@ -3344,6 +3247,7 @@ class TaskScheduler(BaseTaskScheduler):
         payload = dict(data)
         custom_key = payload.pop("custom_key")
         custom_hash = payload.pop("custom_hash")
+        source_id = payload.pop("source_id", DEPLOYMENT_SOURCE_ID)
         payload.pop("destination", None)
         entrypoint_function = payload.pop("entrypoint_function", None)
         schedule = payload.pop("schedule", None)
@@ -3363,6 +3267,7 @@ class TaskScheduler(BaseTaskScheduler):
         )
         name = payload.pop("name", None)
         description = payload.pop("description", None)
+        require_consumed(payload, kind="tasks", custom_key=custom_key)
 
         entrypoint: Any = _UNSET
         if entrypoint_function is not None:
@@ -3393,6 +3298,7 @@ class TaskScheduler(BaseTaskScheduler):
         entries: Dict[str, Any] = {
             "custom_key": custom_key,
             "custom_hash": custom_hash,
+            "source_id": source_id,
             "name": name,
             "description": description,
             "schedule": schedule,
@@ -3431,7 +3337,9 @@ class TaskScheduler(BaseTaskScheduler):
         entries = {key: value for key, value in entries.items() if value is not _UNSET}
 
         sync_meta = {
-            key: entries[key] for key in ("custom_key", "custom_hash") if key in entries
+            key: entries[key]
+            for key in ("custom_key", "custom_hash", "source_id")
+            if key in entries
         }
         provider_entries = {
             key: value for key, value in entries.items() if key not in sync_meta
@@ -3461,132 +3369,21 @@ class TaskScheduler(BaseTaskScheduler):
             workers = 8
         return max(1, min(workers, 32))
 
-    def _upsert_one_custom_task(
-        self,
-        *,
-        custom_key: str,
-        source_data: Dict[str, Any],
-        db_tasks: Dict[str, Dict[str, Any]],
-        function_name_to_id: Dict[str, int],
-        insert_lock: threading.Lock,
-    ) -> None:
-        """Insert or update one custom task row (safe for parallel updates)."""
-
-        task_data = dict(source_data)
-        if custom_key in db_tasks:
-            db_entry = db_tasks[custom_key]
-            if db_entry.get("custom_hash") == task_data.get("custom_hash"):
-                logger.debug("Custom task unchanged: %s", custom_key)
-                return
-            task_id = int(db_entry["task_id"])
-            if (
-                self._running_execution(task_id, states=(ExecutionState.running,))
-                is not None
-            ):
-                logger.warning(
-                    "Skipping update for custom task with a run in flight "
-                    "key=%s task_id=%s",
-                    custom_key,
-                    task_id,
-                )
-                return
-            logger.info("Updating custom task: %s", custom_key)
-            try:
-                self._update_custom_task(
-                    task_id=task_id,
-                    data=task_data,
-                    function_name_to_id=function_name_to_id,
-                )
-            except RuntimeError:
-                logger.warning(
-                    "Skipping update for active custom task key=%s task_id=%s",
-                    custom_key,
-                    task_id,
-                )
-            return
-
-        with insert_lock:
-            existing = unisdk.get_logs(
-                context=self._ctx,
-                filter=f"custom_key == '{custom_key}'",
-                limit=1,
-            )
-            if existing:
-                logger.info(
-                    "Overwriting user-added task with custom definition: %s",
-                    custom_key,
-                )
-                task_id = int(existing[0].entries["task_id"])
-                try:
-                    self._delete_task(task_id=task_id, _root_applied=True)
-                except RuntimeError:
-                    logger.warning(
-                        "Skipping adopt for active task key=%s task_id=%s",
-                        custom_key,
-                        task_id,
-                    )
-                    return
-
-            logger.info("Inserting custom task: %s", custom_key)
-            self._insert_custom_task(
-                task_data,
-                function_name_to_id=function_name_to_id,
-            )
-
-    def _upsert_custom_tasks_parallel(
-        self,
-        *,
-        source_tasks: Dict[str, Dict[str, Any]],
-        db_tasks: Dict[str, Dict[str, Any]],
-        function_name_to_id: Dict[str, int],
-    ) -> None:
-        """Upsert custom tasks with bounded parallelism across independent keys."""
-
-        if not source_tasks:
-            return
-        workers = min(self._custom_task_sync_workers(), len(source_tasks))
-        insert_lock = threading.Lock()
-        if workers == 1:
-            for custom_key, source_data in source_tasks.items():
-                self._upsert_one_custom_task(
-                    custom_key=custom_key,
-                    source_data=source_data,
-                    db_tasks=db_tasks,
-                    function_name_to_id=function_name_to_id,
-                    insert_lock=insert_lock,
-                )
-            return
-
-        errors: list[BaseException] = []
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(
-                    self._upsert_one_custom_task,
-                    custom_key=custom_key,
-                    source_data=source_data,
-                    db_tasks=db_tasks,
-                    function_name_to_id=function_name_to_id,
-                    insert_lock=insert_lock,
-                )
-                for custom_key, source_data in source_tasks.items()
-            ]
-            for future in as_completed(futures):
-                exc = future.exception()
-                if exc is not None:
-                    errors.append(exc)
-        if errors:
-            raise errors[0]
-
     def sync_custom_tasks(
         self,
         *,
         source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
         destination: str | None = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
-        """Ensure custom task rows match source ``tasks.jsonl`` definitions."""
+        """Ensure custom task rows match source ``tasks.jsonl`` definitions.
+
+        Reconciles only the rows *source_id* owns; rows planted in the same
+        context by other sources are neither read nor pruned.
+        """
         try:
-            tasks_context, meta_context, is_personal = self._sync_destination_contexts(
+            tasks_context, meta_context, _is_personal = self._sync_destination_contexts(
                 destination,
             )
         except ToolErrorException as exc:
@@ -3620,71 +3417,45 @@ class TaskScheduler(BaseTaskScheduler):
         self._ctx = tasks_context
         self._store = self._store_for_task_context(tasks_context)
         self._active_task_root_context = tasks_context
+        try:
+            with (
+                exclusive_sync_lease(f"{meta_context}:custom_sync"),
+                self._temporary_tasks_meta_context(meta_context),
+            ):
+                source_tasks = source_tasks or {}
+                synced_key = (tasks_context, source_id)
 
-        with self._temporary_tasks_meta_context(meta_context):
-            if source_tasks is None:
-                source_tasks = {}
-            expected_hash = compute_custom_tasks_hash(source_tasks=source_tasks)
-            current_hash = self._get_stored_custom_tasks_hash()
-            already_synced = (
-                self._custom_tasks_synced
-                if is_personal
-                else tasks_context in self._custom_tasks_synced_contexts
-            )
-
-            if already_synced and current_hash == expected_hash:
-                self._ctx = previous_context
-                self._store = previous_store
-                self._active_task_root_context = previous_active_root
-                return False
-
-            if current_hash == expected_hash:
-                logger.debug("Custom tasks hash matches, skipping sync")
-                if is_personal:
-                    self._custom_tasks_synced = True
-                else:
-                    self._custom_tasks_synced_contexts.add(tasks_context)
-                self._ctx = previous_context
-                self._store = previous_store
-                self._active_task_root_context = previous_active_root
-                return False
-
-            logger.info(
-                "Custom tasks hash mismatch (current=%s, expected=%s), syncing...",
-                current_hash,
-                expected_hash,
-            )
-
-            function_name_to_id = function_name_to_id or {}
-            db_tasks = self._get_custom_tasks_from_db()
-            processed_keys: set[str] = set(source_tasks.keys())
-            self._upsert_custom_tasks_parallel(
-                source_tasks=source_tasks,
-                db_tasks=db_tasks,
-                function_name_to_id=function_name_to_id,
-            )
-
-            for custom_key in db_tasks:
-                if custom_key not in processed_keys:
-                    logger.info("Deleting removed custom task: %s", custom_key)
-                    self._delete_custom_task_by_key(custom_key)
-
-            self._store_custom_tasks_hash(expected_hash)
-            if is_personal:
-                self._custom_tasks_synced = True
-            else:
-                self._custom_tasks_synced_contexts.add(tasks_context)
-
-        self._ctx = previous_context
-        self._store = previous_store
-        self._active_task_root_context = previous_active_root
-        return True
+                return run_custom_sync(
+                    adapter=_TaskSyncAdapter(
+                        self,
+                        function_name_to_id=function_name_to_id or {},
+                        source_id=source_id,
+                    ),
+                    source=source_tasks,
+                    expected_hash=compute_custom_tasks_hash(
+                        source_tasks=source_tasks,
+                    ),
+                    stored_hash=self._get_stored_custom_tasks_hash(source_id),
+                    already_synced=synced_key in self._custom_tasks_synced_sources,
+                    mark_synced=lambda: self._custom_tasks_synced_sources.add(
+                        synced_key,
+                    ),
+                    store_hash=lambda value: self._store_custom_tasks_hash(
+                        value,
+                        source_id=source_id,
+                    ),
+                )
+        finally:
+            self._ctx = previous_context
+            self._store = previous_store
+            self._active_task_root_context = previous_active_root
 
     def sync_custom(
         self,
         *,
         source_tasks: Optional[Dict[str, Dict[str, Any]]] = None,
         function_name_to_id: Optional[Dict[str, int]] = None,
+        source_id: str = DEPLOYMENT_SOURCE_ID,
     ) -> bool:
         """Sync custom tasks from pre-collected sources across destinations."""
         if source_tasks is None:
@@ -3702,5 +3473,95 @@ class TaskScheduler(BaseTaskScheduler):
                 source_tasks=group,
                 function_name_to_id=function_name_to_id,
                 destination=destination_arg,
+                source_id=source_id,
             )
         return changed
+
+
+class _TaskSyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the custom tasks reconcile.
+
+    Updates run in parallel across independent keys; the engine
+    serializes collision probes and inserts under one lock. An update is
+    vetoed (and retried next reconcile, because the aggregate hash stays
+    unstored) while the task has an execution genuinely running.
+    """
+
+    kind = "tasks"
+
+    def __init__(
+        self,
+        scheduler: TaskScheduler,
+        *,
+        function_name_to_id: Dict[str, int],
+        source_id: str = DEPLOYMENT_SOURCE_ID,
+    ) -> None:
+        self._scheduler = scheduler
+        self._function_name_to_id = function_name_to_id
+        self.source_id = source_id
+        self.max_workers = scheduler._custom_task_sync_workers()
+
+    def live_rows(self) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=self._scheduler._ctx,
+            filter=managed_rows_filter(self.source_id),
+            limit=1000,
+            exclude_fields=list_private_fields(self._scheduler._ctx),
+        )
+        return [dict(lg.entries or {}) for lg in logs]
+
+    def should_update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        task_id = int(live_row["task_id"])
+        return (
+            self._scheduler._running_execution(
+                task_id,
+                states=(ExecutionState.running,),
+            )
+            is None
+        )
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._scheduler._insert_custom_task(
+            fields,
+            function_name_to_id=self._function_name_to_id,
+        )
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._scheduler._update_custom_task(
+            task_id=int(live_row["task_id"]),
+            data=fields,
+            function_name_to_id=self._function_name_to_id,
+        )
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._scheduler._delete_custom_task_by_key(key, source_id=self.source_id)
+
+    def find_collision(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = unisdk.get_logs(
+            context=self._scheduler._ctx,
+            filter=f"custom_key == '{key}'",
+            limit=1,
+        )
+        if not existing:
+            return None
+        return dict(existing[0].entries or {})
+
+    def remove_collision(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._scheduler._delete_task(
+            task_id=int(live_row["task_id"]),
+            _root_applied=True,
+        )

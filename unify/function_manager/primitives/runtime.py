@@ -205,6 +205,23 @@ def _make_session_method(
 
     is_desktop = mode == "desktop"
 
+    async def _call(session, *args, **kwargs):
+        try:
+            return await getattr(session, method_name)(*args, **kwargs)
+        except Exception as e:
+            if not _is_dead_session_error(e):
+                raise
+            if on_session_dead:
+                on_session_dead()
+            if not is_desktop:
+                raise
+            # The agent-service reaps sessions idle >30 min and this cache is
+            # never told; the desktop singleton only mirrors the persistent VM
+            # display, so a fresh session is equivalent — re-create and retry.
+            owner.backend.clear_session(mode)
+            session = await session_resolver()
+            return await getattr(session, method_name)(*args, **kwargs)
+
     if method_name == "get_screenshot":
 
         async def screenshot_wrapper(*args, **kwargs):
@@ -220,12 +237,7 @@ def _make_session_method(
             from PIL import Image as _Image
 
             session = await session_resolver()
-            try:
-                b64 = await session.get_screenshot()
-            except Exception as e:
-                if on_session_dead and _is_dead_session_error(e):
-                    on_session_dead()
-                raise
+            b64 = await _call(session)
             if is_desktop:
                 _publish_desktop_invoked(method_name)
             return _Image.open(io.BytesIO(base64.b64decode(b64)))
@@ -277,12 +289,7 @@ def _make_session_method(
         _w_log.debug(
             f"⏱️ [desktop.{method_name} +{_w_ms()}] calling session.{method_name}",
         )
-        try:
-            result = await getattr(session, method_name)(*args, **kwargs)
-        except Exception as e:
-            if on_session_dead and _is_dead_session_error(e):
-                on_session_dead()
-            raise
+        result = await _call(session, *args, **kwargs)
         _w_log.debug(
             f"⏱️ [desktop.{method_name} +{_w_ms()}] session.{method_name} returned",
         )

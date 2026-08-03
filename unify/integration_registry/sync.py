@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import unisdk
 
+from unify.common.custom_sync import CustomSyncAdapter, run_custom_sync
 from unify.common.log_utils import create_logs as unity_create_logs
+from unify.common.sync_lease import exclusive_sync_lease
 from unify.integration_registry.custom_integration_registry import (
     compute_custom_integration_registry_hash,
 )
@@ -154,75 +156,84 @@ class IntegrationRegistrySync:
         source_registry: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> bool:
         """Ensure deployment-defined integration registry rows match the source."""
-        if source_registry is None:
-            source_registry = {}
+        source_registry = source_registry or {}
 
-        expected_hash = compute_custom_integration_registry_hash(
-            source_registry=source_registry,
-        )
-        current_hash = self._get_stored_hash()
-
-        if self._synced and current_hash == expected_hash:
-            return False
-
-        if current_hash == expected_hash:
-            logger.debug(
-                "Custom integration registry hash matches, skipping sync",
-            )
+        def _mark_synced() -> None:
             self._synced = True
-            return False
 
-        logger.info(
-            "Custom integration registry hash mismatch "
-            "(current=%s, expected=%s), syncing...",
-            current_hash,
-            expected_hash,
-        )
+        with exclusive_sync_lease(f"{self._meta_context()}:custom_sync"):
+            return run_custom_sync(
+                adapter=_IntegrationRegistrySyncAdapter(self),
+                source=source_registry,
+                expected_hash=compute_custom_integration_registry_hash(
+                    source_registry=source_registry,
+                ),
+                stored_hash=self._get_stored_hash(),
+                already_synced=self._synced,
+                mark_synced=_mark_synced,
+                store_hash=self._store_hash,
+            )
 
-        db_rows = self._get_managed_rows_from_db()
-        processed_keys: Set[str] = set()
 
-        for custom_key, source_data in source_registry.items():
-            processed_keys.add(custom_key)
-            row_data = {
-                k: v for k, v in source_data.items() if k not in {"destination"}
-            }
-            slug = str(row_data.get("slug", custom_key))
+class _IntegrationRegistrySyncAdapter(CustomSyncAdapter):
+    """Storage mechanics for the integration registry reconcile."""
 
-            if custom_key in db_rows:
-                db_entry = db_rows[custom_key]
-                if db_entry.get("custom_hash") != row_data.get("custom_hash"):
-                    logger.info(
-                        "Updating custom integration registry row: %s",
-                        custom_key,
-                    )
-                    self._update_row(int(db_entry["_log_id"]), row_data)
-            else:
-                unmanaged = self._find_unmanaged_row_by_slug(slug)
-                if unmanaged is not None:
-                    logger.info(
-                        "Adopting unmanaged integration registry row: %s",
-                        custom_key,
-                    )
-                    self._update_row(int(unmanaged["_log_id"]), row_data)
-                else:
-                    logger.info(
-                        "Inserting custom integration registry row: %s",
-                        custom_key,
-                    )
-                    self._insert_row(row_data)
+    kind = "integration registry"
 
-        for custom_key, db_entry in db_rows.items():
-            if custom_key not in processed_keys:
-                logger.info(
-                    "Deleting removed custom integration registry row: %s",
-                    custom_key,
-                )
-                self._delete_row(int(db_entry["_log_id"]))
+    def __init__(self, syncer: IntegrationRegistrySync) -> None:
+        self._syncer = syncer
 
-        self._store_hash(expected_hash)
-        self._synced = True
-        return True
+    def live_rows(self) -> List[Dict[str, Any]]:
+        ctx = self._syncer._manifests_context()
+        try:
+            logs = unisdk.get_logs(
+                context=ctx,
+                filter="custom_hash != None",
+                limit=1000,
+            )
+        except Exception:
+            return []
+        rows: List[Dict[str, Any]] = []
+        for log in logs:
+            entries = dict(log.entries or {})
+            entries.setdefault("custom_key", entries.get("slug"))
+            entries["_log_id"] = log.id
+            rows.append(entries)
+        return rows
+
+    def transform(self, key: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        fields.pop("destination", None)
+        return fields
+
+    def insert(self, key: str, fields: Dict[str, Any]) -> None:
+        self._syncer._insert_row(fields)
+
+    def update(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._syncer._update_row(int(live_row["_log_id"]), fields)
+
+    def delete(self, key: str, live_row: Dict[str, Any]) -> None:
+        self._syncer._delete_row(int(live_row["_log_id"]))
+
+    def find_adoptable(
+        self,
+        key: str,
+        fields: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        slug = str(fields.get("slug", key))
+        return self._syncer._find_unmanaged_row_by_slug(slug)
+
+    def adopt(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> None:
+        self._syncer._update_row(int(live_row["_log_id"]), fields)
 
 
 _syncer = IntegrationRegistrySync()

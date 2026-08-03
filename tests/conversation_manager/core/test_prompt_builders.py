@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from unify.conversation_manager.prompt_builders import (
+    _build_voice_calls_guide,
+    build_fast_brain_turn_guidance,
     build_system_prompt,
     build_voice_agent_prompt,
 )
@@ -307,9 +309,6 @@ class TestCoordinatorPrompt:
             "T-W1N is Alice Smith's personal, private assistant"
             not in coordinator_prompt
         )
-        assert "My onboarding flow (UI reference)" in coordinator_prompt
-        # The flow reference no longer enumerates step titles (those live in
-        # the render-driven progress block); it must still speak first-person.
         assert "Give T-W1N access to your workspace" not in coordinator_prompt
         assert "I propose handing it to T-W1N explicitly" not in coordinator_prompt
 
@@ -319,9 +318,6 @@ class TestCoordinatorPrompt:
 
         assert "Intent vs verified outcomes" in base_prompt
         assert "Intent vs verified outcomes" in coordinator_prompt
-        assert "Console knowledge" in base_prompt
-        assert "Console knowledge" not in coordinator_prompt
-        assert "My Console literacy" in coordinator_prompt
         assert "Concurrent action and acknowledgment" in base_prompt
         assert "Concurrent action and acknowledgment" in coordinator_prompt
         assert "Onboarding reference" in base_prompt
@@ -440,8 +436,6 @@ class TestPromptSectionOwnershipMatrix:
                     "Concurrent action and acknowledgment\n------------------------------------",
                     "T-W1N\n----",
                     "My identity\n-----------",
-                    "My Console literacy\n----------------------",
-                    "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
@@ -463,8 +457,6 @@ class TestPromptSectionOwnershipMatrix:
                     "switch to that organization's T-W1N",
                     "T-W1N\n----",
                     "My identity\n-----------",
-                    "My Console literacy\n----------------------",
-                    "Console account & org administration",
                     "Proactive meeting offers\n------------------------",
                 ),
                 "absent": (
@@ -537,12 +529,7 @@ class TestCoordinatorVoicePrompt:
         # the slow brain let the Voice Agent freelance contradictory
         # "what's next / where do I click" answers. Those questions now defer
         # to the slow brain (RULE 2), which owns onboarding navigation.
-        assert "My Console literacy" not in prompt
-        assert "Left sidebar — selection drives everything" not in prompt
-        assert "Console account & org administration" not in prompt
-        assert "Two ways to accomplish org tasks" not in prompt
-        assert "My onboarding flow (UI reference)" not in prompt
-        assert "Console knowledge\n-----------------" not in prompt
+        assert "Console knowledge" not in prompt
         assert "My opening turn" not in prompt
         assert "Onboarding checklist" not in prompt
         assert "Step-by-step walkthrough pacing" not in prompt
@@ -863,20 +850,27 @@ class TestProactiveMeetingOffers:
 # ---------------------------------------------------------------------------
 
 
+_CONSOLE_BLOCK = "Console knowledge\n-----------------\nSurfaces go here."
+
+
 class TestConsoleKnowledge:
-    """The prompt includes console UI knowledge for guiding users."""
+    """Console orientation comes from the running Console, not from this module.
 
-    def test_console_knowledge_present(self):
-        prompt = _build()
-        assert "Console knowledge" in prompt
-        assert "Integrations" in prompt
-        assert "Contact Details" in prompt
+    The prompt carries whatever text Console publishes, verbatim, and carries
+    nothing when Console publishes nothing.
+    """
 
-    def test_console_knowledge_has_navigation_paths(self):
+    def test_console_block_is_passed_through_verbatim(self):
+        prompt = _build(console_guidance=_CONSOLE_BLOCK)
+        assert _CONSOLE_BLOCK in prompt
+
+    def test_no_console_block_without_guidance(self):
         prompt = _build()
-        assert "open the **Integrations** tab" in prompt
-        assert "⋮ → **Contact Details**" in prompt
-        assert "profile menu" in prompt
+        assert "Console knowledge" not in prompt
+
+    def test_coordinator_takes_the_same_block(self):
+        prompt = _build(is_coordinator=True, console_guidance=_CONSOLE_BLOCK)
+        assert _CONSOLE_BLOCK in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -885,12 +879,13 @@ class TestConsoleKnowledge:
 
 
 class TestConsoleUIGate:
-    """Console-UI knowledge and onboarding prompts are gated on
-    ``console_ui_present`` so the public local install (no Console) gets a
-    trimmed prompt with a local-mode note instead."""
+    """Onboarding prompts are gated on ``console_ui_present`` so the public
+    local install (no Console) gets a trimmed prompt with a local-mode note.
+    A Console-less deployment also never fetches guidance, so the orientation
+    block is absent by the same token."""
 
     def test_regular_console_knowledge_present_by_default(self):
-        prompt = _build(is_coordinator=False)
+        prompt = _build(is_coordinator=False, console_guidance=_CONSOLE_BLOCK)
         assert "Console knowledge" in prompt
         assert "Interaction surface" not in prompt
 
@@ -899,19 +894,13 @@ class TestConsoleUIGate:
         assert "Console knowledge" not in prompt
         assert "Interaction surface" in prompt
 
-    def test_coordinator_console_blocks_present_by_default(self):
-        prompt = _build(is_coordinator=True)
-        assert "Console literacy" in prompt
-        assert "onboarding flow (UI reference)" in prompt
-        assert (
-            "steps route through the Assistant info → Onboarding checklist first"
-            in prompt
-        )
+    def test_coordinator_console_block_present_by_default(self):
+        prompt = _build(is_coordinator=True, console_guidance=_CONSOLE_BLOCK)
+        assert "Console knowledge" in prompt
 
-    def test_coordinator_console_blocks_absent_in_local_mode(self):
+    def test_coordinator_console_block_absent_in_local_mode(self):
         prompt = _build(is_coordinator=True, console_ui_present=False)
-        assert "Console literacy" not in prompt
-        assert "onboarding flow (UI reference)" not in prompt
+        assert "Console knowledge" not in prompt
         assert "Interaction surface" in prompt
 
     def test_voice_platform_knowledge_present_by_default(self):
@@ -921,6 +910,18 @@ class TestConsoleUIGate:
     def test_voice_platform_knowledge_absent_in_local_mode(self):
         prompt = _build_voice(is_coordinator=False, console_ui_present=False)
         assert "Platform knowledge" not in prompt
+
+    def test_voice_prompt_never_carries_the_console_block(self):
+        """Console orientation is slow-brain-only, for two reasons.
+
+        The Coordinator's fast brain freelanced contradictory "where do I click"
+        answers when it held the same navigation knowledge, and this prompt is
+        built in the LiveKit worker subprocess, which cannot see the Console
+        presence the block is gated on.
+        """
+        for is_coordinator in (False, True):
+            prompt = _build_voice(is_coordinator=is_coordinator)
+            assert "Console knowledge" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1201,3 +1202,53 @@ class TestOnboardingPromptLeakageGuard:
         assert "Startable steps right now" in prompt
         assert "1. Trigger WhatsApp message from T-W1N" in prompt
         assert "2. Add your phone number" in prompt
+
+
+class TestFastBrainTurnGuidance:
+    """The note handed to the slow brain after the Voice Agent finishes a turn.
+
+    The Voice Agent's line is already in the caller's ears by the time the slow
+    brain runs, so the note has to read as reported fact. Phrasing it as an
+    intention invites a reply that re-answers the question and opens with a
+    second "Yes".
+    """
+
+    @pytest.mark.parametrize(
+        "classification",
+        ["defer", "smalltalk", "continuation", "some_future_classification"],
+    )
+    def test_line_is_presented_as_already_spoken(self, classification):
+        note = build_fast_brain_turn_guidance(
+            classification=classification,
+            intended_speech="Yes — I can take a look at that.",
+        )
+        assert "Yes — I can take a look at that." in note
+        assert "intended speech" not in note.lower()
+        assert "heard" in note.lower()
+
+    def test_defer_asks_for_continuation_not_a_fresh_reply(self):
+        note = build_fast_brain_turn_guidance(
+            classification="defer",
+            intended_speech="Yes — I can take a look at that.",
+        )
+        lowered = note.lower()
+        assert "continues that same piece of speech" in lowered
+        assert "do not restate it" in lowered
+        assert "do not re-answer" in lowered
+        assert "same yes/no" in lowered
+        # The filler framing told the slow brain the line did not count.
+        assert "filler" not in lowered
+
+    def test_smalltalk_still_asks_for_silence(self):
+        note = build_fast_brain_turn_guidance(
+            classification="smalltalk",
+            intended_speech="It's just gone nine here.",
+        )
+        assert "wait()" in note
+        assert "do not repeat or paraphrase it" in note.lower()
+
+    def test_voice_guide_treats_the_spoken_line_as_delivered(self):
+        guide = _build_voice_calls_guide()
+        assert "mine and already delivered" in guide
+        assert "Continue from what I just said." in guide
+        assert 'never "Yes. The quickest way is…"' in guide

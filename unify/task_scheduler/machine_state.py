@@ -62,7 +62,6 @@ _EXECUTION_QUERY_FIELDS = [
     "delivery",
     "state",
     "task_name",
-    "task_description",
     "scheduled_for",
     "dispatch_offset_seconds",
     "trigger_medium",
@@ -70,7 +69,7 @@ _EXECUTION_QUERY_FIELDS = [
     "trigger_omit_contact_ids",
     "trigger_recurring",
     "entrypoint",
-    "repeat",
+    "recurring",
     "revision",
     "requires_filesystem",
     "requires_computer",
@@ -115,7 +114,7 @@ class TaskExecutionSnapshot:
     delivery: str | None = None
     state: str | None = None
     task_name: str | None = None
-    task_description: str | None = None
+    task_summary: str | None = None
     scheduled_for: str | None = None
     dispatch_offset_seconds: float | None = None
     trigger_medium: str | None = None
@@ -126,7 +125,7 @@ class TaskExecutionSnapshot:
     max_runtime_seconds: int | None = None
     requires_filesystem: bool = False
     requires_computer: bool = False
-    repeat: list[Any] | None = None
+    recurring: bool = False
     revision: str | None = None
 
 
@@ -147,7 +146,6 @@ class TaskRunProvenance:
     source_contact_id: str | None = None
     source_contact_display_name: str | None = None
     task_name: str | None = None
-    task_description: str | None = None
     attempt_token: str | None = None
     dispatch_offset_seconds: float | None = None
     # Symbolic function id the definition binds this occurrence to. Dispatch
@@ -370,9 +368,6 @@ def consume_live_task_run_provenance(
             execution.trigger_medium if wake is Wake.triggered and execution else None
         ),
         task_name=(execution.task_name if execution is not None else None),
-        task_description=(
-            execution.task_description if execution is not None else None
-        ),
     )
 
 
@@ -459,19 +454,6 @@ def create_or_adopt_live_task_run(
     )
 
 
-def project_task_occurrence(provenance: TaskRunProvenance) -> TaskRunReference | None:
-    """Create or adopt the pending execution row for one future occurrence.
-
-    A projected occurrence has not started: it is ``scheduled`` with no
-    ``started_at``, so overlap guards ignore it and dispatch owns the moment it
-    actually begins. Projecting it as a running row made every successor look
-    like a live concurrent run the instant its predecessor started, and the
-    predecessor and successor then overlap-skipped each other forever.
-    """
-
-    return _create_or_adopt_task_run(provenance, state=ExecutionState.scheduled)
-
-
 def _create_or_adopt_task_run(
     provenance: TaskRunProvenance,
     *,
@@ -504,7 +486,6 @@ def _create_or_adopt_task_run(
                 "source_contact_id": provenance.source_contact_id,
                 "source_contact_display_name": provenance.source_contact_display_name,
                 "task_name": provenance.task_name,
-                "task_description": provenance.task_description,
                 "started_at": started_at,
                 "state": state.value,
             },
@@ -789,38 +770,6 @@ def find_running_execution_for_task(
     return _row_to_execution(rows[0])
 
 
-def latest_scheduled_occurrence_for_task(
-    *,
-    task_id: int,
-    destination: str | None = None,
-) -> str | None:
-    """The newest ``scheduled_for`` already projected for one task, if any.
-
-    The next occurrence is derived from the last one the ledger knows about,
-    not from a field the definition mutates. Every caller reading the same
-    ledger computes the same next slot, so concurrent runs converge on one
-    ``run_key`` instead of racing a shared row.
-    """
-
-    filter_clauses = [f"task_id == {int(task_id)}", "wake == 'scheduled'"]
-    normalized_destination = _canonical_destination_or_none(destination)
-    if normalized_destination is not None:
-        filter_clauses.append(f"destination == '{normalized_destination}'")
-    rows = _execution_store().get_rows(
-        filter=" and ".join(filter_clauses),
-        limit=200,
-        include_fields=_EXECUTION_QUERY_FIELDS,
-    )
-    occurrences = [
-        _coerce_str(getattr(_row_to_execution(row), "scheduled_for", None))
-        for row in rows
-    ]
-    known = [value for value in occurrences if value]
-    if not known:
-        return None
-    return max(known, key=_normalize_datetime_string)
-
-
 def find_terminal_execution_for_task(
     *,
     task_id: int,
@@ -1024,7 +973,7 @@ def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
         delivery=_coerce_str(entries.get("delivery")),
         state=_coerce_str(entries.get("state")),
         task_name=_coerce_str(entries.get("task_name")),
-        task_description=_coerce_str(entries.get("task_description")),
+        task_summary=_coerce_str(entries.get("task_summary")),
         scheduled_for=_coerce_str(entries.get("scheduled_for")),
         trigger_medium=_coerce_str(entries.get("trigger_medium")),
         trigger_from_contact_ids=_coerce_int_list(
@@ -1036,7 +985,7 @@ def _row_to_execution(row: Any) -> TaskExecutionSnapshot | None:
         trigger_recurring=bool(entries.get("trigger_recurring", False)),
         entrypoint=_coerce_int(entries.get("entrypoint")),
         max_runtime_seconds=_coerce_int(entries.get("max_runtime_seconds")),
-        repeat=_coerce_list(entries.get("repeat")),
+        recurring=bool(entries.get("recurring", False)),
         revision=_coerce_str(entries.get("revision")),
         requires_filesystem=resolve_requires_filesystem(entries),
         requires_computer=resolve_requires_computer(entries),

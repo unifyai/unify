@@ -87,7 +87,7 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
     ),
     "learning_beat_requested": (
         "The user clicked the Learning tutorial row — run the guided "
-        "expenses-etl correction demo now."
+        "billsplit-dinner correction demo now."
     ),
     "my_computer_beat_requested": (
         "The user clicked the My Computer row — run the live desktop demo now "
@@ -189,6 +189,13 @@ def _should_deliver_coordinator_chat_intro(cm: "ConversationManager") -> bool:
         cm.coordinator_onboarding_active
         and cm.coordinator_intro_watched
         and cm.coordinator_pending_chat_intro
+        # Process-lifetime latch: once this pod has sent (or claimed) the
+        # intro it never sends again, regardless of what a later durable
+        # state refresh reports. Repeated onboarding_session_started events
+        # re-schedule delivery, and a lost PATCH or a not-yet-hydrated
+        # contact index otherwise makes every re-schedule look like the
+        # first — users received the scripted greeting five times.
+        and not getattr(cm, "_coordinator_chat_intro_claimed", False)
         and not _boss_thread_has_assistant_unify_message(cm)
     )
 
@@ -215,9 +222,22 @@ async def _deliver_coordinator_chat_intro_task(cm: "ConversationManager") -> Non
         await asyncio.sleep(delay)
     if not _should_deliver_coordinator_chat_intro(cm):
         return
+    # Claim before sending (locally and durably). If the durable PATCH is
+    # lost we skip one greeting rather than risk re-greeting on every
+    # subsequent onboarding_session_started event — a missing pleasantry
+    # is recoverable, a five-fold "great to meet you" is not.
+    cm._coordinator_chat_intro_claimed = True
+    cm.coordinator_pending_chat_intro = False
+    patch_result = await cm._patch_coordinator_pending_chat_intro(pending=False)
+    if isinstance(patch_result, dict) and patch_result.get("status") == "error":
+        cm._session_logger.info(
+            "coordinator_onboarding_event",
+            "Chat intro durable claim failed; skipping intro send this "
+            "session (%s)." % patch_result.get("message", "unknown"),
+        )
+        return
     tools = ConversationManagerBrainActionTools(cm)
     await tools.send_unify_message_to_boss(content=COORDINATOR_ONBOARDING_CHAT_INTRO)
-    await cm._patch_coordinator_pending_chat_intro(pending=False)
     cm._session_logger.info(
         "coordinator_onboarding_event",
         "Coordinator onboarding chat intro delivered.",
@@ -677,11 +697,11 @@ def _coordinator_onboarding_notification_text(
         return _append_onboarding_trigger_ack_guidance(text, event.subtype)
 
     if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
-        from unify.conversation_manager.domains.learning_expenses_fixtures import (
-            learning_expenses_scenario_prompt_lines,
-            learning_expenses_stop_act_for_storage_rule,
-            learning_expenses_storage_check_nudge,
-            learning_expenses_user_facing_voice,
+        from unify.conversation_manager.domains.learning_billsplit_fixtures import (
+            learning_billsplit_scenario_prompt_lines,
+            learning_billsplit_stop_act_for_storage_rule,
+            learning_billsplit_storage_check_nudge,
+            learning_billsplit_user_facing_voice,
         )
 
         details = event.details if isinstance(event.details, dict) else {}
@@ -691,46 +711,61 @@ def _coordinator_onboarding_notification_text(
         framing_note = f" Section framing: {framing}" if framing else ""
         scenario_note = f" Scenario id: `{scenario_id}`." if scenario_id else ""
         replay_note = f" Replay hint: {replay_hint}" if replay_hint else ""
-        fixture_note = " ".join(learning_expenses_scenario_prompt_lines())
+        fixture_note = " ".join(learning_billsplit_scenario_prompt_lines())
         medium_note = (
             " This is an openly narrated tutorial demo — say so up front. "
-            f"{learning_expenses_user_facing_voice()} "
+            f"{learning_billsplit_user_facing_voice()} "
             f"{fixture_note} "
-            "Before the first attempt, send the month-N bank export CSVs as "
-            "unify_message attachments (one attachment per message). Run a "
-            "deliberately naive first pass via act(persist=True) with genuinely "
-            "computed numbers (sum every outflow, add abs(Amount) again for each "
-            "INTERNAL XFER row on either file including card-side credits, ignore "
-            "refunds), state the naive total and explain the mistake in plain "
-            "language (no tables or row-by-row breakdowns), suggest the exact "
-            "correction text, and WAIT — never send the correction or proceed "
-            "on the user's behalf. After their correction, interject_* into the "
-            "running persist act with the corrected algorithm and include this "
-            f"StorageCheck memoization request verbatim: "
-            f"{learning_expenses_storage_check_nudge()} "
-            "Then send the improved deliverable as a unify_message. "
-            f"{learning_expenses_stop_act_for_storage_rule()} "
-            "The doing loop must not call "
-            "GuidanceManager or FunctionManager store tools — StorageCheck "
-            "persists after completion; tell the user to open the Brain rail "
-            "Guidance and Functions sections and cite what StorageCheck stored — "
-            "I have no tool to navigate the Console for them — invite them to ask "
-            "for next month's report, and WAIT again "
-            "before the replay act. Each phase deliverable (first attempt, "
-            "improved version, replay) must be sent with send_unify_message. "
-            "After the replay deliverable, mark the step done with "
-            "set_onboarding_task_state('learn-from-correction', True) — the "
-            "checklist does not auto-detect the tutorial. Brain nudges and "
-            "attachment intro messages are not deliverables. Tell the user to open "
-            "the Actions tab themselves before/during each act run — I have no "
-            "tool to navigate the Console for them. "
+            "Beat 1: announce the trick — I'm going to get the first split "
+            "wrong ON PURPOSE, their job is to catch me, and to open the "
+            "Actions tab so they can watch me work. "
+            "Beat 2: send Friday's receipt as ONE unify_message attachment "
+            "with a one-sentence caption naming that night's attendees — no "
+            "second file. "
+            "Beat 3: run a deliberately naive pass via act(persist=True) with "
+            "genuinely computed numbers (split the total evenly across every "
+            "attendee, including alcohol), state the naive per-person total "
+            "and explain the mistake in plain language (no tables or "
+            "row-by-row breakdowns), suggest the exact correction text, and "
+            "WAIT — never send the correction or proceed on the user's "
+            "behalf. "
+            "Beat 4: after their correction (paraphrase accepted if it "
+            "conveys the rule and/or Sam's fact), interject_* into the "
+            "running persist act with the corrected algorithm and include "
+            f"this StorageCheck memoization request verbatim: "
+            f"{learning_billsplit_storage_check_nudge()} "
+            "Then send the corrected deliverable as a unify_message. "
+            f"{learning_billsplit_stop_act_for_storage_rule()} "
+            "The doing loop must not call GuidanceManager, FunctionManager, "
+            "or KnowledgeManager store tools directly — StorageCheck persists "
+            "after the stopped act completes, in the background. Do NOT "
+            "invite Saturday's dinner or cite anything as saved yet. "
+            "Beat 5 (proactive, exactly once): once StorageCheck actually "
+            "finishes — I may be woken for this with no new user message — "
+            "send 'Saved ✓' citing what actually got stored (a rule, Sam's "
+            "fact, a bill-splitting skill), point at the Brain tab, and "
+            "invite Saturday's dinner as the test; on failure say so plainly "
+            "and offer to retry; a user poke before the save gets an honest "
+            "status answer and never cancels or duplicates this "
+            "announcement. "
+            "Beat 6: only after the Beat 5 announcement, once the user asks "
+            "for Saturday, send Saturday's receipt as ONE unify_message "
+            "attachment (Sam recurs) and run the replay zero-shot via a "
+            "second act(persist=True) — no reminder about Sam. Each "
+            "deliverable (naive, corrected, replay) must be sent with "
+            "send_unify_message. After the replay deliverable, mark the step "
+            "done with set_onboarding_task_state('learn-from-correction', "
+            "True) — the checklist does not auto-detect the tutorial. Brain "
+            "nudges and attachment intro messages are not deliverables. Tell "
+            "the user to open the Actions tab themselves before/during each "
+            "act run — I have no tool to navigate the Console for them. "
             "On a live in-app Unify Meet call: narrate spoken beats via "
-            "guide_voice_agent, but CSV attachments and all three deliverables "
-            "MUST still be sent as unify_message chat messages — a report is a "
-            "document, not a spoken line. "
-            "On off-console channels (plain phone call, WhatsApp call): do not "
-            "run the tutorial; say it is a Console exercise and offer to start "
-            "when the user is back in the app."
+            "guide_voice_agent, but receipt attachments and all three "
+            "deliverables MUST still be sent as unify_message chat messages "
+            "— a report is a document, not a spoken line. "
+            "On off-console channels (plain phone call, WhatsApp call): do "
+            "not run the tutorial; say it is a Console exercise and offer to "
+            "start when the user is back in the app."
         )
         text = (
             f"{subtype_hint} {body}{framing_note}{scenario_note}{replay_note}"
@@ -839,6 +874,9 @@ async def _handle_coordinator_onboarding_event(
             # New session boundary: forget any prior in-session clicks so a
             # stale click can't keep a re-gated channel's tool unlocked.
             cm.clear_onboarding_clicked_trigger_steps()
+            # An abandoned learning demo can't leave the StorageCheck wake
+            # armed across sessions.
+            cm.set_learning_demo_storage_wake_armed(False)
         if event.subtype == _SUBTYPE_REFERENCE_QUIZ_CLUE_REQUESTED:
             trace = getattr(cm, "_current_event_trace", None) or {}
             # Unlock this channel's send tool for the session (the click is
@@ -849,12 +887,15 @@ async def _handle_coordinator_onboarding_event(
                 origin_event_id=trace.get("event_id", ""),
             )
         if event.subtype == _SUBTYPE_LEARNING_BEAT_REQUESTED:
-            from unify.conversation_manager.domains.learning_expenses_fixtures import (
-                provision_learning_expenses_fixtures,
+            from unify.conversation_manager.domains.learning_billsplit_fixtures import (
+                provision_learning_billsplit_fixtures,
             )
             from unify.file_manager.settings import get_local_root
 
-            provision_learning_expenses_fixtures(get_local_root())
+            provision_learning_billsplit_fixtures(get_local_root())
+            # Arm the StorageCheck-completion wake for the duration of the
+            # demo (see ActorNotification handler in event_handlers.py).
+            cm.set_learning_demo_storage_wake_armed(True)
     if event.subtype == _SUBTYPE_ONBOARDING_RENDER_UPDATED:
         details = event.details if isinstance(event.details, dict) else {}
         if details.get("reason") == "integration_connected" and "apps" in (
@@ -912,5 +953,8 @@ async def _handle_coordinator_onboarding_event(
         # event only exists to push the freshly-derived render; triggering a run
         # here would make the brain acknowledge its own action in a redundant
         # second turn. Refresh only, no run.
+        details = event.details if isinstance(event.details, dict) else {}
+        if details.get("step_id") == "learn-from-correction":
+            cm.set_learning_demo_storage_wake_armed(False)
         return False
     return True

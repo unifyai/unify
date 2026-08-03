@@ -1,6 +1,8 @@
 import asyncio
+import collections
 import contextlib
 import json
+import time
 import traceback
 from datetime import datetime
 from typing import Any, Callable, Optional, Reversible
@@ -12,6 +14,10 @@ from unify.common.diagnostic_logging import staging_diagnostics_enabled
 from unify.session_details import SESSION_DETAILS
 from unify.coordinator_voice import resolve_runtime_voice
 from unify.settings import SETTINGS
+from unify.conversation_manager.console_actions import (
+    parse_console_actions,
+    strip_markers,
+)
 from unify.manager_registry import SingletonABCMeta
 from unify.common.async_tool_loop import SteerableToolHandle
 from unify.common.hierarchical_logger import SessionLogger
@@ -66,11 +72,33 @@ RECENT_TOOL_EXECUTIONS_LIMIT = 20
 RECENT_TOOL_PREVIEW_CHARS = 500
 CREDIT_GATE_REPLY_THROTTLE_SECONDS = 300
 ONBOARDING_OUTBOUND_CONTEXT_TTL_SECONDS = 120
+# How long a Console presence heartbeat keeps the Console orientation block in
+# the prompt. Comfortably longer than Console's keep-warm interval so a user who
+# is present but idle does not drop out of it between beats.
+CONSOLE_PRESENCE_TTL_S = 600.0
 DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "Your credits are depleted, so I can't continue helping with setup or tasks "
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
 DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
+SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS = 600
+SLOW_BRAIN_FAILURE_RESPONSE = (
+    "I hit a technical problem and couldn't respond just now. Please try "
+    "again in a moment — if it keeps happening, contact support@unify.ai "
+    "so we can look into it."
+)
+SLOW_BRAIN_FAILURE_EMAIL_SUBJECT = "Temporary problem responding"
+# Self-scheduled wait(delay) polling backoff. Timer wakes are full-priced
+# slow-brain turns; a model that busy-polls a long-running act ("check
+# again in 10 seconds", repeatedly) burns tokens with zero information
+# gain — external events wake the brain immediately regardless, so only
+# the self-scheduled timer needs a floor. A small budget of fast polls
+# per window stays free; beyond it the effective delay doubles per extra
+# poll up to the cap.
+WAIT_POLL_WINDOW_SECONDS = 600.0
+WAIT_POLL_FREE_BUDGET = 5
+WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS = 60
+WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS = 600
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
         "act",
@@ -289,10 +317,18 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # send durably completes the step. Lost on restart on purpose — the
         # row stays re-clickable, so a tool can never be permanently masked.
         self._onboarding_clicked_trigger_steps: set[str] = set()
-        # Static, deployment-gated onboarding catalog (phases + steps + copy),
-        # fetched once from Orchestra's canonical source of truth and reused for
-        # every prompt build so console_ui never re-declares onboarding copy.
-        self.onboarding_catalog: dict[str, Any] | None = None
+        # Armed only inside the learning-demo chip-click -> step-complete
+        # window (learning_beat_requested .. learn-from-correction
+        # step_completed / session restart). Gates the StorageCheck-completion
+        # wake in event_handlers.py's ActorNotification handler so storage
+        # completing after every act does not wake the brain product-wide.
+        self._learning_demo_storage_wake_armed: bool = False
+        # Console orientation text and when the Console last reported the user
+        # present, both set from AssistantPresenceObserved. See
+        # ``console_guidance`` for why they are held together.
+        self._console_guidance: dict[str, str] = {}
+        self._console_guidance_version: str = ""
+        self._console_presence_at: float | None = None
         self._coordinator_state_checked_at: float = 0.0
         # Shared keep-alive HTTP client for Orchestra state reads/writes, plus
         # the in-flight background refresh (see
@@ -394,8 +430,17 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # meet interaction state (screen share / webcam / remote control)
         self.assistant_screen_share_active: bool = False
         self.user_screen_share_active: bool = False
+        # Someone in a browser meeting is sharing a screen with us. Kept apart
+        # from ``user_screen_share_active`` because that one also gates the
+        # desktop fast path and web-session listing, which should not switch on
+        # because a stranger in a Google Meet put up a slide.
+        self.meet_screen_share_active: bool = False
         self.user_webcam_active: bool = False
         self.user_remote_control_active: bool = False
+        # Flag names above that a frontend has reported on. A frontend is
+        # authoritative for its surfaces, so track-inferred events stop being
+        # applied to them once it speaks.
+        self._frontend_reported_meet_surfaces: set[str] = set()
 
         # screenshot buffer for slow brain visual context
         self._screenshot_buffer: list[ScreenshotEntry] = []
@@ -711,6 +756,61 @@ class ConversationManager(metaclass=SingletonABCMeta):
             contact_id=SESSION_DETAILS.boss_contact_id,
         )
 
+    def record_console_presence(
+        self,
+        *,
+        version: str = "",
+        brief: str = "",
+        full: str = "",
+        actions: str = "",
+    ) -> None:
+        """Note that Console reported the user present, and keep any text it sent.
+
+        Heartbeats that carry no text still refresh presence: most of them are
+        version-only by design, and treating those as absence would blink the
+        prompt section in and out between the ones that do carry it.
+        """
+        self._console_presence_at = time.monotonic()
+        if not brief and not full:
+            return
+        if version and version != self._console_guidance_version:
+            self._session_logger.info(
+                "console_guidance",
+                f"Console guidance updated to version {version}.",
+            )
+        self._console_guidance_version = version
+        self._console_guidance = {"brief": brief, "full": full, "actions": actions}
+
+    def console_is_open(self) -> bool:
+        """Whether Console reported the user present recently enough to count."""
+        if self._console_presence_at is None:
+            return False
+        return time.monotonic() - self._console_presence_at <= CONSOLE_PRESENCE_TTL_S
+
+    def console_action_catalogue(self) -> str:
+        """Navigation targets Console currently offers, or ``""`` when it is shut.
+
+        Gated with the orientation text and for the same reason, plus one of its
+        own: taking someone to a page they are not looking at accomplishes
+        nothing, so the tool that consumes this is withheld along with it.
+        """
+        if not self.console_is_open():
+            return ""
+        return self._console_guidance.get("actions", "")
+
+    def console_guidance(self, detail: str = "brief") -> str:
+        """Console orientation text, but only while the user is on the Console.
+
+        Someone who emailed hours ago is not looking at a screen, so describing
+        it to them is prompt bloat that also invites the assistant to talk about
+        a surface nobody has open. The window is generous relative to Console's
+        keep-warm heartbeat so an idle-but-present user does not flicker in and
+        out of it, since each flip costs a prompt-cache miss.
+        """
+        if not self.console_is_open():
+            return ""
+        return self._console_guidance.get(detail, "")
+
     async def capture_assistant_screenshot(
         self,
         user_utterance: str,
@@ -816,6 +916,23 @@ class ConversationManager(metaclass=SingletonABCMeta):
         peek) are preserved for the next turn.
         """
         del self._screenshot_buffer[:count]
+
+    def drop_unpaired_screenshots(self, source: str) -> int:
+        """Forget buffered frames from *source* that no utterance depends on.
+
+        Called when a visual source goes away. An unpaired frame is "what this
+        source shows now", so once the source is gone it shows nothing and holding
+        the last one lets the next turn describe a screen that has been taken
+        down. Frames paired with an utterance are kept: those are evidence for a
+        specific thing somebody said, and remain true after the screen goes.
+        """
+        before = len(self._screenshot_buffer)
+        self._screenshot_buffer = [
+            entry
+            for entry in self._screenshot_buffer
+            if entry.source != source or entry.utterance
+        ]
+        return before - len(self._screenshot_buffer)
 
     async def _register_screenshots_background(
         self,
@@ -1407,6 +1524,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         message: str,
         slow_brain_log_path: str = "",
         fast_brain_guidance: str = "",
+        console_steps: list[dict[str, Any]] | None = None,
     ) -> None:
         """Publish a slow-brain spoken line (``guide_voice_agent``) to the fast brain.
 
@@ -1426,6 +1544,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
             source="slow_brain",
             llm_log_path=slow_brain_log_path,
             fast_brain_guidance=fast_brain_guidance,
+            console_steps=console_steps or [],
         )
         self._session_logger.info(
             "call_notification",
@@ -1490,10 +1609,69 @@ class ConversationManager(metaclass=SingletonABCMeta):
             if self.mode.is_voice and self._is_transient_llm_error(exc):
                 with contextlib.suppress(Exception):
                     await self._notify_fast_brain_of_slow_brain_failure(exc)
+            elif not self.mode.is_voice:
+                # Text surfaces have no fast brain to apologise for a dead
+                # slow brain — without this, a hard failure (e.g. an
+                # unconstructable LLM client on a stale image) is pure
+                # silence, and users have re-sent the same message for
+                # hours. Throttled so repeated failures produce one
+                # apology, not one per attempt.
+                with contextlib.suppress(Exception):
+                    await self._send_slow_brain_failure_reply()
             raise
+
+    async def _send_slow_brain_failure_reply(self) -> None:
+        """Tell the user their message hit a hard failure (throttled)."""
+        reply_context = self._last_inbound_reply_context
+        if not reply_context:
+            return
+        now = self.loop.time()
+        last_sent = getattr(self, "_slow_brain_failure_reply_sent_at", None)
+        if (
+            last_sent is not None
+            and now - last_sent < SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS
+        ):
+            return
+        self._slow_brain_failure_reply_sent_at = now
+        await self._send_system_reply(
+            reply_context,
+            content=SLOW_BRAIN_FAILURE_RESPONSE,
+            email_subject=SLOW_BRAIN_FAILURE_EMAIL_SUBJECT,
+        )
 
     def record_last_inbound_reply(self, reply_context: dict[str, Any]) -> None:
         self._last_inbound_reply_context = reply_context
+
+    def _clamp_wait_poll_delay(self, delay: int) -> int:
+        """Apply escalating backoff to repeated self-scheduled wait polls.
+
+        Keeps the first ``WAIT_POLL_FREE_BUDGET`` timer wakes per window at
+        the model's requested cadence, then doubles the enforced minimum
+        per extra poll (capped). External events are unaffected — they wake
+        the brain immediately whether or not a timer is pending.
+        """
+        polls = getattr(self, "_wait_poll_times", None)
+        if polls is None:
+            polls = self._wait_poll_times = collections.deque(maxlen=64)
+        now = self.loop.time()
+        polls.append(now)
+        recent = sum(1 for t in polls if now - t <= WAIT_POLL_WINDOW_SECONDS)
+        excess = recent - WAIT_POLL_FREE_BUDGET
+        if excess <= 0:
+            return delay
+        floor = min(
+            WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS * (2 ** (excess - 1)),
+            WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS,
+        )
+        if delay < floor:
+            self._session_logger.info(
+                "wait",
+                f"Wait-poll backoff: raising delay {delay}s -> {floor}s "
+                f"({recent} timer polls in the last "
+                f"{int(WAIT_POLL_WINDOW_SECONDS)}s)",
+            )
+            return floor
+        return delay
 
     def _credit_gate_throttle_key(
         self,
@@ -1528,17 +1706,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self._credit_gate_reply_sent_at[throttle_key] = now
         return False
 
-    async def _send_credit_gate_reply(
+    async def _send_system_reply(
         self,
         reply_context: dict[str, Any],
+        *,
+        content: str,
+        email_subject: str,
     ) -> bool:
+        """Deliver a canned system message over the inbound reply channel.
+
+        Shared by the credit-gate reply and the slow-brain hard-failure
+        apology: routes plain text back over whichever medium the last
+        inbound message arrived on.
+        """
         medium = reply_context.get("medium")
         contact_id = reply_context.get("contact_id")
         tools = ConversationManagerBrainActionTools(self)
 
         if medium == Medium.UNIFY_MESSAGE.value:
             send_kwargs: dict[str, Any] = {
-                "content": DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                "content": content,
             }
             raw_group_id = reply_context.get("group_id")
             raw_team_id = reply_context.get("team_id")
@@ -1554,20 +1741,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
         elif medium == Medium.SMS_MESSAGE.value and contact_id is not None:
             await tools.send_sms(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.WHATSAPP_MESSAGE.value and contact_id is not None:
             await tools.send_whatsapp(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.EMAIL.value:
             email_id = reply_context.get("email_id")
             thread_id = reply_context.get("thread_id")
             if email_id:
                 await tools.send_email(
-                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    subject=email_subject,
+                    body=content,
                     reply_all=True,
                     email_id_to_reply_to=email_id,
                     thread_id=thread_id,
@@ -1575,21 +1762,21 @@ class ConversationManager(metaclass=SingletonABCMeta):
             elif contact_id is not None:
                 await tools.send_email(
                     to=[contact_id],
-                    subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
-                    body=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                    subject=email_subject,
+                    body=content,
                 )
             else:
                 return False
         elif medium == Medium.API_MESSAGE.value:
             await tools.send_api_response(
                 contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tags=reply_context.get("tags"),
             )
         elif medium == Medium.DISCORD_MESSAGE.value and contact_id is not None:
             await tools.send_discord_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.DISCORD_CHANNEL_MESSAGE.value and reply_context.get(
             "channel_id",
@@ -1598,12 +1785,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 channel_id=reply_context["channel_id"],
                 guild_id=reply_context.get("guild_id") or "",
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.SLACK_MESSAGE.value and contact_id is not None:
             await tools.send_slack_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 team_id=reply_context.get("team_id") or "",
                 thread_ts=reply_context.get("thread_ts"),
             )
@@ -1615,12 +1802,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 team_id=reply_context.get("team_id") or "",
                 thread_ts=reply_context.get("thread_ts"),
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
             )
         elif medium == Medium.TEAMS_MESSAGE.value and contact_id is not None:
             await tools.send_teams_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 chat_id=reply_context.get("chat_id"),
             )
         elif medium == Medium.TEAMS_CHANNEL_MESSAGE.value and reply_context.get(
@@ -1628,7 +1815,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_teams_message(
                 contact_id=contact_id or SESSION_DETAILS.boss_contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 channel_id=reply_context.get("channel_id"),
                 team_id=reply_context.get("team_id"),
             )
@@ -1639,7 +1826,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_ms_teams_bot_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tenant_id=reply_context["tenant_id"],
                 conversation_id=reply_context["conversation_id"],
             )
@@ -1650,7 +1837,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ):
             await tools.send_ms_teams_bot_channel_message(
                 contact_id=contact_id,
-                content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+                content=content,
                 tenant_id=reply_context["tenant_id"],
                 conversation_id=reply_context["conversation_id"],
             )
@@ -1658,6 +1845,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
             return False
 
         return True
+
+    async def _send_credit_gate_reply(
+        self,
+        reply_context: dict[str, Any],
+    ) -> bool:
+        return await self._send_system_reply(
+            reply_context,
+            content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+            email_subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+        )
 
     async def _maybe_handle_depleted_credit_gate(
         self,
@@ -2035,6 +2232,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
+                meet_screen_share_active=self.meet_screen_share_active,
                 active_web_sessions=web_sessions,
                 managers_initialized=self.initialized,
                 vm_ready=self.vm_ready,
@@ -2324,12 +2522,42 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if self.mode.is_voice:
             guidance_message = ""
             fast_brain_guidance = ""
+            console_targets: list[str] = []
             for tool_exec in result.tools:
                 if tool_exec.name == "guide_voice_agent":
                     args = tool_exec.args or {}
                     guidance_message = args.get("message", "")
                     fast_brain_guidance = args.get("fast_brain_guidance", "")
-                    break
+                elif tool_exec.name == "show_in_console":
+                    raw = (tool_exec.args or {}).get("targets") or []
+                    console_targets = [str(t) for t in raw if str(t).strip()]
+
+            # The spoken line may carry [[n]] markers naming console moves. They
+            # are stripped on every medium -- a line reaching TTS with one still
+            # in it gets read aloud -- but only a Meet can act on them. A phone
+            # call's room is the SIP leg, which Console is not in, so its moves
+            # went out over the event stream when the tool ran instead.
+            console_steps: list[dict[str, Any]] = []
+            if guidance_message and "[[" in guidance_message:
+                if (
+                    console_targets
+                    and self.mode == Mode.MEET
+                    and self.console_is_open()
+                ):
+                    parsed = parse_console_actions(guidance_message, console_targets)
+                    guidance_message = parsed.spoken_text
+                    console_steps = [
+                        {"target": step.target, "afterChars": step.after_chars}
+                        for step in parsed.steps
+                    ]
+                    if parsed.dropped:
+                        self._session_logger.info(
+                            "console_actions",
+                            f"Dropped console moves: {'; '.join(parsed.dropped)}.",
+                        )
+                else:
+                    # Markers with nothing to drive them: still not speakable.
+                    guidance_message = strip_markers(guidance_message)
 
             # A pending hang-up (recorded by the hang_up tool this turn) must not
             # tear down the session until the spoken line has been delivered,
@@ -2350,6 +2578,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                     message=guidance_message,
                     slow_brain_log_path=slow_brain_log_path,
                     fast_brain_guidance=fast_brain_guidance,
+                    console_steps=console_steps,
                 )
                 # Stash the spoken line for a render-only overlay so the next run
                 # (which may start before the real `[You]` utterance is recorded)
@@ -2424,6 +2653,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 )
                 self._session_logger.info("wait", msg)
                 if delay is not None:
+                    delay = self._clamp_wait_poll_delay(delay)
                     await self.run_llm(delay=delay)
                 break
 
@@ -2716,7 +2946,16 @@ class ConversationManager(metaclass=SingletonABCMeta):
         self.org_name: str = payload.get("org_name", "")
         self.team_ids: list[int] = payload.get("team_ids") or []
         team_summaries = payload.get("team_summaries") or []
-        self.owner_team_id: int | None = payload.get("owner_team_id")
+        # Arrives as an int from the bootstrap secret's JSON, but coerce
+        # defensively: a string here would make team_owned truthy while every
+        # integer comparison downstream silently failed.
+        raw_owner_team_id = payload.get("owner_team_id")
+        try:
+            self.owner_team_id: int | None = (
+                int(raw_owner_team_id) if raw_owner_team_id not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            self.owner_team_id = None
         is_coordinator = bool(payload.get("is_coordinator", False))
         is_multiplayer = bool(payload.get("is_multiplayer", False))
         # Set API key on SESSION_DETAILS for runtime access
@@ -2894,18 +3133,6 @@ class ConversationManager(metaclass=SingletonABCMeta):
             )
             resp.raise_for_status()
             info = (resp.json() or {}).get("info") or {}
-            # The onboarding catalog is static + deployment-gated; fetch it
-            # once and reuse it for every subsequent prompt build.
-            if self.onboarding_catalog is None:
-                cat_resp = await client.get(
-                    f"{SETTINGS.ORCHESTRA_URL}/assistant/onboarding/catalog",
-                    headers={
-                        "Authorization": f"Bearer {SESSION_DETAILS.unify_key}",
-                    },
-                )
-                cat_resp.raise_for_status()
-                catalog = (cat_resp.json() or {}).get("info") or {}
-                self.onboarding_catalog = catalog if isinstance(catalog, dict) else None
             self._apply_coordinator_state_info(info)
         except Exception as exc:
             # repr, not str: httpx timeout exceptions stringify to "".
@@ -3176,6 +3403,20 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def clear_onboarding_clicked_trigger_steps(self) -> None:
         """Forget this session's clicked trigger rows (e.g. on onboarding reset)."""
         self._onboarding_clicked_trigger_steps.clear()
+
+    @property
+    def learning_demo_storage_wake_armed(self) -> bool:
+        """Whether a StorageCheck-completion notification should wake the brain.
+
+        Armed on ``learning_beat_requested``, cleared on the
+        ``learn-from-correction`` step completing or on a fresh
+        ``onboarding_session_started`` — so an abandoned demo can't leave
+        the wake armed across sessions.
+        """
+        return self._learning_demo_storage_wake_armed
+
+    def set_learning_demo_storage_wake_armed(self, armed: bool) -> None:
+        self._learning_demo_storage_wake_armed = armed
 
     def active_pending_onboarding_outbound(self) -> dict[str, Any] | None:
         """Return armed onboarding outbound metadata, or None if unset or expired."""
@@ -3625,6 +3866,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 user_remote_control_active=self.user_remote_control_active,
                 google_meet_active=self.call_manager.has_active_google_meet,
                 teams_meet_active=self.call_manager.has_active_teams_meet,
+                meet_screen_share_active=self.meet_screen_share_active,
                 vm_ready=self.vm_ready,
                 file_sync_complete=self.file_sync_complete,
                 has_desktop=SESSION_DETAILS.assistant.has_managed_desktop,

@@ -38,6 +38,8 @@ on:
 
 permissions:
   contents: read
+  # Reading the cross-branch llm-cache-ndjson artifact.
+  actions: read
 
 # Share a group across the push and pull_request events for the same source
 # branch so a [run-flows] push and its staging -> main PR don't double-run.
@@ -166,7 +168,7 @@ jobs:
       run: echo "SMOKE_E cancelled-cleanup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   flows:
-    name: Flow smoke
+    name: Flow smoke (run)
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
     timeout-minutes: 60
@@ -180,9 +182,11 @@ jobs:
       UNIFY_TESTS_RAND_PROJ: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_EXIT: "false"
-      # Flows always run live: the brain's later-turn prompts are not
-      # deterministic across runs, so a read-only cache replay always misses.
-      UNILLM_CACHE: "false"
+      # Read-write, never read-only: a miss must fall through to a live call and
+      # be recorded, not fail the gate. Hit rates start low because the brain
+      # embeds per-run values (wall-clock "[Now: ...]", task/log/context ids) in
+      # later-turn prompts, and only entries whose whole request matches replay.
+      UNILLM_CACHE: "true"
       ORCHESTRA_REPO_PATH: ${{ github.workspace }}/orchestra
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_CI_API_KEY }}
@@ -281,15 +285,35 @@ jobs:
         pip install uv
         pip install poetry
 
+    # Download cache only, never .venv — see the note in tests.yml. Both
+    # workflows write this key, so they have to agree on what it holds.
     - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.cache/uv
-          .venv
-        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
+        path: ~/.cache/uv
+        key: uv-v2-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
         restore-keys: |
-          uv-${{ runner.os }}-
+          uv-v2-${{ runner.os }}-
+
+    # Same store the Tests matrix reads and the LLM cache refresh writes, so a
+    # flow run replays anything those already paid for.
+    - name: Restore .cache.ndjson
+      id: cache-read
+      uses: actions/cache/restore@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          cache-ndjson-${{ runner.os }}-
+
+    # This gate runs as a pull_request with base=main, which cannot restore an
+    # entry saved on staging, so without the cross-branch artifact the flows
+    # replay nothing and re-buy every completion.
+    - name: Hydrate .cache.ndjson from the cross-branch artifact
+      if: steps.cache-read.outputs.cache-matched-key == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: .github/scripts/hydrate_llm_cache.sh
 
     - name: Configure unify/unillm paths for CI
       run: |
@@ -367,6 +391,56 @@ jobs:
         echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
         exit $TEST_EXIT_CODE
 
+    # Fold each session's misses back into the shared store so the next run
+    # replays them. Runs even when the smoke fails: completions bought before
+    # the failing turn are still worth keeping.
+    - name: Consolidate flow session caches
+      id: consolidate
+      if: always()
+      run: |
+        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
+        # all when the file is missing, so neither case may abort the step.
+        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
+        restored=$(entries .cache.ndjson)
+        # Decided here rather than in the step condition so that dying before
+        # the comparison leaves the answer at "do not publish".
+        echo "publish=false" >> "$GITHUB_OUTPUT"
+        python3 .github/scripts/consolidate_cache.py --artifacts-dir .flow-cache
+        # actions/cache/save fails if the path is absent.
+        touch .cache.ndjson
+        merged=$(entries .cache.ndjson)
+        if (( merged > restored )); then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "Consolidated entry count: $merged (restored $restored)"
+        ls -lh .cache.ndjson
+
+    # Publishing a store that did not grow mints a newer entry under the shared
+    # cache-ndjson- prefix while adding no completions. restore-keys resolves a
+    # prefix to the most recently created match, so such an entry shadows the
+    # real cache for every later Tests and flow run, and each run then republishes
+    # what it just shadowed.
+    - name: Store consolidated cache
+      if: always() && steps.consolidate.outputs.publish == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .cache.ndjson
+        key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # The Actions copy above is branch-scoped and evictable, so the completions
+    # this gate paid for only outlive the branch as an artifact. Retention is
+    # the ceiling on how long the store survives without a refresh.
+    - name: Publish the cross-branch LLM cache artifact
+      if: always() && steps.consolidate.outputs.publish == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 0
+        retention-days: 90
+
     - name: Stop local orchestra
       if: always()
       continue-on-error: true
@@ -388,3 +462,39 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 14
+
+  # Single, stable required status check for staging->main releases.
+  #
+  # This job must run unconditionally on the triggers where `flows` is meant
+  # to run (pull_request and workflow_dispatch), so the context is always an
+  # explicit pass or fail there rather than an implicit pass-by-skip -- the
+  # identical shape in orchestra let four releases merge with a failing suite.
+  #
+  # It must NOT run on plain push. `flows` is gated behind [run-flows] there
+  # (these are paid, uncacheable LLM calls -- too expensive for every commit),
+  # so an unconditional push-triggered run would just republish the same
+  # implicit-pass-by-skip bug for that trigger, or, once fixed to fail closed
+  # instead, would attach a failing "Flow smoke" run to that push's SHA that
+  # persists even after the real pull_request-triggered run for the same SHA
+  # passes -- branch protection blocks on any matching-name run, not just the
+  # latest. Publishing nothing on push means the context is simply pending
+  # until the pull_request run supplies the real answer.
+  flow-smoke-required:
+    name: Flow smoke
+    needs: flows
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the flow smoke to have passed
+      run: |
+        result="${{ needs.flows.result }}"
+        echo "flow smoke result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" ]]; then
+          echo "::error::Flow smoke did not run for this commit, so the release"
+          echo "::error::gate cannot pass. Push with [run-flows], or open the"
+          echo "::error::staging -> main PR which runs it automatically."
+        fi
+        exit 1

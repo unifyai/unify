@@ -65,12 +65,20 @@ def test_every_registered_tool_exists() -> None:
     assert not missing, f"registered but not defined: {missing}"
 
 
-def test_send_meet_chat_is_wired() -> None:
-    """Regression: this pair was split by a cleanup and shipped broken.
+def test_meet_tools_are_wired() -> None:
+    """Regression: a cleanup once split registration from definition here.
 
     The screenshare tools were removed in a contiguous cut that also swallowed
     ``send_meet_chat`` sitting between them, while its registration survived --
-    so every slow-brain turn raised AttributeError in staging.
+    so every slow-brain turn raised AttributeError in staging. The screenshare
+    pair is back, registered from the same block, so all three are pinned
+    together rather than leaving the same gap open next to them.
     """
-    assert _registered_tool_attributes().get("send_meet_chat") == "send_meet_chat"
-    assert hasattr(ConversationManagerBrainActionTools, "send_meet_chat")
+    registered = _registered_tool_attributes()
+    for name in (
+        "send_meet_chat",
+        "start_meet_screenshare",
+        "stop_meet_screenshare",
+    ):
+        assert registered.get(name) == name, f"{name} is not registered"
+        assert hasattr(ConversationManagerBrainActionTools, name)

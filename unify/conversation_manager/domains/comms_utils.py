@@ -9,7 +9,11 @@ from typing import Any
 
 from unify.logger import LOGGER
 from unify.common.hierarchical_logger import ICONS
-from unify.common.plain_text import normalize_outbound_plain_text
+from unify.common.plain_text import (
+    PLACEHOLDER_CONTENT_ERROR,
+    is_placeholder_outbound_content,
+    normalize_outbound_plain_text,
+)
 from unify.conversation_manager.settings import local_comms_listener_url
 from unify.session_details import SESSION_DETAILS
 from unify.settings import SETTINGS
@@ -176,6 +180,8 @@ async def send_sms_message_via_number(to_number: str, content: str) -> str:
         return {"success": False}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -228,6 +234,8 @@ async def send_whatsapp_message(
         return {"success": False}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     payload = {
         "to": to_number,
@@ -622,6 +630,8 @@ async def send_unify_message(
         return {"success": False, "error": destination_error}
 
     content = normalize_outbound_plain_text(content)
+    if is_placeholder_outbound_content(content):
+        return {"success": False, "error": PLACEHOLDER_CONTENT_ERROR}
 
     payload: dict = {"content": content}
     if attachment:
@@ -1005,6 +1015,53 @@ async def publish_voice_enrollment_suggested(*, num_speakers: int) -> None:
     except Exception as e:
         LOGGER.error(
             f"{ICONS['comms_outbound']} Error publishing voice_enrollment_suggested: {e}",
+        )
+
+
+async def publish_console_script(*, steps: list[dict]) -> None:
+    """Send Console a sequence of moves to make, outside a Unify Meet.
+
+    In a Meet the moves ride the LiveKit data channel and are timed against the
+    spoken line, because Console is a participant in that room and is receiving
+    the synchronized transcript. Nowhere else is: a phone call's room is the SIP
+    leg, and a text thread has no room at all. So everywhere else the moves go
+    over the assistant's event stream instead, and Console walks them in order.
+
+    Presence is what gates this, not the medium. Someone reading a text reply
+    with the Console open in another tab is exactly as able to watch as someone
+    on a call, and the only thing that would make this pointless is nobody being
+    there to see it.
+    """
+    if not steps:
+        return
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    event = {
+        "event_type": "console_script",
+        "steps": steps,
+    }
+    if _use_local_comms():
+        try:
+            await _publish_local_outbox_async(
+                {
+                    "thread": "unity_system_event",
+                    "event": event,
+                },
+            )
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Error publishing console_script: {e}",
+            )
+        return
+
+    try:
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unity_system_event",
+            event=event,
+        )
+    except Exception as e:
+        LOGGER.error(
+            f"{ICONS['comms_outbound']} Error publishing console_script: {e}",
         )
 
 

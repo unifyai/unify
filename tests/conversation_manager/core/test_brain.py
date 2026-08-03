@@ -80,6 +80,9 @@ def _make_cm():
             is_ready_for_outbound_call=False,
             hang_up_gate_reason=None,
         ),
+        # No Console presence in these sessions, so no orientation block.
+        console_guidance=lambda detail="brief": "",
+        console_action_catalogue=lambda: "",
         assistant_job_title="",
         assistant_about="Operations assistant.",
         computer_fast_path_eligible=False,
@@ -94,7 +97,6 @@ def _make_cm():
         coordinator_onboarding_active=True,
         coordinator_onboarding_render=None,
         onboarding_clicked_trigger_steps=[],
-        onboarding_catalog=None,
     )
 
 
@@ -158,6 +160,8 @@ class TestBrainSpecStateMessage:
                 is_ready_for_outbound_call=False,
                 hang_up_gate_reason=None,
             ),
+            console_guidance=lambda detail="brief": "",
+            console_action_catalogue=lambda: "",
             assistant_job_title="",
             assistant_about="",
             computer_fast_path_eligible=False,
@@ -172,7 +176,6 @@ class TestBrainSpecStateMessage:
             coordinator_onboarding_active=True,
             coordinator_onboarding_render=None,
             onboarding_clicked_trigger_steps=[],
-            onboarding_catalog=None,
         )
         snapshot_state = SimpleNamespace(full_render="<state>ready</state>")
 

@@ -41,7 +41,6 @@ def _active_task(
     task._was_stopped = False
     task._scheduler = None
     task._task_id = 10
-    task._instance_id = 0
     task._summary_scheduled = False
     task._task_run_reference = (
         TaskRunReference(assistant_id="1406", run_key=run_key)

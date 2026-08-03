@@ -829,6 +829,27 @@ _STORAGE_THREE_STORES = (
     "function only and finish the review. Do not manufacture a wrapper "
     "procedure that merely restates the function contract, and do not "
     "turn the act of writing/testing that function into guidance.\n\n"
+    "**Shared rules and policies are the other first-class use of "
+    "guidance.** When the instructions a workflow was built from embed a "
+    "durable rule, policy, or convention that is not intrinsic to that one "
+    "workflow — a rule that could equally govern other workflows, now or "
+    "later (thresholds, routing or escalation criteria, formatting or tone "
+    "conventions, approval rules) — the canonical statement of that rule "
+    "belongs in ONE guidance entry, linked via `function_ids` to every "
+    "stored function that applies it. Search guidance for an existing "
+    "statement of the rule first: when one exists, update it to include "
+    "the new function's id in `function_ids` instead of writing a second "
+    "copy; when none exists, add a single entry carrying the rule and link "
+    "it. A shared rule qualifies for a guidance entry even when its "
+    "workflow is simple — the entry's value is having one canonical, "
+    "linked home for the rule, not procedural complexity. Functions may "
+    "still bake the rule's current parameters into their implementation "
+    "for deterministic execution; name the linked guidance entry in the "
+    "function's docstring so future revisions know where the canonical "
+    "statement lives. When such a rule changes later, the entry's "
+    "`function_ids` enumerate exactly which functions must be revised — "
+    "keeping those links complete at storage time is what makes that "
+    "maintenance reliable.\n\n"
     "Actions:\n"
     "- **Add** guidance for a genuinely non-trivial compositional "
     "workflow (`GuidanceManager_add_guidance`). Include `function_ids` "
@@ -935,8 +956,12 @@ _STORAGE_BASE_INSTRUCTIONS = (
     "3. Decide what actions (if any) would improve the library. "
     "Prefer a clean, non-redundant library over a large one. "
     "Most trajectories will only warrant function changes, if "
-    "anything at all. Add guidance only when a multi-step "
-    "composition is genuinely non-obvious.\n"
+    "anything at all. Add guidance when a multi-step composition is "
+    "genuinely non-obvious, and whenever the source instructions embed a "
+    "durable shared rule or policy — factor that rule into a single "
+    "guidance entry linked to the stored function(s) per the Shared rules "
+    "section: search guidance first, link into an existing entry rather "
+    "than duplicating it.\n"
     "4. **Delete superseded functions when you add a generalization.** "
     "When you store a new function that subsumes existing narrower "
     "variants (e.g. you add `greet(name, style)` while the store already "
@@ -1166,7 +1191,6 @@ def _build_storage_tools(
         )
         metadata = dict(task_entrypoint_review.get("metadata") or {})
         task_id = metadata.get("task_id")
-        instance_id = metadata.get("instance_id")
         task_name = metadata.get("task_name") or metadata.get("name") or "the task"
 
         async def attach_entrypoint_to_recurring_task(
@@ -1227,8 +1251,7 @@ def _build_storage_tools(
             )
 
         attach_entrypoint_to_recurring_task.__doc__ += (
-            f"\n\nCurrent task: {task_name} "
-            f"(task_id={task_id}, completed instance_id={instance_id}). "
+            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
             "The tool only patches future non-terminal instances; it never "
             "rewrites the completed run or flips delivery to offline."
         )
@@ -1346,7 +1369,6 @@ def _build_storage_tools(
                     {
                         "outcome": "certification_revision_attempts_exhausted",
                         "task_id": task_id,
-                        "completed_instance_id": instance_id,
                         "function_id": int(function_id),
                         "max_revision_attempts": (
                             MAX_OFFLINE_CERTIFICATION_REVISION_ATTEMPTS
@@ -1396,8 +1418,7 @@ def _build_storage_tools(
             return str(outcome)
 
         submit_offline_certification_evidence.__doc__ += (
-            f"\n\nCurrent task: {task_name} "
-            f"(task_id={task_id}, completed instance_id={instance_id}). "
+            f"\n\nCurrent task: {task_name} (task_id={task_id}). "
             "This tool may patch future non-terminal instances to offline "
             "delivery only after evidence-based certification passes."
         )
@@ -1958,9 +1979,14 @@ class _StorageCheckHandle(SteerableToolHandle):
                     )
                 else:
                     self._storage_handle = storage_handle
+                    storage_success = True
                     try:
-                        await self._storage_handle.result()
+                        storage_summary = await self._storage_handle.result()
                     except Exception as exc:
+                        storage_success = False
+                        storage_summary = (
+                            f"StorageCheck failed: {type(exc).__name__}: {exc}"
+                        )
                         logger.warning(
                             f"StorageCheck failed: {type(exc).__name__}: {exc}",
                         )
@@ -1972,6 +1998,17 @@ class _StorageCheckHandle(SteerableToolHandle):
                         phase="outgoing",
                         display_label=review_display_label,
                         hierarchy=_sc_hierarchy,
+                    )
+
+                    # ponytail: single-consumer signal — see event_handlers.py
+                    # ActorNotification handler for the wake gate. Upgrade to
+                    # a dedicated event class if a second consumer appears.
+                    await self._notification_q.put(
+                        {
+                            "type": "storage_review_complete",
+                            "message": storage_summary,
+                            "success": storage_success,
+                        },
                     )
             finally:
                 _PENDING_LOOP_SUFFIX.reset(_sc_suffix_token)
@@ -4750,6 +4787,46 @@ class CodeActActor(BaseCodeActActor):
 
         return tools
 
+    @staticmethod
+    async def _run_repair_diagnostic_probe(code: str) -> str:
+        """Execute a short read-only Python diagnosis snippet in a fresh subprocess.
+
+        Use this to observe the CURRENT behavior of the external interfaces a
+        failing function reads — for example, fetch the endpoint it ingests
+        and print the response's shape, keys, and a sample record — so the
+        repair is grounded in observed reality rather than in assumptions or
+        in the function's own error messages. The snippet runs in a fresh
+        isolated interpreter with the standard library only and must print
+        its observations to stdout.
+
+        Strictly read-only diagnosis: fetch and inspect inputs only. Never
+        perform the failing function's side effects (no writes, deliveries,
+        or state mutations on external systems). Output is truncated after
+        20,000 characters; the subprocess is killed after 60 seconds.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-c",
+            str(code),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        try:
+            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return "Probe timed out after 60 seconds and was killed."
+        output = raw.decode("utf-8", errors="replace")
+        if len(output) > 20_000:
+            output = output[:20_000] + "\n... (output truncated)"
+        return (
+            f"exit_code={proc.returncode}\n{output}"
+            if output.strip()
+            else f"exit_code={proc.returncode} (no output printed)"
+        )
+
     async def _repair_symbolic_entrypoint(
         self,
         *,
@@ -4808,6 +4885,7 @@ class CodeActActor(BaseCodeActActor):
             fm.get_function_venv,
             include_class_name=True,
         )
+        tools["run_diagnostic_probe"] = self._run_repair_diagnostic_probe
         client = new_llm_client(self._model)
         client.set_system_message(
             "You are repairing a stored symbolic task executor. The contract "
@@ -4819,15 +4897,21 @@ class CodeActActor(BaseCodeActActor):
             "a function is stored (fields get renamed or nested, endpoints get "
             "versioned), and adapting ingestion to the environment's current "
             "shape while keeping the outcome exactly equivalent is precisely "
-            "what repair is for. The task description records the environment "
-            "as it looked when the task was created; when the observed failure "
-            "contradicts it, trust the failure evidence over the description's "
+            "what repair is for. Diagnose before you rewrite: when the failure "
+            "implicates an external input surface, first use "
+            "run_diagnostic_probe to observe what that interface actually "
+            "returns right now (its shape, keys, and a sample record) and base "
+            "the repair on that observation. Probes are strictly read-only "
+            "diagnosis — never perform the function's side effects through "
+            "them. The task description records the environment "
+            "as it looked when the task was created; when observed reality "
+            "contradicts it, trust the observation over the description's "
             "input details. Bear in mind that the function's own validation "
             "messages describe its assumptions, not what the environment "
             "actually returned — a missing expected field usually means the "
             "interface changed shape, not that the data is corrupt, so prefer "
-            "ingestion that detects the current shape (e.g. accepts a renamed "
-            "equivalent field) over rejecting the input. Never weaken the "
+            "ingestion that reads the observed current shape over rejecting "
+            "the input. Never weaken the "
             "outcome to make the error disappear: do not fabricate values, "
             "skip required side effects, or coerce genuinely invalid data. "
             "Update the existing function in place with overwrite=True so its "
@@ -4845,12 +4929,15 @@ class CodeActActor(BaseCodeActActor):
             "Repair context:\n"
             f"```json\n{json.dumps(repair_context or {}, indent=2, default=str)}\n```\n\n"
             f"Failure: {type(failure).__name__}: {failure}\n\n"
-            "Diagnose the failure, repair the stored function in place "
-            "(overwrite=True) when an outcome-equivalent fix exists — "
+            "Diagnose the failure — observing the current behavior of any "
+            "implicated external input surface via run_diagnostic_probe "
+            "(read-only) before deciding — then repair the stored function in "
+            "place (overwrite=True) when an outcome-equivalent fix exists, "
             "including adapting input handling to an evolved external "
-            "interface — then briefly summarize the equivalence rationale and "
-            "the change made. Only if no fix can preserve the task's outcome "
-            "semantics, say so without modifying the function."
+            "interface. Briefly summarize the observed evidence, the "
+            "equivalence rationale, and the change made. Only if no fix can "
+            "preserve the task's outcome semantics, say so without modifying "
+            "the function."
         )
         handle = start_async_tool_loop(
             client=client,

@@ -1114,6 +1114,10 @@ class CommsManager:
                         event,
                         message=r,
                     ),
+                    "console_script_result": lambda r: ConsoleScriptResult(
+                        script_id=str(event.get("script_id") or ""),
+                        outcomes=list(event.get("outcomes") or []),
+                    ),
                     "assistant_presence_observed": lambda r: AssistantPresenceObserved(
                         reason=str(
                             event.get("reason") or r or "User presence observed.",
@@ -1121,6 +1125,18 @@ class CommsManager:
                         source=str(event.get("source") or "console"),
                         page_visibility=str(event.get("page_visibility") or ""),
                         occurred_at=str(event.get("occurred_at") or ""),
+                        console_guidance_version=str(
+                            event.get("console_guidance_version") or "",
+                        ),
+                        console_guidance_brief=str(
+                            event.get("console_guidance_brief") or "",
+                        ),
+                        console_guidance_full=str(
+                            event.get("console_guidance_full") or "",
+                        ),
+                        console_action_catalogue=str(
+                            event.get("console_action_catalogue") or "",
+                        ),
                     ),
                     "assistant_turn_injected": lambda r: _assistant_turn_injected_from_payload(
                         event,
@@ -2854,6 +2870,15 @@ class CommsManager:
                     f"{DEFAULT_ICON} StartupEvent published for assistant "
                     f"{event.get('assistant_id')} on {job_name}",
                 )
+                # A pod that cannot construct its slow-brain client can
+                # never reply to anything — signalling ready would route a
+                # user into guaranteed silence (seen with a stale pool
+                # image that predated the assistant's configured endpoint
+                # form). Raise instead so the retry loop logs loudly and
+                # the session never reports ready.
+                from unify.common.llm_client import new_slow_brain_llm_client
+
+                new_slow_brain_llm_client()
                 await asyncio.to_thread(mark_job_container_ready, job_name)
                 LOGGER.info(
                     f"{DEFAULT_ICON} Container-ready signalled for {job_name}",

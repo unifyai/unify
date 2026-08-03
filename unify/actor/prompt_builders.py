@@ -84,6 +84,19 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     appropriate when the *act of persisting the guidance is the task itself*
     (e.g. "remember how to log into X", "here are the steps for Y").
 
+    Guidance entries are also the canonical home for durable shared rules
+    and policies that stored functions apply; an entry's `function_ids`
+    link every function that embeds the rule. When the user changes such a
+    rule ("the threshold is now X", "we've updated our policy on Y"),
+    search guidance for its canonical entry FIRST: the entry's
+    `function_ids` are the authoritative set of affected functions — more
+    reliable than keyword-searching implementations. Update the entry's
+    text to the new rule, then revise every linked function so
+    implementations and canon stay consistent, and verify no linked
+    function was missed before reporting the change complete. When storing
+    a rule the user states, search for an existing entry and update/link it
+    rather than adding a second copy.
+
     #### Writing Knowledge
 
     When the user provides durable non-person, non-procedure, non-secret

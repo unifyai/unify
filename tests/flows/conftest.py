@@ -62,13 +62,42 @@ os.environ["UNITY_FILE_ENABLED"] = "true"
 # without standing up Pub/Sub. See unify/gateway/factory.py.
 os.environ.setdefault("UNITY_CONVERSATION_INGRESS_TRANSPORT", "inmemory")
 os.environ.setdefault("UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "inmemory")
-# Parallel flow sessions must not share cached LLM completions; otherwise
-# unrelated tests' prompts/replies bleed into one another under parallel_run.
-# Caching stays off at the merge gate (a cache hit would skip the live brain we
-# are trying to smoke-test). For local-dev speed it can be enabled per process
-# by exporting UNILLM_CACHE + a unique UNILLM_CACHE_DIR before pytest starts.
-if not os.environ.get("UNILLM_CACHE_DIR"):
-    os.environ["UNILLM_CACHE"] = "false"
+# Flow sessions read one shared store but each needs its own write file.
+# store_entry() appends a whole JSON line per entry, far larger than the
+# PIPE_BUF that makes concurrent appends atomic, and a cache *hit* appends too
+# because reads are promoted into the write cache — so parallel sessions
+# sharing one directory interleave their lines and lose entries. Each session
+# therefore gets a private UNILLM_CACHE_DIR holding a link to the shared
+# .cache.ndjson to read from, and its own .cache_write.ndjson to append to.
+# That is the layout .github/scripts/consolidate_cache.py already merges, so CI
+# folds the per-session writes back into the shared store after a run.
+# Exporting UNILLM_CACHE_DIR yourself opts out of all of this; UNILLM_CACHE=false
+# still forces a fully live run. The repo root is not such an opt-out: the root
+# conftest imports tests/settings.py, which defaults the variable to exactly that
+# path, so treating "set" as "chosen" would skip the session layout every run.
+_repo_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+if os.environ.get("UNILLM_CACHE_DIR", _repo_root) == _repo_root:
+    _session_cache_dir = os.path.join(_repo_root, ".flow-cache", str(os.getpid()))
+    os.makedirs(_session_cache_dir, exist_ok=True)
+    for _cache_file in (".cache.ndjson", ".cache.ndjson.idx"):
+        _shared = os.path.join(_repo_root, _cache_file)
+        _private = os.path.join(_session_cache_dir, _cache_file)
+        # The index is a rebuildable sidecar; link it when it is already warm so
+        # sessions skip re-scanning the shared store, and let them build their
+        # own otherwise.
+        if os.path.exists(_shared) and not os.path.lexists(_private):
+            os.symlink(_shared, _private)
+    os.environ["UNILLM_CACHE_DIR"] = _session_cache_dir
+    # The variable alone would not move anything. Backends bind their directory
+    # when their class body runs, and the root conftest imports unillm long
+    # before this file executes, so the session directory has to be applied
+    # through the API. The variable is still set for anything reading it fresh.
+    import unillm
+
+    unillm.set_cache_dir(_session_cache_dir)
+os.environ.setdefault("UNILLM_CACHE", "true")
 
 import contextlib
 import hashlib

@@ -90,6 +90,22 @@ class MeetProvider(Protocol):
     async def state(self, *, channel: str, session_id: str) -> MeetState | None:
         """Current meeting state, or None when the session is unknown."""
 
+    async def present(self, *, channel: str, session_id: str) -> bool:
+        """Start sharing the assistant's desktop with the meeting.
+
+        How a desktop reaches the meeting is entirely the backend's business, so
+        nothing about the transport appears here. Returns False when it could not
+        start, so the assistant can say so rather than claim to be sharing a screen
+        nobody can see.
+        """
+
+    async def stop_present(self, *, channel: str, session_id: str) -> bool:
+        """Stop sharing, leaving the rest of the session untouched.
+
+        Must not disturb whatever carries audio: losing the assistant's voice
+        mid-meeting is worse than a share that lingers a moment.
+        """
+
     async def send_chat(
         self,
         *,

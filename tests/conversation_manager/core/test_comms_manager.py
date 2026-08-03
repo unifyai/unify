@@ -1869,6 +1869,9 @@ class TestSystemEvents:
                     "reason": "selection",
                     "page_visibility": "visible",
                     "occurred_at": "2026-06-15T21:00:00.000Z",
+                    "console_guidance_version": "guidance-v2",
+                    "console_guidance_brief": "Console knowledge\nBrief.",
+                    "console_guidance_full": "Console knowledge\nFull.",
                 },
             )
 
@@ -1887,6 +1890,11 @@ class TestSystemEvents:
             assert event.source == "assistant_profile"
             assert event.page_visibility == "visible"
             assert event.occurred_at == "2026-06-15T21:00:00.000Z"
+            # Console's orientation text rides on the heartbeat that says the
+            # user is there to read the screen it describes.
+            assert event.console_guidance_version == "guidance-v2"
+            assert event.console_guidance_brief == "Console knowledge\nBrief."
+            assert event.console_guidance_full == "Console knowledge\nFull."
 
     @pytest.mark.asyncio
     async def test_handle_assistant_turn_injected_event(

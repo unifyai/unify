@@ -20,6 +20,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from types import SimpleNamespace
+
 from tests.helpers import _handle_project
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
@@ -57,6 +59,7 @@ from unify.conversation_manager.events import (
     ActorHandleStarted,
     ActorHandleResponse,
     ActorResult,
+    ActorNotification,
     ActorClarificationRequest,
     InitializationComplete,
     OpenSlowBrainTurn,
@@ -83,6 +86,7 @@ from unify.conversation_manager.events import (
 from unify.contact_manager.simulated import SimulatedContactManager
 from unify.conversation_manager.domains.contact_index import ContactIndex
 from unify.conversation_manager.domains.notifications import NotificationBar
+from unify.conversation_manager.medium_scripts.common import TRACK_AUTODETECT_REASON
 from unify.conversation_manager.cm_types import Medium, Mode
 from unify.task_scheduler.machine_state import TaskExecutionSnapshot
 
@@ -181,6 +185,7 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.in_flight_actions = {}
     cm.completed_actions = {}
     cm.assistant_screen_share_active = False
+    cm._frontend_reported_meet_surfaces = set()
     cm.memory_manager = None
 
     # Create a SimulatedContactManager and populate with sample contacts
@@ -217,6 +222,7 @@ def mock_cm(mock_session_logger, mock_event_broker, mock_call_manager, sample_co
     cm.is_coordinator = False
     cm.coordinator_onboarding_active = False
     cm._refresh_coordinator_onboarding_state = AsyncMock()
+    cm.learning_demo_storage_wake_armed = False
 
     return cm
 
@@ -1704,6 +1710,90 @@ class TestActorEventHandlers:
         assert completion["result"] == {"error_kind": "permission_denied"}
 
     @pytest.mark.asyncio
+    async def test_actor_notification_wakes_brain_when_armed_and_kind_matches(
+        self,
+        mock_cm,
+    ):
+        """storage_review_complete + learning-demo flag armed -> wake the brain."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = True
+        event = ActorNotification(
+            handle_id=1,
+            response="Stored: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_no_wake_when_flag_not_armed(self, mock_cm):
+        """Outside the learning-demo window the wake is gated off, even though
+        the notification kind matches -- global behavior stays unchanged."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = False
+        event = ActorNotification(
+            handle_id=1,
+            response="Stored: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_no_wake_for_other_kinds_even_when_armed(
+        self,
+        mock_cm,
+    ):
+        """The wake is specific to storage_review_complete, not any notification."""
+        mock_cm.in_flight_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        mock_cm.learning_demo_storage_wake_armed = True
+        event = ActorNotification(
+            handle_id=1,
+            response="Still working...",
+            kind="progress",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.request_llm_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_actor_notification_records_late_notification_in_completed_actions(
+        self,
+        mock_cm,
+    ):
+        """A notification arriving after the handle moved to completed_actions
+        (e.g. StorageCheck Phase 2 finishing after ActorResult already fired)
+        must be recorded, not silently dropped."""
+        mock_cm.in_flight_actions = {}
+        mock_cm.completed_actions = {
+            1: {"query": "Split Friday's dinner", "handle_actions": []},
+        }
+        event = ActorNotification(
+            handle_id=1,
+            response="Saved: bill-split rule, Sam fact, split_dinner_bill skill.",
+            kind="storage_review_complete",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        handle_actions = mock_cm.completed_actions[1]["handle_actions"]
+        assert any(
+            a["action_name"] == "progress" and "Saved" in a["query"]
+            for a in handle_actions
+        )
+
+    @pytest.mark.asyncio
     async def test_actor_handle_response_updates_matching_pending_action(
         self,
         mock_cm,
@@ -1977,6 +2067,88 @@ class TestMeetInteractionEventHandlers:
         assert "screen sharing" in notification.content.lower()
 
     @pytest.mark.asyncio
+    async def test_track_autodetect_drops_once_frontend_owns_surface(self, mock_cm):
+        """A frontend report silences track-inferred events for that surface.
+
+        Both sources describe the same screen share, so without this the
+        assistant is told twice that sharing began.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+        count_after_frontend = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert len(mock_cm.notifications_bar.notifications) == count_after_frontend
+        assert mock_cm.user_screen_share_active is True
+
+    @pytest.mark.asyncio
+    async def test_stale_track_event_cannot_flip_frontend_owned_flag(self, mock_cm):
+        """A late track unsubscribe must not undo a fresh frontend report.
+
+        LiveKit can hold a camera track until room teardown, long after the user
+        switched it off and back on in the UI.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_webcam_active = False
+
+        await EventHandler.handle_event(UserWebcamStarted(), mock_cm)
+        assert mock_cm.user_webcam_active is True
+
+        await EventHandler.handle_event(
+            UserWebcamStopped(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert mock_cm.user_webcam_active is True
+
+    @pytest.mark.asyncio
+    async def test_track_autodetect_applies_without_a_frontend(self, mock_cm):
+        """With no frontend reporting, track inference still drives the state.
+
+        This is the LiveKit Agents Playground, which has no Console to announce
+        that a developer started sharing.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+        initial_count = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert mock_cm.user_screen_share_active is True
+        assert len(mock_cm.notifications_bar.notifications) == initial_count + 1
+
+    @pytest.mark.asyncio
+    async def test_repeated_frontend_event_does_not_renotify(self, mock_cm):
+        """Restating the current state carries no new information."""
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+        count_after_first = len(mock_cm.notifications_bar.notifications)
+
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+
+        assert len(mock_cm.notifications_bar.notifications) == count_after_first
+
+    @pytest.mark.asyncio
     async def test_meet_interaction_does_not_trigger_slow_brain(self, mock_cm):
         """Meet interaction events are handled by the fast brain; no slow-brain run."""
         mock_cm.assistant_screen_share_active = False
@@ -2007,6 +2179,30 @@ class TestMeetInteractionEventHandlers:
         )
         mock_cm.request_llm_run.assert_not_called()
         mock_cm.schedule_proactive_speech.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_assistant_presence_observed_records_console_guidance(self, mock_cm):
+        """The heartbeat hands Console's orientation text to the runtime.
+
+        Delivery rides on presence because the text is only worth putting in a
+        prompt while the user is looking at the screen it describes.
+        """
+        event = AssistantPresenceObserved(
+            reason="keepwarm",
+            source="assistant_profile",
+            console_guidance_version="guidance-v2",
+            console_guidance_brief="Console knowledge\nBrief.",
+            console_guidance_full="Console knowledge\nFull.",
+            console_action_catalogue="- `section:chat` — Chat",
+        )
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.record_console_presence.assert_called_once_with(
+            version="guidance-v2",
+            brief="Console knowledge\nBrief.",
+            full="Console knowledge\nFull.",
+            actions="- `section:chat` — Chat",
+        )
 
     # --------------------------------------------------------------------- #
     # Screenshot capture on utterance
@@ -2729,7 +2925,6 @@ class TestTaskDueEventHandlers:
             source_task_log_id=555,
             revision="rev-1",
             task_name="Morning briefing",
-            task_description="Deliver the overnight briefing summary unprompted.",
         )
         mock_cm.actor = MagicMock()
         captured: dict[str, object] = {}
@@ -2742,6 +2937,11 @@ class TestTaskDueEventHandlers:
 
         fake_scheduler = MagicMock()
         fake_scheduler.execute = AsyncMock(side_effect=_execute)
+        fake_scheduler._get_task_or_raise = MagicMock(
+            return_value=SimpleNamespace(
+                description="Deliver the overnight briefing summary unprompted.",
+            ),
+        )
 
         async def _noop(*args, **kwargs):
             return None
@@ -2843,7 +3043,6 @@ class TestTaskDueEventHandlers:
             source_task_log_id=source_task_log_id,
             revision="rev-1",
             task_name="Scheduled integration report",
-            task_description="Prepare the scheduled report.",
         )
         mock_cm.actor = actor
 
@@ -2862,7 +3061,6 @@ class TestTaskDueEventHandlers:
                 revision="rev-1",
                 scheduled_for="2026-04-10T09:00:00+00:00",
                 task_name="Scheduled integration report",
-                task_description="Prepare the scheduled report.",
             ),
         )
         monkeypatch.setattr(
@@ -3436,7 +3634,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Invoice follow-up",
-                task_description="Help handle invoice-related requests from Alice.",
+                task_summary="Help handle invoice-related requests from Alice.",
             ),
             TaskExecutionSnapshot(
                 assistant_id="42",
@@ -3573,7 +3771,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
-                task_description="Prioritize urgent inbound calls from Alice.",
+                task_summary="Prioritize urgent inbound calls from Alice.",
             ),
         ]
 
@@ -3624,7 +3822,7 @@ class TestTriggeredTaskNotifications:
                 delivery="live",
                 trigger_from_contact_ids=[2],
                 task_name="Handle VIP caller",
-                task_description="Prioritize urgent inbound calls from Alice.",
+                task_summary="Prioritize urgent inbound calls from Alice.",
             ),
         ]
 

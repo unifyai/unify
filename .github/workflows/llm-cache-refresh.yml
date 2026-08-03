@@ -149,11 +149,15 @@ jobs:
           done < <(python3 .github/scripts/discover_test_paths.py "${RAW_PATHS[@]}")
         fi
 
-        # flows force UNILLM_CACHE=false in conftest — they burn spend without writing cache.
+        # Flows fill the shared cache from their own workflow: flow-smoke.yml
+        # runs them read-write and consolidates each session's writes itself.
+        # Their per-session cache dirs also do not match the .cache_write.ndjson
+        # this workflow uploads, so refreshing them here would spend and collect
+        # nothing.
         FILTERED=()
         for _p in "${PATHS[@]}"; do
           if [[ "$_p" == *tests/flows* ]]; then
-            echo "Skipping live-only path (no cache writes): $_p" >&2
+            echo "Skipping path that manages its own cache: $_p" >&2
             continue
           fi
           FILTERED+=("$_p")
@@ -528,12 +532,23 @@ jobs:
         echo "Using cache-diff artifacts from run $RUN_ID"
 
     - name: Restore existing consolidated cache
+      id: cache-read
       uses: actions/cache/restore@v4
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
+
+    # Consolidation merges onto whatever this job restored, so hydrating first
+    # is what stops a refresh from *shrinking* the store. On 29 July one
+    # restored nothing, merged its own 52 entries, and published that over a
+    # 9586-entry history.
+    - name: Hydrate .cache.ndjson from the cross-branch artifact
+      if: steps.cache-read.outputs.cache-matched-key == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: .github/scripts/hydrate_llm_cache.sh
 
     - name: Download cache diffs from matrix shards
       uses: actions/download-artifact@v4
@@ -546,15 +561,46 @@ jobs:
         github-token: ${{ github.token }}
 
     - name: Consolidate .cache.ndjson
+      id: consolidate
       run: |
+        # grep -c prints 0 and exits 1 on an empty file, and prints nothing at
+        # all when the file is missing, so neither case may abort the step.
+        entries() { local n; n=$(grep -c . "$1" 2>/dev/null || true); echo "${n:-0}"; }
+        restored=$(entries .cache.ndjson)
+        # Decided here rather than in the step condition so that dying before
+        # the comparison leaves the answer at "do not publish".
+        echo "publish=false" >> "$GITHUB_OUTPUT"
         python3 .github/scripts/consolidate_cache.py --artifacts-dir cache-artifacts
         # actions/cache/save fails if the path is absent.
         touch .cache.ndjson
-        echo "Consolidated entry count: $(grep -c . .cache.ndjson || true)"
+        merged=$(entries .cache.ndjson)
+        if (( merged > restored )); then
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+        fi
+        echo "Consolidated entry count: $merged (restored $restored)"
         ls -lh .cache.ndjson
 
+    # A refresh that bought nothing must not publish: the entry would be newer
+    # than the store it was built from, and restore-keys resolves the shared
+    # cache-ndjson- prefix to the most recently created match.
     - name: Store consolidated cache
+      if: steps.consolidate.outputs.publish == 'true'
       uses: actions/cache/save@v4
       with:
         path: .cache.ndjson
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    # The store only leaves this branch as an artifact: the Actions entry above
+    # is branch-scoped, so a promotion PR into main cannot restore it. Retention
+    # is also the ceiling on how long the store survives with no refresh, since
+    # nothing else outlives eviction.
+    - name: Publish the cross-branch LLM cache artifact
+      if: steps.consolidate.outputs.publish == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: llm-cache-ndjson
+        path: .cache.ndjson
+        if-no-files-found: error
+        include-hidden-files: true
+        compression-level: 0
+        retention-days: 90

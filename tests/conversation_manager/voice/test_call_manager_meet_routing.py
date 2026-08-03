@@ -253,3 +253,83 @@ async def test_start_meet_join_failure_clears_state(monkeypatch):
     assert cleanup_calls == ["teams_meet"]
     assert len(captured["http_posts"]) == 1
     assert captured["http_posts"][0][0].endswith("/teamsmeet/join")
+
+
+# ---------------------------------------------------------------------------
+# Desktop screenshare state across meetings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_presenting_state_does_not_survive_the_meeting(monkeypatch):
+    """This manager outlives individual meetings; the presenting flag must not.
+
+    Left set, the next meeting starts believing a share is already up: the start
+    tool is replaced by the stop tool, and ``start_meet_screenshare`` short-circuits
+    on its idempotence guard and reports success without putting anything on the
+    screenshare surface. The assistant then claims to be showing a screen nobody
+    can see.
+    """
+    cm = _build_call_manager()
+    cm._meet_session_id = "bot_1"
+    cm._call_channel = "google_meet"
+    cm._meet_presenting = True
+
+    monkeypatch.setattr(
+        call_manager_module,
+        "delete_livekit_room",
+        AsyncMock(),
+        raising=False,
+    )
+    monkeypatch.setattr(cm, "cleanup_call_proc", AsyncMock())
+    cm._meet_provider = MagicMock()
+    cm._meet_provider.leave = AsyncMock()
+
+    await cm._cleanup_meet("google_meet")
+
+    assert cm.is_presenting_to_meet is False
+    assert cm._meet_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_starting_a_share_without_a_managed_desktop_is_refused(monkeypatch):
+    """Only the managed desktop is ever shared.
+
+    A user's own linked machine is not the assistant's to put in front of a room
+    of people, so this is refused rather than resolved to whatever desktop happens
+    to be reachable.
+    """
+    cm = _build_call_manager()
+    cm._meet_session_id = "bot_1"
+    cm._call_channel = "google_meet"
+    cm._meet_provider = MagicMock()
+    cm._meet_provider.present = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(
+        call_manager_module.SESSION_DETAILS.assistant,
+        "desktop_mode",
+        "none",
+        raising=False,
+    )
+
+    assert await cm.start_meet_screenshare() is False
+    cm._meet_provider.present.assert_not_called()
+    assert cm.is_presenting_to_meet is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_stop_still_clears_the_flag() -> None:
+    """Otherwise the state is unrecoverable for the rest of the meeting.
+
+    A stop that fails leaves the surface up, but continuing to claim we are
+    presenting hides the start tool behind the idempotence guard with no way back.
+    """
+    cm = _build_call_manager()
+    cm._meet_session_id = "bot_1"
+    cm._call_channel = "google_meet"
+    cm._meet_presenting = True
+    cm._meet_provider = MagicMock()
+    cm._meet_provider.stop_present = AsyncMock(return_value=False)
+
+    assert await cm.stop_meet_screenshare() is False
+    assert cm.is_presenting_to_meet is False

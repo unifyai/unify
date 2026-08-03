@@ -352,6 +352,7 @@ def _reset_screen_share_state(cm: "CMStepDriver") -> None:
 
     cm.cm.user_screen_share_active = False
     cm.cm.assistant_screen_share_active = False
+    cm.cm.meet_screen_share_active = False
     cm.cm._screenshot_buffer.clear()
 
 

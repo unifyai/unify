@@ -13,6 +13,8 @@ run-name: >-
 
 permissions:
   contents: read
+  # Reading the cross-branch llm-cache-ndjson artifact.
+  actions: read
 
 on:
   # Manual trigger - always runs tests
@@ -73,11 +75,29 @@ on:
 # AND (when the perpetual staging→main PR exists) a `pull_request`-event
 # run for the same commit, doubling credit usage.
 #
+# The perpetual staging→main PR is the exception, and gets its own group.
+# It runs only the release smoke tier, so sharing a group with the staging
+# push meant a single-file smoke run cancelled the full matrix three
+# seconds after that matrix started — the `cancel-in-progress` above is
+# evaluated for the *incoming* run, so "push events let an in-flight matrix
+# finish" could not hold against a PR-event run in the same group. Tagged
+# pushes lost their suites silently and staging landed commits with no real
+# signal. The cost of separating them is one extra smoke job per staging
+# push; the cost of sharing was every matrix that push asked for.
+#
 # Group key uses `github.head_ref` (PR source branch) when available,
-# falling back to `github.ref_name` (branch name on a direct push).
+# falling back to `github.ref_name` (branch name on a direct push), so a
+# feature branch's push and PR runs still dedupe against each other.
 # Different branches still parallelise.
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: >-
+    tests-${{ github.workflow }}-${{
+      (github.event_name == 'pull_request'
+        && github.base_ref == 'main'
+        && github.head_ref == 'staging')
+      && 'release-smoke'
+      || (github.head_ref || github.ref_name)
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -98,6 +118,7 @@ jobs:
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
         # Helper function to extract [parallel_run.sh ...] content
         # Matches ALL occurrences and combines their arguments
@@ -151,11 +172,25 @@ jobs:
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
             echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
             echo "Tests triggered by commit message containing [run-tests]"
-          else
-            echo "run_tests=false" >> "$GITHUB_OUTPUT"
-            echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
-            echo "Skipping tests - commit message does not contain [run-tests] or [parallel_run.sh ...]"
+            exit 0
           fi
+
+          # staging/main take direct pushes as a matter of course (see AGENTS.md
+          # "commit directly to staging"), untagged. Skipping those outright would
+          # leave a failed release-gate context on that commit's SHA that no later
+          # staging->main PR run can outrun, since branch protection considers any
+          # matching-name check run for the SHA, not just the most recent one. Give
+          # them the same smoke tier as a staging->main PR rather than skipping.
+          if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
+            echo "run_tests=true" >> "$GITHUB_OUTPUT"
+            echo "parallel_run_cmd=tests/common/test_production_settings.py" >> "$GITHUB_OUTPUT"
+            echo "Smoke tests auto-triggered: direct push to $REF_NAME (release-gate safety)"
+            exit 0
+          fi
+
+          echo "run_tests=false" >> "$GITHUB_OUTPUT"
+          echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
+          echo "Skipping tests - commit message does not contain [run-tests] or [parallel_run.sh ...]"
           exit 0
         fi
 
@@ -883,17 +918,25 @@ jobs:
         pip install uv
         pip install poetry
 
-    # Cache uv dependencies to avoid re-downloading on every run
+    # Cache uv dependencies to avoid re-downloading on every run.
+    # Only the download cache is stored, never .venv: uv rebuilds the
+    # environment from it by hardlink in seconds, whereas caching both stored
+    # every dependency twice and made this the largest object in the repo's
+    # Actions cache. It is saved on every ref, so the duplication crowded out
+    # the shared .cache.ndjson and left read-only LLM tests with no cache at
+    # all. Keep this path list to what cannot be reconstructed locally.
     - name: Cache uv dependencies
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.cache/uv
-          .venv
-        # Include unillm and unify pyproject.toml to bust cache when dependencies change
-        key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
+        path: ~/.cache/uv
+        # v2 marks the drop of .venv. Without a new prefix the existing entries
+        # still match on an unchanged dependency hash, and a cache hit does not
+        # re-save, so the old two-copy archives would survive until a dependency
+        # moved. Include unillm and unify pyproject.toml to bust the cache when
+        # dependencies change.
+        key: uv-v2-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'unillm/pyproject.toml', 'unisdk/pyproject.toml') }}
         restore-keys: |
-          uv-${{ runner.os }}-
+          uv-v2-${{ runner.os }}-
 
     - name: Configure unify/unillm paths for CI
       run: |
@@ -1096,6 +1139,16 @@ jobs:
         key: cache-ndjson-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           cache-ndjson-${{ runner.os }}-
+
+    # Only on a miss. The Actions cache is the hot layer and lives beside the
+    # runner, so a hit must not pay for a repo-wide artifact download; but it is
+    # branch-scoped and evictable, and read-only mode fails closed the moment it
+    # is absent. See the script for the branch-scoping detail.
+    - name: Hydrate .cache.ndjson from the cross-branch artifact
+      if: steps.cache-read.outputs.cache-matched-key == ''
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: .github/scripts/hydrate_llm_cache.sh
 
     # Cache orchestra's poetry dependencies keyed on orchestra's commit SHA
     - name: Cache orchestra poetry dependencies

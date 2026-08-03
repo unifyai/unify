@@ -163,7 +163,7 @@ class BaseDataManager(BaseStateManager):
             values are the scoping column (or ``None`` for global auto-increment).
 
             Example: ``{"row_id": None}`` → row_id auto-increments globally
-            Example: ``{"instance_id": "task_id"}`` → instance_id auto-increments per task_id
+            Example: ``{"attempt": "job_id"}`` → attempt auto-increments per job_id
 
         destination : str | None, default ``None``
             Where this data table lives. Pass ``"personal"`` (the default)

@@ -47,6 +47,9 @@ from unify.conversation_manager.domains.task_execution import (
     _handle_task_trigger_requested_event,
     _surface_trigger_task_candidates,
 )
+from unify.conversation_manager.domains.console_script_result import (
+    handle_console_script_result,
+)
 from unify.conversation_manager.domains.whatsapp_history import (
     whatsapp_sent_history_content,
 )
@@ -3562,11 +3565,30 @@ async def _(
     *args,
     **kwargs,
 ):
+    cm.record_console_presence(
+        version=event.console_guidance_version,
+        brief=event.console_guidance_brief,
+        full=event.console_guidance_full,
+        actions=event.console_action_catalogue,
+    )
     if hasattr(cm, "_session_logger"):
         cm._session_logger.debug(
             "assistant_presence_observed",
             f"Assistant presence observed from {event.source or 'console'}.",
         )
+
+
+@EventHandler.register(ConsoleScriptResult)
+async def _(
+    event: ConsoleScriptResult,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # Only a move that failed is worth a turn. A landed one is recorded for the
+    # next one, because the assistant already said what it was doing.
+    if await handle_console_script_result(event, cm):
+        await cm.request_llm_run(delay=0)
 
 
 @EventHandler.register(CoordinatorDelegate)
@@ -3707,17 +3729,31 @@ async def _(event: ActorNotification, cm: "ConversationManager", *args, **kwargs
 
     The fast brain receives actor progress via ``_render_boss_notifications``
     and the ``NotificationReplyEvaluator`` decides whether to speak.
-    """
-    if event.handle_id in cm.in_flight_actions:
-        from unify.common.prompt_helpers import now as prompt_now
 
-        cm.in_flight_actions[event.handle_id]["handle_actions"].append(
-            {
-                "action_name": "progress",
-                "query": event.response,
-                "timestamp": prompt_now(),
-            },
-        )
+    A notification can also arrive *late* -- after the handle has already
+    moved from ``in_flight_actions`` to ``completed_actions`` (e.g. the
+    StorageCheck phase finishing well after ``ActorResult`` resolved the
+    action). Record those too instead of silently dropping them, so the
+    handle's history reflects everything that actually happened.
+    """
+    from unify.common.prompt_helpers import now as prompt_now
+
+    entry = {
+        "action_name": "progress",
+        "query": event.response,
+        "timestamp": prompt_now(),
+    }
+    action_data = cm.in_flight_actions.get(event.handle_id) or cm.completed_actions.get(
+        event.handle_id,
+    )
+    if action_data and "handle_actions" in action_data:
+        action_data["handle_actions"].append(entry)
+
+    # ponytail: single-consumer wake gate. If a second consumer needs to
+    # react to a distinct notification `kind`, upgrade this to a dedicated
+    # event class instead of growing this branch.
+    if event.kind == "storage_review_complete" and cm.learning_demo_storage_wake_armed:
+        await cm.request_llm_run()
 
 
 @EventHandler.register(ComputerActCompleted)
@@ -4018,6 +4054,8 @@ _MEET_LOG_TYPES: dict[type, str] = {
     AssistantScreenShareStopped: "screen_share_off",
     UserScreenShareStarted: "user_screen_share",
     UserScreenShareStopped: "user_screen_share_off",
+    MeetScreenShareStarted: "meet_screen_share_on",
+    MeetScreenShareStopped: "meet_screen_share_off",
     UserWebcamStarted: "webcam_on",
     UserWebcamStopped: "webcam_off",
     UserRemoteControlStarted: "remote_control",
@@ -4029,6 +4067,8 @@ _MEET_INTERACTION_NOTIFICATIONS: dict[type, str] = {
     AssistantScreenShareStopped: "The user disabled assistant screen sharing — they can no longer see your desktop.",
     UserScreenShareStarted: "The user started sharing their screen with you.",
     UserScreenShareStopped: "The user stopped sharing their screen.",
+    MeetScreenShareStarted: "Someone in the meeting started sharing their screen with you.",
+    MeetScreenShareStopped: "Nobody in the meeting is sharing a screen any more.",
     UserWebcamStarted: "The user enabled their webcam — you can now see them.",
     UserWebcamStopped: "The user disabled their webcam.",
     UserRemoteControlStarted: "The user took remote control of your desktop — they now have mouse and keyboard control.",
@@ -4056,6 +4096,16 @@ _MEET_FAST_BRAIN_GUIDANCE: dict[type, str] = {
         "details. Do NOT guess or fabricate what is on their screen."
     ),
     UserScreenShareStopped: ("The user stopped sharing their screen."),
+    MeetScreenShareStarted: (
+        "Someone in the meeting is sharing their screen. Snapshots of it are "
+        "arriving in the background. If they point at something on it, "
+        "acknowledge naturally and wait for the details. Do NOT guess what is "
+        "on it."
+    ),
+    MeetScreenShareStopped: (
+        "The shared screen is gone. Anything you saw on it is history now, not "
+        "something you can still look at."
+    ),
     UserWebcamStarted: (
         "The user enabled their webcam. Visual context is being captured "
         "in the background. If they reference their appearance or something "
@@ -4078,6 +4128,8 @@ _MEET_STATE_FLAGS: dict[type, tuple[str, bool]] = {
     AssistantScreenShareStopped: ("assistant_screen_share_active", False),
     UserScreenShareStarted: ("user_screen_share_active", True),
     UserScreenShareStopped: ("user_screen_share_active", False),
+    MeetScreenShareStarted: ("meet_screen_share_active", True),
+    MeetScreenShareStopped: ("meet_screen_share_active", False),
     UserWebcamStarted: ("user_webcam_active", True),
     UserWebcamStopped: ("user_webcam_active", False),
     UserRemoteControlStarted: ("user_remote_control_active", True),
@@ -4091,6 +4143,8 @@ _MEET_STATE_FLAGS: dict[type, tuple[str, bool]] = {
         AssistantScreenShareStopped,
         UserScreenShareStarted,
         UserScreenShareStopped,
+        MeetScreenShareStarted,
+        MeetScreenShareStopped,
         UserWebcamStarted,
         UserWebcamStopped,
         UserRemoteControlStarted,
@@ -4103,6 +4157,8 @@ async def _(
         | AssistantScreenShareStopped
         | UserScreenShareStarted
         | UserScreenShareStopped
+        | MeetScreenShareStarted
+        | MeetScreenShareStopped
         | UserWebcamStarted
         | UserWebcamStopped
         | UserRemoteControlStarted
@@ -4112,17 +4168,55 @@ async def _(
     *args,
     **kwargs,
 ):
+    from unify.conversation_manager.medium_scripts.common import (
+        TRACK_AUTODETECT_REASON,
+    )
+
     event_name = event.__class__.__name__
     log_type = _MEET_LOG_TYPES.get(event.__class__, "meet_interaction")
     log_msg = f"Event: {event_name}"
-    if event.reason == "LiveKit track auto-detected":
+    track_sourced = event.reason == TRACK_AUTODETECT_REASON
+    if track_sourced:
         cm._session_logger.debug(log_type, log_msg)
     else:
         cm._session_logger.info(log_type, log_msg)
 
-    # Update state flag on the CM.
     attr, value = _MEET_STATE_FLAGS[event.__class__]
+
+    # A frontend and LiveKit track subscription both describe this surface, but
+    # they measure different things: the frontend reports what the user asked
+    # for, the track reports what the transport is carrying. They diverge — a
+    # camera switched off in the UI can keep its track subscribed until room
+    # teardown — so letting both drive the flag makes the winner a matter of
+    # arrival order. The frontend owns every surface it has reported on; track
+    # events survive only where no frontend ever speaks, such as the Playground.
+    if track_sourced:
+        if attr in cm._frontend_reported_meet_surfaces:
+            return
+    else:
+        cm._frontend_reported_meet_surfaces.add(attr)
+
+    # Restating the current state carries no new information: notifying again
+    # would tell the assistant the screen share just started for a second time.
+    if getattr(cm, attr) == value:
+        return
+
+    # Update state flag on the CM.
     setattr(cm, attr, value)
+
+    if isinstance(event, MeetScreenShareStopped):
+        # The buffer is peeked non-destructively and only cleared after a
+        # successful turn, so without this the frame from a screen that has just
+        # been taken down survives into the next turn and gets described as
+        # current. Utterance-paired frames stay: those answer a question somebody
+        # actually asked.
+        for source in ("google_meet", "teams_meet"):
+            dropped = cm.drop_unpaired_screenshots(source)
+            if dropped:
+                cm._session_logger.debug(
+                    log_type,
+                    f"Dropped {dropped} stale {source} screenshot(s)",
+                )
 
     if (
         isinstance(event, (UserWebcamStarted, UserWebcamStopped))

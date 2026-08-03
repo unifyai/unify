@@ -347,6 +347,58 @@ Skip heavy uploads on cancel (`if: success() || failure()`); keep a short
 - Cancel-latency smoke (A–E): Flow Smoke dispatch with
   `confirm_llm_spend=CANCEL_SMOKE_OK` / `scripts/dev/run_cancel_smoke.sh`
 
+# Custom Source Sync: one engine, one identity contract
+
+All git-tracked source definitions (tasks, functions, venvs, guidance,
+knowledge, contacts, secrets, blacklist, data seeds, dashboards,
+integration registry) reconcile through the shared engine in
+`unify/common/custom_sync.py`. Full contract:
+[`docs/writeups/custom-source-sync.md`](../../docs/writeups/custom-source-sync.md).
+
+## Invariants
+
+- A deployment-owned row has `custom_key` **and** `custom_hash`; rows
+  authored by users/actors have neither. `custom_key` is the identity;
+  auto-counted ids (`task_id`, `function_id`, …) are environment-local
+  handles that source code must never reference.
+- Each manager declares its key policy in ONE place (its `custom_*.py`
+  collector). Changing a key policy is an identity migration for every
+  deployment — plan it, never drive-by edit it.
+- Inserts write `custom_key`/`custom_hash` atomically with the row.
+  No create-then-stamp second write.
+- Two live managed rows with the same `custom_key` is an error the
+  engine raises (`CustomSyncDuplicateKeyError`) — never silently pick a
+  survivor.
+- Per-entry failures are isolated and re-raised as
+  `CustomSyncPartialFailure` after the pass; the aggregate hash is not
+  stored on partial failure so the next reconcile retries.
+- Every reconcile holds `exclusive_sync_lease` on the meta context.
+- Writers either persist the collected field dict wholesale, or consume
+  every field and raise on leftovers. A collector hashing a field the
+  writer drops caused live rows to pin themselves "up to date" with the
+  field unwritten (the task `tags` incident) — the leftover check exists
+  to make that class impossible.
+
+## Hard refuse
+
+- A new bespoke `sync_custom_*` diff loop, or "just this one" fork of
+  the engine's semantics inside a manager. Extend the engine instead.
+- Adding a field to a collector's hash without routing the same field
+  through the writer (and vice versa).
+- Stamping identity after insert, or hand-writing rows with a
+  `custom_key` outside the engine.
+- Changing a manager's key derivation (or making an optional source
+  `key` mandatory) without a migration plan for live rows in every
+  deployment.
+
+## Deviations are declared knobs, not forks
+
+`prune=False` (secrets), `collision="yield"` (secrets),
+`find_adoptable` (data seeds, integration registry, functions/venvs
+legacy rows), `should_update` (tasks: skip while running),
+`max_workers` (tasks). New deviations need a named knob on the adapter
+and a line in the writeup's table.
+
 This Unity project is for an AI Assistant, which is implemented as a heavily distributed multi-node system. Each node in the system communicates via English language based public APIs. The assistant's "brain" is then implemented a bit like a back office, where each manager deals with different aspects of the assistant's overall emergent intelligence. For the most part (with a few exceptions, such as `CodeActActor` and `ConversationManager`) the public methods of these managers are implemented as asynchronous tool loops, whereby a central LLM handles the English language request by orchestrating lower level tools which read and mutate the manager-specific backend resources (via the unify python client, which wraps the REST API connecting to the DB). These manager methods are dynamic, and expose handles for mid-flight steering, question answering, pausing, resuming and stopping etc. These manager methods are also often **nested**, whereby the public API of one manager is exposed in the tool set of a higher level manager. The async tool loops can also steer their inner in-flight tools, enabling fully nested dynamic steering of async tool loops up to an arbitrary depth. In terms of hierarchy, the `Actor` serves as the central intelligence, orchestrating other managers through code-first plans. Importantly, we never apply "fast paths" or heuristics based on regex or substring detection from user commands. If a method needs to respond correctly to a certain type of user input, this must **always** be addressed by prompting the model and/or improving docstrings of the exposed tools in order to **nudge** the LLM in the right direction.
 
 # Full Local Stack First
@@ -1331,6 +1383,83 @@ If direct code analysis and debug logging (`CURSOR_DEBUG_LOG`) aren't yielding a
 - Don't read diffs commit-by-commit and mentally compose them; use the aggregate diff
 - Don't dump entire file histories; scope queries to the relevant path(s)
 
+# Staging→Main Release Gates Are Fail-Closed
+
+Every repo's `Staging->Main` ruleset requires at least one status check whose
+job makes an expensive or conditional run (full pytest matrix, paid LLM smoke
+tests, E2E). Those jobs don't run on every push — they're gated on a
+`[run-tests]`/`[run-flows]`-style commit-message tag, or on the PR event
+itself. As of **2026-07-31**, the required context for that job is published
+**unconditionally** on every push: an explicit pass or fail, never an
+implicit pass from a skip.
+
+## Why: the orchestra incident
+
+Before 2026-07-31, the required context was only published when the gated
+job actually ran; an ordinary push that skipped it published nothing, and
+**GitHub counts a skipped required check as satisfied**. A staging→main
+release PR shares its head SHA with whatever was last pushed to staging, so
+that stale implicit pass could satisfy branch protection before the real
+PR-triggered run finished. In orchestra this let four release PRs (#125,
+#127, #128, #129) merge into main carrying a skipped/failing suite — #125
+merged 83 seconds into an 11-minute test run that later came back failing,
+leaving a broken test on main for thirteen hours.
+
+The fix — "make the gate fail closed" — makes an aggregator job republish the
+required context unconditionally, so a push that didn't run the suite now
+reports that context **red**, not green-by-default.
+
+Rolled out the same week to: orchestra (`pytest`, [`0f040b6c`](https://github.com/unifyai/orchestra/commit/0f040b6c)),
+unillm (`pytest`, `c7b2351`), unify (`Flow smoke`, `e2bb461c7`), unify-deploy
+(`Integration smoke`, `0d886ad1`), console (`Push Gate`, `08cf9a9fd`). Check
+name and trigger tag differ per repo; the fail-closed shape is the same.
+unisdk, brain, docs, and landing-page have no equivalent expensive/conditional
+gate, so this doesn't currently apply there — but treat it as the default
+shape for any new staging→main required check in any repo.
+
+## The known follow-up flaw, and its fix
+
+Fail-closed on its own creates a new failure mode: **GitHub's required-check
+evaluation considers every check-run matching the required context name on a
+commit's SHA, not just the latest one.** If staging gets an untagged direct
+push, that push's run reports the context red. Opening the release PR then
+runs the real suite via the `pull_request` trigger and it can pass cleanly —
+but the earlier red run doesn't get superseded. The release PR is left
+**permanently blocked** on that SHA: re-running the failed job reproduces the
+same failure (the commit still lacks the tag), and the passing PR-triggered
+run sits right next to it, ignored.
+
+`unify` hit this within 36 hours of rolling out fail-closed and fixed it in
+[`05fbdcce9`](https://github.com/unifyai/unify/commit/05fbdcce9): scope the
+aggregator job to `pull_request`/`workflow_dispatch` only, so a plain push
+with no matching trigger publishes **no run at all** for that context
+(`pending`) instead of an explicit failure. Pending isn't a stale pass and
+isn't an unresolvable block — the PR-triggered run is free to become the
+only entry once it lands.
+
+As of this writing, only `unify` has this follow-up. orchestra, unillm,
+unify-deploy, and console still run the plain fail-closed version and can hit
+the stale-permanent-block failure mode above.
+
+## What to do when a release PR is stuck this way
+
+Recognize the shape first: `reviewDecision: APPROVED`, `mergeable: MERGEABLE`,
+`mergeStateStatus: BLOCKED`, and the required context shows both a `FAILURE`
+and a `SUCCESS` entry for the same PR head SHA, from two different workflow
+runs (one push-triggered, one pull_request-triggered). This is not a real
+test failure and not something to route around with an admin bypass — surface
+it and let the user choose:
+
+- **Get a clean SHA**: push a small commit (or empty commit) to staging
+  carrying the trigger tag, giving the release PR a fresh head with a single,
+  unambiguous run for that context.
+- **Port the `unify` follow-up**: scope that repo's aggregator job to
+  `pull_request`/`workflow_dispatch` the way `unify` did, so this stops
+  recurring for every untagged direct push to staging.
+
+Do not force-merge, disable the ruleset, or bypass the check to route around
+this — both remediations above satisfy the gate on its own terms.
+
 # Python Formatting & Pre-commit
 
 Every first-party Python repo (`orchestra`, `unify`, `unisdk`, `unillm`,
@@ -1984,10 +2113,10 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   `run_key` (the idempotency key). Occurrence and attempt are the same row.
   Recurrence creates the *next* Execution when the current one **starts** — it
   does **not** clone the Tasks row.
-- **`instance_id` is vestigial.** It is a legacy occurrence counter kept only so
-  pre-migration rows still read back. It is not unique, not auto-counted, and
-  not part of identity; new rows get `0`. Treat any non-zero `instance_id` as a
-  pre-migration artefact, not as a thing to allocate, increment, or reason about.
+- **`instance_id` no longer exists.** The legacy occurrence counter was purged
+  (July 2026): no code writes or reads it, and there is no field to set. A
+  stored `instance_id` entry on an old row is inert junk — never a lookup key,
+  never identity.
 - Concurrency is normal now: several Executions can be in flight against one
   definition, so a definition sitting in `active` is not a zombie by itself.
 
@@ -2000,8 +2129,6 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
   Executions.
 - Do **not** invent a Tasks row by hand with an explicit `task_id` — go through
   TaskScheduler APIs and let Orchestra allocate it.
-- Do **not** write `instance_id` at all. It buys nothing on the current model,
-  and a non-zero value pushes reads down the legacy compat path (see below).
 
 ## Allowed ops
 
@@ -2009,24 +2136,16 @@ Agents frequently break recurring jobs by hand-editing `Teams/*/Tasks`
 |---|---|
 | Arm a planted custom task | Set **`enabled=True`** on the definition row (the single `task_id` row, `custom_key` set). TaskScheduler schedules the next Execution. |
 | Pause | `enabled=False` on the definition row; optionally cancel open Executions. |
-| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). It takes no `instance_id`. |
+| One-off catch-up / run now | `POST /v0/tasks/{task_id}/trigger` (`trigger_task(task_id=…)` in `typed_tasks_client`). |
 | Change cadence | Edit `tasks.jsonl` + deploy reconcile, or TaskScheduler APIs that own the schedule — not ad-hoc DM patches. |
 | Stuck `active` zombie | `POST /admin/task-source/release-active` with the source task log id. |
 
-## Legacy compat path
+## Pre-migration remnants
 
-`_get_task_row(task_id, instance_id)` addresses by `task_id` alone when
-`instance_id == 0`, and only falls back to the old
-`task_id AND instance_id` filter when it is non-zero
-(`unify/task_scheduler/task_scheduler.py`, the `if instance_id != 0:` branch).
-That fallback exists to read surviving pre-migration rows. Do not lean on it
-for new work, and do not pass a non-zero `instance_id` to make a lookup
-"more specific" — on a post-migration task it just fails to match.
-
-If a `task_id` genuinely resolves to more than one Tasks row, that is a
-pre-migration remnant (or a bad hand-write), not a counter desync. Delete the
-stale duplicate, or leave it terminal and do not re-trigger until the health
-check is clean.
+If a `task_id` resolves to more than one Tasks row, that is a pre-migration
+remnant (or a bad hand-write), not a counter desync. Delete the stale
+duplicate, or leave it terminal and do not re-trigger until the health check
+is clean.
 
 ## Break-glass
 

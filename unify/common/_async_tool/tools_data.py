@@ -621,9 +621,24 @@ class ToolsData:
 
         # (Argument pretty-printing now handled in assistant message logs only)
 
-        # Build coroutine
+        # Build coroutine. Argument binding for an async fn happens
+        # synchronously at coroutine creation, so a model omitting a
+        # required argument raises TypeError HERE — outside the task
+        # machinery that turns failures into tool results. Convert it
+        # into a task-level failure so the model sees the error and
+        # self-corrects instead of the whole trajectory dying (seen in
+        # prod: act dispatch killed by execute_code missing `language`).
+        # The sync branch is already safe: asyncio.to_thread defers
+        # binding into the task.
         if asyncio.iscoroutinefunction(fn):
-            coro = fn(**merged_kwargs)
+            try:
+                coro = fn(**merged_kwargs)
+            except TypeError as bind_exc:
+
+                async def _raise_binding_error(exc: TypeError = bind_exc):
+                    raise exc
+
+                coro = _raise_binding_error()
         else:
             coro = asyncio.to_thread(fn, **merged_kwargs)
 

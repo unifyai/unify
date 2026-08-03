@@ -8,13 +8,12 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from unify.common import console_ui
 from unify.common.accessible_teams_block import build_accessible_teams_block
-from unify.conversation_manager.domains.learning_expenses_fixtures import (
-    learning_expenses_scenario_prompt_lines,
-    learning_expenses_stop_act_for_storage_rule,
-    learning_expenses_storage_check_nudge,
-    learning_expenses_user_facing_voice,
+from unify.conversation_manager.domains.learning_billsplit_fixtures import (
+    learning_billsplit_scenario_prompt_lines,
+    learning_billsplit_stop_act_for_storage_rule,
+    learning_billsplit_storage_check_nudge,
+    learning_billsplit_user_facing_voice,
 )
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
@@ -184,29 +183,33 @@ def build_fast_brain_turn_guidance(
         )
     if classification == FAST_BRAIN_TURN_SMALLTALK:
         return (
-            "[Voice Agent turn completed. Classification: SMALLTALK. "
-            f"Intended speech (may still be playing or may have been "
-            f"interrupted): {quoted}. Do NOT repeat this line via "
-            "guide_voice_agent; call wait() unless you have something "
-            "additional and substantive beyond what the Voice Agent already "
-            "covered.]"
+            "[Voice Agent turn completed. Classification: SMALLTALK. You have "
+            f"just said this aloud and the caller has heard it: {quoted}. Do "
+            "NOT repeat or paraphrase it via guide_voice_agent; call wait() "
+            "unless you have something additional and substantive beyond what "
+            "it already covered.]"
         )
     if classification == FAST_BRAIN_TURN_CONTINUATION:
         return (
-            "[Voice Agent turn completed. Classification: CONTINUATION. "
-            f"Resumed verbatim remainder: {quoted}. This was already your "
-            "prior line; call wait() unless the caller's new message requires "
-            "more.]"
+            "[Voice Agent turn completed. Classification: CONTINUATION. You "
+            f"have just finished delivering your interrupted line: {quoted}. "
+            "The caller has now heard it; call wait() unless their new message "
+            "requires more.]"
         )
     if classification == FAST_BRAIN_TURN_DEFER:
         return (
-            "[Voice Agent turn completed. Classification: DEFER (latency "
-            f"filler). Intended speech: {quoted}. Compose the substantive "
-            "reply via guide_voice_agent — the filler is not the answer.]"
+            "[Voice Agent turn completed. Classification: DEFER. You have just "
+            f"said this aloud and the caller has heard it: {quoted}. Your next "
+            "line continues that same piece of speech from where it stopped: "
+            "do not restate it, do not re-answer what it already answered, and "
+            "do not open with the same yes/no or acknowledgement it already "
+            "gave. Carry straight on into the substance via guide_voice_agent.]"
         )
     return (
         "[Voice Agent turn completed. Classification: "
-        f"{classification or 'unknown'}. Intended speech: {quoted}.]"
+        f"{classification or 'unknown'}. You have just said this aloud and the "
+        f"caller has heard it: {quoted}. Continue from it rather than restating "
+        "it.]"
     )
 
 
@@ -408,13 +411,13 @@ Call transcriptions will appear as another communication thread, with the Voice 
 
 **Verbatim speech.** When I call `guide_voice_agent`, `message` is spoken **verbatim** by TTS with no rewrite — it must already follow **Spoken output** above. There is no non-speaking mode: calling the tool always speaks; to stay silent I omit it and `wait`.
 
-**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and intended speech (which may still be playing or may have been interrupted). For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** the filler is not the answer — I compose the real reply via `guide_voice_agent`. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. For **HANG_UP** (only possible after I sanctioned ending via `allow_hang_up`) the Voice Agent is speaking its farewell and the call ends right after — I `wait()` and do not guide further speech. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
+**Voice Agent turn completes before I run.** On each user turn the Voice Agent speaks first (filler, small talk, continuation, or silence). My turn starts only after it finishes, except bare acknowledgements the Voice Agent classifies as **SILENCE** — those need no slow-brain turn at all. When I do run, a `[Voice Agent turn completed …]` guidance note tells me its classification and the line it just spoke. That line is **mine and already delivered** — I treat it as heard even if it was cut short, exactly like any `[You @ ...]` row. For **SMALLTALK** I usually `wait()` — do not repeat what it already said. For **DEFER** I have already begun the answer out loud, so I continue that same piece of speech via `guide_voice_agent` rather than starting a fresh reply. For **CONTINUATION** it resumed my prior line — `wait()` unless their new message needs more. For **HANG_UP** (only possible after I sanctioned ending via `allow_hang_up`) the Voice Agent is speaking its farewell and the call ends right after — I `wait()` and do not guide further speech. Action progress, action results, participant messages, cross-channel notifications, and anything the Voice Agent did not already cover still come from me via `guide_voice_agent(message="...")`.
 
 **Idle small-talk exception.** If absolutely nothing is happening — no in-flight action, no recent assistant comms, and no pending spoken line — the Voice Agent may directly answer a casual "what are you doing?" style question with a playful non-work aside about passing time on the laptop, such as playing Snake, Sudoku, Mario Kart, or Tetris. This is only social banter. If any real work, recent message, call, action, result, or status is involved, I own the answer via `guide_voice_agent`.
 
 **Optional one-shot guidance.** The single exception to the above: I may bundle a short `fast_brain_guidance` note with a spoken `guide_voice_agent` turn — a ready fact the Voice Agent may use to give ONE basic, direct reply to the caller's very next message (e.g. confirm something I just told it). It is never spoken on its own and the Voice Agent never volunteers it; it only applies to the immediate next moment, and my next spoken turn replaces or clears it. I still never rely on the Voice Agent to compose, decide, or look anything up, and I can never hand it guidance without also speaking.
 
-**Continue from the filler.** The Voice Agent has just said a short filler phrase right before my line lands. I continue naturally from it and never restate the filler — e.g. after "One moment." I give the answer directly, not "One moment, …".
+**Continue from what I just said.** The line named in the `[Voice Agent turn completed …]` note has already left my mouth, whatever its length or content — a bare "One moment." and a full "Yes — I can take a look at that." are both equally spoken. My next line continues that one piece of speech instead of restarting it. So after "One moment." I give the answer directly, not "One moment, …" — and after a line that already committed to something, I do not commit again: I continue "The quickest way is…", never "Yes. The quickest way is…". Opening with a yes/no or acknowledgement I have just given tells the caller I have forgotten my own last sentence.
 
 **Interruptions.** When (and only when) I see an explicit `[... interrupted ...]` note naming a remainder the caller did not hear, I weave that remainder back in naturally if it still matters, or drop it if their new message moved on. Absent that note, my recent lines were delivered — I never re-deliver them."""
     )
@@ -552,14 +555,14 @@ def _build_missing_phone_notice(assistant_has_phone: bool) -> str:
     """Explain that the assistant cannot send SMS or make calls."""
     if assistant_has_phone:
         return ""
-    return f"""- I do not currently have a phone number configured, so I cannot send SMS messages or make phone calls. If my boss asks me to text or call someone, I should let them know I don't have a phone number set up yet and explain that they can set one up by {console_ui.CONTACT_DETAILS_VIA_MENU}."""
+    return """- I do not currently have a phone number configured, so I cannot send SMS messages or make phone calls. If my boss asks me to text or call someone, I should let them know I don't have a phone number set up yet and offer to walk them through setting one up in my contact details."""
 
 
 def _build_missing_email_notice(assistant_has_email: bool) -> str:
     """Explain that the assistant cannot send or receive emails."""
     if assistant_has_email:
         return ""
-    return f"""- I do not currently have an email address configured, so I cannot send or receive emails. If my boss asks me to email someone, I should let them know I don't have an email set up yet and explain that they can set one up by {console_ui.CONTACT_DETAILS_VIA_MENU}."""
+    return """- I do not currently have an email address configured, so I cannot send or receive emails. If my boss asks me to email someone, I should let them know I don't have an email set up yet and offer to walk them through setting one up in my contact details."""
 
 
 def _build_whatsapp_number_change_notice(assistant_has_whatsapp: bool) -> str:
@@ -1053,7 +1056,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
     ``coordinator_onboarding_event_service.SUBTYPE_*`` constants and
     the wire shape published by the adapters webhook.
     """
-    scenario_lines = learning_expenses_scenario_prompt_lines()
+    scenario_lines = learning_billsplit_scenario_prompt_lines()
     return "\n".join(
         [
             "My onboarding narration",
@@ -1119,7 +1122,7 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "Integrations connect suggestion — explain what kind of app to "
             "connect; the step completes only after a real credential lands.",
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
-            "row — run the guided expenses-etl correction demo from the "
+            "row — run the guided billsplit-dinner correction demo from the "
             "notification framing.",
             "  - `my_computer_beat_requested`: the user clicked the My Computer "
             "row — on a call run the live desktop demo; off-call ring them via "
@@ -1298,57 +1301,96 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "me in chat or on a call — I handle the pause myself after confirmation.",
             "  - Per-row **Defer** on the checklist is not a global pause; I never "
             "call `deactivate_onboarding` for a single skipped row.",
-            "Rules for `learning_beat_requested`:",
-            f"  0. {learning_expenses_user_facing_voice()}",
-            "  1. Treat the notification body and section `framing` as the task "
-            "contract. Say up front this is a demo of how the user corrects me.",
+            "Rules for `learning_beat_requested` (six-beat billsplit-dinner script):",
+            f"  0. {learning_billsplit_user_facing_voice()}",
+            "  1. Beat 1 — opener: treat the notification body and section "
+            "`framing` as the task contract. Say up front this is a demo of "
+            "how the user corrects me, then announce the trick: I'm going to "
+            "get the first split wrong ON PURPOSE and their job is to catch "
+            "me — tell them to open the Actions tab so they can watch me work.",
             "  Scenario context (fixed bundled fixtures):",
             *[f"    - {line}" for line in scenario_lines],
-            "  2. Before the first attempt, send the month-N bank export CSVs "
-            "as unify_message attachments — one attachment per message — so the "
-            "user can inspect the data.",
-            "  3. Run a deliberately naive first pass over month-N files via "
-            "act(persist=True) with genuinely computed numbers (never assert "
-            "totals). The act query MUST include the naive algorithm from the "
-            "scenario context verbatim so the actor double-counts INTERNAL XFER "
-            "rows on both files. When the act completes, send the first-attempt "
-            "deliverable as a unify_message in the same turn.",
-            "  4. State the naive total and explain the mistake in plain language "
-            "(see rule 0) — never forward act tables or row-by-row math. Suggest "
-            "the exact correction text for the user to send, and WAIT — never "
-            "send the correction or proceed on their behalf.",
-            "  5. After the user's correction, interject_* into the running "
-            "persist act (do not start a new act) with the corrected algorithm "
-            "from scenario context and include this StorageCheck memoization "
-            f"request verbatim: {learning_expenses_storage_check_nudge()} "
-            "Then send the improved deliverable as a unify_message. "
-            f"{learning_expenses_stop_act_for_storage_rule()} "
-            "The doing loop must not call "
-            "GuidanceManager or FunctionManager store tools — StorageCheck runs "
-            "after completion; once the act finishes, tell the user to open the "
-            "Brain rail **Guidance** and **Functions** sections and point at what "
-            "StorageCheck stored — I have no tool to navigate the Console for "
-            "them (not a generic Memory tab).",
-            "  6. Invite the user to ask for next month's report and WAIT; the "
-            "replay only runs once they ask.",
-            "  7. Replay via a second act(persist=True) over the month-N+1 files "
-            "and send the replay deliverable as a unify_message.",
-            "  8. Tell the user to open the Actions tab themselves before and "
+            "  2. Beat 2 — the setup: send Friday's receipt as ONE "
+            "unify_message attachment, with a one-sentence caption naming that "
+            "night's attendees — attendees live in the caption, not a second "
+            "file.",
+            "  3. Beat 3 — naive pass: run a deliberately naive pass over the "
+            "Friday receipt via act(persist=True) with genuinely computed "
+            "numbers (never assert totals). The act query MUST include the "
+            "naive algorithm from the scenario context verbatim so the actor "
+            "splits the total evenly including alcohol. When the act "
+            "completes, send the naive deliverable as a unify_message in the "
+            "same turn: state the naive per-person total, explain the mistake "
+            "in plain language (see rule 0), then suggest the exact "
+            "correction text for the user to send, and WAIT — never send the "
+            "correction or proceed on their behalf.",
+            "  4. Beat 4 — correction: accept any message that conveys the "
+            "rule and/or Sam's fact, including a paraphrase; if it conveys "
+            "neither, re-offer the exact text once, warmly, never scold; if "
+            "it conveys only one half, apply what was given and confirm the "
+            "missing half in one sentence as part of the deliverable. "
+            "interject_* into the running persist act (do not start a new "
+            "act) with the corrected algorithm from scenario context and "
+            "include this StorageCheck memoization request verbatim: "
+            f"{learning_billsplit_storage_check_nudge()} Then send the "
+            "corrected deliverable as a unify_message: state the corrected "
+            "totals (Sam vs everyone else), say I am stopping the run so "
+            "Brain can save the rule. "
+            f"{learning_billsplit_stop_act_for_storage_rule()} Do NOT invite "
+            "Saturday's dinner and do NOT cite anything as saved in this "
+            "beat — both belong to Beat 5 only, once the save actually "
+            "completes. The doing loop must not call GuidanceManager, "
+            "FunctionManager, or KnowledgeManager store tools directly — "
+            "StorageCheck persists after the stopped act completes, in the "
+            "background.",
+            "  5. Beat 5 — the save (proactive, exactly once, NEW behavior): "
+            "I do not poll for this and I am not told about it via a new "
+            "user message. The persist act I stopped in rule 4 later gains a "
+            "NEW `progress` entry in its action history once StorageCheck "
+            "finishes — I may be woken for exactly this with no new user "
+            "message on the turn. The FIRST time I see that new entry: if it "
+            "reports success, I send, unprompted, 'Saved ✓' citing what that "
+            "entry actually says was stored (a rule, Sam's fact, and the "
+            "bill-splitting skill — never invent or guess at what was "
+            "stored), point the user at the Brain tab to see all three, and "
+            "invite Saturday's dinner as the test — they are not allowed to "
+            "remind me about Sam. If instead that entry reports the save "
+            "failed, I say so plainly (never a false 'Saved ✓') and offer to "
+            "retry. I check the transcript before sending — if I already "
+            "sent this announcement for this correction, I do not send it "
+            "again. If the user asks about save status (or anything else) "
+            "before that history entry appears, I answer honestly with "
+            "whatever status I actually have — that answer never counts as, "
+            "duplicates, or cancels the one proactive announcement, which "
+            "still fires exactly once whenever the save actually completes.",
+            "  6. Beat 6 — the reveal: only after the Beat 5 announcement has "
+            "actually been sent, and only once the user asks for it, send "
+            "Saturday's receipt as ONE unify_message attachment (caption "
+            "naming that night's attendees — Sam recurs), then run the "
+            "replay zero-shot via a second act(persist=True) over the "
+            "Saturday receipt — no reminder about Sam in the act query. Send "
+            "the replay deliverable as a unify_message: the new totals in "
+            "one line, plus one sentence noting nobody reminded me about Sam "
+            "this time. If the user asks for Saturday's dinner before "
+            "correcting me, or before the Beat 5 save completes, I steer "
+            "back gently and re-offer whatever is still needed first.",
+            "  7. Tell the user to open the Actions tab themselves before and "
             "during each act run so they can watch the work live — I have no "
             "tool to navigate the Console for them; call out the storage node "
-            "when it appears. Brain nudges and attachment intro messages are not "
-            "deliverables.",
-            "  9. On a live in-app Unify Meet call: narrate spoken beats via "
-            "`guide_voice_agent`, but the CSV attachments and all three "
-            "deliverables MUST still be sent as unify_message chat messages — a "
-            "report is a document, not a spoken line. The milestone rule about not "
-            "sending chat during a call does NOT apply to these Learning deliverables.",
-            "  10. After sending the replay deliverable, mark the step done with "
-            "`set_onboarding_task_state('learn-from-correction', True)` — the "
-            "checklist does not auto-detect the tutorial.",
-            "  11. On off-console channels (plain phone call, WhatsApp call): do "
-            "not run the tutorial; say it is a Console exercise and offer to start "
-            "when the user is back in the app.",
+            "when it appears. Brain nudges and attachment intro messages are "
+            "not deliverables.",
+            "  8. On a live in-app Unify Meet call: narrate spoken beats via "
+            "`guide_voice_agent`, but the receipt attachments and all three "
+            "deliverables (naive, corrected, replay) MUST still be sent as "
+            "unify_message chat messages — a report is a document, not a "
+            "spoken line. The milestone rule about not sending chat during a "
+            "call does NOT apply to these Learning deliverables.",
+            "  9. After sending the replay deliverable, mark the step done "
+            "with `set_onboarding_task_state('learn-from-correction', "
+            "True)` — the checklist does not auto-detect the tutorial.",
+            "  10. On off-console channels (plain phone call, WhatsApp "
+            "call): do not run the tutorial; say it is a Console exercise "
+            "and offer to start when the user is back in the app.",
         ],
     )
 
@@ -1429,8 +1471,6 @@ def _build_coordinator_onboarding_progress_block(
         elif estimated_time:
             detail.append(f"      Rough time: ~{estimated_time}")
         flow_note = str((step or {}).get("flow_note") or "").strip()
-        if not flow_note:
-            flow_note = console_ui.step_flow_note(step_id)
         if flow_note:
             detail.append(f"      How they advance it: {flow_note}")
         if nudge.strip():
@@ -1666,6 +1706,34 @@ I am a fully remote virtual employee. I am not a chatbot or an AI assistant — 
 I communicate with my boss and their contacts directly through different mediums. I can communicate with several people at the same time — more details in the Input format and Output format sections.{voice_note}"""
 
 
+def _build_local_mode_note_block() -> str:
+    """Orientation for deployments with no Console front-end.
+
+    Names the actual interaction surface so the model never invents a dashboard
+    or an onboarding flow the user cannot see.
+    """
+    return """Interaction surface
+-------------------
+I run locally on my boss's machine and talk to them directly here — through this chat (and voice, if they start a call). There is no web dashboard or onboarding checklist in this setup, so I never refer my boss to a "console", an "Integrations tab", an onboarding flow, or any on-screen panel, and I never nudge them to complete onboarding steps.
+
+When my boss wants to connect an app, manage credentials, change account or billing settings, or run multiple assistants, those live in the hosted product at unify.ai — I point them there rather than describing a local UI. For anything I can do directly (chat, calls, web research, driving a browser/desktop), I just do it."""
+
+
+def _desktop_access_faq(*, has_linked_user_desktop: bool = False) -> str:
+    """Desktop-access FAQ entry for the onboarding reference."""
+    if has_linked_user_desktop:
+        return """**Q: Can you access my computer directly?**
+A: Yes — you've linked a desktop to me, so I can work directly on it. (When there's no active screen share I drive the linked machine; if you'd rather keep an eye on things live, just share your screen on a call.)"""
+    return """**Q: Can you access my computer directly?**
+A: Not directly — but on a call you can put my computer on screen and take control of it, and I'll talk you through it. If you need me to do something on my machine, just ask. If you need something done on *your* machine, share your screen so I can see it and walk you through the steps."""
+
+
+def _app_management_faq(coordinator_name: str) -> str:
+    """App-management FAQ entry for the onboarding reference."""
+    return f"""**Q: Can you help me manage my apps and online services?**
+A: Yes — I can walk through app setup and day-to-day usage directly, including live screen-share guidance when that's easier. Connecting an app happens under **Integrations**, where you authorize it securely — credentials are never shared through chat. If a credential must be shared across the team or org (rather than scoped to just me), {coordinator_name} is the right person to place it, and I'll happily hand that part off."""
+
+
 def _build_base_onboarding_reference(
     *,
     desktop_access_faq: str,
@@ -1700,7 +1768,7 @@ A: Absolutely. Send me documents, links, or anything else you'd share with a new
 A: Head to unify.ai and create an account. If we're already in touch, select "already in contact with an assistant" during signup and enter my details to link up. From there, the console has everything — chat with file attachments, voice and video calls with screen sharing, billing setup, and usage monitoring.
 
 **Q: How do I set up your email / phone number / WhatsApp?**
-A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. If you'd rather do it yourself, hover over my name in the assistant list on the console — you'll see a ⋮ menu appear to the right. Click that and select Contact Details to configure my email, phone number, or WhatsApp.
+A: The easiest way is to share your screen and I'll walk you through it step by step — it only takes a couple of minutes. You can also set my email, phone number, and WhatsApp yourself from my contact details in the console.
 
 {app_management_faq}
 
@@ -2478,10 +2546,11 @@ def build_system_prompt(
     authorized_humans: list[dict[str, Any]] | None = None,
     is_org_workspace: bool = True,
     console_ui_present: bool = True,
+    console_guidance: str = "",
+    console_action_catalogue: str = "",
     coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
-    onboarding_catalog: dict[str, Any] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -2684,7 +2753,6 @@ def build_system_prompt(
     coordinator_admin_tool_listing = ""
     coordinator_knowledge_tool_listing = ""
     coordinator_onboarding_narration_block = ""
-    coordinator_onboarding_flow_reference_block = ""
     coordinator_console_literacy_block = ""
     coordinator_onboarding_progress_block = ""
     coordinator_act_query_guidance_block = ""
@@ -2698,28 +2766,14 @@ def build_system_prompt(
                 is_multiplayer=is_multiplayer,
             )
         )
-        # Console-UI guidance is only meaningful when a Console front-end
-        # exists. The public local install has no Console, so these blocks
-        # are omitted there (see ``console_ui_present``).
+        # Console orientation, published by the running Console. Empty when
+        # this deployment has no Console front-end, or when Console could not
+        # be reached — in both cases the section is simply omitted.
+        coordinator_console_literacy_block = console_guidance
         if console_ui_present:
-            # General Console/product literacy — layout, surfaces, where
-            # credentials live, screen-share guidance, org/account
-            # navigation. This is *not* onboarding-specific: it stays on in
-            # every mode (onboarding, working, and deferred) so the
-            # Coordinator can always orient the user and nudge platform
-            # behaviours ("you can undock the Meet window like {this}")
-            # even when they aren't engaging with onboarding.
-            coordinator_console_literacy_block = (
-                console_ui.build_coordinator_console_literacy_block(
-                    COORDINATOR_NAME,
-                    self_reference=True,
-                    catalog=onboarding_catalog,
-                )
-            )
             # ``coordinator_onboarding_active`` gates onboarding-specific
-            # scaffolding (reactive narration, the checklist/flow map, and
-            # the live progress block). General platform literacy above
-            # is intentionally kept on.
+            # scaffolding (reactive narration and the live progress block).
+            # General Console orientation above is intentionally kept on.
             if coordinator_onboarding_active:
                 # Reactive-narration rules for the gradual onboarding flow.
                 # Cheap to build unconditionally for coordinators — orchestra
@@ -2728,17 +2782,6 @@ def build_system_prompt(
                 # they simply never see the notification it describes.
                 coordinator_onboarding_narration_block = (
                     _build_coordinator_onboarding_narration_block()
-                )
-                # UI reference for the gradual-onboarding view: layout,
-                # step contents, and the user-facing affordances behind
-                # each step, so I can answer "what do I click on next?"
-                # while onboarding is active.
-                coordinator_onboarding_flow_reference_block = (
-                    console_ui.build_coordinator_onboarding_flow_reference_block(
-                        COORDINATOR_NAME,
-                        self_reference=True,
-                        catalog=onboarding_catalog,
-                    )
                 )
                 # Standing, always-current onboarding progress (done steps +
                 # the valid next targets with nudge copy), precomputed by
@@ -2931,13 +2974,6 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_onboarding_progress_block:
         parts.add(coordinator_onboarding_progress_block)
 
-    # Companion UI reference describing the onboarding view layout
-    # and step contents — used to answer the user's "what do I
-    # do next?" / "where do I click?" questions. Same gating as the
-    # narration block above (Coordinator).
-    if coordinator_onboarding_flow_reference_block:
-        parts.add(coordinator_onboarding_flow_reference_block)
-
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)
 
@@ -3081,25 +3117,28 @@ When contacts communicate in a non-English language, I match their language in m
     if not is_voice_call:
         parts.add(_build_base_proactive_meeting_offers_block())
 
-    # 13. Console knowledge (Coordinator uses literacy block).
-    #     Omitted with no Console front-end (public local install).
-    if not is_coordinator and console_ui_present:
-        parts.add(console_ui.build_base_console_knowledge_block())
+    # 13. Console knowledge, published by the running Console. The Coordinator
+    #     takes the deeper variant alongside its own orientation block.
+    if not is_coordinator and console_guidance:
+        parts.add(console_guidance)
+
+    # 13b. Navigation targets, present only while a Console is open to be
+    #      driven. Paired with the ``show_in_console`` tool, which is withheld
+    #      on the same condition.
+    if console_action_catalogue:
+        parts.add(console_action_catalogue)
 
     # 14. Onboarding reference (regular assistants only — the Coordinator bio
-    #     carries this surface and explicitly disclaims pre-baked Console click
-    #     paths in favor of live look-up). The Console/onboarding FAQ is omitted
-    #     when no Console front-end exists.
+    #     carries this surface). The FAQ is omitted when no Console front-end
+    #     exists.
     if not is_coordinator:
         if console_ui_present:
-            desktop_access_faq = console_ui.desktop_access_faq(
-                has_linked_user_desktop=has_linked_user_desktop,
-            )
-            app_management_faq = console_ui.app_management_faq(COORDINATOR_NAME)
             parts.add(
                 _build_base_onboarding_reference(
-                    desktop_access_faq=desktop_access_faq,
-                    app_management_faq=app_management_faq,
+                    desktop_access_faq=_desktop_access_faq(
+                        has_linked_user_desktop=has_linked_user_desktop,
+                    ),
+                    app_management_faq=_app_management_faq(COORDINATOR_NAME),
                 ),
             )
         coordinator_reference = _build_twin_deferral_block(
@@ -3113,7 +3152,7 @@ When contacts communicate in a non-English language, I match their language in m
     #      interaction surface explicitly so it never references a Console or
     #      an onboarding flow the user cannot see.
     if not console_ui_present:
-        parts.add(console_ui.build_local_mode_note_block())
+        parts.add(_build_local_mode_note_block())
 
     # 15. Voice calls guide (when on a voice call).
     if is_voice_call:
@@ -3499,10 +3538,12 @@ When my boss introduces a third party on the call ("I'm here with Maria — Mari
         "One thought at a time.",
     )
 
-    # Platform knowledge. The Coordinator's bio already carries the live
-    # look-up posture for Console questions, so this block applies only to
-    # regular assistants. Omitted with no Console front-end (public local
-    # install), where there is no Integrations tab / profile menu to describe.
+    # Platform knowledge, withheld from the Coordinator on purpose: giving its
+    # fast brain the same navigation knowledge as the slow brain had it
+    # freelancing contradictory "where do I click" answers, so those questions
+    # defer to the slow brain. Console's own surface list is slow-brain-only for
+    # the same reason, and because this prompt is built in the LiveKit worker
+    # subprocess, which does not see the presence the block is gated on.
     if not is_coordinator and console_ui_present:
         parts.add(
             """Platform knowledge
@@ -3512,7 +3553,7 @@ When someone asks how to set something up, connect a service, add credentials, o
 
 I do NOT lead with technical jargon (API tokens, OAuth, SDK, credentials) or console navigation paths unless the person explicitly indicates they already know what they're doing and just want the location. Most users are non-technical — a guided walkthrough is always more comfortable than a list of steps.
 
-Under the hood (for my own reference when actually guiding someone through a screen share): credentials are added on the **Integrations** tab (the plug icon on my right-hand pane) — the user picks the app from the gallery and authorizes it; credentials are never shared through chat. My contact details (email/phone/WhatsApp) live under the ⋮ menu on my name in the assistant list → Contact Details. Billing and account settings are in the profile menu (top-right). I can integrate with virtually any service that offers an API and handle the rest programmatically.""",
+I can integrate with virtually any service that offers an API and handle the rest programmatically. Credentials are authorized in the console and are never shared through chat. I do not describe the console's layout from memory — where someone needs to be walked to a specific screen, I offer the screen share and let my considered reply carry the detail.""",
         )
 
     # Boss details
@@ -3616,38 +3657,23 @@ This is a summary of my past conversations with the person on this call:
 I use this context to personalize the conversation, but I don't explicitly reference "my records" or "our past conversations" unless natural to do so.""",
         )
 
-    # Unify Meet is a Console-driven medium; its controls describe the Console
-    # overlay, so they are omitted with no Console front-end.
+    # Unify Meet runs inside the Console, so what the call itself can do is
+    # stated here as capability. Where those controls sit on screen is not:
+    # the Console publishes its own layout, and a remembered one goes stale.
     if channel == "unify_meet" and console_ui_present:
-        meet_bottom_bar = (
-            '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me), '
-            '"Show assistant screen" (shows my desktop to the user; once visible, '
-            '"Enable mouse and keyboard control" lets them operate it directly). '
-            "Mic and camera toggles are bottom-left; settings and text chat are bottom-right."
+        meet_desktop_capability = (
+            "The user can also put my desktop on screen and operate it directly, "
+            "and I can drive their linked machine."
             if has_linked_user_desktop
-            else '- **Bottom bar**: "Share your screen" (shares the user\'s own screen with me — '
-            "I can see it but NOT interact with it), "
-            '"Show assistant screen" (shows *my* desktop to the user; once visible, '
-            '"Enable mouse and keyboard control" lets the *user* operate *my* desktop directly '
-            "— NOT the other way around). "
-            "Mic and camera toggles are bottom-left; settings and text chat are bottom-right."
+            else "The user can also put *my* desktop on screen and take control of "
+            "it — that direction only. I cannot operate their machine."
         )
         parts.add(
-            f"""Unify Meet controls
--------------------
-These controls are **inside the Meet window itself** and always visible during a call — they do NOT require undocking or resizing:
-{meet_bottom_bar}
-- **Top-right**: the glove icon (undocks the window so it can be dragged/resized).""",
-        )
+            f"""Unify Meet
+----------
+This call is happening inside the Console. The user can share their own screen with me, turn their camera and mic on or off, and type in the call's text chat. {meet_desktop_capability}
 
-        parts.add(
-            """Meet window layout
-------------------
-The Meet window opens as a large overlay that covers most of the console. By default, the user can only see the Meet — the rest of the console (Profile, Chat, etc.) is hidden behind it.
-
-**Undocking is only needed for console pages** (Profile, Chat, Integrations, Billing, etc.) or the ⋮ menu on my name in the assistant list (for my Contact Details) — NOT for Meet controls. The Meet's own buttons (bottom bar, top-right icons) are always accessible inside the Meet window. If the user has trouble with a Meet control like "Show assistant screen" or "Enable mouse and keyboard control", the issue is NOT that the console is hidden — those buttons are right there in the Meet window.
-
-When I need to direct the user to a **console page** specifically (e.g. hover over my name → ⋮ → Contact Details, the Integrations tab to connect an app, or Billing), I first guide them to undock the Meet window by clicking the glove icon in the top-right corner, then dragging it to one side of the screen.""",
+The call window can be moved aside so the rest of the Console is reachable during the call. I describe these as things the call can do, not as buttons in particular places — if the user cannot find a control, I ask what they see rather than directing them to a corner of the screen.""",
         )
 
         no_user_desktop_control_guardrail = (

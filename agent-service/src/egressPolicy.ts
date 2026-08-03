@@ -34,9 +34,20 @@ export interface EgressEnv {
    * Username template. Residential providers encode both the geography and
    * the sticky-session handle in the username, so `{region}` and `{session}`
    * are substituted here rather than the caller ever seeing a credential.
+   *
+   * A dedicated-IP endpoint has neither: the username is literal, the exit is
+   * whatever address the endpoint owns, and `UNITY_EGRESS_PROXY_REGIONS` below
+   * is what states where that is.
    */
   UNITY_EGRESS_PROXY_USERNAME?: string;
   UNITY_EGRESS_PROXY_PASSWORD?: string;
+  /**
+   * Regions the configured endpoint actually exits from, comma-separated.
+   *
+   * Required when the username carries no `{region}` placeholder — see
+   * `assertRegionServable`.
+   */
+  UNITY_EGRESS_PROXY_REGIONS?: string;
 }
 
 export interface ProxyConfig {
@@ -160,6 +171,46 @@ function renderUsername(template: string, region: string, sessionKey: string): s
     .replace(/\{session\}/g, sessionKey);
 }
 
+/** Whether the provider takes the requested region as a per-request parameter. */
+function usernameIsGeoTargeted(template: string): boolean {
+  return /\{region\}|\{REGION\}/.test(template);
+}
+
+/**
+ * Refuse a region the configured endpoint cannot actually exit from.
+ *
+ * A geo-targeted username carries the region to the provider, so any supported
+ * region is servable. A **dedicated-IP** endpoint carries nothing: its exit is
+ * fixed, and a request for some other region would otherwise resolve to that
+ * one fixed address while `contextOptions` reported the region that was asked
+ * for. That is not a degraded proxy, it is an actively contradictory browser —
+ * a London address insisting it is in New York — which is worse than no proxy
+ * at all and, being config-shaped rather than error-shaped, surfaces nowhere.
+ *
+ * So a non-templated username must declare its coverage, and anything outside
+ * that declaration fails closed like every other unmeetable policy here.
+ */
+function assertRegionServable(env: EgressEnv, template: string, region: string): void {
+  if (usernameIsGeoTargeted(template)) return;
+  const declared = (env.UNITY_EGRESS_PROXY_REGIONS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (!declared.length) {
+    throw new EgressPolicyError(
+      'managed egress username carries no {region} placeholder, so the exit is fixed; ' +
+        'set UNITY_EGRESS_PROXY_REGIONS to the regions it serves. Refusing to claim ' +
+        `region ${r_safe(region)} on an endpoint of unknown geography`,
+    );
+  }
+  if (!declared.includes(region)) {
+    throw new EgressPolicyError(
+      `configured egress endpoint serves ${declared.join(', ')}, not ${r_safe(region)}; ` +
+        'refusing to exit from one region while reporting another',
+    );
+  }
+}
+
 export function parseEgressPolicy(raw: unknown): EgressPolicy | null {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== 'object') {
@@ -238,6 +289,7 @@ export function resolveEgress(
       );
     }
     const usernameTemplate = (env.UNITY_EGRESS_PROXY_USERNAME || '').trim();
+    assertRegionServable(env, usernameTemplate, region);
     proxy = {
       server,
       username: usernameTemplate

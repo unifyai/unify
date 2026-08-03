@@ -58,12 +58,8 @@ async def _make_scheduler_with_task(description: str, *, steps: int = 1):
     return scheduler, handle
 
 
-def _source_log_id(scheduler: TaskScheduler, task_id: int, instance_id: int = 0) -> int:
-    del instance_id
-    return scheduler._get_log_by_task_instance(
-        task_id=task_id,
-        instance_id=0,
-    ).id
+def _source_log_id(scheduler: TaskScheduler, task_id: int) -> int:
+    return scheduler._get_task_log(task_id=task_id).id
 
 
 @pytest.mark.asyncio
@@ -200,7 +196,6 @@ async def test_scheduled_execution_consumes_provenance(monkeypatch):
             revision="rev-scheduled",
             scheduled_for=scheduled_for,
             task_name="Scheduled report",
-            task_description="Send the scheduled report.",
         ),
     )
 
@@ -296,7 +291,6 @@ async def test_scheduled_execution_live_delegate_materializes_run(
             revision="rev-live-delegate",
             scheduled_for=scheduled_for,
             task_name="Delegate live report",
-            task_description="Send the live delegated report.",
         ),
     )
     monkeypatch.setattr(
@@ -407,7 +401,6 @@ async def test_scheduled_execution_offline_delegate_materializes_run(
             revision="rev-offline-delegate",
             scheduled_for=scheduled_for,
             task_name="Offline report",
-            task_description="Send the offline delegated report.",
         ),
     )
     monkeypatch.setattr(
@@ -431,7 +424,6 @@ async def test_scheduled_execution_offline_delegate_materializes_run(
         source_task_log_id=_source_log_id(scheduler, task_id),
         revision="rev-offline-delegate",
         task_name="Offline report",
-        task_description="Send the offline delegated report.",
         scheduled_for=scheduled_for,
     )
     delegate = offline_runner._OfflineTaskExecutionDelegate(config)
@@ -540,7 +532,6 @@ async def test_offline_recurring_execution_projects_successors_between_runs(
             source_task_log_id=_source_log_id(scheduler, task_id),
             revision=f"rev-run-{run_index}",
             task_name=row.name,
-            task_description=row.description,
             scheduled_for=scheduled_for,
         )
         delegate = offline_runner._OfflineTaskExecutionDelegate(config)
@@ -635,7 +626,6 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_runs(
         source_task_log_id=source_log_id,
         revision="rev-concurrent",
         task_name=current.name,
-        task_description=current.description,
         scheduled_for=current.schedule_start_at.isoformat(),
     )
     remember_live_task_run_provenance(
@@ -648,7 +638,6 @@ async def test_offline_scheduled_execution_allows_concurrent_same_task_runs(
             revision="rev-concurrent",
             scheduled_for=current.schedule_start_at.isoformat(),
             task_name=current.name,
-            task_description=current.description,
         ),
     )
     delegate = offline_runner._OfflineTaskExecutionDelegate(config)
@@ -736,7 +725,6 @@ async def test_triggered_execution_offline_delegate_consumes_trigger_provenance(
         source_task_log_id=_source_log_id(scheduler, task_id),
         revision="rev-triggered-offline-delegate",
         task_name="Triggered offline report",
-        task_description="Send the triggered offline delegated report.",
         source_ref="sms-message-123",
         source_medium="sms",
         source_contact_id="123",
@@ -1276,7 +1264,7 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         repeat=[RepeatPattern(frequency=Frequency.DAILY)],
         offline=True,
     )["details"]["task_id"]
-    source_log_id_b = _source_log_id(scheduler, task_id_b, 0)
+    source_log_id_b = _source_log_id(scheduler, task_id_b)
     task_b = scheduler._filter_tasks(filter=f"task_id == {task_id_b}")[0]
 
     class _Handle:
@@ -1318,7 +1306,6 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
         source_task_log_id=source_log_id_b,
         revision="rev-b-concurrent",
         task_name=task_b.name,
-        task_description=task_b.description,
         scheduled_for=task_b.schedule_start_at.isoformat(),
     )
     remember_live_task_run_provenance(
@@ -1331,7 +1318,6 @@ async def test_offline_execute_allows_second_task_while_other_task_active(monkey
             revision="rev-b-concurrent",
             scheduled_for=task_b.schedule_start_at.isoformat(),
             task_name=task_b.name,
-            task_description=task_b.description,
         ),
     )
     delegate = offline_runner._OfflineTaskExecutionDelegate(config)
@@ -1388,7 +1374,6 @@ async def test_execute_allows_restart_while_definition_active(monkeypatch):
             revision="rev-same-definition",
             scheduled_for=past,
             task_name="Definition active restart ok",
-            task_description="Definition active restart ok",
         ),
     )
 
