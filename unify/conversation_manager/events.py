@@ -1997,6 +1997,64 @@ class TaskTriggerRequested(Event):
 
 
 @dataclass
+class CanvasInvocationRequested(Event):
+    """A viewer triggered an action from a canvas.
+
+    Orchestra validated the arguments against the schema declared at author time,
+    enforced the action's rate limit, deduplicated the request and recorded it as a
+    ``Canvas/Invocations`` row *before* publishing this. So the event carries only
+    an identifier: everything needed to run the work — the arguments, the declared
+    target, who asked — is already on the row, which is also what makes the run
+    recoverable if this event is lost.
+
+    Delivery is at-least-once, so a redelivery is expected rather than exceptional.
+    ``run_invocation`` returns a completed run unchanged instead of repeating it,
+    which is what stops a redelivered send going out twice.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:canvas_invocation"
+
+    canvas_token: str
+    invocation_id: int
+    action_name: str = ""
+    reason: str = ""
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Any,
+        *,
+        reason: str = "",
+    ) -> "CanvasInvocationRequested | None":
+        """Build a canvas invocation event from a comms Pub/Sub payload."""
+
+        if not isinstance(payload, _Mapping):
+            return None
+        extra = payload.get("extra_event_fields")
+        fields = {**(extra if isinstance(extra, dict) else {}), **payload}
+
+        canvas_token = str(fields.get("canvas_token") or "")
+        invocation_id = _coerce_int(fields.get("invocation_id"))
+        # Both are required to address a run, and a run cannot be addressed by
+        # either alone: invocation ids are sequential per canvas.
+        if not canvas_token or invocation_id is None:
+            return None
+
+        action_name = str(fields.get("action_name") or "")
+        return cls(
+            canvas_token=canvas_token,
+            invocation_id=invocation_id,
+            action_name=action_name,
+            reason=reason
+            or (
+                f"A viewer triggered '{action_name}' from a canvas."
+                if action_name
+                else "A viewer triggered a canvas action."
+            ),
+        )
+
+
+@dataclass
 class ProviderEventDispatchRequested(Event):
     """Orchestra asked Unity to adopt one live provider-event dispatch.
 

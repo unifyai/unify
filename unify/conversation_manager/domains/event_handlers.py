@@ -15,6 +15,9 @@ from unify.common.hierarchical_logger import DEFAULT_ICON
 from unify.conversation_manager import assistant_jobs
 from unify.conversation_manager.events import *
 from unify.conversation_manager.domains import managers_utils
+from unify.conversation_manager.domains.canvas_actions import (
+    handle_canvas_invocation_requested,
+)
 from unify.conversation_manager.domains.comms_utils import (
     post_call_utterances_to_orchestra,
     publish_system_error,
@@ -3529,6 +3532,19 @@ async def _(
 ):
     if await _handle_task_trigger_requested_event(event, cm):
         await cm.request_llm_run(delay=0)
+
+
+@EventHandler.register(CanvasInvocationRequested)
+async def _(
+    event: CanvasInvocationRequested,
+    cm: "ConversationManager",
+    *args,
+    **kwargs,
+):
+    # No `request_llm_run`: the run is deterministic work whose outcome is written
+    # to the invocation row and streamed to the canvas, so waking the slow brain
+    # would add a conversational turn nobody asked for.
+    await handle_canvas_invocation_requested(event, cm)
 
 
 @EventHandler.register(ProviderEventDispatchRequested)
