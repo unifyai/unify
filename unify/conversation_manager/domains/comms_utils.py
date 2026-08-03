@@ -1070,6 +1070,7 @@ async def publish_assistant_desktop_ready(
     desktop_url: str,
     liveview_url: str,
     vm_type: str,
+    liveview_password: str | None = None,
 ) -> None:
     """Publish desktop-ready notification to the assistant's Pub/Sub topic.
 
@@ -1082,6 +1083,8 @@ async def publish_assistant_desktop_ready(
         "liveview_url": liveview_url,
         "vm_type": vm_type,
     }
+    if liveview_password:
+        event_data["liveview_password"] = liveview_password
     message_data = {
         "thread": "assistant_desktop_ready",
         "event": event_data,

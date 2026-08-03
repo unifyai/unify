@@ -63,6 +63,7 @@ class AssistantJobsBackend(Protocol):
         assistant_id: str,
         user_id: str,
         liveview_url: str,
+        liveview_password: str | None = None,
     ) -> None: ...
 
     def mark_job_done(
@@ -142,6 +143,7 @@ class NoopAssistantJobsBackend:
         assistant_id: str,
         user_id: str,
         liveview_url: str,
+        liveview_password: str | None = None,
     ) -> None:
         return None
 
@@ -332,11 +334,17 @@ def log_job_startup(
     )
 
 
-def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> None:
+def update_liveview_url(
+    assistant_id: str,
+    user_id: str,
+    liveview_url: str,
+    liveview_password: str | None = None,
+) -> None:
     get_deploy_runtime().jobs.update_liveview_url(
         assistant_id,
         user_id,
         liveview_url,
+        liveview_password,
     )
 
 

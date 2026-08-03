@@ -4982,6 +4982,106 @@ class TestAssistantDesktopReadyEvent:
         mock_cm.request_llm_run.assert_called_with(delay=0)
 
     @pytest.mark.asyncio
+    async def test_assistant_desktop_ready_relays_desktop_secret_when_present(
+        self,
+        mock_cm,
+    ):
+        """A desktop_secret on the event must reach the liveview PATCH and the
+        Console SSE payload as ``liveview_password``."""
+        from unify.conversation_manager.events import AssistantDesktopReady
+
+        mock_cm.vm_ready = False
+        mock_cm.assistant_id = "84"
+        mock_cm.user_id = "test_user"
+        event = AssistantDesktopReady(
+            binding_id="binding-84",
+            desktop_url="https://unity-pool-ubuntu-1.vm.unify.ai",
+            vm_type="ubuntu",
+            desktop_secret="binding-secret",  # pragma: allowlist secret
+        )
+
+        with (
+            patch(
+                "unify.conversation_manager.assistant_jobs.update_liveview_url",
+            ) as mock_update_liveview_url,
+            patch(
+                "unify.conversation_manager.domains.managers_utils._start_file_sync",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "unify.session_details.SESSION_DETAILS",
+            ) as mock_sd,
+            patch(
+                "unify.function_manager.primitives.runtime._vm_ready",
+            ),
+            patch(
+                "unify.conversation_manager.domains.event_handlers._ensure_desktop_session",
+                return_value=AsyncMock()(),
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
+                new_callable=AsyncMock,
+            ) as mock_publish_desktop_ready,
+        ):
+            mock_sd.assistant.desktop_url = ""
+            mock_sd.assistant.binding_id = "binding-84"
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_update_liveview_url.call_args.args[-1] == "binding-secret"
+        mock_publish_desktop_ready.assert_awaited_once()
+        _, publish_kwargs = mock_publish_desktop_ready.call_args
+        assert publish_kwargs.get("liveview_password") == "binding-secret"
+
+    @pytest.mark.asyncio
+    async def test_assistant_desktop_ready_omits_liveview_password_without_secret(
+        self,
+        mock_cm,
+    ):
+        """No secret on the event (old binding) -- relay ``None``, not an
+        empty string, so downstream layers treat it as absent."""
+        from unify.conversation_manager.events import AssistantDesktopReady
+
+        mock_cm.vm_ready = False
+        mock_cm.assistant_id = "84"
+        mock_cm.user_id = "test_user"
+        event = AssistantDesktopReady(
+            binding_id="binding-84",
+            desktop_url="https://unity-pool-ubuntu-1.vm.unify.ai",
+            vm_type="ubuntu",
+        )
+
+        with (
+            patch(
+                "unify.conversation_manager.assistant_jobs.update_liveview_url",
+            ) as mock_update_liveview_url,
+            patch(
+                "unify.conversation_manager.domains.managers_utils._start_file_sync",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "unify.session_details.SESSION_DETAILS",
+            ) as mock_sd,
+            patch(
+                "unify.function_manager.primitives.runtime._vm_ready",
+            ),
+            patch(
+                "unify.conversation_manager.domains.event_handlers._ensure_desktop_session",
+                return_value=AsyncMock()(),
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.publish_assistant_desktop_ready",
+                new_callable=AsyncMock,
+            ) as mock_publish_desktop_ready,
+        ):
+            mock_sd.assistant.desktop_url = ""
+            mock_sd.assistant.binding_id = "binding-84"
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_update_liveview_url.call_args.args[-1] is None
+        _, publish_kwargs = mock_publish_desktop_ready.call_args
+        assert publish_kwargs.get("liveview_password") is None
+
+    @pytest.mark.asyncio
     async def test_assistant_desktop_ready_ignores_missing_binding_when_session_has_one(
         self,
         mock_cm,

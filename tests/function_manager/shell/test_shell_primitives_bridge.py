@@ -101,8 +101,23 @@ sleep 100
 echo "Never reached"
 """
 
+# Bash features that are not POSIX sh, chosen to work on bash 3.2 as well as
+# modern bash: indexed arrays, `[[ ]]`, and pattern substitution. This is what
+# proves the runner dispatched to bash rather than sh on every platform.
 BASH_SPECIFIC_SCRIPT = """#!/bin/bash
-# Use bash-specific features
+items=("value1" "value2")
+echo "Bash map: ${items[0]}, ${items[1]}"
+name="hello-world"
+echo "Substituted: ${name/world/bash}"
+if [[ "$name" == hello-* ]]; then
+  echo "Matched: yes"
+fi
+"""
+
+# Associative arrays arrived in bash 4.0. macOS still ships 3.2 at /bin/bash
+# (the last GPLv2 release), and the runner resolves that path directly, so this
+# script only runs where the interpreter actually supports it.
+BASH_ASSOC_ARRAY_SCRIPT = """#!/bin/bash
 declare -A map
 map["key1"]="value1"
 map["key2"]="value2"
@@ -428,10 +443,34 @@ async def test_shell_script_timeout(function_manager_factory):
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _bash_major_version() -> int:
+    """Major version of the bash the runner will actually invoke.
+
+    The runner resolves ``/bin/bash`` directly rather than searching PATH, so
+    a newer bash installed elsewhere does not change what runs here.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["/bin/bash", "-c", "echo $BASH_VERSINFO"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return int((out.stdout or "0").strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
 @_handle_project
 @pytest.mark.asyncio
 async def test_bash_specific_features(function_manager_factory):
-    """Test bash-specific features work correctly."""
+    """The runner dispatches to bash, not sh.
+
+    Uses constructs bash has had since 3.2, so this runs everywhere rather
+    than only where bash is modern.
+    """
     fm = function_manager_factory()
 
     # Skip if bash is not available
@@ -444,8 +483,36 @@ async def test_bash_specific_features(function_manager_factory):
     )
 
     assert result["error"] is None, f"Unexpected error: {result['stderr']}"
-    assert "value1" in result["stdout"]
-    assert "value2" in result["stdout"]
+    assert "Bash map: value1, value2" in result["stdout"]
+    assert "Substituted: hello-bash" in result["stdout"]
+    assert "Matched: yes" in result["stdout"]
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_bash_associative_arrays(function_manager_factory):
+    """Associative arrays, where the interpreter is new enough for them.
+
+    This assertion used to live in the test above and failed on macOS for a
+    reason that looked like a product bug: bash 3.2 has no ``declare -A``, so
+    both subscripts evaluate arithmetically to 0 and the array behaves as an
+    indexed one, leaving both keys reading ``value2``.
+    """
+    fm = function_manager_factory()
+
+    if not os.path.exists("/bin/bash"):
+        pytest.skip("bash not available")
+    major = _bash_major_version()
+    if major < 4:
+        pytest.skip(f"/bin/bash is {major}.x; associative arrays need 4.0+")
+
+    result = await fm.execute_shell_script(
+        implementation=BASH_ASSOC_ARRAY_SCRIPT,
+        language="bash",
+    )
+
+    assert result["error"] is None, f"Unexpected error: {result['stderr']}"
+    assert "Bash map: value1, value2" in result["stdout"]
 
 
 @_handle_project

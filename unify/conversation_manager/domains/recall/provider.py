@@ -249,9 +249,10 @@ class RecallMeetProvider:
             raise RuntimeError("RECALL_RELAY_SECRET must be set to sign the page URL")
 
         liveview = f"{browser_desktop_url.rstrip('/')}/desktop/custom.html"
-        # The VNC password is the assistant's own API key, which is how Console
-        # reaches the same surface.
-        password = SESSION_DETAILS.unify_key
+        # The VNC password is the per-binding desktop secret, which is how
+        # Console reaches the same surface. Old bindings without a minted
+        # secret fall back to the legacy convention (the assistant's own key).
+        password = SESSION_DETAILS.assistant.desktop_secret or SESSION_DETAILS.unify_key
         query = urlencode(
             {
                 "liveview": liveview,
