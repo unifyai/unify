@@ -346,3 +346,46 @@ class TestControlPlaneResolution:
 
         monkeypatch.setattr(SETTINGS.conversation, "COMMS_URL", "", raising=False)
         assert IngestionSettings().resolved_pipeline_url() == ""
+
+
+class TestActorSurface:
+    """The manager is only real if a plan can actually call it.
+
+    Registering a ManagerSpec is not enough: the alias must also be canonical
+    and mapped to a registry getter, or scoped collection drops the manager and
+    `primitives.ingestion` simply does not exist on the surface the actor is
+    handed. That is how a fully-built, fully-tested manager can be unreachable
+    from every plan while every unit test still passes.
+    """
+
+    def test_the_alias_is_canonical(self):
+        from unify.function_manager.primitives.scope import VALID_MANAGER_ALIASES
+
+        assert "ingestion" in VALID_MANAGER_ALIASES
+
+    def test_every_public_verb_is_collected(self):
+        from unify.function_manager.primitives.registry import get_registry
+        from unify.function_manager.primitives.scope import PrimitiveScope
+
+        collected = get_registry().collect_primitives(
+            PrimitiveScope.single("ingestion"),
+        )
+        names = {key.rsplit(".", 1)[-1] for key in collected}
+        assert names == {
+            "submit",
+            "get_status",
+            "get_logs",
+            "wait",
+            "list_runs",
+            "retry",
+            "cancel",
+            "pause",
+            "resume",
+        }
+
+    def test_a_default_primitives_instance_exposes_it(self):
+        from unify.function_manager.primitives import Primitives
+
+        primitives = Primitives()
+        assert "ingestion" in primitives.primitive_scope.scoped_managers
+        assert hasattr(primitives, "ingestion")

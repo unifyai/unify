@@ -1,9 +1,11 @@
 """
-CodeActActor eval tests for DashboardManager routing (simulated managers).
+CodeActActor eval tests for visualization routing (simulated managers).
 
-These tests verify that when the user asks for visualizations:
-1. The actor routes to ``primitives.dashboards.create_tile`` (not old plot/table_view).
-2. For live-data scenarios, the actor includes ``data_bindings`` with query params.
+A visualization request must reach ``primitives.canvas``, not the superseded
+tile surface. Two managers can put something visual in front of the user and
+only one should be authored against, so this is the test that catches the tool
+surface drifting back toward tiles -- whether through spec wording, ranking, or
+a prompt example that overclaims.
 
 Uses ``make_code_act_actor`` with simulated managers and a live LLM.
 """
@@ -100,8 +102,8 @@ VISUALIZATION_QUESTIONS = [
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("question", VISUALIZATION_QUESTIONS)
-async def test_code_act_visualization_routes_to_dashboards(question: str):
-    """Verify CodeActActor routes visualization requests to primitives.dashboards.create_tile."""
+async def test_code_act_visualization_routes_to_canvas(question: str):
+    """A chart or plot request must author a canvas, never a tile."""
     async with make_code_act_actor(impl="simulated") as (actor, _primitives, calls):
         dm = ManagerRegistry.get_data_manager()
         await _seed_monthly_revenue(dm)
@@ -114,13 +116,23 @@ async def test_code_act_visualization_routes_to_dashboards(question: str):
         result = await handle.result()
 
         assert result is not None
-        dashboard_calls = [c for c in calls if "dashboards" in c]
-        assert dashboard_calls, (
-            f"Expected primitives.dashboards calls for a visualization request, "
+        canvas_calls = [c for c in calls if "canvas" in c]
+        assert canvas_calls, (
+            f"Expected primitives.canvas calls for a visualization request, "
             f"but only saw: {calls}"
         )
-        create_tile_calls = [c for c in calls if "create_tile" in c]
-        assert create_tile_calls, (
-            f"Expected primitives.dashboards.create_tile to be called, "
-            f"but dashboard calls were: {dashboard_calls}"
+        assert [c for c in canvas_calls if "create_view" in c], (
+            f"Expected primitives.canvas.create_view to be called, "
+            f"but canvas calls were: {canvas_calls}"
         )
+        # Canvas must be the *first* visual surface reached. A later tile call is
+        # legitimate fallback -- without an installed toolchain the build gate
+        # rejects every canvas, and an actor that then gives the user nothing
+        # would be worse. What must not happen is reaching for a tile first.
+        first_visual = next(
+            (c for c in calls if "canvas" in c or "dashboards" in c),
+            "",
+        )
+        assert (
+            "canvas" in first_visual
+        ), f"A visualization request reached for a tile before a canvas: {calls}"

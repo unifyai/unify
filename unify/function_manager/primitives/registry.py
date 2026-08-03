@@ -174,22 +174,37 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         manager_registry_key="dashboards",
         primitive_class_path="unify.dashboard_manager.dashboard_manager.DashboardManager",
         excluded_methods=frozenset(),
-        priority=8,
-        domain="Visualizations & Dashboards",
+        # Superseded by `canvas`. Specs are listed in ascending priority, so a
+        # number past every other manager's puts this last -- the actor reads
+        # the replacement first and reaches this only when a request is
+        # explicitly about a board that already exists. This manager is deleted
+        # once existing tiles are migrated to canvases, along with its
+        # primitives, contexts and Console panes; until then the code stays so
+        # those tiles keep rendering and the migration has something to read.
+        priority=30,
+        domain="Legacy HTML Tiles (superseded by Canvas)",
         description=(
-            "Create HTML visualization tiles (charts, plots, KPI cards, tables) "
-            "and compose them into dashboard grid layouts"
+            "Read and amend HTML visualization tiles and dashboard grid layouts "
+            "that already exist. Superseded by canvas for anything new"
         ),
         use_when=(
-            "Generate any visualization, chart, plot, dashboard, KPI card, "
-            "or interactive HTML output for the user to view"
+            "Only when working with a tile or dashboard that already exists -- "
+            "listing them, reading one, or editing one the user points at. "
+            "NEVER for new visual output of any kind: every chart, plot, table, "
+            "KPI card, dashboard and interactive view goes to primitives.canvas"
         ),
         examples=(
-            "'Plot repairs by category', 'Show me a bar chart of revenue', "
-            "'Create a dashboard with KPIs and charts', "
-            "'Generate an interactive table of orders'"
+            "'Update the revenue tile on my sales dashboard', "
+            "'What tiles are on my ops board?', 'Delete that old chart tile'"
         ),
         special_note=(
+            "SUPERSEDED BY primitives.canvas. Do not create new tiles or "
+            "dashboards here: a canvas renders the whole view as one React "
+            "module, carries live query bindings, and supports buttons that run "
+            "real work, so it covers everything a tile did and more. Use these "
+            "methods only to inspect or amend tiles that already exist, and "
+            "prefer offering to rebuild such a board as a canvas. This manager "
+            "is removed once existing tiles are migrated. "
             "The actor has full creative freedom over tile HTML -- any "
             "HTML/CSS/JS that renders in a browser works. PREFER live tiles: "
             "declare data_bindings (FilterBinding, ReduceBinding, JoinBinding, "
@@ -626,6 +641,49 @@ _ROUTING_GUIDANCE: List[Dict[str, Any]] = [
             ),
         ],
     },
+    # Two managers can put something visual in front of the user, and only one
+    # of them should be authored against. This pairing exists so the actor is
+    # told which, rather than inferring it from two overlapping descriptions --
+    # the failure mode being a tile built for a request that asked for a view.
+    # Removed with `dashboards` once existing tiles are migrated to canvases.
+    {
+        "managers": {"canvas", "dashboards"},
+        "title": "`primitives.canvas.*` vs `primitives.dashboards.*`",
+        "guidance": [
+            (
+                "canvas",
+                "Use for **ALL new visual output, without exception** -- every "
+                "chart, plot, table, KPI card, dashboard, tracker, report and "
+                "interactive view. A canvas is one React module with live query "
+                "bindings and buttons that can run real work, so it covers "
+                "everything a tile did and more.",
+            ),
+            (
+                "dashboards",
+                "**Superseded. Never author here.** Use only to inspect or amend "
+                "a tile or dashboard that ALREADY exists, because the user "
+                "pointed at one. When they do, offer to rebuild it as a canvas. "
+                "This manager is removed once existing tiles are migrated.",
+            ),
+        ],
+        "examples": [
+            (
+                "Plot repairs by category",
+                "canvas",
+                "primitives.canvas.create_view(tsx=..., bindings=[...])",
+            ),
+            (
+                "Build me a dashboard of last quarter's sales",
+                "canvas",
+                "primitives.canvas.create_view(tsx=..., bindings=[...])",
+            ),
+            (
+                "Change the title on the revenue tile of my ops board",
+                "dashboards",
+                "primitives.dashboards.update_tile(...)",
+            ),
+        ],
+    },
 ]
 
 
@@ -679,12 +737,12 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
         "get_primitives_canvas_actions_example",
         "get_primitives_canvas_revision_example",
     ],
+    # Superseded by canvas: one composition example remains so the actor can
+    # amend a board that already exists, and the authoring examples are gone so
+    # the prompt teaches a single way to produce visual output. This entry goes
+    # with the manager once existing tiles are migrated to canvases.
     "dashboards": [
-        "get_primitives_dashboards_baked_in_example",
-        "get_primitives_dashboards_live_data_example",
-        "get_primitives_dashboards_rich_live_data_example",
         "get_primitives_dashboards_composition_example",
-        "get_primitives_dashboards_actions_example",
     ],
     "integrations": [
         "get_primitives_integrations_function_manager_search_example",
