@@ -40,8 +40,13 @@ def log_job_startup(
     _log_job_startup(job_name, user_id, assistant_id, medium=medium)
 
 
-def update_liveview_url(assistant_id: str, user_id: str, liveview_url: str) -> None:
-    _update_liveview_url(assistant_id, user_id, liveview_url)
+def update_liveview_url(
+    assistant_id: str,
+    user_id: str,
+    liveview_url: str,
+    liveview_password: str | None = None,
+) -> None:
+    _update_liveview_url(assistant_id, user_id, liveview_url, liveview_password)
 
 
 def mark_job_done(

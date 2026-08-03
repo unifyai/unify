@@ -201,6 +201,8 @@ The public API of each state manager is defined by the abstract methods on `Base
 | Domain facts, typed knowledge claims | `KnowledgeManager_*` (top-level JSON tools, not primitives) |
 | Durable tasks (create, execute) | `primitives.tasks.*` / `TaskScheduler` |
 | Files (parse, query) | `primitives.files.*` |
+| Storing new data or files, from any source | `primitives.ingestion.*` (`submit` — there is no `primitives.data.ingest`) |
+| Generative UI (interactive views) | `primitives.canvas.*` |
 | Web research (lightweight) | `primitives.web.*` |
 | Secrets (metadata only via `ask`) | `primitives.secrets.*` |
 | Procedural how-tos, SOPs | `GuidanceManager_*` (top-level JSON tools, not primitives) |
@@ -734,6 +736,12 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
   - Ephemeral live action (UI control/one‑off interaction) → `Actor.act` (called via ConversationManager)
   - Durable, tracked work → `TaskScheduler.execute` (via `primitives.tasks.execute`)
   - Never use `TaskScheduler.update` to start work; always use `execute`.
+- **Storing new data or files (any source)**
+  - Rows from an API / connected app / user input, specific files, whole folders, or a reshape of a stored table → `primitives.ingestion.submit(source, target)`. One verb for every source/target pairing; returns a run handle immediately.
+  - Observe and recover with `primitives.ingestion.get_status` / `get_logs` / `wait` / `retry` / `cancel` / `pause` / `resume`. `status.next_step` states the one action that makes sense.
+  - There is no `primitives.data.ingest` — a direct ingest blocked the plan for the length of the write and left nothing to inspect if it died part-way.
+- **Generative UI (canvases)**
+  - Author, revise and inspect interactive views → `primitives.canvas.*` (`create_view`, `update_view`, `refresh_props`, `preview`, `list_invocations`, …). Bind live data to stored tables (including ones an ingestion run just produced via `status.contexts`), never to a provider call.
 - **File → knowledge distillation**
   - Parse with `primitives.files.parse`, then distill durable statements into typed claims via `KnowledgeManager_add_knowledge` (attach `source_refs` pointing at the file / transcript / user statement). There is no `primitives.knowledge` pipeline and no NL `ask`/`update`/`refactor` loop on KnowledgeManager.
 - **Images**
@@ -798,10 +806,28 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### DataManager
 - **Role**: Low‑level data operations on any Unify context.
-- **Scope**: Canonical implementation of filter, search, reduce, join, insert, update, delete, vectorize, plot.
+- **Scope**: Canonical implementation of filter, search, reduce, join, insert, update, delete, vectorize, plot. `ingest` exists as the low-level chunked write engine but is **not** exposed to the Actor — storing new data routes through `IngestionManager` so every write is recorded, checkpointed and recoverable.
 - **Connections**:
-  - **Steered by**: `FileManager` (delegates data ops), `Actor` (via `primitives.data.*`).
+  - **Steered by**: `FileManager` (delegates data ops), `IngestionManager` (row writes via the shared checkpointed engine), `Actor` (via `primitives.data.*`).
   - **Steers**: — (pure primitives module, no high‑level tool loops).
+
+### IngestionManager
+- **Role**: The one verb for storing data and files from anywhere — `submit(source, target)` — with a resumable, checkpointed engine behind it that in-process and worker-fleet execution share.
+- **Scope**: `submit`, `get_status`, `get_logs`, `wait`, `list_runs`, `retry`, `cancel`, `pause`, `resume` via `primitives.ingestion.*`. Sources: `RowsSource` (anything in hand), `FilesSource` / `FolderSource` (parse via the file pipeline), `TableSource` (reshape stored rows). Targets: `TableTarget` (one queryable context) or `CollectionTarget` (documents kept whole, inner tables extracted). Runs and their events are rows in `Ingestion/Runs` + `Ingestion/Events`.
+- **Tiering**: never a caller's choice. Files parse off the assistant's process whenever a worker fleet is reachable; rows and tables run in process only under a measured row ceiling. Both tiers write the same artifacts, leases and checkpoints, so the tier affects latency and nothing else.
+- **Negative scope**: does not query or reshape-in-place (DataManager), does not answer questions about file contents (FileManager `ask`), does not own provider fetches (integrations fetch, ingestion stores).
+- **Connections**:
+  - **Steered by**: `Actor` (via `primitives.ingestion.*`); `FileManager` (attachment ingestion submits here).
+  - **Steers**: `DataManager.ingest` (row writes), the file parse pipeline, and the hosted pipeline control plane (`/infra/pipeline/*`) for dispatched runs.
+
+### CanvasManager
+- **Role**: Assistant-authored generative React UI. The actor writes real TSX against `@unity/canvas-kit`; it is linted, typechecked, bundled, rendered headlessly and critiqued before publish; Console displays it in a genuinely isolated frame.
+- **Scope**: `create_view`, `update_view`, `refresh_props`, `get_view`, `list_views`, `delete_view`, `preview`, `run_invocation`, `list_invocations` via `primitives.canvas.*`. Rows live in `Canvas/Views` / `Canvas/Actions` / `Canvas/Invocations`; a routing token is registered with the backend on publish.
+- **Data plane**: query bindings (context-backed tables, executed server-side per view) and materialised props (LLM-shaped reads frozen at author/refresh time). Connected-app data must be **stored first** (via `primitives.ingestion.submit`) and bound as an ordinary table.
+- **Write plane**: declared, schema-validated actions; the viewer's input is validated server-side, recorded as an invocation row, then executed by the assistant in one of three lanes (stored function, task trigger, actor request).
+- **Connections**:
+  - **Steered by**: `Actor` (via `primitives.canvas.*`); `ConversationManager` (executes recorded invocations on `CanvasInvocationRequested`).
+  - **Steers**: `DataManager` (binding dry-runs), `FunctionManager` (action target resolution and execution), `TaskScheduler` (task-lane triggers), the actor (assistant-lane requests).
 
 ### WebSearcher
 - **Role**: Lightweight, text-based retrieval engine for quick one-off internet queries (headlines, weather, definitions, current events).
@@ -1383,56 +1409,116 @@ The fix — "make the gate fail closed" — makes an aggregator job republish th
 required context unconditionally, so a push that didn't run the suite now
 reports that context **red**, not green-by-default.
 
-Rolled out the same week to: orchestra (`pytest`, [`0f040b6c`](https://github.com/unifyai/orchestra/commit/0f040b6c)),
-unillm (`pytest`, `c7b2351`), unify (`Flow smoke`, `e2bb461c7`), unify-deploy
-(`Integration smoke`, `0d886ad1`), console (`Push Gate`, `08cf9a9fd`). Check
-name and trigger tag differ per repo; the fail-closed shape is the same.
-unisdk, brain, docs, and landing-page have no equivalent expensive/conditional
-gate, so this doesn't currently apply there — but treat it as the default
-shape for any new staging→main required check in any repo.
+Rolled out the same week to: orchestra (`pytest`), unillm (`pytest`), unify
+(`Flow smoke`), unify-deploy (`Integration smoke`), console (`Push Gate`).
+Check name and trigger tag differ per repo; the fail-closed shape is the
+same. unisdk, brain, docs, and landing-page have no equivalent
+expensive/conditional gate, so this doesn't currently apply there — but
+treat it as the default shape for any new staging→main required check in
+any repo.
 
-## The known follow-up flaw, and its fix
+## The `if:`-scoping approach does NOT work — verified 2026-08-03
 
-Fail-closed on its own creates a new failure mode: **GitHub's required-check
-evaluation considers every check-run matching the required context name on a
-commit's SHA, not just the latest one.** If staging gets an untagged direct
-push, that push's run reports the context red. Opening the release PR then
-runs the real suite via the `pull_request` trigger and it can pass cleanly —
-but the earlier red run doesn't get superseded. The release PR is left
-**permanently blocked** on that SHA: re-running the failed job reproduces the
-same failure (the commit still lacks the tag), and the passing PR-triggered
-run sits right next to it, ignored.
+An earlier version of this rule described scoping the aggregator job's own
+`if:` to `pull_request`/`workflow_dispatch` (unify's `05fbdcce9`) as the
+fix for the fail-closed-on-push problem below. **That is wrong, and left
+orchestra and unify-deploy releases merging on a stale pass again**, plus
+unify itself carrying an unnoticed stale pass on its own staging HEAD.
 
-`unify` hit this within 36 hours of rolling out fail-closed and fixed it in
-[`05fbdcce9`](https://github.com/unifyai/unify/commit/05fbdcce9): scope the
-aggregator job to `pull_request`/`workflow_dispatch` only, so a plain push
-with no matching trigger publishes **no run at all** for that context
-(`pending`) instead of an explicit failure. Pending isn't a stale pass and
-isn't an unresolvable block — the PR-triggered run is free to become the
-only entry once it lands.
+The reasoning behind that approach assumed an `if:`-scoped job produces *no
+check run at all* when its condition is false. It does not: **GitHub Actions
+still publishes a "skipped" check run for a job whose `if:` evaluates to
+false**, even when that job is the required aggregator itself, and a skipped
+required check is satisfied exactly like a pass. Scoping only the aggregator
+job's `if:` — while the *workflow file* it lives in still triggers on
+`push` — just changes what an ordinary push publishes from an explicit
+failure back to a skip, which is the original 2026-07-31 bug, verbatim.
 
-As of this writing, only `unify` has this follow-up. orchestra, unillm,
-unify-deploy, and console still run the plain fail-closed version and can hit
-the stale-permanent-block failure mode above.
+## The real fix: no `push` trigger on the gate's workflow file at all
 
-## What to do when a release PR is stuck this way
+The only way to guarantee an ordinary push publishes **nothing** under the
+required context name is for the *workflow file* that defines the
+aggregator to never be triggered by `push` in the first place. A workflow
+with no `push` in its `on:` block simply never runs on a push event, so
+none of its jobs — passing, failing, or skipped — produce a check run for
+that SHA. The context sits genuinely `pending` until the real
+`pull_request`-triggered run supplies an answer.
 
-Recognize the shape first: `reviewDecision: APPROVED`, `mergeable: MERGEABLE`,
-`mergeStateStatus: BLOCKED`, and the required context shows both a `FAILURE`
-and a `SUCCESS` entry for the same PR head SHA, from two different workflow
-runs (one push-triggered, one pull_request-triggered). This is not a real
-test failure and not something to route around with an admin bypass — surface
-it and let the user choose:
+Concretely: split the gate into two workflow files.
 
-- **Get a clean SHA**: push a small commit (or empty commit) to staging
-  carrying the trigger tag, giving the release PR a fresh head with a single,
-  unambiguous run for that context.
-- **Port the `unify` follow-up**: scope that repo's aggregator job to
-  `pull_request`/`workflow_dispatch` the way `unify` did, so this stops
-  recurring for every untagged direct push to staging.
+- **The everyday/ad-hoc workflow** (existing file) keeps `push` (gated by
+  the `[run-tests]`/`[run-flows]`/`[run-integration]`-style tag) and
+  `workflow_dispatch`, for ordinary developer feedback. It must **not**
+  define the aggregator job, and its own expensive test job must not share
+  a job id/name with the required context (see the collision gotcha below).
+- **A new, dedicated workflow file** (e.g. `pytest-release-gate.yml`,
+  `flow-smoke-release-gate.yml`, `integration-smoke-release-gate.yml`)
+  triggers **only** on `pull_request: branches: [main]` and
+  `workflow_dispatch`. It contains its own copy of the expensive test job
+  plus the aggregator job that publishes the required context. Because this
+  file has no `push` trigger, an ordinary push can never populate that
+  context under any name defined in it.
 
-Do not force-merge, disable the ruleset, or bypass the check to route around
-this — both remediations above satisfy the gate on its own terms.
+Applied 2026-08-03 to orchestra (`pytest-release-gate.yml`), unify
+(`flow-smoke-release-gate.yml`), unillm (`pytest-release-gate.yml`), and
+unify-deploy (`integration-smoke-release-gate.yml`). console's `Push Gate`
+was checked and found **not** vulnerable to this bug: its push-triggered run
+genuinely executes the full suite unconditionally (no tag-gating), so there
+is no skip to exploit — no fix needed there.
+
+## Gotcha: job-id collision reintroduces the same bug
+
+After removing the explicit aggregator from the everyday workflow, check
+that its own expensive test job doesn't accidentally publish the exact same
+context name. In orchestra, the plain development `pytest:` matrix job had
+no explicit `name:`, so its check run defaulted to its job id — which
+happened to be the literal string `pytest`, the required context. A job
+whose matrix never expands (because its own `if:` evaluated false) still
+publishes **one** check run under that bare job id, not per-shard, so this
+silently recreated the stale-skip bug via a different job. Fix: give the
+everyday job a distinct job id and/or explicit `name:` (orchestra renamed it
+to `pytest-dev`). Always verify this when doing this split — confirm the
+everyday workflow's job names don't coincide with any required-check context
+string, matrix or not.
+
+## Gotcha: don't write the trigger tag in prose in a commit message
+
+The `push` gating check on these jobs is a naive substring match against the
+full commit message (subject + body) for `[run-tests]` / `[run-flows]` /
+`[run-integration]`. Writing that literal bracketed tag *anywhere* in a
+commit message — including inside a sentence explaining how the tag
+mechanism works — re-triggers the real (sometimes paid, sometimes
+live-infra) job on that push. This happened twice while rolling out the fix
+above: a commit message explaining unify's ad-hoc `[run-flows]` trigger
+accidentally fired a real paid Flow Smoke run (caught and cancelled before
+much cost), and a commit message explaining unify-deploy's
+`[run-integration]` trigger fired a real live Integration Smoke run against
+staging infra that ran to completion (~18 minutes) before failing on an
+unrelated live-infra teardown timeout — cleanup steps still ran, so no
+resource leak, but wasted CI/infra time. When a commit touches one of these
+workflow files and needs to describe its trigger tag, break up the literal
+bracket sequence (e.g. quote it without brackets) so the substring match
+cannot fire.
+
+## What to do when a release PR is stuck or merges on a stale pass
+
+**Stuck/blocked** — `reviewDecision: APPROVED`, `mergeable: MERGEABLE`,
+`mergeStateStatus: BLOCKED`, and the required context shows both a
+`FAILURE` and a `SUCCESS` entry for the same PR head SHA from two different
+workflow runs (one push-triggered, one pull_request-triggered): this is the
+pre-`if:`-scoping failure mode. Push a small commit carrying the trigger tag
+to give the release PR a fresh head with a single, unambiguous run, and
+apply the real fix above so it stops recurring.
+
+**Merges anyway on a stale pass** — the required context shows `SKIPPED` on
+a push-triggered run for the PR's head SHA, and the PR merges (or already
+merged) before the real `pull_request`-triggered run finished: this is the
+`if:`-scoping-is-insufficient failure mode described above. Apply the real
+fix (dedicated no-`push` workflow file) — do not consider the job's `if:`
+condition alone a fix.
+
+In both cases: do not force-merge, disable the ruleset, or bypass the check
+to route around this — the real fix satisfies the gate on its own terms.
 
 # Python Formatting & Pre-commit
 
@@ -1866,6 +1952,12 @@ context (especially tables at 10⁴+ rows such as GTM `Prospects`):
    store updates on ids from `filter(..., include_ids=True)`; bulk insert via
    `insert_rows` / `parallel_create_logs` / `ingest`. Do not invent a
    full-table client scan to decide which rows to touch.
+
+   Note for unify Actor plans specifically: `DataManager.ingest` is the
+   low-level write engine and is not exposed as a primitive there — storing
+   new data goes through `primitives.ingestion.submit`, which records a
+   resumable, checkpointed run over the same engine. Scripts, brain ticks and
+   workers may keep calling `ingest` directly.
 
 Equality on a typed field (e.g. `best_email == "..."`) is a sub-second
 server query even on ~10⁵-row contexts. A client `iter_all` + Python `if`

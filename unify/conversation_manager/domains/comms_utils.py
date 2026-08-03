@@ -889,6 +889,97 @@ async def complete_api_message(
             return {"success": True}
 
 
+def _publish_canvas_event(event: dict) -> None:
+    """Publish one canvas signal on the system-event thread.
+
+    Canvas signals ride ``unity_system_event`` rather than a thread of their own
+    because Orchestra already announces a triggered action there: when a viewer
+    presses a control it posts ``event_type="canvas_invocation"`` through the
+    adapters' system-event webhook, which lands on this same topic. Console
+    therefore reads one thread and switches on ``event_type``, instead of
+    subscribing twice to assemble one action's lifecycle.
+
+    Synchronous, because every caller is: CanvasManager publishes and revises
+    canvases on the calling thread, and the invocation handler runs the work in a
+    worker thread.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return
+
+    if _use_local_comms():
+        try:
+            _publish_local_outbox_sync({"thread": "unity_system_event", "event": event})
+        except Exception as e:
+            LOGGER.error(
+                f"{ICONS['comms_outbound']} Failed to publish canvas event: {e}",
+            )
+        return
+
+    try:
+        _publish_to_assistant_topic(
+            agent_id=agent_id,
+            thread="unity_system_event",
+            event=event,
+            timeout=5,
+        )
+    except Exception as e:
+        LOGGER.error(f"{ICONS['comms_outbound']} Failed to publish canvas event: {e}")
+
+
+def publish_canvas_updated(*, token: str, title: str, status: str) -> None:
+    """Tell every mounted frame that a canvas was published, revised or removed.
+
+    A canvas is long-lived and often left open in a tab, so a revision that only
+    took effect on reload would leave a viewer looking at a superseded view with
+    no indication of it. Carries no bundle: the surfaces re-read the record, which
+    keeps the integrity check on the path it is already on.
+
+    ``status`` is the canvas's lifecycle value, or ``deleted`` when the row is
+    gone, so a surface can drop a canvas rather than poll a token that will now
+    never resolve.
+    """
+    _publish_canvas_event(
+        {
+            "event_type": "canvas_updated",
+            "canvas_token": token,
+            "title": title,
+            "status": status,
+        },
+    )
+
+
+def publish_canvas_invocation(
+    *,
+    token: str,
+    invocation_id: int,
+    action_name: str,
+    status: str,
+    error: str | None = None,
+) -> None:
+    """Report where a triggered canvas action got to.
+
+    Without this the control that started the run has no terminal state. The frame
+    is told the invocation was accepted and then nothing further, so a button that
+    says "working" says it for as long as the tab stays open, whether the action
+    sent the email or failed outright.
+
+    ``invocation_id`` is auto-counted and therefore 0-based: the first run of a
+    canvas has id ``0``, so this must not be guarded on truthiness anywhere along
+    the path.
+    """
+    event = {
+        "event_type": "canvas_invocation",
+        "canvas_token": token,
+        "invocation_id": int(invocation_id),
+        "action_name": action_name,
+        "status": status,
+    }
+    if error:
+        event["error"] = error
+    _publish_canvas_event(event)
+
+
 async def publish_voice_enrollment_suggested(*, num_speakers: int) -> None:
     """Notify Console that manual voice enrollment is needed after this call.
 
@@ -979,6 +1070,7 @@ async def publish_assistant_desktop_ready(
     desktop_url: str,
     liveview_url: str,
     vm_type: str,
+    liveview_password: str | None = None,
 ) -> None:
     """Publish desktop-ready notification to the assistant's Pub/Sub topic.
 
@@ -991,6 +1083,8 @@ async def publish_assistant_desktop_ready(
         "liveview_url": liveview_url,
         "vm_type": vm_type,
     }
+    if liveview_password:
+        event_data["liveview_password"] = liveview_password
     message_data = {
         "thread": "assistant_desktop_ready",
         "event": event_data,

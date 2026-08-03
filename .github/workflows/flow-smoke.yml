@@ -1,21 +1,33 @@
 name: Flow Smoke
 run-name: >-
   ${{
-    github.event_name == 'pull_request' && 'Flow smoke (staging → main gate)' ||
     github.event_name == 'push' && 'Flow smoke (commit)' ||
     'Flow smoke (manual)'
   }}
 
-# Live end-to-end smoke of the core product flows in tests/flows. These drive
-# the real Unity brain through a local Orchestra, so every run makes paid LLM
-# calls and cannot be cache-replayed: the brain embeds fresh per-run identifiers
-# (task/log/context ids, timestamps) in later-turn prompts, so read-only cache
-# replay misses and fails. That is why the flows must live here on a dedicated
-# spend-acknowledged trigger rather than in the normal read-only Tests matrix
-# (the Tests discover job blocks tests/flows for the same reason).
+# Ad-hoc/manual runner for the live flow smoke suite, plus the cancel-latency
+# diagnostics below. Live end-to-end smoke of the core product flows in
+# tests/flows drives the real Unity brain through a local Orchestra, so every
+# run makes paid LLM calls and cannot be cache-replayed: the brain embeds
+# fresh per-run identifiers (task/log/context ids, timestamps) in later-turn
+# prompts, so read-only cache replay misses and fails. That is why the flows
+# must live here on a dedicated spend-acknowledged trigger rather than in the
+# normal read-only Tests matrix (the Tests discover job blocks tests/flows
+# for the same reason).
 #
-# Triggers: a [run-flows] marker on any push, every staging -> main pull
-# request (the release gate), and manual dispatch (LLM_SPEND_OK acknowledged).
+# The staging -> main release gate lives in a separate workflow,
+# flow-smoke-release-gate.yml, which only triggers on pull_request(main) or
+# workflow_dispatch. It must stay separate: GitHub Actions publishes a
+# "skipped" check run for a job whose `if` evaluates false, and a skipped
+# required check is satisfied the same as a pass, so a gate job living in a
+# workflow that also triggers on push would attach a stale passing
+# "Flow smoke" to every ordinary commit -- letting a release PR merge on that
+# stale pass before the real pull_request-triggered run for the same SHA
+# finishes. Keeping the gate out of any push-triggered workflow means an
+# ordinary push produces no check run under that context at all.
+#
+# Triggers here: a [run-flows] marker on any push, and manual dispatch
+# (LLM_SPEND_OK acknowledged, or CANCEL_SMOKE_OK for the diagnostics below).
 
 on:
   workflow_dispatch:
@@ -32,22 +44,17 @@ on:
   push:
     branches:
     - '**'
-  pull_request:
-    branches:
-    - main
 
 permissions:
   contents: read
   # Reading the cross-branch llm-cache-ndjson artifact.
   actions: read
 
-# Share a group across the push and pull_request events for the same source
-# branch so a [run-flows] push and its staging -> main PR don't double-run.
-# Debouncer semantics on push/dispatch: running smoke completes; only the
-# pending slot is replaced. PRs cancel in-progress for fast feedback.
+# Debouncer semantics: a running smoke completes; only the pending slot is
+# replaced.
 concurrency:
   group: flow-smoke-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -172,12 +179,12 @@ jobs:
     runs-on: ubuntu-latest-8-cores
     environment: unity-testing
     timeout-minutes: 60
-    # Run on: manual LLM_SPEND_OK dispatch, a [run-flows] push, or a staging -> main PR.
+    # Run on: manual LLM_SPEND_OK dispatch, or a [run-flows] push.
     # CANCEL_SMOKE_OK dispatches are handled by the cancel-smoke-* jobs above.
+    # The staging -> main PR case runs from flow-smoke-release-gate.yml instead.
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.confirm_llm_spend == 'LLM_SPEND_OK') ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-flows]')) ||
-      (github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'staging')
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-flows]'))
     env:
       UNIFY_TESTS_RAND_PROJ: "false"
       UNIFY_TESTS_DELETE_PROJ_ON_START: "false"
@@ -456,39 +463,3 @@ jobs:
         path: logs/
         if-no-files-found: ignore
         retention-days: 14
-
-  # Single, stable required status check for staging->main releases.
-  #
-  # This job must run unconditionally on the triggers where `flows` is meant
-  # to run (pull_request and workflow_dispatch), so the context is always an
-  # explicit pass or fail there rather than an implicit pass-by-skip -- the
-  # identical shape in orchestra let four releases merge with a failing suite.
-  #
-  # It must NOT run on plain push. `flows` is gated behind [run-flows] there
-  # (these are paid, uncacheable LLM calls -- too expensive for every commit),
-  # so an unconditional push-triggered run would just republish the same
-  # implicit-pass-by-skip bug for that trigger, or, once fixed to fail closed
-  # instead, would attach a failing "Flow smoke" run to that push's SHA that
-  # persists even after the real pull_request-triggered run for the same SHA
-  # passes -- branch protection blocks on any matching-name run, not just the
-  # latest. Publishing nothing on push means the context is simply pending
-  # until the pull_request run supplies the real answer.
-  flow-smoke-required:
-    name: Flow smoke
-    needs: flows
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    steps:
-    - name: Require the flow smoke to have passed
-      run: |
-        result="${{ needs.flows.result }}"
-        echo "flow smoke result: $result"
-        if [[ "$result" == "success" ]]; then
-          exit 0
-        fi
-        if [[ "$result" == "skipped" ]]; then
-          echo "::error::Flow smoke did not run for this commit, so the release"
-          echo "::error::gate cannot pass. Push with [run-flows], or open the"
-          echo "::error::staging -> main PR which runs it automatically."
-        fi
-        exit 1

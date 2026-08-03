@@ -65,7 +65,7 @@ def test_dashboard_manager_metadata_registered():
     registry = get_registry()
     spec = registry.get_manager_spec("dashboards")
     assert spec is not None
-    assert spec.domain == "Visualizations & Dashboards"
+    assert "superseded by Canvas" in spec.domain
     methods = registry.primitive_methods(manager_alias="dashboards")
     assert "create_tile" in methods
     assert "create_dashboard" in methods
@@ -179,6 +179,6 @@ def test_dashboard_example_generators_registered():
 
     assert "dashboards" in _EXAMPLE_GENERATORS
     generators = _EXAMPLE_GENERATORS["dashboards"]
-    assert "get_primitives_dashboards_baked_in_example" in generators
-    assert "get_primitives_dashboards_live_data_example" in generators
-    assert "get_primitives_dashboards_composition_example" in generators
+    # Authoring examples are withdrawn: canvas is the one way to author visual
+    # output. Amending a board that already exists is still a real request.
+    assert generators == ["get_primitives_dashboards_composition_example"]

@@ -233,6 +233,12 @@ class FmBinding(IngestBinding):
 
     fm_alias: str = "Local"
     logical_path: str
+    # Ownership root the files land under, same vocabulary as ``DmBinding``:
+    # ``None``/``"personal"`` for the dispatching assistant's own root,
+    # ``"team:<id>"`` for a shared team root. Present on both bindings because a
+    # collection of documents is as shareable as a table of rows, and a caller
+    # asking for one should not silently get the other's scope.
+    destination: str | None = None
 
 
 class DmBinding(IngestBinding):
@@ -321,6 +327,18 @@ class ParseRequested(BaseModel):
     fm_binding: Optional[FmBinding] = None
     dm_binding: Optional[DmBinding] = None
     table_config: Optional[Dict[str, Any]] = None
+    # Artifact key of the staged ``IngestionRequest`` this run was submitted
+    # with. The request is the caller's whole intent -- row identity, schema,
+    # embedding, derived columns -- and the worker reads it rather than having
+    # each option re-encoded onto this message: one representation serves both
+    # tiers, and an option added to the request never needs a wire change here.
+    # Empty on operator-CLI submits, which have no staged request.
+    request_key: str = ""
+    # Where this run's observability lives: the run key plus the two
+    # ``Ingestion/*`` context paths the manager recorded the run in. Workers
+    # journal events there so a dispatched run reads back exactly like an
+    # in-process one. Absent on operator-CLI submits, which have no run row.
+    observability: Optional[Dict[str, str]] = None
 
 
 class IngestRequested(BaseModel):
@@ -345,3 +363,6 @@ class IngestRequested(BaseModel):
     ingestion_mode: Literal["dm", "fm"] = "dm"
     fm_binding: Optional[FmBinding] = None
     dm_binding: Optional[DmBinding] = None
+    # Propagated verbatim from ``ParseRequested``; see there for both fields.
+    request_key: str = ""
+    observability: Optional[Dict[str, str]] = None

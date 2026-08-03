@@ -718,7 +718,38 @@ class IntegrationPrimitives:
         user_id: Optional[str] = None,
         assistant_id: Optional[int] = None,
     ) -> Any:
-        """Return the account selection mode for an app (``primary``/``explicit``/``pool``)."""
+        """Return the account selection mode for an app.
+
+        Read this before executing a tool for an app the owner may have
+        connected more than once: under ``explicit`` the execute call must
+        carry a ``connection_id``, and omitting it fails rather than guessing
+        an account.
+
+        Parameters
+        ----------
+        canonical_app_slug : str
+            Canonical slug of the app, as it appears in
+            ``primitives.integrations.<app>.<tool>`` (e.g. ``"slack"``).
+        owner_scope : str, optional
+            Effective connection owner lane. Defaults to the current session's
+            owner scope, usually ``"assistant"``. Use ``"org"``, ``"team"``,
+            or ``"user"`` when explicitly operating at that scope.
+        org_id : int, optional
+            Organization identifier for org-scoped or inherited connections.
+        team_id : int, optional
+            Team identifier for team-scoped connections.
+        user_id : str, optional
+            User identifier for user-scoped connections.
+        assistant_id : int, optional
+            Assistant identifier for assistant-scoped connections.
+
+        Returns
+        -------
+        Any
+            The stored preference, whose mode is ``"primary"`` (latest live
+            connection), ``"explicit"`` (caller supplies ``connection_id``), or
+            ``"pool"`` (round-robin across live accounts).
+        """
 
         return integration_ops.get_app_preference(
             canonical_app_slug,
@@ -744,9 +775,36 @@ class IntegrationPrimitives:
     ) -> Any:
         """Set account selection mode for an app.
 
-        ``primary`` uses the latest live connection, ``explicit`` requires
-        ``connection_id`` on execute, and ``pool`` round-robins across live
-        accounts (useful for sharing API rate limits).
+        Parameters
+        ----------
+        canonical_app_slug : str
+            Canonical slug of the app, as it appears in
+            ``primitives.integrations.<app>.<tool>`` (e.g. ``"slack"``).
+        usage_mode : str
+            One of ``"primary"``, ``"explicit"``, or ``"pool"``. ``primary``
+            uses the latest live connection. ``explicit`` requires a
+            ``connection_id`` on every execute, so set it only when the caller
+            can supply one. ``pool`` round-robins across live accounts, which
+            spreads a shared API rate limit but makes the account used for any
+            single call unpredictable — avoid it where the recipient sees which
+            account acted.
+        owner_scope : str, optional
+            Effective connection owner lane. Defaults to the current session's
+            owner scope, usually ``"assistant"``. Use ``"org"``, ``"team"``,
+            or ``"user"`` when explicitly operating at that scope.
+        org_id : int, optional
+            Organization identifier for org-scoped or inherited connections.
+        team_id : int, optional
+            Team identifier for team-scoped connections.
+        user_id : str, optional
+            User identifier for user-scoped connections.
+        assistant_id : int, optional
+            Assistant identifier for assistant-scoped connections.
+
+        Returns
+        -------
+        Any
+            The updated preference row.
         """
 
         return integration_ops.update_app_preference(

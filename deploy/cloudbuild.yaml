@@ -19,8 +19,10 @@ steps:
   - |
     UNIFY_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unisdk.git refs/heads/main | cut -f1)
     UNILLM_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/unillm.git refs/heads/main | cut -f1)
+    BRANDING_SHA=$$(git ls-remote https://$$GITHUB_TOKEN@github.com/unifyai/branding.git refs/heads/main | cut -f1)
     echo "$${UNIFY_SHA}-$${UNILLM_SHA}" > /workspace/dep_repos_sha.txt
-    echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8}"
+    echo "$${BRANDING_SHA}" > /workspace/canvas_branding_sha.txt
+    echo "Dependency SHAs: unify=$${UNIFY_SHA:0:8} unillm=$${UNILLM_SHA:0:8} branding=$${BRANDING_SHA:0:8}"
   secretEnv: ['GITHUB_TOKEN']
   waitFor: ['-']
 
@@ -34,12 +36,14 @@ steps:
   - '-c'
   - |
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
+    BRANDING_SHA=$$(cat /workspace/canvas_branding_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       --build-arg DEP_REPOS_SHA=$$DEP_SHA \
+      --build-arg CANVAS_BRANDING_SHA=$$BRANDING_SHA \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest .

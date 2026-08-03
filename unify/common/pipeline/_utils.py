@@ -27,7 +27,7 @@ def utc_now_iso() -> str:
 class JsonlWriter:
     """Thread-safe append-only JSONL writer.
 
-    Used by ``JsonlRunLedger`` and ``JsonlCostLedger`` to avoid duplicating
+    Used by ``JsonlRunLedger`` to avoid duplicating
     the same file-handle + lock boilerplate.
     """
 

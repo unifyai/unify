@@ -39,7 +39,6 @@ class TestPipelineInstrumentationLifecycle:
 
         assert instr.enabled
         assert instr.has_run_ledger
-        assert not instr.has_cost_tracking
 
         with instr:
             instr.record_stage(
@@ -80,7 +79,6 @@ class TestPipelineInstrumentationLifecycle:
 
         assert not instr.enabled
         assert not instr.has_run_ledger
-        assert not instr.has_cost_tracking
 
         with instr:
             instr.record_stage(
@@ -92,51 +90,6 @@ class TestPipelineInstrumentationLifecycle:
                 file_path="x.csv",
                 status="success",
             )
-            instr.add_parse_costs(
-                file_path="x.csv",
-                parse_duration_seconds=1.0,
-            )
-
-    def test_cost_accumulation(self, tmp_path: Path):
-        from unify.common.pipeline.cost_ledger import (
-            JsonlCostLedger,
-            PipelineCostAccumulator,
-            PipelineCostRateCard,
-        )
-
-        rate_card = PipelineCostRateCard()
-        accumulator = PipelineCostAccumulator(
-            run_id="cost-run",
-            rate_card=rate_card,
-        )
-        cost_path = tmp_path / "cost_ledger.jsonl"
-        cost_ledger = JsonlCostLedger(path=cost_path)
-
-        instr = PipelineInstrumentation(
-            run_id="cost-run",
-            cost_accumulator=accumulator,
-            cost_ledger=cost_ledger,
-            file_count=1,
-        )
-
-        assert instr.has_cost_tracking
-        assert instr.rate_card is rate_card
-
-        with instr:
-            instr.add_parse_costs(
-                file_path="data.xlsx",
-                parse_duration_seconds=5.0,
-                estimated_peak_memory_bytes=1024 * 1024 * 100,
-                parse_backend="native_xlsx",
-            )
-
-        records = [
-            json.loads(line) for line in cost_path.read_text().strip().splitlines()
-        ]
-        assert len(records) == 1
-        assert records[0]["record_type"] == "cost_ledger"
-        assert records[0]["run_id"] == "cost-run"
-        assert len(records[0]["line_items"]) >= 1
 
     def test_from_config_with_diagnostics_enabled(self, tmp_path: Path):
         """Verify from_config wires up run ledger from config.diagnostics."""
@@ -145,12 +98,8 @@ class TestPipelineInstrumentationLifecycle:
             enable_run_ledger = True
             run_ledger_file = str(tmp_path / "from_config_ledger.jsonl")
 
-        class _MockCost:
-            enable_cost_ledger = False
-
         class _MockConfig:
             diagnostics = _MockDiagnostics()
-            cost = _MockCost()
 
         instr = PipelineInstrumentation.from_config(
             _MockConfig(),
@@ -158,7 +107,6 @@ class TestPipelineInstrumentationLifecycle:
             file_count=2,
         )
         assert instr.has_run_ledger
-        assert not instr.has_cost_tracking
 
         with instr:
             pass

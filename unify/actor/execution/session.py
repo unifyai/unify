@@ -32,10 +32,14 @@ from unify.function_manager.primitives import ComputerPrimitives
 from unify.common.hierarchical_logger import DEFAULT_ICON
 
 from .capture import _stdout_parts, capture_sandbox_output
-from .steering import (
-    SteeringDispatchProxy,
-    current_channel,
-    instrument_for_steering,
+from unify.function_manager.steering import (
+    DEFAULT_TOOL_NAMESPACES,
+    MemoisedDispatch,
+    active_session,
+    bind_session,
+    instrument,
+    restore_session,
+    run_with_steering,
 )
 from .types import TextPart
 
@@ -661,22 +665,38 @@ class PythonExecutionSession:
                     ast.fix_missing_locations(tree)
                     code = ast.unparse(tree)
 
-                # Steering checkpoints, only when a tool call attached a
-                # channel. Without one the block is unsteerable anyway, so it
-                # runs exactly as it did before and pays nothing.
-                steering_channel = current_channel(self.global_state)
-                if steering_channel is not None:
-                    # Bind and re-parse against the same text so a reported
-                    # line number indexes the source the model is shown.
-                    steering_channel.bind_source(code)
-                    tree = instrument_for_steering(ast.parse(code))
-                    code = ast.unparse(tree)
+                # Steering only exists while a call is in flight. The session
+                # arrives by context rather than on this object, because the
+                # sandbox that runs a block is often not the one that was
+                # current when the tool started — stateless mode, the default,
+                # builds a fresh one per call. Binding it here means every
+                # in-process Python path picks it up, whichever sandbox that
+                # turns out to be.
+                steering = active_session()
+                # Probes only. Memoising `primitives` is done further down,
+                # where it can be composed in the right order with the
+                # context-forwarding proxy.
+                steering_token = (
+                    bind_session(self.global_state, steering, tool_namespaces=[])
+                    if steering is not None
+                    else None
+                )
 
-                async_code = "async def __exec_wrapper():\n"
-                if top_level_assign_targets:
-                    async_code += f"    global {', '.join(sorted(list(top_level_assign_targets)))}\n"
+                def _wrap_for_execution(body: str) -> str:
+                    """Indent a block into the async wrapper it runs inside.
 
-                async_code += "".join(f"    {line}\n" for line in code.splitlines())
+                    Rebuilt per attempt, because a correction rewrites the body
+                    and the wrapper has to be regenerated around the new text.
+                    """
+                    header = "async def __exec_wrapper():\n"
+                    if top_level_assign_targets:
+                        header += (
+                            "    global "
+                            f"{', '.join(sorted(top_level_assign_targets))}\n"
+                        )
+                    return header + "".join(f"    {ln}\n" for ln in body.splitlines())
+
+                async_code = _wrap_for_execution(code)
 
                 # Inject a custom print function that writes directly to our capture
                 # list via ContextVar, bypassing sys.stdout entirely. This is
@@ -742,27 +762,55 @@ class PythonExecutionSession:
                         _wrapped_prims,
                         _parent_chat_context=_pcc,
                     )
-                # Outermost, so a checkpoint runs before context forwarding and
-                # before the primitive itself. Reaches dispatches the statement
-                # and loop-body checkpoints cannot see, such as a primitive
-                # called inside a comprehension or gathered concurrently.
-                if steering_channel is not None and _wrapped_prims is not None:
-                    _wrapped_prims = SteeringDispatchProxy(
-                        _wrapped_prims,
-                        steering_channel,
-                    )
+                # Outermost, so memoisation sees the call before context
+                # forwarding does. This is what covers dispatches the statement
+                # probes cannot reach, such as a primitive inside a
+                # comprehension or gathered concurrently.
+                if steering is not None and _wrapped_prims is not None:
+                    _wrapped_prims = MemoisedDispatch(_wrapped_prims, steering)
                 if _wrapped_prims is not _orig_prims:
                     self.global_state["primitives"] = _wrapped_prims
 
                 spawned_handles: list[Any] = []
                 spawned_token = _SANDBOX_SPAWNED_HANDLES.set(spawned_handles)
-                try:
-                    exec(async_code, self.global_state)
+
+                async def _run_once(body: str) -> Any:
+                    """Compile and run one attempt at this block."""
+                    source = body
+                    if steering is not None:
+                        source = ast.unparse(
+                            instrument(
+                                ast.parse(body),
+                                tool_namespaces=set(DEFAULT_TOOL_NAMESPACES),
+                            ),
+                        )
+                    exec(_wrap_for_execution(source), self.global_state)
                     execution = self.global_state["__exec_wrapper"]()
                     if timeout is None:
-                        result = await execution
+                        return await execution
+                    return await asyncio.wait_for(execution, timeout=timeout)
+
+                try:
+                    if steering is None:
+                        exec(async_code, self.global_state)
+                        execution = self.global_state["__exec_wrapper"]()
+                        if timeout is None:
+                            result = await execution
+                        else:
+                            result = await asyncio.wait_for(
+                                execution,
+                                timeout=timeout,
+                            )
                     else:
-                        result = await asyncio.wait_for(execution, timeout=timeout)
+                        # A correction rewrites `code` and re-runs; already
+                        # completed dispatches replay from the session cache
+                        # rather than happening twice.
+                        steering.bind_source(code)
+                        result = await run_with_steering(
+                            code,
+                            _run_once,
+                            session=steering,
+                        )
                     await _await_orphan_sandbox_handles(
                         spawned=spawned_handles,
                         result=result,
@@ -771,6 +819,8 @@ class PythonExecutionSession:
                     _SANDBOX_SPAWNED_HANDLES.reset(spawned_token)
                     if _orig_prims is not None:
                         self.global_state["primitives"] = _orig_prims
+                    if steering_token is not None:
+                        restore_session(self.global_state, steering_token)
 
             except asyncio.TimeoutError:
                 error = f"Python execution timed out after {timeout}s"
