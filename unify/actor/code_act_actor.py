@@ -2905,11 +2905,7 @@ class CodeActActor(BaseCodeActActor):
             bind_sandbox_clarification_queues,
             restore_sandbox_clarification_queues,
         )
-        from unify.function_manager.steering import (
-            SteeringSession,
-            bind_session,
-            restore_session,
-        )
+        from unify.function_manager.steering import SteeringSession, use_session
         from unify.function_manager.steering_patcher import build_patch_author
 
         @contextmanager
@@ -2936,11 +2932,13 @@ class CodeActActor(BaseCodeActActor):
                 notification_q=notification_q,
                 patch_author=build_patch_author() if interject_q is not None else None,
             )
-            steer_token = bind_session(sb.global_state, steering)
+            # Carried by context rather than installed on this sandbox: only
+            # one execution mode actually runs here, and the default
+            # (stateless) builds a fresh sandbox that would never see it.
             try:
-                yield steering
+                with use_session(steering):
+                    yield steering
             finally:
-                restore_session(sb.global_state, steer_token)
                 if clar_token is not None:
                     restore_sandbox_clarification_queues(sb.global_state, clar_token)
 

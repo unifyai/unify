@@ -319,11 +319,12 @@ async def test_correction_reaches_a_running_loop_and_replays_what_is_done():
             ],
         )
 
+    from unify.function_manager.steering import use_session
+
     interject_q: asyncio.Queue = asyncio.Queue()
     sandbox = PythonExecutionSession()
     sandbox.global_state["primitives"] = _Prims()
     steering = SteeringSession(interject_q=interject_q, patch_author=author)
-    token = bind_session(sandbox.global_state, steering)
 
     async def steer() -> None:
         while len(sent) < 2:
@@ -332,16 +333,16 @@ async def test_correction_reaches_a_running_loop_and_replays_what_is_done():
 
     steerer = asyncio.create_task(steer())
     try:
-        out = await sandbox.execute(
-            "async def notify(vs):\n"
-            "    for v in vs:\n"
-            "        await primitives.comms.send(v)\n"
-            "    return 'done'\n"
-            "await notify(['eu-a', 'us-b', 'us-c', 'eu-d'])\n",
-        )
+        with use_session(steering):
+            out = await sandbox.execute(
+                "async def notify(vs):\n"
+                "    for v in vs:\n"
+                "        await primitives.comms.send(v)\n"
+                "    return 'done'\n"
+                "await notify(['eu-a', 'us-b', 'us-c', 'eu-d'])\n",
+            )
         await steerer
     finally:
-        restore_session(sandbox.global_state, token)
         await sandbox.close()
 
     assert out["error"] is None
@@ -450,3 +451,76 @@ def test_memoised_dispatch_does_not_stack():
     target = _Prims()
     twice = MemoisedDispatch(MemoisedDispatch(target, session), session)
     assert twice._target is target
+
+
+@pytest.mark.asyncio
+async def test_steering_reaches_a_sandbox_the_tool_never_saw():
+    """The session must follow the call, not the sandbox object.
+
+    Only one execution mode (``stateful`` with ``session_id=0``) runs in the
+    sandbox that was current when the tool started. Stateless — the default for
+    ``execute_code`` — builds a fresh one per call, so a session installed on
+    the tool's sandbox would never be seen by the code that actually runs, and
+    the common case would be silently unsteerable.
+    """
+    from unify.function_manager.steering import use_session
+
+    sent: list[str] = []
+
+    class _Comms:
+        async def send(self, to):
+            sent.append(to)
+            await asyncio.sleep(0)
+            return f"ok:{to}"
+
+    class _Prims:
+        comms = _Comms()
+
+    async def author(*, interjections, session):
+        return InterruptionRequest(
+            reason=interjections[0],
+            patches=[
+                Patch(
+                    function_name="notify",
+                    source=(
+                        "async def notify(vs):\n"
+                        "    for v in vs:\n"
+                        "        if v.startswith('eu-'):\n"
+                        "            await primitives.comms.send(v)\n"
+                        "    return 'done'\n"
+                    ),
+                ),
+            ],
+        )
+
+    interject_q: asyncio.Queue = asyncio.Queue()
+    steering = SteeringSession(interject_q=interject_q, patch_author=author)
+
+    async def steer() -> None:
+        while len(sent) < 2:
+            await asyncio.sleep(0)
+        await interject_q.put("only the EU ones")
+
+    steerer = asyncio.create_task(steer())
+    with use_session(steering):
+        # Built inside the steered scope and never bound to it.
+        sandbox = PythonExecutionSession()
+        sandbox.global_state["primitives"] = _Prims()
+        out = await sandbox.execute(
+            "async def notify(vs):\n"
+            "    for v in vs:\n"
+            "        await primitives.comms.send(v)\n"
+            "    return 'done'\n"
+            "await notify(['eu-a', 'us-b', 'us-c', 'eu-d'])\n",
+        )
+    await steerer
+
+    assert out["error"] is None
+    assert steering.retries == 1
+    assert "us-c" not in sent
+
+    # And the probes are gone once the call is over.
+    after = await sandbox.execute("t = 0\nfor i in range(4):\n    t += i\nt")
+    await sandbox.close()
+    assert after["result"] == 6
+    assert current_session(sandbox.global_state) is None
