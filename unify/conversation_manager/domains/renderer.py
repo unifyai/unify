@@ -607,6 +607,7 @@ class Renderer:
         user_remote_control_active: bool = False,
         google_meet_active: bool = False,
         teams_meet_active: bool = False,
+        meet_screen_share_active: bool = False,
         active_web_sessions: list | None = None,
         managers_initialized: bool = True,
         vm_ready: bool = True,
@@ -649,6 +650,7 @@ class Renderer:
             user_remote_control_active=user_remote_control_active,
             google_meet_active=google_meet_active,
             teams_meet_active=teams_meet_active,
+            meet_screen_share_active=meet_screen_share_active,
         )
         _meet_ms = _mark_step()
 
@@ -824,12 +826,17 @@ class Renderer:
         user_remote_control_active: bool = False,
         google_meet_active: bool = False,
         teams_meet_active: bool = False,
+        meet_screen_share_active: bool = False,
     ) -> str:
         """Render active meet interaction states as top-level sections.
 
         Each active state gets its own prominent, self-contained XML section
         with clear context explaining what is happening and what it means.
         Inactive states produce no output — no clutter for text-only sessions.
+
+        The browser-meeting block is the exception that does render when
+        inactive: "nobody is sharing" is worth saying out loud, because silence
+        there was read as "the last screen I saw is still up".
         """
         parts: list[str] = []
 
@@ -874,35 +881,35 @@ class Renderer:
                 "</user_remote_control>",
             )
 
-        # These say what you can see *if* someone shares, not that anyone is:
-        # the flags mean a meeting is in progress. Whether a share is up right
-        # now is evident from the snapshots attached to this state, and claiming
-        # one unconditionally would have the assistant describing a screen that
-        # nobody put up.
-        if google_meet_active:
-            parts.append(
-                "<google_meet_visual status='active'>\n"
-                "You are in a Google Meet call. When a participant shares their "
-                "screen you receive periodic screenshots of it, labelled with "
-                "whose screen it is; those screenshots appear alongside this "
-                "state when a share is live. What you see is the sharer's own "
-                "machine -- not yours, and not the meeting's gallery view, so "
-                "you cannot see participants' faces or the meeting UI.\n"
-                "</google_meet_visual>",
-            )
-
-        if teams_meet_active:
-            parts.append(
-                "<teams_meet_visual status='active'>\n"
-                "You are in a Microsoft Teams meeting. When a participant "
-                "shares their screen you receive periodic screenshots of it, "
-                "labelled with whose screen it is; those screenshots appear "
-                "alongside this state when a share is live. What you see is the "
-                "sharer's own machine -- not yours, and not the meeting's "
-                "gallery view, so you cannot see participants' faces or the "
-                "meeting UI.\n"
-                "</teams_meet_visual>",
-            )
+        # Driven by whether a share is actually up, never by the meeting being in
+        # progress. The previous block was emitted for the whole meeting under the
+        # name ``google_meet_visual status='active'``, and a status attribute in a
+        # block named after a visual outvotes any amount of conditional prose
+        # inside it: the assistant went on describing the last screen it had seen
+        # long after the presenter stopped.
+        if google_meet_active or teams_meet_active:
+            platform = "Google Meet" if google_meet_active else "Microsoft Teams"
+            if meet_screen_share_active:
+                parts.append(
+                    "<meet_shared_screen status='live'>\n"
+                    f"Someone in the {platform} meeting is sharing their screen "
+                    "right now, and snapshots of it are attached to this state, "
+                    "labelled with whose screen it is. What you see is the "
+                    "sharer's own machine -- not yours, and not the meeting's "
+                    "gallery view, so you cannot see participants' faces or the "
+                    "meeting UI.\n"
+                    "</meet_shared_screen>",
+                )
+            else:
+                parts.append(
+                    "<meet_shared_screen status='none'>\n"
+                    f"Nobody in the {platform} meeting is sharing a screen. I "
+                    "cannot see anything. If a screen was shared earlier, what I "
+                    "saw is history -- I do not describe it as though it were "
+                    "still up, and I say plainly that nothing is being shared if "
+                    "asked.\n"
+                    "</meet_shared_screen>",
+                )
 
         return "\n\n".join(parts)
 

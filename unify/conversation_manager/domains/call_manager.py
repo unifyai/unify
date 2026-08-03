@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from unify.conversation_manager.medium_scripts.common import (
     _resolve_agent_service_url,
 )
+from unify.session_details import SESSION_DETAILS
 
 
 def make_room_name(assistant_id: str, medium: str) -> str:
@@ -185,6 +186,11 @@ class LivekitCallManager:
         # ``_watch_meet_state``.
         self._meet_state_task: asyncio.Task | None = None
         self._meet_joining: bool = False
+        # Whether the assistant's desktop is currently on the bot's screenshare
+        # surface. Guards both directions: presenting twice would re-point a
+        # surface that is already correct, and stopping when nothing is shared
+        # would DELETE a surface the meeting never saw.
+        self._meet_presenting: bool = False
         # True while the browser is admitted-pending: it has knocked on the
         # meeting (clicked "Ask to join") and is sitting in the waiting room
         # for the host to let it in. This is a *successful* join in progress,
@@ -1299,6 +1305,53 @@ class LivekitCallManager:
             to=to,
         )
 
+    @property
+    def is_presenting_to_meet(self) -> bool:
+        """Whether the assistant's desktop is on the meeting's screenshare now."""
+        return self._meet_presenting
+
+    async def start_meet_screenshare(self) -> bool:
+        """Share the assistant's desktop with the active browser meeting.
+
+        The desktop is the managed VM's own liveview, framed by a page the bot
+        renders, so putting it up is a single call to the meeting backend -- there
+        is nothing on this side to start or keep running.
+        """
+        session_id = self._meet_session_id
+        channel = self._call_channel or ""
+        if not session_id or channel not in self._MEET_ROOM_SUFFIX:
+            return False
+        if not SESSION_DETAILS.assistant.has_managed_desktop:
+            # Only the managed desktop is ever shared. A user's own linked machine
+            # is not the assistant's to put in front of a room of people.
+            return False
+        if self._meet_presenting:
+            return True
+
+        ok = await self.meet_provider.present(
+            channel=channel,
+            session_id=session_id,
+        )
+        self._meet_presenting = ok
+        return ok
+
+    async def stop_meet_screenshare(self) -> bool:
+        """Stop sharing the desktop, leaving the meeting and its audio intact."""
+        session_id = self._meet_session_id
+        channel = self._call_channel or ""
+        if not session_id or not self._meet_presenting:
+            return False
+
+        ok = await self.meet_provider.stop_present(
+            channel=channel,
+            session_id=session_id,
+        )
+        # Cleared either way: a failed stop leaves the surface up, but claiming to
+        # still be presenting would hide the ``start`` tool behind an idempotence
+        # guard and make the state unrecoverable for the rest of the meeting.
+        self._meet_presenting = False
+        return ok
+
     async def _watch_meet_state(self, channel: str) -> None:
         """Track the meeting backend's own view of the session.
 
@@ -1396,6 +1449,11 @@ class LivekitCallManager:
         self._meet_session_id = None
         self._meet_joining = False
         self._meet_lobby_waiting = False
+        # Per-meeting, like the flags above. This manager outlives individual
+        # meetings, so leaving it set would make the next one start believing it
+        # is already presenting: the start tool would be replaced by the stop
+        # tool, and starting would return success without putting anything up.
+        self._meet_presenting = False
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED

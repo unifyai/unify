@@ -27,6 +27,9 @@ from unify.conversation_manager.events import (
     FastBrainNotification,
     EmailReceived,
     EmailSent,
+    GoogleMeetChatMessage,
+    GoogleMeetChatSent,
+    InboundGoogleMeetUtterance,
     InboundPhoneUtterance,
     InboundUnifyMeetUtterance,
     OutboundPhoneUtterance,
@@ -35,6 +38,7 @@ from unify.conversation_manager.events import (
     PhoneCallStarted,
     SMSReceived,
     SMSSent,
+    TeamsMeetChatMessage,
     UnifyMessageReceived,
     UnifyMessageSent,
 )
@@ -488,3 +492,144 @@ class TestHydrationCrossCutting:
             await hydrate_global_thread(cm)
 
         assert len(cm.contact_index.global_thread) == 0
+
+
+# =============================================================================
+# Browser-meet chat hydration
+# =============================================================================
+
+
+class TestBrowserMeetChatHydration:
+    """Typed meeting-chat lines survive a restart, like the spoken ones.
+
+    Chat was recorded to the durable stores before it was rehydrated here, so
+    the gap was invisible in the transcript: only the brain's own thread came
+    back short, and only after a mid-meeting restart.
+    """
+
+    @pytest.mark.asyncio
+    async def test_inbound_chat_restored_under_the_meeting_medium(self):
+        cm = _make_mock_cm()
+        events = [
+            GoogleMeetChatMessage(
+                contact=ALICE,
+                sender_name="Bob Jones",
+                content="here is the doc",
+                timestamp=BASE_TIME,
+            ),
+        ]
+
+        with patch(
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
+        ) as mock_bus:
+            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
+            await hydrate_global_thread(cm)
+
+        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
+        assert len(msgs) == 1
+        assert msgs[0].role == "user"
+        # The marker is the only thing telling the brain this was typed: the
+        # thread is flat text, carrying none of the structure the stored rows do.
+        assert msgs[0].content == "<meeting chat> here is the doc"
+
+    @pytest.mark.asyncio
+    async def test_inbound_chat_credits_the_typist_not_the_call_contact(self):
+        """Anyone in the meeting can type, including a non-participant contact.
+
+        Every other case here derives the name from the contact; chat must not,
+        or a third participant's message is attributed to whoever the call is
+        with.
+        """
+        cm = _make_mock_cm()
+        events = [
+            GoogleMeetChatMessage(
+                contact=ALICE,
+                sender_name="Bob Jones",
+                content="dropping the link here",
+                timestamp=BASE_TIME,
+            ),
+        ]
+
+        with patch(
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
+        ) as mock_bus:
+            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
+            await hydrate_global_thread(cm)
+
+        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
+        assert msgs[0].name == "Bob Jones"
+
+    @pytest.mark.asyncio
+    async def test_teams_chat_lands_in_the_teams_thread(self):
+        """The two platforms share a handler, so the medium split needs pinning."""
+        cm = _make_mock_cm()
+        events = [
+            TeamsMeetChatMessage(
+                contact=ALICE,
+                sender_name="Bob Jones",
+                content="same but teams",
+                timestamp=BASE_TIME,
+            ),
+        ]
+
+        with patch(
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
+        ) as mock_bus:
+            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
+            await hydrate_global_thread(cm)
+
+        assert len(cm.contact_index.get_messages_for_contact(2, Medium.TEAMS_MEET)) == 1
+        assert cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET) == []
+
+    @pytest.mark.asyncio
+    async def test_assistant_chat_restored_as_its_own(self):
+        """Without it the thread comes back holding questions and no answers."""
+        cm = _make_mock_cm()
+        events = [
+            GoogleMeetChatSent(
+                contact=ALICE,
+                content="https://example.com/doc",
+                timestamp=BASE_TIME,
+            ),
+        ]
+
+        with patch(
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
+        ) as mock_bus:
+            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
+            await hydrate_global_thread(cm)
+
+        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
+        assert len(msgs) == 1
+        assert msgs[0].role == "assistant"
+        assert msgs[0].content == "<meeting chat> https://example.com/doc"
+
+    @pytest.mark.asyncio
+    async def test_chat_and_speech_rehydrate_into_one_thread(self):
+        """They shared a medium live; a restart must not split them apart."""
+        cm = _make_mock_cm()
+        events = [
+            InboundGoogleMeetUtterance(
+                contact=ALICE,
+                content="did you get it?",
+                timestamp=BASE_TIME,
+            ),
+            GoogleMeetChatMessage(
+                contact=ALICE,
+                sender_name="Alice Smith",
+                content="here is the doc",
+                timestamp=BASE_TIME + timedelta(seconds=5),
+            ),
+        ]
+
+        with patch(
+            "unify.conversation_manager.domains.managers_utils.EVENT_BUS",
+        ) as mock_bus:
+            mock_bus.search = AsyncMock(return_value=_make_bus_events(events))
+            await hydrate_global_thread(cm)
+
+        msgs = cm.contact_index.get_messages_for_contact(2, Medium.GOOGLE_MEET)
+        assert [m.content for m in msgs] == [
+            "did you get it?",
+            "<meeting chat> here is the doc",
+        ]

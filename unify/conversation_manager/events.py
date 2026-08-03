@@ -2117,6 +2117,27 @@ class AssistantPresenceObserved(Event):
 
 
 @dataclass
+class ConsoleScriptResult(Event):
+    """What became of the console moves this assistant asked for.
+
+    Reported once per script, after it settles. Without it the runtime steers
+    blind: it says "and there it is" whether or not the control was there, which
+    is worse than never having offered to navigate.
+
+    ``outcomes`` is a list of ``{"target": str, "outcome": str}``. The outcomes
+    that mean a move did not happen are distinguished on purpose -- a control
+    that was missing, a user who switched the feature off, and speech that never
+    reached the move all call for the assistant to say something different.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:console_script_result"
+    loggable: ClassVar[bool] = False
+
+    script_id: str = ""
+    outcomes: list = field(default_factory=list)
+
+
+@dataclass
 class CoordinatorDelegate(Event):
     """A Coordinator assigned asynchronous work to this colleague.
 
@@ -2261,6 +2282,40 @@ class UserScreenShareStopped(Event):
     """User stopped sharing their screen during a Unify Meet session."""
 
     topic: ClassVar[str | None] = "app:comms:user_screen_share_stopped"
+
+    reason: str = ""
+
+
+@dataclass
+class MeetScreenShareStarted(Event):
+    """Someone in a browser meeting started sharing their screen.
+
+    Distinct from ``UserScreenShareStarted``, which is the Console surface: that
+    one also gates the desktop fast path and web-session listing, which have no
+    business turning on because a stranger in a Google Meet shared a slide. This
+    one says only that a shared screen is now reaching the assistant.
+
+    Deliberately carries no sharer name: attribution rides the frame's own label,
+    which is where the model needs it, and at the moment this fires the first
+    frame has not arrived yet -- so any name here would be blank or the previous
+    presenter's.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:meet_screen_share_started"
+
+    reason: str = ""
+
+
+@dataclass
+class MeetScreenShareStopped(Event):
+    """Nobody in the browser meeting is sharing a screen any more.
+
+    Without this the assistant keeps describing the last frame it saw: the state
+    block that says a share is live is otherwise driven by the meeting being in
+    progress, which stays true until hangup.
+    """
+
+    topic: ClassVar[str | None] = "app:comms:meet_screen_share_stopped"
 
     reason: str = ""
 

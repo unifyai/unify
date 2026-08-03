@@ -168,6 +168,10 @@ class ExecutionResult(BaseModel):
     venv_id: Optional[int] = None
     session_created: Optional[bool] = None
     duration_ms: Optional[int] = None
+    #: Where the block got to when something steered it mid-flight. Set only
+    #: when an interjection actually reached this execution, so an ordinary
+    #: run carries no extra weight in the transcript.
+    steering: Optional[Dict[str, Any]] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -199,6 +203,8 @@ class ExecutionResult(BaseModel):
             meta["session_created"] = self.session_created
         if self.duration_ms is not None:
             meta["duration_ms"] = self.duration_ms
+        if self.steering is not None:
+            meta["steering"] = self.steering
 
         # Add metadata block if present
         if meta:

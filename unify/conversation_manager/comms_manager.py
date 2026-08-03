@@ -1099,6 +1099,10 @@ class CommsManager:
                         event,
                         message=r,
                     ),
+                    "console_script_result": lambda r: ConsoleScriptResult(
+                        script_id=str(event.get("script_id") or ""),
+                        outcomes=list(event.get("outcomes") or []),
+                    ),
                     "assistant_presence_observed": lambda r: AssistantPresenceObserved(
                         reason=str(
                             event.get("reason") or r or "User presence observed.",

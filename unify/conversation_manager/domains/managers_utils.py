@@ -103,6 +103,10 @@ _MESSAGE_PRODUCING_EVENTS = {
     "OutboundGoogleMeetUtterance",
     "InboundTeamsMeetUtterance",
     "OutboundTeamsMeetUtterance",
+    "GoogleMeetChatMessage",
+    "TeamsMeetChatMessage",
+    "GoogleMeetChatSent",
+    "TeamsMeetChatSent",
     "AssistantTurnInjected",
     "FastBrainNotification",
     "PhoneCallReceived",
@@ -625,6 +629,44 @@ async def hydrate_global_thread(cm: "ConversationManager") -> None:
                     sender_name=sender_name,
                     thread_name=Medium.TEAMS_MEET,
                     message_content=cm_event.content,
+                    role="assistant",
+                    timestamp=ts,
+                )
+
+            # --- Browser-meet chat ---
+            # The `<meeting chat>` prefix is reproduced rather than inferred: the
+            # thread is flat text to the brain, so a rehydrated line without it
+            # reads as something the participant said out loud.
+            case "GoogleMeetChatMessage" | "TeamsMeetChatMessage":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    # The typist, not the call's contact. Anyone in the meeting
+                    # can type, and unlike every case above, the event carries
+                    # the real name -- resolving it from the contact would
+                    # attribute a third participant's message to whoever the
+                    # call is with.
+                    sender_name=cm_event.sender_name,
+                    thread_name=(
+                        Medium.GOOGLE_MEET
+                        if payload_cls == "GoogleMeetChatMessage"
+                        else Medium.TEAMS_MEET
+                    ),
+                    message_content=f"<meeting chat> {cm_event.content}",
+                    role="user",
+                    timestamp=ts,
+                )
+            case "GoogleMeetChatSent" | "TeamsMeetChatSent":
+                entry = cm.contact_index.build_message(
+                    contact_id=contact_id,
+                    # Ignored for an assistant role, which renders as "You" --
+                    # passed for symmetry with every other case here.
+                    sender_name=sender_name,
+                    thread_name=(
+                        Medium.GOOGLE_MEET
+                        if payload_cls == "GoogleMeetChatSent"
+                        else Medium.TEAMS_MEET
+                    ),
+                    message_content=f"<meeting chat> {cm_event.content}",
                     role="assistant",
                     timestamp=ts,
                 )
