@@ -1504,6 +1504,8 @@ _ALIAS_TO_GETTER: dict[str, str] = {
     "comms": "",
     "contacts": "get_contact_manager",
     "dashboards": "get_dashboard_manager",
+    "canvas": "get_canvas_manager",
+    "ingestion": "get_ingestion_manager",
     "data": "get_data_manager",
     "transcripts": "get_transcript_manager",
     "tasks": "get_task_scheduler",
@@ -1519,7 +1521,7 @@ _ALIAS_TO_GETTER: dict[str, str] = {
 
 # Managers that need async wrapping (sync implementations)
 _SYNC_MANAGERS: frozenset[str] = frozenset(
-    {"dashboards", "data", "files", "coordinator"},
+    {"canvas", "dashboards", "data", "files", "ingestion", "coordinator"},
 )
 
 

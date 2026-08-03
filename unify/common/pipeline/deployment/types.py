@@ -108,7 +108,6 @@ class DeploymentObservabilityRefs(BaseModel):
     progress_file: str | None = None
     log_file: str | None = None
     run_ledger_path: str | None = None
-    cost_ledger_path: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -126,7 +125,6 @@ class DeploymentIngestionStageStatus(BaseModel):
 class DeploymentIngestionOutcome(BaseModel):
     """Typed result returned by a deployment ingestion executor callback."""
 
-    cost_ledger_path: str | None = None
     observability_refs: DeploymentObservabilityRefs = Field(
         default_factory=DeploymentObservabilityRefs,
     )
@@ -154,7 +152,6 @@ class DeploymentIngestionJob(BaseModel):
     paused_at: str | None = None
     pause_reason: str | None = None
     parked_manifest_keys: list[str] = Field(default_factory=list)
-    cost_ledger_path: str | None = None
     observability_refs: DeploymentObservabilityRefs = Field(
         default_factory=DeploymentObservabilityRefs,
     )

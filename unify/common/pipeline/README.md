@@ -6,7 +6,7 @@ It is a cross-cutting shared module with zero imports from `FileManager`, `DataM
 
 ## Design principles
 
-- **Ports and Adapters**: every infrastructure concern (artifact storage, work queues, run/cost ledgers, deployment stores) is expressed as a `Protocol` with a local-first implementation. GCP-backed adapters live in the private deployment repos and plug into the same protocols.
+- **Ports and Adapters**: every infrastructure concern (artifact storage, work queues, run ledgers, deployment stores) is expressed as a `Protocol` with a local-first implementation. GCP-backed adapters live in the private deployment repos and plug into the same protocols. The local implementation of a port is a *full* implementation, not a stub — `LocalArtifactStore` fences and checkpoints exactly as the hosted one does, because an executor cannot know which adapter it was handed and must not offer a guarantee the binding cannot keep.
 - **Control plane is JSON**: manifests, queue messages, ledger records, and progress events are all JSON-serializable Pydantic models. Large tabular data is never serialized through the control plane.
 - **No pickle**: binary serialization on durable or cross-process boundaries is explicitly forbidden. Row data stays in its original source file or is materialized as JSONL/Parquet artifacts.
 - **Typed settings**: all configuration flows through Pydantic `BaseSettings` models defined in `types/config.py`. No ad-hoc `os.getenv()` calls.
@@ -45,18 +45,25 @@ Typed models for tracking pipeline run lifecycle:
 
 `RunLedger` protocol with `JsonlRunLedger` implementation that appends manifests as JSONL records for post-run inspection.
 
-### `cost_ledger.py` — per-run cost estimation
+### `checkpointed_ingest.py` — resumable table ingestion
 
-Rate-card-based cost estimation with typed line items:
+The one place rows are written. In-process execution and the worker fleet both call
+`CheckpointedIngest`, which is what makes the choice between them a question of
+latency rather than of guarantees.
 
-- `PipelineCostRateCard`: versioned unit rates for compute, storage, ingest, embeddings, observability
-- `PipelineCostLineItem`: one cost entry (component, quantity, unit_rate, estimated_cost, confidence)
-- `PipelineCostLedger`: per-run cost summary with all line items
-- `PipelineCostAccumulator`: mutable collector used during pipeline execution
+Three invariants, each answering a specific way an interrupted ingestion loses or
+duplicates rows:
 
-Builder functions (`build_parse_cost_line_items`, `build_ingest_cost_line_items`, etc.) accept pre-computed metrics and produce line items. The accumulator finalizes into a `PipelineCostLedger` at run completion.
+- **Checkpoint after every committed chunk** — resume re-does at most one chunk.
+- **A fenced lease per table** — at-most-one-writer, and a superseded writer
+  *notices* rather than rolling progress backwards over its successor's.
+- **Verify committed rows against the declared count** — a run that landed fewer
+  rows than its source declared fails loudly instead of passing as success.
 
-`CostLedger` protocol with `JsonlCostLedger` for local JSONL persistence.
+`TableWork` describes one table to ingest; `IngestOutcome` reports what happened,
+with `shortfalls` naming any table whose durable progress is behind its declared
+count. `incomplete_tables` answers the same question from checkpoints alone, so an
+audit and the worker's own finalisation gate cannot disagree.
 
 ### `retry_policy.py` — network resilience
 
@@ -99,7 +106,7 @@ FileManager executor (ingest via DataManager, emit ledgers)
        ↓
 ArtifactStore (optional materialization for large tables)
        ↓
-RunLedger + CostLedger (JSONL persistence for inspection)
+RunLedger (JSONL persistence for inspection)
 ```
 
 For deployment bundles, the flow is:
@@ -113,7 +120,7 @@ LocalDeploymentIngestionRunner.submit() (background execution)
        ↓
 execute callback (parse + ingest with stage reporting)
        ↓
-DeploymentIngestionJob (status, stages, cost, observability refs)
+DeploymentIngestionJob (status, stages, observability refs)
 ```
 
 ## Extending with GCP adapters
@@ -125,6 +132,5 @@ The Ports and Adapters design means GCP implementations plug in without changing
 | `ArtifactStore` | `LocalArtifactStore` | `GcsArtifactStore` |
 | `WorkQueue` | `InMemoryWorkQueue` | `PubSubWorkQueue` / `CloudTasksWorkQueue` |
 | `RunLedger` | `JsonlRunLedger` | Cloud Logging / BigQuery |
-| `CostLedger` | `JsonlCostLedger` | BigQuery cost export |
 | `DeploymentBundleStore` | `LocalDeploymentBundleStore` | `GcsDeploymentBundleStore` |
 | `DeploymentJobStore` | `LocalDeploymentJobStore` | Firestore / Cloud SQL |

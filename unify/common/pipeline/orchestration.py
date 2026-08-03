@@ -225,17 +225,6 @@ def ingest_artifacts(
             },
         )
 
-        if outcome.success:
-            instrumentation.add_ingest_costs(
-                file_path=source_path,
-                file_id=item.meta.get("file_id"),
-                storage_id=item.meta.get("storage_id"),
-                stage_name=item.stage_name,
-                stage_id=item.stage_id,
-                stage_value=outcome.value,
-                table_id=item.table_id,
-            )
-
         return result
 
     if len(work_items) <= 1:

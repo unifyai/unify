@@ -32,9 +32,9 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const DESKTOP_NOVNC_HOST = process.env.DESKTOP_NOVNC_HOST || '127.0.0.1';
 const DESKTOP_NOVNC_PORT = Number(process.env.DESKTOP_NOVNC_PORT || 6080);
 
-/** VNC password matches setup.sh (first 8 chars of UNIFY_KEY). */
+/** VNC password is the per-binding desktop secret; falls back to setup.sh's convention (first 8 chars of UNIFY_KEY). */
 function buildDesktopNoVncUrl(): string {
-  const password = (process.env.UNIFY_KEY || '').slice(0, 8);
+  const password = process.env.VNC_PASSWORD || (process.env.UNIFY_KEY || '').slice(0, 8);
   const params = new URLSearchParams({
     password,
     autoconnect: '1',

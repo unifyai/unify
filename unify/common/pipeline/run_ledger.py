@@ -115,9 +115,26 @@ class JsonlRunLedger:
         self._writer.close()
 
 
+#: Where a run's diagnostic output lands when no path is configured. One
+#: directory for every kind of per-run diagnostic so a run's ledger and its
+#: progress events sit together rather than in whichever directory the process
+#: happened to start in.
+DIAGNOSTICS_DIR = Path("logs/file_manager_runs")
+
+
+def generate_diagnostics_path(basename: str) -> str:
+    """Return a timestamped absolute path under :data:`DIAGNOSTICS_DIR`.
+
+    Absolute on purpose. A relative fallback resolves against the working
+    directory, which is the repo root for a local test run but is wherever its
+    entrypoint left it for a worker pod -- so the same default scattered output
+    across unrelated places depending on who called it.
+    """
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
+    return str((DIAGNOSTICS_DIR / f"{basename}_{stamp}.jsonl").resolve())
+
+
 def generate_run_ledger_path() -> str:
     """Return a timestamped local path for run-manifest output."""
 
-    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
-    path = Path("logs/file_manager_runs") / f"run_ledger_{stamp}.jsonl"
-    return str(path.resolve())
+    return generate_diagnostics_path("run_ledger")

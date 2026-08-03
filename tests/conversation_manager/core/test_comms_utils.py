@@ -908,6 +908,67 @@ class TestLocalCommsBackends:
             _, publish_kwargs = mock_publisher.publish.call_args
             assert publish_kwargs.get("thread") == "assistant_desktop_ready"
 
+    @pytest.mark.asyncio
+    async def test_publish_assistant_desktop_ready_includes_liveview_password_when_set(
+        self,
+    ):
+        """Console needs the per-binding secret to frame the liveview; older
+        bindings without one must not send a stray empty field."""
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
+                return_value=True,
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils._publish_local_outbox_async",
+                new=AsyncMock(return_value=True),
+            ) as mock_outbox,
+            patch(
+                "unify.conversation_manager.domains.comms_utils._publish_to_assistant_topic",
+            ),
+        ):
+            await comms_utils.publish_assistant_desktop_ready(
+                "binding-1",
+                "http://127.0.0.1:8090",
+                "http://127.0.0.1:8090/desktop/custom.html",
+                "ubuntu",
+                liveview_password="binding-secret",  # pragma: allowlist secret
+            )
+
+            outbox_payload = mock_outbox.await_args.args[0]
+            assert (
+                outbox_payload["event"]["liveview_password"]
+                == "binding-secret"  # pragma: allowlist secret
+            )
+
+    @pytest.mark.asyncio
+    async def test_publish_assistant_desktop_ready_omits_liveview_password_when_absent(
+        self,
+    ):
+        """No secret minted yet (pre-rebind) -- don't send an empty field."""
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils._use_local_comms",
+                return_value=True,
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils._publish_local_outbox_async",
+                new=AsyncMock(return_value=True),
+            ) as mock_outbox,
+            patch(
+                "unify.conversation_manager.domains.comms_utils._publish_to_assistant_topic",
+            ),
+        ):
+            await comms_utils.publish_assistant_desktop_ready(
+                "binding-1",
+                "http://127.0.0.1:8090",
+                "http://127.0.0.1:8090/desktop/custom.html",
+                "ubuntu",
+            )
+
+            outbox_payload = mock_outbox.await_args.args[0]
+            assert "liveview_password" not in outbox_payload["event"]
+
     def test_create_assistant_call_posts_ring_session(self):
         """The Meet ring creates an Orchestra ``assistant_dm`` call session;
         Orchestra owns the incoming frame and the answer-triggered dispatch."""

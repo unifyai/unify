@@ -113,26 +113,98 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         examples="'Who is our contact at Acme Corp?', 'Find Alice's email', 'Contacts in Berlin?'",
     ),
     ManagerSpec(
+        manager_alias="canvas",
+        manager_registry_key="canvas",
+        primitive_class_path="unify.canvas_manager.canvas_manager.CanvasManager",
+        excluded_methods=frozenset(),
+        priority=8,
+        domain="Generative User Interfaces",
+        description=(
+            "Author real React views the user can open and interact with: "
+            "trackers, to-do lists, dashboards, any custom interface, with live "
+            "data and buttons that run work"
+        ),
+        use_when=(
+            "The user asks to see something as a view, page, dashboard, tracker "
+            "or list rather than as an answer in chat, or asks for something they "
+            "can come back to and interact with"
+        ),
+        examples=(
+            "'Build me a tracker for my open tasks', 'Show last quarter's sales "
+            "as a dashboard', 'Give me a to-do list I can tick off', 'A view of "
+            "our GitHub issues next to the HubSpot pipeline'"
+        ),
+        special_note=(
+            "A canvas is ONE TSX module rendering the whole view -- there is no "
+            "tile/layout split, React composes. Write against @unity/canvas-kit "
+            "only; react and the kit are the sole imports available at view time. "
+            "NEVER write a colour: there is no colour prop and no colour class "
+            "works, so use tone='success'|'warning'|'danger'|'muted' and chart "
+            "series indices. Nothing is stored until it lints, typechecks, "
+            "compiles, its bindings dry-run and it renders, so read "
+            "``result.build.diagnostics`` on failure and revise -- a failed "
+            "update leaves the published canvas untouched. "
+            "DATA: declare ``bindings`` for anything that is a query; they re-run "
+            "on every view so the canvas stays live, and the query never reaches "
+            "the browser. Use ``props`` only for values that needed reasoning to "
+            "produce. A canvas can ONLY display data that already lives in a "
+            "table, so data from connected apps must be STORED FIRST: call the "
+            "integration tools, store rows with ``primitives.ingestion.submit`` "
+            "and ``wait`` for the run, keep it fresh with ``primitives.tasks``, "
+            "then bind to that table. Binding to a table that does not exist yet "
+            "fails at creation naming the table, so waiting is what makes the "
+            "binding valid. This is also the only way to show two apps together, "
+            "since providers cannot be joined directly. "
+            "FRESHNESS IS REQUIRED for anything not live: a canvas over "
+            "materialised ``props`` or an ingested table must render "
+            "``<Freshness synced={...}/>`` next to the data, fed the time the "
+            "data was produced (pass it via props). A number that looks live "
+            "but is hours old misleads; one that admits its age does not. "
+            "Query bindings re-run per view and need no Freshness. "
+            "INTERACTIVITY: declare ``actions`` for anything the viewer should be "
+            "able to do; give an ``input_schema`` with explicit maxItems/maxLength "
+            "and set ``destructive=True`` with ``confirm`` text for anything "
+            "irreversible -- Console shows that outside the frame with the real "
+            "arguments. Prefer ``update_view`` over creating a second canvas: the "
+            "URL is stable, so anywhere it was shared keeps working."
+        ),
+    ),
+    ManagerSpec(
         manager_alias="dashboards",
         manager_registry_key="dashboards",
         primitive_class_path="unify.dashboard_manager.dashboard_manager.DashboardManager",
         excluded_methods=frozenset(),
-        priority=8,
-        domain="Visualizations & Dashboards",
+        # Superseded by `canvas`. Specs are listed in ascending priority, so a
+        # number past every other manager's puts this last -- the actor reads
+        # the replacement first and reaches this only when a request is
+        # explicitly about a board that already exists. This manager is deleted
+        # once existing tiles are migrated to canvases, along with its
+        # primitives, contexts and Console panes; until then the code stays so
+        # those tiles keep rendering and the migration has something to read.
+        priority=30,
+        domain="Legacy HTML Tiles (superseded by Canvas)",
         description=(
-            "Create HTML visualization tiles (charts, plots, KPI cards, tables) "
-            "and compose them into dashboard grid layouts"
+            "Read and amend HTML visualization tiles and dashboard grid layouts "
+            "that already exist. Superseded by canvas for anything new"
         ),
         use_when=(
-            "Generate any visualization, chart, plot, dashboard, KPI card, "
-            "or interactive HTML output for the user to view"
+            "Only when working with a tile or dashboard that already exists -- "
+            "listing them, reading one, or editing one the user points at. "
+            "NEVER for new visual output of any kind: every chart, plot, table, "
+            "KPI card, dashboard and interactive view goes to primitives.canvas"
         ),
         examples=(
-            "'Plot repairs by category', 'Show me a bar chart of revenue', "
-            "'Create a dashboard with KPIs and charts', "
-            "'Generate an interactive table of orders'"
+            "'Update the revenue tile on my sales dashboard', "
+            "'What tiles are on my ops board?', 'Delete that old chart tile'"
         ),
         special_note=(
+            "SUPERSEDED BY primitives.canvas. Do not create new tiles or "
+            "dashboards here: a canvas renders the whole view as one React "
+            "module, carries live query bindings, and supports buttons that run "
+            "real work, so it covers everything a tile did and more. Use these "
+            "methods only to inspect or amend tiles that already exist, and "
+            "prefer offering to rebuild such a board as a canvas. This manager "
+            "is removed once existing tiles are migrated. "
             "The actor has full creative freedom over tile HTML -- any "
             "HTML/CSS/JS that renders in a browser works. PREFER live tiles: "
             "declare data_bindings (FilterBinding, ReduceBinding, JoinBinding, "
@@ -165,20 +237,25 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         manager_alias="data",
         manager_registry_key="data",
         primitive_class_path="unify.data_manager.data_manager.DataManager",
-        excluded_methods=frozenset(),
+        # `ingest` is deliberately not exposed here. Storing anything goes
+        # through `primitives.ingestion.submit`, which records a run, checkpoints
+        # it and can resume it. A direct ingest call has none of that: it blocks
+        # the plan for as long as the write takes and leaves nothing to inspect
+        # if it dies part-way.
+        excluded_methods=frozenset({"ingest"}),
         priority=9,
-        domain="Data Operations & Ingestion",
+        domain="Data Operations",
         description=(
-            "Low-level and high-level data operations on any Unify context "
-            "(filter, search, reduce, join, ingest, vectorize)"
+            "Read and reshape data already stored in any Unify context "
+            "(filter, search, reduce, join, update_rows, vectorize)"
         ),
         use_when=(
-            "Data operations, aggregations, "
-            "data ingestion from APIs/warehouses, cross-context joins"
+            "Querying, aggregating or joining stored tables; updating rows in "
+            "place. To *store* new data from anywhere, use primitives.ingestion"
         ),
         examples=(
             "'Filter rows where amount > 1000', 'Join repairs with telematics', "
-            "'Sum revenue by region', 'Ingest this API data'"
+            "'Sum revenue by region', 'Mark these rows reviewed'"
         ),
         special_note=(
             "DataManager operates on any Unify context path. "
@@ -190,7 +267,65 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
             "`update_rows(..., filter=...)` over fetch-all then per-row "
             "updates. Team-shared tables are already readable via "
             "`primitives.data` team-root fan-out — do not peek into "
-            "another assistant's private contexts."
+            "another assistant's private contexts. "
+            "STORING new data is not here: use `primitives.ingestion.submit` "
+            "for rows from an API or connected app, for files, and for "
+            "reshaping one table into another."
+        ),
+    ),
+    ManagerSpec(
+        manager_alias="ingestion",
+        manager_registry_key="ingestion",
+        primitive_class_path=(
+            "unify.ingestion_manager.ingestion_manager.IngestionManager"
+        ),
+        excluded_methods=frozenset(),
+        priority=9,
+        domain="Storing Data & Files",
+        description=(
+            "Store data from anywhere into queryable tables or document "
+            "collections: rows fetched from an API or connected app, uploaded "
+            "and attached files, a whole folder, or a reshape of a stored table"
+        ),
+        use_when=(
+            "Anything that puts NEW data somewhere it can later be queried, "
+            "searched or bound to a canvas — API responses, connected-app pulls, "
+            "attachments, uploads, exports, folder syncs, table reshapes"
+        ),
+        examples=(
+            "'Pull my HubSpot deals in and chart them', 'Ingest this PDF', "
+            "'Load the whole exports folder', 'Store these API results', "
+            "'Make a current-state table out of that event log'"
+        ),
+        special_note=(
+            "ONE VERB: `submit(source, target)`. The source says where data "
+            "comes from — `RowsSource(rows=[...])` for anything already in hand "
+            "(API responses, connected-app pulls via primitives.integrations, "
+            "computed values), `FilesSource(paths=[...])` for specific files, "
+            "`FolderSource(path=..., pattern=...)` for an open-ended set, "
+            "`TableSource(context=...)` to reshape stored rows. The target says "
+            "where it lands — `TableTarget(context=...)` for one queryable "
+            "table, `CollectionTarget(name=...)` to keep documents whole with "
+            "their inner tables extracted alongside. Choose by intent: a table "
+            "is for querying columns, a collection is for reading and citing "
+            "documents. "
+            "NOTHING BLOCKS: submit returns a run handle immediately. Poll "
+            "`get_status(run_id)` and read its `next_step`, which states the one "
+            "action that makes sense; call `wait(run_id)` only when the plan "
+            "genuinely cannot continue, such as when the next step builds a "
+            "canvas over the result. `status.contexts` reports the exact paths "
+            "written, so bind a canvas to those rather than guessing a layout. "
+            "WHERE IT RUNS IS NOT YOURS TO CHOOSE and there is no mode "
+            "argument: files always parse off this process, and rows run here "
+            "only under a measured ceiling. Both paths checkpoint identically, "
+            "so a run is always resumable — `retry(run_id)` re-attempts only "
+            "what was parked, `pause`/`resume` stop and continue from the last "
+            "checkpoint. "
+            "FOR A CANVAS OVER CONNECTED APPS the shape is always: call the "
+            "integration tool, `submit(RowsSource(rows=...), TableTarget(...))`, "
+            "`wait` for it, schedule `primitives.tasks` to keep it fresh, then "
+            "bind the canvas to that table. This is also the only way to show "
+            "two providers together, since providers cannot be joined directly."
         ),
     ),
     ManagerSpec(
@@ -506,6 +641,49 @@ _ROUTING_GUIDANCE: List[Dict[str, Any]] = [
             ),
         ],
     },
+    # Two managers can put something visual in front of the user, and only one
+    # of them should be authored against. This pairing exists so the actor is
+    # told which, rather than inferring it from two overlapping descriptions --
+    # the failure mode being a tile built for a request that asked for a view.
+    # Removed with `dashboards` once existing tiles are migrated to canvases.
+    {
+        "managers": {"canvas", "dashboards"},
+        "title": "`primitives.canvas.*` vs `primitives.dashboards.*`",
+        "guidance": [
+            (
+                "canvas",
+                "Use for **ALL new visual output, without exception** -- every "
+                "chart, plot, table, KPI card, dashboard, tracker, report and "
+                "interactive view. A canvas is one React module with live query "
+                "bindings and buttons that can run real work, so it covers "
+                "everything a tile did and more.",
+            ),
+            (
+                "dashboards",
+                "**Superseded. Never author here.** Use only to inspect or amend "
+                "a tile or dashboard that ALREADY exists, because the user "
+                "pointed at one. When they do, offer to rebuild it as a canvas. "
+                "This manager is removed once existing tiles are migrated.",
+            ),
+        ],
+        "examples": [
+            (
+                "Plot repairs by category",
+                "canvas",
+                "primitives.canvas.create_view(tsx=..., bindings=[...])",
+            ),
+            (
+                "Build me a dashboard of last quarter's sales",
+                "canvas",
+                "primitives.canvas.create_view(tsx=..., bindings=[...])",
+            ),
+            (
+                "Change the title on the revenue tile of my ops board",
+                "dashboards",
+                "primitives.dashboards.update_tile(...)",
+            ),
+        ],
+    },
 ]
 
 
@@ -542,15 +720,29 @@ _EXAMPLE_GENERATORS: Dict[str, List[str]] = {
     "data": [
         "get_primitives_data_filter_example",
         "get_primitives_data_reduce_example",
-        "get_primitives_data_ingest_example",
         "get_primitives_data_external_sync_example",
     ],
+    "ingestion": [
+        # One example covering every source, because the point of the design is
+        # that they are the same verb -- showing them separately would imply a
+        # choice of function where there is only a choice of argument.
+        "get_primitives_ingestion_sources_example",
+    ],
+    "canvas": [
+        # The component reference comes first: the actor needs to know what it
+        # can compose before the examples showing how to compose it.
+        "get_canvas_kit_reference",
+        "get_primitives_canvas_live_view_example",
+        "get_primitives_canvas_connected_apps_example",
+        "get_primitives_canvas_actions_example",
+        "get_primitives_canvas_revision_example",
+    ],
+    # Superseded by canvas: one composition example remains so the actor can
+    # amend a board that already exists, and the authoring examples are gone so
+    # the prompt teaches a single way to produce visual output. This entry goes
+    # with the manager once existing tiles are migrated to canvases.
     "dashboards": [
-        "get_primitives_dashboards_baked_in_example",
-        "get_primitives_dashboards_live_data_example",
-        "get_primitives_dashboards_rich_live_data_example",
         "get_primitives_dashboards_composition_example",
-        "get_primitives_dashboards_actions_example",
     ],
     "integrations": [
         "get_primitives_integrations_function_manager_search_example",
