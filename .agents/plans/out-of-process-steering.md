@@ -11,6 +11,25 @@ Read `unify/function_manager/steering.py` first. This plan assumes its four
 parts (probes, idempotency cache, retry via source splice, bounded lifetime)
 and reuses them rather than replacing them.
 
+## Read this before deciding how much to build
+
+The work splits into two phases with very different costs, and **Phase 1 is
+worth doing on its own**. It is not groundwork for Phase 2; it is the whole
+feature for most cases.
+
+Phase 1 makes out-of-process execution correctable at every side effect that
+goes through primitives, and that is the case the mechanism exists for — the
+reason to steer is to stop a side effect before it happens, and side effects
+are overwhelmingly primitive dispatches. It needs no changes inside the child
+process and it covers venv, shell and remote at once.
+
+Phase 2 closes one specific remaining gap: a loop in the child that does no
+primitive call, and so is invisible to the parent. It is venv-only, it is the
+only part with a performance question, and it should be built when a real
+workload needs it rather than for completeness.
+
+If Phase 2 never happens, this feature is not half-finished.
+
 ---
 
 ## Where things stand
@@ -84,7 +103,7 @@ in-process: it looks wired and does nothing.
 
 ---
 
-## Phase 1 — parent-side cache and interrupt
+## Phase 1 — parent-side cache and interrupt (worth doing alone)
 
 One change, no child changes, and it benefits venv, shell and remote at once
 because all three converge on the RPC handler.
@@ -130,7 +149,7 @@ sub-cases, and they are not equally important:
 
 ---
 
-## Phase 2 — instrumented child source (venv only)
+## Phase 2 — instrumented child source (venv only, optional)
 
 Full parity, and the only part with a performance question.
 
@@ -209,6 +228,5 @@ closes.
 5. Phase 2 only if a real workload needs correction inside a non-dispatching
    loop. Design the control channel first; the AST pass already exists.
 
-Phase 1 is worth doing on its own merits. If Phase 2 never happens,
-out-of-process execution is still steerable at every primitive side effect,
-which is the case the mechanism exists for.
+Steps 1-4 are the feature. Step 5 is a response to evidence, not a
+commitment made in advance — see the framing at the top of this document.
