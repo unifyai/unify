@@ -74,6 +74,34 @@ def test_collect_custom_tasks_finds_entries(custom_tasks_dir):
     assert "ops/on-event" in tasks
 
 
+def test_collect_custom_tasks_rejects_a_malformed_line(custom_tasks_dir):
+    """A bad line must fail the collection, not vanish from the source.
+
+    Skipping it leaves the key absent from the collected source, which the
+    reconcile reads as "removed" — and it deletes the live task it still owns.
+    """
+    path = custom_tasks_dir / TASKS_JSONL_FILENAME
+    path.write_text(path.read_text() + "{not json}\n")
+
+    with pytest.raises(ValueError, match="Invalid tasks.jsonl line"):
+        collect_custom_tasks(path=custom_tasks_dir)
+
+
+def test_collect_custom_tasks_rejects_schedule_and_trigger_together(custom_tasks_dir):
+    path = custom_tasks_dir / TASKS_JSONL_FILENAME
+    both = {
+        "key": "ops/ambiguous",
+        "name": "Ambiguous",
+        "description": "Has both a schedule and a trigger.",
+        "schedule": {"start_at": "2026-07-30T11:00:00Z"},
+        "trigger": {"provider": "slack", "event": "message"},
+    }
+    path.write_text(path.read_text() + json.dumps(both) + "\n")
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        collect_custom_tasks(path=custom_tasks_dir)
+
+
 def test_collect_custom_tasks_excludes_auto_sync_false(custom_tasks_dir):
     tasks = collect_custom_tasks(path=custom_tasks_dir)
     assert "draft/unpublished" not in tasks
