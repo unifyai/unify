@@ -1007,23 +1007,26 @@ class GuidanceManager(BaseGuidanceManager):
         limit: int = 100,
     ) -> List[Guidance]:
         from_fields = list(self._BUILTIN_FIELDS)
-        rows = federated_filter(
-            [
-                *(
-                    FederatedSearchContext(
-                        context=context,
-                        source=context,
-                        allowed_fields=from_fields,
-                    )
-                    for context in self._read_guidance_contexts()
-                ),
-                self._builtins_read_spec(allowed_fields=from_fields),
-            ],
-            filter=self._scoped_filter(normalize_filter_expr(filter)),
-            offset=offset,
-            limit=limit,
-            annotate=False,
-        )
+        try:
+            rows = federated_filter(
+                [
+                    *(
+                        FederatedSearchContext(
+                            context=context,
+                            source=context,
+                            allowed_fields=from_fields,
+                        )
+                        for context in self._read_guidance_contexts()
+                    ),
+                    self._builtins_read_spec(allowed_fields=from_fields),
+                ],
+                filter=self._scoped_filter(normalize_filter_expr(filter)),
+                offset=offset,
+                limit=limit,
+                annotate=False,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
         return [self._with_content_preview(Guidance(**row)) for row in rows]
 
     @functools.wraps(BaseGuidanceManager.get_guidance, updated=())

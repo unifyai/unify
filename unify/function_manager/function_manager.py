@@ -5603,12 +5603,15 @@ class FunctionManager(BaseFunctionManager):
             for spec in contexts
         ]
 
-        rows = federated_filter(
-            contexts,
-            filter=caller_filter,
-            offset=offset,
-            limit=limit,
-        )
+        try:
+            rows = federated_filter(
+                contexts,
+                filter=caller_filter,
+                offset=offset,
+                limit=limit,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
 
         if not _return_callable:
             # Strip implementations if not requested (reduces payload size)
