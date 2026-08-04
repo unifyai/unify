@@ -601,7 +601,14 @@ def pytest_sessionfinish(session, exitstatus):
     except Exception:
         pass
 
-    if SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT:
+    # A session that was handed a prepared project does not own it, so it does
+    # not tear it down — the runner that prepared it deletes once, after every
+    # session has finished. Mirrors the same guard on delete-on-start; without
+    # it the first session to exit takes the project out from under the rest.
+    if (
+        SETTINGS.UNIFY_TESTS_DELETE_PROJ_ON_EXIT
+        and not SETTINGS.UNIFY_SKIP_SESSION_SETUP
+    ):
         unisdk.delete_project(unisdk.active_project())
 
 
