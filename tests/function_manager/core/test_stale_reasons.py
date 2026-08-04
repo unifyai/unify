@@ -64,6 +64,34 @@ def test_delete_without_dependents_keeps_and_marks_dependant():
     assert refreshed is not None and refreshed["stale_reasons"] == []
 
 
+@_handle_project
+def test_reconcile_does_not_flag_real_primitive_dependency_as_stale():
+    """A function depending on a real primitive must not be flagged stale
+    just because the reconciling FunctionManager instance has no primitives
+    in its own scope (``include_primitives=False`` here). The dependency
+    resolves at runtime through the actor's injected environments, not
+    through this instance's primitive catalog -- an instance that cannot see
+    a primitive is not authorized to call it missing.
+    """
+    fm = _manager()  # include_primitives=False: no primitives in scope.
+    source = (
+        "async def delegate_task(request: str):\n"
+        '    """Delegate a task to a sub-agent."""\n'
+        "    handle = await primitives.actor.act(request=request)\n"
+        "    return await handle.result()\n"
+    )
+    fm.add_functions(implementations=source)
+    function_id = fm.list_functions()["delegate_task"]["function_id"]
+
+    result = fm.reconcile_dependencies(function_ids=[function_id])
+
+    assert function_id not in result["details"]["stale_function_ids"]
+    assert result["details"]["stale_count"] == 0
+    refreshed = fm._get_function_data_by_name(name="delegate_task")
+    assert refreshed is not None
+    assert refreshed["stale_reasons"] == []
+
+
 def test_provider_cleanup_marks_compositional_dependencies(monkeypatch):
     primitive = SimpleNamespace(
         id=11,
