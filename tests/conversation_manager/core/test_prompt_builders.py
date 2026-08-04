@@ -686,8 +686,26 @@ class TestRoomChatEtiquette:
 
     def test_it_tells_me_to_stand_down_when_a_teammate_is_named(self):
         prompt = _build()
-        assert "Addressed to a teammate by name" in prompt
+        assert "(not me)" in prompt
         assert "Stay quiet" in prompt
+
+    def test_it_quotes_the_annotation_the_renderer_actually_emits(self):
+        """Guidance keyed on wording the renderer never produces is guidance the
+        model cannot act on — the annotation and the rule have to agree."""
+        prompt = _build()
+        assert "`addressed to me`" in prompt
+        assert "`addressed to <name> (not me)`" in prompt
+
+    def test_absent_addressing_is_not_treated_as_nobody(self):
+        """An empty mention list also means the sender typed the "@" by hand."""
+        prompt = _build()
+        assert "NOT the same as nobody being addressed" in prompt
+        assert 'my own name appears after an "@"' in prompt
+
+    def test_it_says_silence_is_the_worse_failure_when_i_was_named(self):
+        """The regression this block caused: standing down when asked directly."""
+        prompt = _build()
+        assert "staying quiet is the worse failure" in prompt
 
     def test_it_carves_the_room_exception_out_of_the_restraint_rule(self):
         """Both rules ship together, so the narrower one has to name the wider."""

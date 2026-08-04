@@ -487,13 +487,29 @@ class TestRendererUnifyMessage:
         assert "auto-downloaded" not in result
 
 
-class TestRendererRoomAddressing:
-    """A room message has to say who it was addressed to.
+OWN_AGENT_ID = 8034
 
-    Every member assistant receives its own copy, so without the addressing
-    each one reads an unaddressed message as its own to answer, and a message
-    aimed at one teammate as equally its own.
+
+class TestRendererRoomAddressing:
+    """A room message says who it named, from this assistant's point of view.
+
+    Every member assistant receives its own copy, so "was I asked, or was
+    someone else?" decides who answers. Both halves of that have gone wrong in
+    production: an assistant read its own name in a list as a teammate's and
+    stood down from a message aimed at it, and an empty mention list was
+    asserted as "nobody addressed" when it only meant the sender typed the "@"
+    by hand.
     """
+
+    @pytest.fixture(autouse=True)
+    def _own_identity(self):
+        with patch(
+            "unify.conversation_manager.domains.renderer.SESSION_DETAILS",
+        ) as mock_session:
+            mock_session.assistant.agent_id = OWN_AGENT_ID
+            mock_session.assistant.email = ""
+            mock_session.is_private_coordinator = False
+            yield
 
     def _room_message(self, mentions=None, **scope):
         return UnifyMessage(
@@ -512,7 +528,20 @@ class TestRendererRoomAddressing:
             datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
         )
 
-    def test_a_named_teammate_is_reported(self, renderer):
+    def _me(self, name="Lila Down"):
+        return {"kind": "assistant", "id": str(OWN_AGENT_ID), "name": name}
+
+    def test_being_addressed_is_reported_as_me_not_as_my_name(self, renderer):
+        """The regression: my own name in a list read as a teammate's."""
+        result = self._render(
+            renderer,
+            self._room_message(mentions=[self._me()], team_id=7),
+        )
+
+        assert "addressed to me;" in result
+        assert "Lila Down (not me)" not in result
+
+    def test_a_named_teammate_is_marked_as_not_me(self, renderer):
         result = self._render(
             renderer,
             self._room_message(
@@ -521,39 +550,52 @@ class TestRendererRoomAddressing:
             ),
         )
 
-        assert "addressed to Ada;" in result
+        assert "addressed to Ada (not me);" in result
 
-    def test_several_names_are_all_reported(self, renderer):
+    def test_me_alongside_others_still_counts_as_me(self, renderer):
         result = self._render(
             renderer,
             self._room_message(
                 mentions=[
-                    {"kind": "assistant", "id": "22", "name": "Ada"},
+                    self._me(),
                     {"kind": "human", "id": "u1", "name": "Bo"},
                 ],
                 group_id=9,
             ),
         )
 
-        assert "addressed to Ada, Bo;" in result
+        assert "addressed to me and Bo;" in result
 
-    def test_an_unaddressed_room_message_says_so(self, renderer):
-        """Silence about addressing reads as "addressed to me"."""
-        result = self._render(renderer, self._room_message(team_id=7))
-
-        assert "nobody addressed by name;" in result
-
-    def test_a_private_thread_gets_no_room_annotation(self, renderer):
-        """A 1:1 Console DM has one recipient, so there is nothing to arbitrate."""
+    def test_identity_is_matched_on_id_not_display_name(self, renderer):
+        """Two teammates can share a name; only the id is identity."""
         result = self._render(
             renderer,
             self._room_message(
-                mentions=[{"kind": "assistant", "id": "22", "name": "Ada"}],
+                mentions=[{"kind": "assistant", "id": "99", "name": "Lila Down"}],
+                team_id=7,
             ),
         )
 
-        assert "addressed to" not in result
-        assert "nobody addressed" not in result
+        assert "addressed to Lila Down (not me);" in result
+
+    def test_a_human_sharing_my_agent_id_is_not_me(self, renderer):
+        """Human and assistant ids live in different spaces and can collide."""
+        result = self._render(
+            renderer,
+            self._room_message(
+                mentions=[{"kind": "human", "id": str(OWN_AGENT_ID), "name": "Bo"}],
+                team_id=7,
+            ),
+        )
+
+        assert "addressed to Bo (not me);" in result
+
+    def test_no_mentions_says_nothing_rather_than_claiming_nobody(self, renderer):
+        """Empty also means "typed by hand", so it cannot assert a negative."""
+        result = self._render(renderer, self._room_message(team_id=7))
+
+        assert "addressed" not in result
+        assert 'team chat team_id="7"' in result
 
     def test_a_malformed_mention_does_not_break_rendering(self, renderer):
         """Mentions cross a wire; a nameless entry must not take the line down."""
@@ -565,8 +607,18 @@ class TestRendererRoomAddressing:
             ),
         )
 
-        assert "nobody addressed by name;" in result
+        assert "addressed" not in result
         assert "can someone pull the numbers?" in result
+
+    def test_a_private_thread_gets_no_room_annotation(self, renderer):
+        """A 1:1 Console DM has one recipient, so there is nothing to arbitrate."""
+        result = self._render(
+            renderer,
+            self._room_message(mentions=[self._me()]),
+        )
+
+        assert "addressed to" not in result
+        assert "team chat" not in result
 
     def test_the_reply_route_is_still_named(self, renderer):
         """Addressing is added to the scope annotation, not instead of it."""
