@@ -219,8 +219,19 @@ def build_snapshot_entries(
 
 
 def write_snapshot(entries: Dict[str, Dict[str, str]], path: Path) -> None:
-    """Write the snapshot deterministically (sorted keys, trailing newline)."""
-    payload = {"skills": {key: entries[key] for key in sorted(entries)}}
+    """Write the snapshot deterministically (sorted keys, trailing newline).
+
+    Preserves entries owned by other importers -- the canvas vocabulary
+    (``canvas/`` keys, written by ``vocabulary_to_guidance``) lives in the same
+    snapshot, and a skills re-import must not wipe it.
+    """
+    merged = dict(entries)
+    if path.exists():
+        stored = json.loads(path.read_text(encoding="utf-8")).get("skills", {})
+        merged.update(
+            {key: value for key, value in stored.items() if key.startswith("canvas/")},
+        )
+    payload = {"skills": {key: merged[key] for key in sorted(merged)}}
     path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
         encoding="utf-8",
