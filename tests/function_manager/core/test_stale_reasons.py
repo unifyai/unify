@@ -64,6 +64,35 @@ def test_delete_without_dependents_keeps_and_marks_dependant():
     assert refreshed is not None and refreshed["stale_reasons"] == []
 
 
+def test_dependency_stale_reasons_never_flags_primitive_names():
+    """``_dependency_stale_reasons`` must never report a ``primitives.*``
+    dependency as missing, since a FunctionManager instance's own primitive
+    catalog reflects its ``include_primitives``/``primitive_scope`` and sync
+    state, not whether the primitive actually resolves at runtime through
+    the actor's injected environments -- it is never authoritative for that.
+
+    Pure unit test on the ``@staticmethod`` itself: no Orchestra/network
+    required, unlike the integration test below which needs a live backend
+    to exercise the full ``add_functions``/``reconcile_dependencies`` path.
+    A genuinely-missing *compositional* name (something this FunctionManager
+    does own outright) must still be flagged.
+    """
+    depends_on = [
+        "primitives.comms.send_unify_message",
+        "primitives.computer.user_desktop.files.pull",
+        "primitives.computer.user_desktop.list_linked",
+        "deleted_helper",
+    ]
+    available_names = {"some_other_stored_function"}
+
+    reasons = FunctionManager._dependency_stale_reasons(
+        depends_on,
+        available_names=available_names,
+    )
+
+    assert [reason.name for reason in reasons] == ["deleted_helper"]
+
+
 @_handle_project
 def test_reconcile_does_not_flag_real_primitive_dependency_as_stale():
     """A function depending on a real primitive must not be flagged stale
