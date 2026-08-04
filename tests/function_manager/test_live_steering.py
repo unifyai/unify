@@ -599,3 +599,22 @@ async def test_steering_reaches_a_sandbox_the_tool_never_saw():
     await sandbox.close()
     assert after["result"] == 6
     assert current_session(sandbox.global_state) is None
+
+
+@pytest.mark.asyncio
+async def test_around_passes_through_a_synchronous_result():
+    """The bracket wraps a call, not only an awaited one.
+
+    ``user_desktop.list_linked`` is documented as synchronous, so it reaches
+    ``around`` as a plain list. Awaiting that unconditionally raised "object
+    list can't be used in 'await' expression", which made every synchronous
+    primitive unreachable through ``execute_function``.
+    """
+    session = SteeringSession()
+
+    assert await session.around("list_linked", ["a-desktop"]) == ["a-desktop"]
+
+    async def _coro():
+        return "awaited"
+
+    assert await session.around("async call", _coro()) == "awaited"
