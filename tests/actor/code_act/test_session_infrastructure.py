@@ -101,6 +101,17 @@ class _FakeFunctionManager:
             ),
             "Session limit exceeded",
         ),
+        (
+            dict(
+                state_mode="stateful",
+                session_id=0,
+                session_name=None,
+                language="python",
+                venv_id=0,
+                venv_exists=lambda _v: False,
+            ),
+            "VirtualEnv 0 does not exist",
+        ),
     ],
 )
 def test_validate_execution_params_matrix(kwargs, expect_error_substr: str):
@@ -108,6 +119,55 @@ def test_validate_execution_params_matrix(kwargs, expect_error_substr: str):
     assert isinstance(err, dict)
     assert err.get("error_type") == "validation"
     assert expect_error_substr.lower() in str(err.get("error", "")).lower()
+
+
+def test_missing_venv_suggestion_offers_a_way_out():
+    """The error has to say what to do, or the model can only guess another id."""
+    err = _validate_execution_params(
+        state_mode="stateful",
+        session_id=0,
+        session_name=None,
+        language="python",
+        venv_id=7,
+        venv_exists=lambda _v: False,
+    )
+    suggestion = err["suggestion"]
+    assert "Omit venv_id" in suggestion
+    assert "FunctionManager_list_venvs" in suggestion
+    assert "FunctionManager_add_venv" in suggestion
+
+
+def test_existing_venv_passes_validation():
+    assert (
+        _validate_execution_params(
+            state_mode="stateful",
+            session_id=0,
+            session_name=None,
+            language="python",
+            venv_id=3,
+            venv_exists=lambda _v: True,
+        )
+        is None
+    )
+
+
+def test_venv_is_not_checked_when_none_is_requested():
+    """No venv request means no lookup — the default path must stay untouched."""
+
+    def _boom(_venv_id):  # pragma: no cover - must never be called
+        raise AssertionError("venv existence was checked without a venv_id")
+
+    assert (
+        _validate_execution_params(
+            state_mode="stateless",
+            session_id=None,
+            session_name=None,
+            language="python",
+            venv_id=None,
+            venv_exists=_boom,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

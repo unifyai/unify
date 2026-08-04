@@ -224,6 +224,7 @@ def _validate_execution_params(
         Callable[[str, Optional[int], int], Optional[str]]
     ] = None,
     session_exists: Optional[Callable[[str, Optional[int], int], bool]] = None,
+    venv_exists: Optional[Callable[[int], bool]] = None,
     max_sessions_total: Optional[int] = None,
     active_session_count: Optional[int] = None,
 ) -> dict | None:
@@ -252,6 +253,28 @@ def _validate_execution_params(
         return _validation_error(
             message=f"Unsupported state_mode: {state_mode!r}",
             suggestion="Use one of: 'stateful', 'read_only', 'stateless'",
+            state_mode=state_mode,
+            session_id=session_id,
+            session_name=session_name,
+            language=language,
+            venv_id=venv_id,
+        )
+
+    # A venv is a named resource, so a request for one that does not exist is
+    # answered here rather than deep in venv preparation, where it would arrive
+    # as a bare traceback carrying no way to recover.
+    if (
+        venv_id is not None
+        and venv_exists is not None
+        and not venv_exists(int(venv_id))
+    ):
+        return _validation_error(
+            message=f"VirtualEnv {venv_id} does not exist.",
+            suggestion=(
+                "Omit venv_id to run in the default environment, list the "
+                "existing venvs with FunctionManager_list_venvs, or create one "
+                "with FunctionManager_add_venv."
+            ),
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,

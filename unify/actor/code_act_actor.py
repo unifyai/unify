@@ -2615,9 +2615,20 @@ class CodeActActor(BaseCodeActActor):
                 venv_id=v,
                 session_id=s,
             ),
+            venv_exists=self._venv_exists,
             max_sessions_total=self._max_sessions_total,
             active_session_count=self._count_active_sessions_total(),
         )
+
+    def _venv_exists(self, venv_id: int) -> bool:
+        """Whether *venv_id* names a venv this actor can execute in.
+
+        Venvs are owned by the FunctionManager, so without one there is nothing
+        to check against — the venv-backed path rejects the call on its own.
+        """
+        if self.function_manager is None:
+            return True
+        return self.function_manager.get_venv(venv_id=venv_id) is not None
 
     def _resolve_session(
         self,
