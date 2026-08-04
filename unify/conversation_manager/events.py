@@ -1165,6 +1165,11 @@ class UnifyMessageReceived(Event):
     # All known room member contact ids (humans + peer assistants), excluding
     # self. Used to expand Transcripts ``receiver_ids`` for room traffic.
     participant_contact_ids: list[int] | None = None
+    # Who the sender picked out, as ``{"kind", "id", "name"}`` entries. A room
+    # message reaches every member assistant, so being named is what separates
+    # "this is for me" from "I am cc'd" — and without this the only trace of it
+    # is the literal "@Name" in the body, left for the model to read as prose.
+    mentions: list[dict] = field(default_factory=list)
 
 
 @dataclass

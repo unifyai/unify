@@ -1528,16 +1528,34 @@ class Renderer:
             # target the room via send_unify_message(team_id=/group_id=).
             room_line = ""
             if isinstance(message, UnifyMessage):
+                # Who the sender named, if anyone. Every member assistant gets
+                # its own copy of a room message, so without this each one reads
+                # an unaddressed message as its own to answer, and a message
+                # addressed to one teammate as equally its own.
+                addressed = ", ".join(
+                    name
+                    for name in (
+                        str(mention.get("name") or "").strip()
+                        for mention in (message.mentions or [])
+                        if isinstance(mention, dict)
+                    )
+                    if name
+                )
+                addressed_line = (
+                    f" addressed to {addressed};"
+                    if addressed
+                    else " nobody addressed by name;"
+                )
                 if message.group_id is not None:
                     room_line = (
                         f' [group chat group_id="{message.group_id}" — visible to '
-                        f"the whole group; reply with "
+                        f"the whole group;{addressed_line} reply with "
                         f"send_unify_message(group_id={message.group_id})]"
                     )
                 elif message.team_id is not None:
                     room_line = (
                         f' [team chat team_id="{message.team_id}" — visible to '
-                        f"the whole team; reply with "
+                        f"the whole team;{addressed_line} reply with "
                         f"send_unify_message(team_id={message.team_id})]"
                     )
 

@@ -487,6 +487,94 @@ class TestRendererUnifyMessage:
         assert "auto-downloaded" not in result
 
 
+class TestRendererRoomAddressing:
+    """A room message has to say who it was addressed to.
+
+    Every member assistant receives its own copy, so without the addressing
+    each one reads an unaddressed message as its own to answer, and a message
+    aimed at one teammate as equally its own.
+    """
+
+    def _room_message(self, mentions=None, **scope):
+        return UnifyMessage(
+            name="Boss",
+            content="can someone pull the numbers?",
+            timestamp=datetime(2025, 6, 13, 12, 0, 0, tzinfo=timezone.utc),
+            role="user",
+            attachments=[],
+            mentions=mentions or [],
+            **scope,
+        )
+
+    def _render(self, renderer, message):
+        return renderer.render_message(
+            message,
+            datetime(2025, 6, 13, 11, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_a_named_teammate_is_reported(self, renderer):
+        result = self._render(
+            renderer,
+            self._room_message(
+                mentions=[{"kind": "assistant", "id": "22", "name": "Ada"}],
+                team_id=7,
+            ),
+        )
+
+        assert "addressed to Ada;" in result
+
+    def test_several_names_are_all_reported(self, renderer):
+        result = self._render(
+            renderer,
+            self._room_message(
+                mentions=[
+                    {"kind": "assistant", "id": "22", "name": "Ada"},
+                    {"kind": "human", "id": "u1", "name": "Bo"},
+                ],
+                group_id=9,
+            ),
+        )
+
+        assert "addressed to Ada, Bo;" in result
+
+    def test_an_unaddressed_room_message_says_so(self, renderer):
+        """Silence about addressing reads as "addressed to me"."""
+        result = self._render(renderer, self._room_message(team_id=7))
+
+        assert "nobody addressed by name;" in result
+
+    def test_a_private_thread_gets_no_room_annotation(self, renderer):
+        """A 1:1 Console DM has one recipient, so there is nothing to arbitrate."""
+        result = self._render(
+            renderer,
+            self._room_message(
+                mentions=[{"kind": "assistant", "id": "22", "name": "Ada"}],
+            ),
+        )
+
+        assert "addressed to" not in result
+        assert "nobody addressed" not in result
+
+    def test_a_malformed_mention_does_not_break_rendering(self, renderer):
+        """Mentions cross a wire; a nameless entry must not take the line down."""
+        result = self._render(
+            renderer,
+            self._room_message(
+                mentions=[{"kind": "assistant", "id": "22"}, "not-a-dict"],
+                team_id=7,
+            ),
+        )
+
+        assert "nobody addressed by name;" in result
+        assert "can someone pull the numbers?" in result
+
+    def test_the_reply_route_is_still_named(self, renderer):
+        """Addressing is added to the scope annotation, not instead of it."""
+        result = self._render(renderer, self._room_message(group_id=9))
+
+        assert "send_unify_message(group_id=9)" in result
+
+
 # =============================================================================
 # Tests for Incremental Diff
 # =============================================================================
