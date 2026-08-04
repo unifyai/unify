@@ -135,25 +135,30 @@ def lint_source(tsx: str) -> List[str]:
 
         if _HEX_COLOUR.search(scannable):
             problems.append(
-                f"line {lineno}: hex colour is not allowed. Use a `tone` prop "
-                f"(muted/success/warning/danger) or a chart series index.",
+                f"line {lineno}: hex colour is not allowed. Use a semantic token "
+                f"utility (bg-primary, text-muted-foreground, bg-destructive, ...) "
+                f"or seriesColor(n) / var(--chart-N) for chart fills.",
             )
         if _FUNCTIONAL_COLOUR.search(scannable):
             problems.append(
-                f"line {lineno}: rgb()/hsl() colour is not allowed. Use a `tone` prop.",
+                f"line {lineno}: rgb()/hsl() colour is not allowed. Use a semantic "
+                f"token utility or seriesColor(n) for chart fills.",
             )
         if _TAILWIND_COLOUR_CLASS.search(scannable):
             problems.append(
                 f"line {lineno}: named colour utility class is not allowed and has no effect — "
-                f"the canvas stylesheet ships no colour utilities. Use a `tone` prop.",
+                f"the canvas stylesheet ships no colour palette. Use a semantic token "
+                f"utility (bg-primary, text-muted-foreground, bg-destructive, ...).",
             )
         if _ARBITRARY_COLOUR_CLASS.search(scannable):
             problems.append(
-                f"line {lineno}: arbitrary colour class is not allowed. Use a `tone` prop.",
+                f"line {lineno}: arbitrary colour class is not allowed. Use a "
+                f"semantic token utility.",
             )
         if _INLINE_FONT_FAMILY.search(scannable):
             problems.append(
-                f"line {lineno}: inline font-family is not allowed; the kit sets typography.",
+                f"line {lineno}: inline font-family is not allowed; the host "
+                f"stylesheet sets typography.",
             )
 
     imports = allowed_imports()
@@ -209,6 +214,12 @@ def _lint_class_strings(tsx: str) -> List[str]:
     problems: List[str] = []
     for token in sorted(candidates):
         if not token or "${" in token or token in manifest:
+            continue
+        # Colour classes already carry a line-anchored diagnostic with the
+        # colour-specific remedy; a second report for the same token is noise.
+        if _TAILWIND_COLOUR_CLASS.search(token) or _ARBITRARY_COLOUR_CLASS.search(
+            token,
+        ):
             continue
         problems.append(
             f"class {token!r} is not in the shipped stylesheet and will "

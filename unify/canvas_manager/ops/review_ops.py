@@ -57,8 +57,9 @@ _HOST_FALLBACKS = (
 
 # The documents the runtime is served under, newest first. Authoring always
 # reviews against the newest runtime present — that is the one a canvas built
-# by this toolchain will be routed to — while v1 keeps older installs working.
-_HOST_DOCUMENTS = ("host/v2/index.html", "host/v1/index.html")
+# by this toolchain will be routed to. A breaking runtime change adds a new
+# version at the front rather than replacing the existing entry.
+_HOST_DOCUMENTS = ("host/v1/index.html",)
 
 # Generous enough for a cold chromium launch on a throttled pod, short enough
 # that a canvas whose effect loops on mount fails rather than hangs.
