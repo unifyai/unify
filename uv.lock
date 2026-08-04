@@ -9592,11 +9592,9 @@ requires-dist = [
 dev = [
     { name = "autoflake", specifier = ">=2.3.1" },
     { name = "black", specifier = "==26.5.1" },
-    { name = "fastapi", specifier = ">=0.136.3" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
-    { name = "orjson", specifier = ">=3.10.0" },
     { name = "pre-commit", specifier = ">=4.0.1" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
