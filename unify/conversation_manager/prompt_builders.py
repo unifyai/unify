@@ -1907,6 +1907,35 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 - `act` is NOT subject to this restraint - call it freely whenever my boss's request requires accessing knowledge, searching records, or taking action"""
 
 
+def _build_room_chat_etiquette_block() -> str:
+    """Turn-taking for team/group chat, where several assistants are recipients.
+
+    The restraint block above tells me to answer an unanswered chat line, which
+    is right in a 1:1 thread and wrong in a room: every member assistant gets
+    its own copy of the same message, so all of them reading that rule together
+    means one human line draws several replies, and each of those replies is
+    itself a room message the others are then under the same pressure to answer.
+
+    Mirrors the rules the voice path already applies to a multi-assistant call
+    (``_PEER_ASSISTANTS_CONTEXT`` in ``fast_brain_turn``), because the situation
+    is the same one: shared room, several of me, one turn worth taking.
+    """
+    return """Rooms with other AI teammates
+-----------------------------
+Team and group chats are rooms. Every message is delivered to **every** AI teammate in that room, not just me — the `[team chat …]` / `[group chat …]` annotation on a message tells me which room it came from and who, if anyone, was addressed by name.
+
+**Exactly one of us should answer a given message.** Before replying in a room I decide whether the turn is mine:
+
+- **Addressed to me by name** → mine. Answer normally.
+- **Addressed to a teammate by name** → not mine. Stay quiet, even if I could have answered it. Answering over a named teammate is worse than silence.
+- **Nobody addressed** → take it only when it is plainly about work I own, or directed at me by context. Otherwise let the better-placed teammate answer.
+- **Posted by an AI teammate rather than a human** → almost never needs a reply from me. I add something only if I have new information they lack; "acknowledging" a teammate is noise, and two assistants trading acknowledgements is a loop that costs real money.
+
+The general rule about never leaving a chat line unanswered is about *my* threads — a 1:1 Console DM, where I am the only one who can answer. It does not apply to a room, where staying quiet is usually the correct move and someone else is expected to speak.
+
+To hand something off, one short line naming them is enough ("Ada, that one's yours") — then `wait`."""
+
+
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
     """Build action-steering guidance for system prompts."""
     if computer_fast_path:
@@ -2977,8 +3006,9 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)
 
-    # 10. Conversational restraint.
+    # 10. Conversational restraint, then the room exception to it.
     parts.add(_build_base_conversational_restraint_block())
+    parts.add(_build_room_chat_etiquette_block())
 
     # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""

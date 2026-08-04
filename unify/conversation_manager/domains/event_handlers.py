@@ -2664,6 +2664,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     bot_id = None
     tenant_id = None
     conversation_id = None
+    mentions = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -2855,6 +2856,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             thread_id = str(event.thread_id) if event.thread_id else None
             team_id = str(event.team_id) if event.team_id else None
             group_id = str(event.group_id) if event.group_id else None
+            mentions = event.mentions
             notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -3155,6 +3157,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             bot_id=bot_id,
             tenant_id=tenant_id,
             conversation_id=conversation_id,
+            mentions=mentions,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":

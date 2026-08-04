@@ -1381,6 +1381,11 @@ class CommsManager:
                             team_name=str(event.get("team_name") or ""),
                             group_id=resolved_group_id,
                             participant_contact_ids=participant_contact_ids or None,
+                            mentions=[
+                                mention
+                                for mention in (event.get("mentions") or [])
+                                if isinstance(mention, dict)
+                            ],
                         ).to_json(),
                     )
 

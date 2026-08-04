@@ -667,6 +667,45 @@ class TestConcurrentActionAckBlock:
         assert 'send_unify_message(contact_id=1, content="Let me check.")' in block
 
 
+class TestRoomChatEtiquette:
+    """Team/group chat needs the opposite default to a 1:1 thread.
+
+    The restraint section says never to leave a chat line unanswered, which is
+    right when I am the only possible answerer. A room delivers the same message
+    to every member assistant, so all of them following that rule turns one
+    human line into several replies — and each reply is itself a room message
+    the others are then under the same pressure to answer.
+    """
+
+    def test_the_room_etiquette_section_is_present(self):
+        assert "Rooms with other AI teammates" in _build()
+
+    def test_it_says_exactly_one_assistant_should_answer(self):
+        prompt = _build()
+        assert "Exactly one of us should answer a given message." in prompt
+
+    def test_it_tells_me_to_stand_down_when_a_teammate_is_named(self):
+        prompt = _build()
+        assert "Addressed to a teammate by name" in prompt
+        assert "Stay quiet" in prompt
+
+    def test_it_carves_the_room_exception_out_of_the_restraint_rule(self):
+        """Both rules ship together, so the narrower one has to name the wider."""
+        prompt = _build()
+        assert "Never `wait` while their chat line is still unanswered" in prompt
+        assert "It does not apply to a room" in prompt
+
+    def test_it_warns_off_replying_to_another_assistant(self):
+        """The volley the fan-out brake bounds should be discouraged first."""
+        prompt = _build()
+        assert "Posted by an AI teammate" in prompt
+
+    def test_it_points_at_the_annotation_that_carries_the_addressing(self):
+        """Guidance is useless if it names a signal the renderer never emits."""
+        prompt = _build()
+        assert "[team chat" in prompt and "[group chat" in prompt
+
+
 class TestCreateTeamsMeetShareTools:
     """create_teams_meet share guidance names only configured outbound tools."""
 
