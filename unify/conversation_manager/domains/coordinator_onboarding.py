@@ -90,12 +90,12 @@ _SUBTYPE_DEFAULT_MESSAGES: dict[str, str] = {
         "billsplit-dinner correction demo now."
     ),
     "my_computer_beat_requested": (
-        "The user clicked the My Computer row — run the live desktop demo now "
+        "The user clicked the Twin's Computer row — run the live desktop demo now "
         "if you're on a call with them, otherwise ring them with start_unify_meet "
         "— opener introduces the demo, briefing carries the demo script."
     ),
     "your_computer_beat_requested": (
-        "The user clicked the Their Computer demo row — fetch a file from their "
+        "The user clicked the Your Computer demo row — fetch a file from their "
         "linked computer now and send it back in chat; works from chat or on a "
         "call."
     ),

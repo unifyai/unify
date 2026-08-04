@@ -74,7 +74,7 @@ unknown or impossible.
    - Index: fetch https://docs.unify.ai/llms.txt for every page URL.
    - Append `.md` to any page URL for clean markdown.
    - Sections mirror the product: Communication, Workspace, Integrations,
-     Tasks, Learning, Canvas, Your Computer, Their Computer, Teams, Hiring —
+     Tasks, Learning, Canvas, Twin's Computer, Your Computer, Teams, Hiring —
      each with a `Developers` sub-section covering internals.
    - Best for: "what can it do", "how do I use X", setup and behavior
      questions. The docs are written for users and track the live deployment.

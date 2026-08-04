@@ -1124,10 +1124,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
             "row — run the guided billsplit-dinner correction demo from the "
             "notification framing.",
-            "  - `my_computer_beat_requested`: the user clicked the My Computer "
+            "  - `my_computer_beat_requested`: the user clicked the Twin's Computer "
             "row — on a call run the live desktop demo; off-call ring them via "
             "`start_unify_meet` with opener + briefing per the notification framing.",
-            "  - `your_computer_beat_requested`: the user clicked the Their Computer "
+            "  - `your_computer_beat_requested`: the user clicked the Your Computer "
             "demo row — fetch a file from their own linked computer (chat- or "
             "call-native; no ring); mark complete only after confirmed delivery.",
             "Rules for `onboarding_step_started`:",
