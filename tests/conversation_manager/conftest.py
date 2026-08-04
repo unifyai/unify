@@ -348,12 +348,67 @@ async def conversation_manager(request) -> CMStepDriver:
 
 
 def _reset_screen_share_state(cm: "CMStepDriver") -> None:
-    """Clear screen-share flags and buffered screenshots between tests."""
+    """Clear every meet surface and buffered screenshot between tests.
 
-    cm.cm.user_screen_share_active = False
-    cm.cm.assistant_screen_share_active = False
-    cm.cm.meet_screen_share_active = False
+    Driven off the surface registries rather than a hand-written list, so a
+    surface added to the CM cannot be left leaking here — the omission this
+    guards against is the same one it exists to catch.
+
+    Both groups are cleared, unlike the production ``reset_meet_surfaces``,
+    which spares the desktop-scoped pair because the Console's Desktop tab owns
+    those independently of any call. No such pane exists in a test, so between
+    tests the honest state is everything closed.
+    """
+    from unify.conversation_manager.conversation_manager import (
+        CALL_SCOPED_MEET_SURFACES,
+        DESKTOP_SCOPED_MEET_SURFACES,
+    )
+
+    for surface in (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES):
+        setattr(cm.cm, surface, False)
+    cm.cm._frontend_reported_meet_surfaces.clear()
     cm.cm._screenshot_buffer.clear()
+
+
+def _reset_call_state(cm: "CMStepDriver") -> None:
+    """Return the shared CM to its between-calls state.
+
+    The ``conversation_manager`` fixture is module-scoped, so one CM serves
+    every test in a file — an arrangement production never has, where a pod
+    builds its own and ends calls through the event handler. A test that opens
+    a voice session and does not close it therefore hands the next test a CM
+    still in ``Mode.CALL``, and that next test either fails a clean-state
+    precondition or is silently skipped: the call-init handler drops the event
+    when ``mode.is_voice`` is already true, so its ``start_call`` never runs and
+    the failure reads as "called 0 times" a hundred lines from the cause.
+
+    Leaving the call open is legitimate in the tests that do it — they are
+    exercising mid-call behaviour, and teardown is not their subject. So the
+    reset belongs here, once, rather than as a closing event every future voice
+    test has to remember.
+    """
+    from unify.contact_manager.types.contact import UNASSIGNED
+    from unify.conversation_manager.cm_types import Mode
+
+    cm.cm.mode = Mode.TEXT
+    call_manager = cm.cm.call_manager
+    call_manager.call_contact = None
+    # The identity of a finished call, mirroring what the ``*Ended`` handler
+    # clears; a stale room name or session id re-attaches the next call to the
+    # last one's transcript.
+    call_manager.conference_name = None
+    call_manager.room_name = None
+    call_manager.call_session_id = ""
+    call_manager.unify_meet_call_session_id = ""
+    call_manager.provider_call_sid = ""
+    call_manager.call_start_timestamp = None
+    call_manager.unify_meet_start_timestamp = None
+    call_manager.google_meet_start_timestamp = None
+    call_manager.teams_meet_start_timestamp = None
+    call_manager.call_exchange_id = UNASSIGNED
+    call_manager.unify_meet_exchange_id = UNASSIGNED
+    call_manager.google_meet_exchange_id = UNASSIGNED
+    call_manager.teams_meet_exchange_id = UNASSIGNED
 
 
 def _complete_in_flight_actions(cm: "CMStepDriver") -> None:
@@ -402,6 +457,10 @@ def initialized_cm(
 
     # Screen-share tests attach screenshots that must not leak into text-only turns.
     _reset_screen_share_state(conversation_manager)
+
+    # Voice tests that never end their call leave the shared CM mid-call, which
+    # the next test either trips over or is silently skipped by.
+    _reset_call_state(conversation_manager)
 
     # Clear tool call tracking from previous tests
     conversation_manager.all_tool_calls.clear()
