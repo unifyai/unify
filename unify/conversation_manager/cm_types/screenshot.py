@@ -66,11 +66,27 @@ def visual_source_label(source: str, attribution: str | None = None) -> str:
     return f"=== {label} ==="
 
 
+def _attribution_slug(attribution: str | None) -> str:
+    """Filename-safe fragment naming the sharer, or "" when unattributed."""
+    cleaned = "".join(
+        ch if ch.isalnum() or ch in "-_" else "-" for ch in (attribution or "")
+    ).strip("-")
+    return cleaned[:40]
+
+
 def generate_screenshot_path(entry: ScreenshotEntry) -> str:
-    """Compute a deterministic filepath for a screenshot (no I/O)."""
+    """Compute a deterministic filepath for a screenshot (no I/O).
+
+    The sharer is part of the name because one source can have several of them:
+    two people sharing into the same meeting produce frames a timestamp alone
+    cannot separate, and the loser of the collision is simply overwritten.
+    """
     subfolder = _SOURCE_SUBFOLDER.get(entry.source, entry.source.title())
     directory = Path("Screenshots") / subfolder
     stem = entry.timestamp.strftime("%Y-%m-%dT%H-%M-%S.%f")
+    slug = _attribution_slug(entry.attribution)
+    if slug:
+        stem = f"{stem}_{slug}"
     return str(directory / f"{stem}.jpg")
 
 

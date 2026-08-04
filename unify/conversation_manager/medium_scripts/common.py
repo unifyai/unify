@@ -667,7 +667,8 @@ class UserTrackCaptureManager:
         screen_mgr = UserTrackCaptureManager(ctx.room)  # screen share (default)
         webcam_mgr = UserTrackCaptureManager(ctx.room, track_source="camera")
         # ... later, on user utterance ...
-        b64 = screen_mgr.capture_screenshot()  # None if no active share
+        shots = screen_mgr.capture_screenshots()  # every active publisher
+        b64 = screen_mgr.capture_screenshot()  # focused publisher only
         # ... on cleanup ...
         await screen_mgr.close()
     """
@@ -684,10 +685,13 @@ class UserTrackCaptureManager:
 
         # Multi-party rooms can carry several publishers of the same source
         # (two humans with cameras on, or a new presenter taking over the
-        # share). Each publication gets its own capture keyed by sid; the most
-        # recently subscribed publisher with a frame is the "focused" one that
-        # screenshots read — matching the Console's latest-presenter-wins
-        # focus layout.
+        # share). Each publication gets its own capture keyed by sid, carrying
+        # the publisher it belongs to: a shared screen in a room of several
+        # people is somebody's in particular, and a frame whose owner is unknown
+        # can only be described as "the user's", which in a group call is a
+        # guess. ``capture_screenshots`` reads every publisher;
+        # ``capture_screenshot`` reads the most recently subscribed one, which
+        # matches the Console's latest-presenter-wins focus layout.
         self._captures: dict[str, dict] = {}
         self._capture_order: list[str] = []
         self._on_track_change = on_track_change
@@ -704,7 +708,7 @@ class UserTrackCaptureManager:
 
         @room.on("track_subscribed")
         def _on_track_subscribed(track, publication, participant):
-            self._handle_track_subscribed(track, publication)
+            self._handle_track_subscribed(track, publication, participant)
 
         @room.on("track_unsubscribed")
         def _on_track_unsubscribed(track, publication, participant):
@@ -717,7 +721,7 @@ class UserTrackCaptureManager:
     def _publication_sid(publication) -> str:
         return str(getattr(publication, "sid", "") or id(publication))
 
-    def _handle_track_subscribed(self, track, publication) -> None:
+    def _handle_track_subscribed(self, track, publication, participant) -> None:
         from livekit import rtc
 
         if (
@@ -727,13 +731,19 @@ class UserTrackCaptureManager:
             sid = self._publication_sid(publication)
             if sid in self._captures:
                 return
+            identity = str(getattr(participant, "identity", "") or "")
             if self._log:
                 self._log.screenshot_debug(
-                    f"{self._label} track subscribed ({sid}), starting capture "
-                    f"({len(self._captures) + 1} active)",
+                    f"{self._label} track subscribed ({sid}) from {identity!r}, "
+                    f"starting capture ({len(self._captures) + 1} active)",
                 )
             stream = rtc.VideoStream(track, format=rtc.VideoBufferType.RGBA)
-            capture: dict = {"stream": stream, "frame": None, "task": None}
+            capture: dict = {
+                "stream": stream,
+                "frame": None,
+                "task": None,
+                "identity": identity,
+            }
             capture["task"] = asyncio.create_task(
                 self._capture_loop(stream, capture),
             )
@@ -803,16 +813,9 @@ class UserTrackCaptureManager:
                 return capture["frame"]
         return None
 
-    def capture_screenshot(self) -> str | None:
-        """Convert the latest captured frame to a base64-encoded JPEG string.
-
-        Returns None if no matching track is active or no frame has been
-        captured yet.
-        """
-        frame_data = self._focused_frame()
-        if frame_data is None:
-            return None
-
+    @staticmethod
+    def _encode_jpeg(frame_data: tuple[bytes, int, int]) -> str:
+        """Base64-encoded JPEG for one raw RGBA frame."""
         import base64
         import io
 
@@ -824,6 +827,50 @@ class UserTrackCaptureManager:
         buf = io.BytesIO()
         rgb.save(buf, format="JPEG", quality=85)
         return base64.b64encode(buf.getvalue()).decode("ascii")
+
+    def capture_screenshot(self) -> str | None:
+        """Convert the focused publisher's latest frame to a base64 JPEG.
+
+        Returns None if no matching track is active or no frame has been
+        captured yet. Prefer ``capture_screenshots`` where the caller can
+        attribute frames: this one cannot say whose screen it returned.
+        """
+        frame_data = self._focused_frame()
+        if frame_data is None:
+            return None
+        return self._encode_jpeg(frame_data)
+
+    def capture_screenshots(self, limit: int | None = None) -> list[tuple[str, str]]:
+        """One ``(b64_jpeg, publisher_identity)`` per publisher holding a frame.
+
+        Oldest-subscribed first, so ``limit`` keeps the longest-standing shares
+        rather than whichever the dict happened to yield. Pass it: every frame
+        returned here is JPEG-encoded, written to disk and published over IPC by
+        the caller, once per turn, for as long as the share is up — so an
+        unbounded read makes the cost of a call scale with how many people
+        happen to have a camera on.
+
+        Identity is the LiveKit participant identity, which the caller resolves
+        to a display name — this class has no roster to do it with.
+        """
+        shots: list[tuple[str, str]] = []
+        available = 0
+        for sid in self._capture_order:
+            capture = self._captures.get(sid)
+            if capture is None or capture.get("frame") is None:
+                continue
+            available += 1
+            if limit is not None and len(shots) >= limit:
+                continue
+            shots.append(
+                (self._encode_jpeg(capture["frame"]), capture.get("identity") or ""),
+            )
+        if self._log and available > len(shots):
+            self._log.screenshot_debug(
+                f"{self._label}: read {len(shots)} of {available} publishers "
+                f"(limit={limit})",
+            )
+        return shots
 
     async def close(self) -> None:
         """Cancel every capture loop and release resources."""
@@ -881,6 +928,14 @@ async def publish_meet_interaction_from_track(source: str, active: bool) -> None
 # -------- Screenshot history for fast brain visual context -------- #
 
 
+# How many distinct sharers of one source reach the fast brain per turn. Each
+# image is spent on every turn for as long as the share is up, so an uncapped
+# room of people with cameras on quietly multiplies the cost of the whole call.
+# Keeping more than a couple also stops helping: past that the model is choosing
+# between near-identical frames rather than gaining context.
+MAX_VISUALS_PER_SOURCE = 2
+
+
 class ScreenshotHistory:
     """Per-source screenshot history for the fast brain LLM.
 
@@ -908,18 +963,28 @@ class ScreenshotHistory:
     def build_visual_context_content(self) -> list:
         """Build a content list for a visual context chat message.
 
-        Returns only the latest screenshot from each source with a clear
-        structural label.  Historical entries are omitted — the fast brain
-        needs a snapshot of *now*, not a timeline.
+        Returns the latest screenshot per (source, sharer) with a clear
+        structural label. Historical entries are omitted — the fast brain needs
+        a snapshot of *now*, not a timeline.
+
+        Keyed on the sharer as well as the source because a multi-party room has
+        several of each: keyed on source alone, the second person to share
+        overwrote the first and the room silently collapsed to one screen. At
+        most ``MAX_VISUALS_PER_SOURCE`` sharers survive per source, newest
+        dropped first so the longest-standing share is the one that keeps its
+        place.
         """
         from livekit.agents.llm import ImageContent
 
         if not self._entries:
             return []
 
-        latest_by_source: dict[str, "ScreenshotEntry"] = {}
+        # Insertion order is arrival order, so a later entry for the same sharer
+        # replaces the earlier one while the first appearance fixes their place
+        # in the queue.
+        latest: dict[tuple[str, str], "ScreenshotEntry"] = {}
         for entry, _ in self._entries:
-            latest_by_source[entry.source] = entry
+            latest[(entry.source, entry.attribution or "")] = entry
 
         from unify.conversation_manager.cm_types.screenshot import (
             VISUAL_SOURCE_ORDER,
@@ -928,15 +993,26 @@ class ScreenshotHistory:
 
         parts: list = []
         for source in VISUAL_SOURCE_ORDER:
-            entry = latest_by_source.get(source)
-            if entry is None:
-                continue
-            # Shared with the voice-agent prompt, which tells the model to look
-            # for this exact string.
-            parts.append(visual_source_label(source, entry.attribution))
-            parts.append(
-                ImageContent(image=f"data:image/jpeg;base64,{entry.b64}"),
-            )
+            for_source = [
+                entry
+                for (entry_source, _), entry in latest.items()
+                if entry_source == source
+            ]
+            kept = for_source[:MAX_VISUALS_PER_SOURCE]
+            for entry in kept:
+                # Shared with the voice-agent prompt, which tells the model to
+                # look for this exact string.
+                parts.append(visual_source_label(source, entry.attribution))
+                parts.append(
+                    ImageContent(image=f"data:image/jpeg;base64,{entry.b64}"),
+                )
+            dropped = len(for_source) - len(kept)
+            if dropped:
+                # A silently truncated room reads as a room where only these
+                # people were sharing.
+                parts.append(
+                    f"=== {dropped} FURTHER {source.upper()} SHARE(S) NOT SHOWN ===",
+                )
 
         return parts
 
