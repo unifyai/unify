@@ -10,7 +10,7 @@ to get colour or an unresolvable import past a naive check.
 import pytest
 
 from unify.canvas_manager.ops.build_ops import (
-    ALLOWED_IMPORTS,
+    allowed_imports,
     build_canvas,
     lint_source,
     toolchain_available,
@@ -81,7 +81,7 @@ class TestImports:
     def test_every_allowed_import_passes(self):
         source = "\n".join(
             f'import x{i} from "{name}";'
-            for i, name in enumerate(sorted(ALLOWED_IMPORTS))
+            for i, name in enumerate(sorted(allowed_imports()))
         )
         assert lint_source(source) == []
 
@@ -131,10 +131,10 @@ class TestBundleCeiling:
         filler = ",".join(f'{{ label: "row {n}", value: {n} }}' for n in range(20_000))
         source = (
             "import * as React from 'react';\n"
-            "import { Canvas, Text } from '@unity/canvas-kit';\n"
+            "import { Canvas } from '@unity/canvas-kit';\n"
             f"const rows = [{filler}];\n"
             "export default function View() {\n"
-            "  return <Canvas><Text>{rows.length}</Text></Canvas>;\n"
+            "  return <Canvas><span>{rows.length}</span></Canvas>;\n"
             "}\n"
         )
 
