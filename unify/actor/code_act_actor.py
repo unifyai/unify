@@ -2644,27 +2644,14 @@ class CodeActActor(BaseCodeActActor):
         Handles the full session resolution flow used by both ``execute_code``
         and ``execute_function``:
 
-        1. Read falsy session placeholders as "no session".
-        2. For stateful mode: resolve an existing session name, allocate a new
+        1. For stateful mode: resolve an existing session name, allocate a new
            session id, or default to session 0.
-        3. Register session name aliases when both name and id are provided.
-        4. Validate the resulting execution parameters.
+        2. Register session name aliases when both name and id are provided.
+        3. Validate the resulting execution parameters.
 
         Returns a ``_ResolvedSession`` named tuple.  If ``error`` is not
         ``None``, the caller should return it as the tool result immediately.
         """
-        # A model has no way to send an absent argument, so it fills these
-        # optionals with falsy placeholders instead of omitting them. An empty
-        # name is never a valid session name, and session 0 carries no meaning
-        # until state is being kept, so both read as "no session". Without this
-        # a stateless call is inexpressible: every attempt names a session the
-        # caller never asked for, and the validation error it earns is one the
-        # model cannot act on.
-        if not session_name:
-            session_name = None
-        if state_mode == "stateless" and not session_id:
-            session_id = None
-
         # Resolve / allocate sessions for stateful.
         if state_mode == "stateful":
             if session_name:
