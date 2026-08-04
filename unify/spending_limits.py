@@ -186,10 +186,9 @@ class _LimitCheckResult:
     billing_mode: Optional[str] = None
     # Account frozen server-side (admin freeze, card gate, abuse sweep).
     account_suspended: bool = False
-    # Trial daily-burn ceiling: populated by Orchestra only for accounts
-    # with no real payment history.
-    trial_daily_spend: Optional[float] = None
-    trial_daily_cap: Optional[float] = None
+    # Account has no real payment history. Set by Orchestra; false for
+    # internal accounts and admin-granted free trials.
+    never_paid: bool = False
     # The check could not be completed (Orchestra unreachable or errored).
     # Distinct from a clean 404, which legitimately means "no limit set".
     check_failed: bool = False
@@ -233,8 +232,7 @@ def _parse_spend_result(
     billing_mode = data.get("billing_mode")
     gate_fields = {
         "account_suspended": bool(data.get("account_suspended", False)),
-        "trial_daily_spend": data.get("trial_daily_spend"),
-        "trial_daily_cap": data.get("trial_daily_cap"),
+        "never_paid": bool(data.get("never_paid", False)),
         # Defaults True so an Orchestra build predating the field — or an
         # endpoint that doesn't carry it — never silently locks the API.
         "api_access_allowed": bool(data.get("api_access_allowed", True)),
@@ -583,8 +581,7 @@ async def check_spending_limits_callback(
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
     account_suspended = False
-    trial_daily_spend: Optional[float] = None
-    trial_daily_cap: Optional[float] = None
+    never_paid = False
     check_failed = False
     api_access_allowed = True
 
@@ -602,10 +599,7 @@ async def check_spending_limits_callback(
         if billing_mode is None and result.billing_mode is not None:
             billing_mode = result.billing_mode
         account_suspended = account_suspended or result.account_suspended
-        if trial_daily_spend is None and result.trial_daily_spend is not None:
-            trial_daily_spend = result.trial_daily_spend
-        if trial_daily_cap is None and result.trial_daily_cap is not None:
-            trial_daily_cap = result.trial_daily_cap
+        never_paid = never_paid or result.never_paid
 
         if result.exceeded:
             current = (
@@ -667,18 +661,17 @@ async def check_spending_limits_callback(
             ),
         )
 
-    # Paid-only providers. ``trial_daily_cap`` is Orchestra's never-paid
-    # marker: it is populated only for accounts with no real payment
-    # history, and is already NULL for internal accounts and for orgs
-    # holding an admin-granted free trial, so those keep full model access
-    # without a second exemption list here.
+    # Paid-only providers. Orchestra sets ``never_paid`` only for accounts
+    # with no real payment history, and already clears it for internal
+    # accounts and for orgs holding an admin-granted free trial, so those
+    # keep full model access without a second exemption list here.
     #
     # Unlike the Console-only gate above this applies on every surface,
     # including the runtime. An account that has never paid cannot reach
     # these providers from the Console either — that is the point, since
     # the Console is where the free grant is meant to be spent and these
     # models are what make spending it worthwhile.
-    if _payment_gated(request.model, never_paid=trial_daily_cap is not None):
+    if _payment_gated(request.model, never_paid=never_paid):
         provider = _provider_of(request.model)
         return LimitCheckResponse(
             allowed=False,
@@ -686,22 +679,6 @@ async def check_spending_limits_callback(
                 f"{provider} models require a payment method on this "
                 "account. Add one to enable them, or switch this assistant "
                 "to one of the included models."
-            ),
-        )
-
-    # Trial daily-burn ceiling (never-paid accounts only): bounds how fast
-    # trial credits can be extracted regardless of remaining balance.
-    if (
-        trial_daily_cap is not None
-        and trial_daily_spend is not None
-        and trial_daily_spend >= trial_daily_cap
-    ):
-        return LimitCheckResponse(
-            allowed=False,
-            reason=(
-                f"Daily trial spend limit reached (${trial_daily_spend:.2f} "
-                f"of ${trial_daily_cap:.2f} today). It resets at midnight "
-                "UTC; subscribe with a payment method to lift it."
             ),
         )
 

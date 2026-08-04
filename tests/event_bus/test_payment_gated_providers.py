@@ -21,15 +21,11 @@ from unify.spending_limits import (
     check_spending_limits_callback,
 )
 
-#: A wallet with room and no cap — the "has paid" shape.
+#: A wallet with room — the "has paid" shape.
 _PAID = {"cumulative_spend": 0.0, "limit": None, "credit_balance": 100.0}
 
-#: Orchestra populates the trial cap only for accounts that never paid.
-_NEVER_PAID = {
-    **_PAID,
-    "trial_daily_spend": 0.0,
-    "trial_daily_cap": 25.0,
-}
+#: Orchestra sets ``never_paid`` only for accounts with no payment history.
+_NEVER_PAID = {**_PAID, "never_paid": True}
 
 
 class TestProviderParsing:
