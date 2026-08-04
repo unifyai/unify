@@ -69,6 +69,7 @@ from .steering import (
     dispatch_with_steering,
     instrument,
     interrupt_directive,
+    is_stopped_outcome,
     restore_session,
     run_with_steering,
 )
@@ -7426,7 +7427,14 @@ if __name__ == "__main__":
         # Step 6: Pull the result file back via bisync, then read it locally.
         await self._sync_from_remote()
 
-        if result_local.exists():
+        if is_stopped_outcome(exec_res.result):
+            # A steering stop ended the script mid-run. Whatever it wrote
+            # before dying has been pulled back; the stop is the run's
+            # outcome, not a failure to produce a result file — and it wins
+            # even over a result the script managed to write while the kill
+            # was landing, matching the venv boundaries.
+            result_data = {"result": exec_res.result, "error": None}
+        elif result_local.exists():
             try:
                 result_data = json.loads(result_local.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
