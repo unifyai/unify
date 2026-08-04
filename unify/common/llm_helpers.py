@@ -619,8 +619,21 @@ def _annotation_to_schema(ann: Any) -> Dict[str, Any]:
 
     if is_union:
         sub_schemas = [annotation_to_schema(a) for a in get_args(ann)]
-        if len(sub_schemas) == 2 and {"type": "null"} in sub_schemas:
-            return next(s for s in sub_schemas if s != {"type": "null"})
+        null_schema = {"type": "null"}
+        # An optional parameter has to stay *expressible as absent*. Collapsing
+        # `int | None` to a bare integer leaves a model with no way to say "no
+        # value", so it supplies a sentinel instead — and a sentinel that means
+        # nothing to the receiver (venv 0, session 0) reads as a real request.
+        if len(sub_schemas) == 2 and null_schema in sub_schemas:
+            inner = next(s for s in sub_schemas if s != null_schema)
+            inner_type = inner.get("type")
+            # Widening the existing `type` keeps the schema a single shape, so
+            # the description, `items` and `additionalProperties` all survive
+            # and no second branch appears for the model to mistake for a
+            # serialized alternative.
+            if isinstance(inner_type, str):
+                return {**inner, "type": [inner_type, "null"]}
+            return inner
         return {"anyOf": sub_schemas}
 
     # Python's base `object` class: allow any JSON value (empty schema = no constraints)
