@@ -1157,7 +1157,47 @@ def _strip_chat_html(raw: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
 
 
+def _describe_call_opening_config(raw: object) -> str:
+    """Summarise an opening config for the log, without its copy.
+
+    Names the fields that decide how the call opens — and, for a recorded
+    opening, whether the asset actually resolves against
+    ``_RECORDED_OPENINGS``. The spoken text itself is the boss's own words
+    and is reported only as present or absent.
+    """
+    if raw in (None, ""):
+        return "absent"
+    parsed: object = raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return f"unparseable-json len={len(raw)}"
+    if not isinstance(parsed, dict):
+        return f"non-object {type(parsed).__name__}"
+
+    def _val(key: str) -> str:
+        return str(parsed.get(key, "") or "").strip()
+
+    asset = _val("recording_asset")
+    carried = sorted(
+        key
+        for key in ("opener_text", "briefing", "simulated_utterance", "transcript")
+        if _val(key)
+    )
+    return (
+        f"mode={_val('mode') or '-'} source={_val('source') or '-'} "
+        f"recording_asset={asset or '-'} asset_resolves={asset in _RECORDED_OPENINGS} "
+        f"recording_path={bool(_val('recording_path'))} "
+        f"recording_url={bool(_val('recording_url'))} carried={carried}"
+    )
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
+    # Logged before validation: a rejected config raises out of here, and the
+    # shape it arrived in is the only way to tell a caller sending the wrong
+    # thing from a call opening on stale state.
+    _log.info(f"Opening config: {_describe_call_opening_config(raw)}")
     if raw in (None, ""):
         return {"mode": "speak"}
     if isinstance(raw, str):
