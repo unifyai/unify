@@ -353,11 +353,19 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
     # Use fetched timezone if available, fallback to UTC
     base_fields["timezone"] = user_info.get("timezone") or "UTC"
 
-    # Store the platform user_id for cost attribution (contact_id -> user_id mapping)
+    # The platform user_id, which maps contact_id -> user_id. Added for cost
+    # attribution, but room routing now depends on it too: a Unify room's
+    # members arrive as platform user ids, and the only way back to a contact
+    # is this field.
     from ..session_details import SESSION_DETAILS
 
-    if SESSION_DETAILS.is_initialized and SESSION_DETAILS.user.id:
-        base_fields["user_id"] = SESSION_DETAILS.user.id
+    session_user_id = (
+        SESSION_DETAILS.user.id
+        if SESSION_DETAILS.is_initialized and SESSION_DETAILS.user.id
+        else None
+    )
+    if session_user_id:
+        base_fields["user_id"] = session_user_id
 
     if user_log is not None:
         try:
@@ -381,6 +389,14 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
             needs_slack = (
                 fetched_slack and entries.get("slack_user_id") != fetched_slack
             )
+            # Backfilled, not just set on insert. A boss contact provisioned
+            # before the session carried a user id keeps a null one forever
+            # otherwise: this sync runs on every boot and would walk past the
+            # empty field each time, which is why the gap stayed invisible
+            # until a room send tried to resolve members by user id.
+            needs_user_id = bool(session_user_id) and (
+                entries.get("user_id") != session_user_id
+            )
             needs_is_system = entries.get("is_system") is not True
 
             if (
@@ -391,6 +407,7 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                 or needs_discord
                 or needs_slack
                 or needs_is_system
+                or needs_user_id
             ):
                 update_kwargs: Dict[str, Any] = {
                     "contact_id": resolved_contact_id,
@@ -410,6 +427,8 @@ def provision_user_contact(self, user_log, *, contact_id: int | None = None) -> 
                     update_kwargs["slack_user_id"] = fetched_slack
                 if needs_is_system:
                     update_kwargs["is_system"] = True
+                if needs_user_id:
+                    update_kwargs["user_id"] = session_user_id
                 self.update_contact(**partition_update_kwargs(update_kwargs))
             else:
                 # Warm local cache when no change needed
