@@ -750,10 +750,18 @@ class ComputerBackend(_LowLevelActionsMixin, ABC):
 
         Executes a natural language instruction by interpreting the current
         visual state and performing the necessary UI interactions (clicks,
-        typing, scrolling, navigation, form filling, etc.). The agent is
-        **autonomous and can perform multiple steps** to achieve the goal
-        described in the instruction. It operates based on a visual
-        understanding of the current page/screen.
+        typing, scrolling, navigation, form filling, etc.). It operates based
+        on a visual understanding of the current page/screen.
+
+        How much it can do in one call depends on ``verify``. The default
+        (``verify=False``) takes ONE screenshot, plans from it, and executes
+        that plan blind: several actions are fine, but every target must be
+        identifiable in that first screenshot. A step whose target only exists
+        *after* an earlier action — a menu entry that has not opened yet, a
+        directory that appears once a location bar is focused — cannot be
+        planned and will not land. Split those at the UI-state boundary and
+        screenshot between the calls. ``verify=True`` re-observes and re-plans
+        between iterations, so it can adapt within a single call.
 
         Guidance
         --------
@@ -786,11 +794,13 @@ class ComputerBackend(_LowLevelActionsMixin, ABC):
         agent cannot predict ahead of time.
 
         **During live demos / interactive sessions** where the user is
-        watching in real time, strongly prefer verify=False. The latency
-        cost of verification (extra screenshot + LLM round-trip per
-        iteration) is directly felt by the user. Only use verify=True
-        interactively when the task is genuinely complex enough that
-        retrying from scratch would be worse than the verification overhead.
+        watching in real time, prefer verify=False *and split the work* — the
+        latency cost of verification (extra screenshot + LLM round-trip per
+        iteration) is directly felt by the user, so a chain of single-boundary
+        calls with a screenshot between each reads better than one verified
+        call. This preference never licenses packing a multi-boundary step into
+        one verify=False call: that does not become achievable because the
+        session is live, it just fails in front of the user.
 
         Parameters
         ----------
