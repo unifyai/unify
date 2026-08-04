@@ -97,6 +97,21 @@ _SECRET_EXCLUDES: tuple[str, ...] = (
     # Windows credential stores under %APPDATA% (AppData/Roaming).
     "/AppData/Roaming/gcloud/**",
     "/AppData/Roaming/Microsoft/Credentials/**",
+    # Any-depth forms: the same credential dirs/files nested inside a copied
+    # subtree (a checked-out repo with its own .netrc, a project folder with
+    # deploy keys under .ssh/, dotfiles with a nested .config/gcloud) must
+    # never leave the machine either. Kept alongside the anchored forms
+    # above rather than replacing them.
+    ".ssh/**",
+    ".gnupg/**",
+    ".aws/**",
+    ".kube/**",
+    ".config/gcloud/**",
+    ".docker/**",
+    ".netrc",
+    ".git-credentials",
+    "AppData/Roaming/gcloud/**",
+    "AppData/Roaming/Microsoft/Credentials/**",
 )
 
 

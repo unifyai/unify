@@ -51,6 +51,29 @@ def test_secrets_adds_tier3():
         assert p in pats
 
 
+def test_secrets_include_any_depth_forms_for_nested_credential_dirs():
+    """A pull/sync of a larger subtree must still drop credentials nested
+    inside it (e.g. Desktop/proj/.ssh/id_rsa), not just ones at the home root.
+    """
+    pats = _patterns(_build_excludes(noise=True, secrets=True))
+    for p in (
+        ".ssh/**",
+        ".gnupg/**",
+        ".aws/**",
+        ".kube/**",
+        ".config/gcloud/**",
+        ".docker/**",
+        ".netrc",
+        ".git-credentials",
+        "AppData/Roaming/gcloud/**",
+        "AppData/Roaming/Microsoft/Credentials/**",
+    ):
+        assert p in pats
+    # The anchored forms stay too — self-documenting, not replaced.
+    for p in ("/.ssh/**", "/.aws/**", "/.netrc", "/.config/gcloud/**"):
+        assert p in pats
+
+
 def test_windows_patterns_in_copies_not_in_browse():
     browse = _patterns(_build_excludes(noise=False, secrets=False))
     copy = _patterns(_build_excludes(noise=True, secrets=True))
@@ -63,6 +86,14 @@ def test_windows_patterns_in_copies_not_in_browse():
     # ... and Windows credential stores never leave the machine.
     assert "/AppData/Roaming/gcloud/**" in copy
     assert "/AppData/Roaming/gcloud/**" not in browse
+
+
+def test_browse_set_excludes_no_any_depth_secret_patterns():
+    """list_dir must stay truthful: no secret pattern, anchored or any-depth,
+    should ever reach the browse (secrets=False) exclude set."""
+    pats = _patterns(_build_excludes(noise=False, secrets=False))
+    for p in (".ssh/**", ".aws/**", ".netrc", ".config/gcloud/**"):
+        assert p not in pats
 
 
 def test_sync_args_exclude_noise_secrets_and_carry_stats():
