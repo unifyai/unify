@@ -114,6 +114,43 @@ _SECRET_EXCLUDES: tuple[str, ...] = (
     "AppData/Roaming/Microsoft/Credentials/**",
 )
 
+# Credential dir/file names, used to refuse a pull/sync request that targets
+# a credential path *directly* (see _is_credential_path below) rather than
+# rely on the exclude patterns above, which don't cover that case. Keep in
+# sync with the entries in _SECRET_EXCLUDES.
+_SECRET_DIR_NAMES: tuple[str, ...] = (".ssh", ".gnupg", ".aws", ".kube", ".docker")
+_SECRET_DIR_PATH_NAMES: tuple[tuple[str, ...], ...] = (
+    (".config", "gcloud"),
+    ("AppData", "Roaming", "gcloud"),
+    ("AppData", "Roaming", "Microsoft", "Credentials"),
+)
+_SECRET_FILE_NAMES: tuple[str, ...] = (".netrc", ".git-credentials")
+
+
+def _is_credential_path(rel: PurePosixPath) -> bool:
+    """True if ``rel`` names, or falls inside, a credential dir/file.
+
+    The exclude patterns above only protect a credential dir/file *nested
+    inside* a larger requested subtree. They can't protect a request that
+    targets the credential path directly: ``pull``/``sync`` make the
+    requested entry's own directory the copy's rclone source root, which
+    absorbs the credential path segment out of every relative path the
+    filters test against (e.g. pulling ``.ssh/id_rsa`` copies from a source
+    rooted at ``.ssh``, so no remaining path segment still says ".ssh") — so
+    the filters silently let it through. Call this before any rclone call is
+    made and refuse outright instead.
+    """
+    parts = rel.parts
+    if parts and parts[-1] in _SECRET_FILE_NAMES:
+        return True
+    for i in range(len(parts)):
+        if parts[i] in _SECRET_DIR_NAMES:
+            return True
+        for seq in _SECRET_DIR_PATH_NAMES:
+            if parts[i : i + len(seq)] == seq:
+                return True
+    return False
+
 
 def _exclude_patterns(*, noise: bool, secrets: bool) -> list[str]:
     """The requested exclude tiers as raw rclone patterns.
@@ -261,10 +298,17 @@ class UserHomeSFTP:
 
         Noise (caches, deps, VCS metadata) and credential dirs (``.ssh``,
         ``.gnupg``, ``.aws``, …) are skipped, so pulling a directory won't drag
-        in its dependency trees or secrets. Use :meth:`list_dir` to see the
-        full tree first.
+        in its dependency trees or secrets. A request that targets a
+        credential path directly (e.g. ``.ssh/id_rsa``) is refused outright
+        rather than silently copying it — see :func:`_is_credential_path`.
+        Use :meth:`list_dir` to see the full tree first.
         """
         rel = _normalize_remote(remote_path)
+        if _is_credential_path(rel):
+            raise ValueError(
+                f"Refusing to pull {rel}: path is a credential file or "
+                "directory and must not leave the user's machine",
+            )
         dest = self.local_root / rel
         # rclone refuses ``copyto`` against a single file whenever any filter is
         # set ("can't limit to single files when using filters"), so every
@@ -329,9 +373,16 @@ class UserHomeSFTP:
 
         ``remote_path`` is home-relative (``""`` mirrors the whole home, which
         can be large and slow — scope to a subtree like ``"Documents"`` when
-        possible). Returns the absolute local paths now staged.
+        possible). A request that targets a credential path directly (e.g.
+        ``.ssh``) is refused outright — see :func:`_is_credential_path`.
+        Returns the absolute local paths now staged.
         """
         rel = _normalize_remote(remote_path)
+        if _is_credential_path(rel):
+            raise ValueError(
+                f"Refusing to sync {rel}: path is a credential file or "
+                "directory and must not leave the user's machine",
+            )
         dest = self.local_root / rel
         async with self._op_lock:
             dest.mkdir(parents=True, exist_ok=True)
