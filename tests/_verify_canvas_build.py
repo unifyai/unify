@@ -16,11 +16,16 @@ from unify.canvas_manager.ops.build_ops import build_canvas, toolchain_available
 
 CLEAN = """
 import * as React from 'react';
-import { Canvas, Card, CardContent, CardHeader, CardTitle, Stat, Table, type CanvasViewProps } from '@unity/canvas-kit';
+import { Canvas, Freshness, cn, type CanvasViewProps } from '@unity/canvas-kit';
+import { ChevronDown } from 'lucide-react';
 
 interface Row extends Record<string, unknown> {
   title: string;
   status: string;
+}
+
+function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('rounded-xl border bg-card text-card-foreground shadow', className)} {...props} />;
 }
 
 export default function Tracker({ canvas }: CanvasViewProps) {
@@ -29,20 +34,22 @@ export default function Tracker({ canvas }: CanvasViewProps) {
 
   return (
     <Canvas>
-      <Card>
-        <CardHeader>
-          <CardTitle>Open</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Stat label="Open" value={open.length} />
-          <Table
-            rows={open}
-            columns={[
-              { key: 'title', header: 'Task' },
-              { key: 'status', header: 'Status' },
-            ]}
-          />
-        </CardContent>
+      <Card className="p-6">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold">Open ({open.length})</span>
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <table className="w-full text-sm">
+          <tbody>
+            {open.map((row) => (
+              <tr key={row.title} className="border-b">
+                <td className="p-2">{row.title}</td>
+                <td className="p-2 text-muted-foreground">{row.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Freshness synced={Date.now()} />
       </Card>
     </Canvas>
   );
@@ -51,12 +58,16 @@ export default function Tracker({ canvas }: CanvasViewProps) {
 
 # A wrong prop name. esbuild compiles this happily, so only the typecheck stage
 # can reject it -- which is the whole reason tsc runs.
-TYPE_ERROR = CLEAN.replace("rows={open}", "rows={open} colums={[]}")
+TYPE_ERROR = CLEAN.replace("synced={Date.now()}", "synced={Date.now()} staleAfter={1}")
 
 HEX = CLEAN.replace(
-    "<CardTitle>Open</CardTitle>",
-    '<CardTitle style={{ color: "#ff0000" }}>Open</CardTitle>',
+    'className="font-semibold"',
+    'className="font-semibold" style={{ color: "#ff0000" }}',
 )
+
+# A class the shipped stylesheet does not contain: it would silently style
+# nothing at view time, which is exactly why the lint refuses it.
+GHOST_CLASS = CLEAN.replace('className="p-6"', 'className="p-6 backdrop-hue-rotate-15"')
 
 FORBIDDEN_IMPORT = "import axios from 'axios';\n" + CLEAN
 
@@ -119,6 +130,13 @@ def main() -> int:
     check(
         "unavailable import blocks publish",
         not bad_import.ok and bad_import.failed_stage == "lint",
+    )
+
+    ghost, _ = build_canvas(GHOST_CLASS)
+    check(
+        "class outside the shipped stylesheet blocks publish",
+        not ghost.ok and ghost.failed_stage == "lint",
+        "; ".join(ghost.diagnostics)[:120],
     )
 
     oversized, oversized_code = build_canvas(OVERSIZED)

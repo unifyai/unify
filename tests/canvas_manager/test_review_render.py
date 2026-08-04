@@ -29,17 +29,16 @@ from unify.canvas_manager.types.view import ReviewReport
 
 WORKING = """
 import * as React from 'react';
-import { Canvas, Card, CardContent, Stat, type CanvasViewProps } from '@unity/canvas-kit';
+import { Canvas, cn, type CanvasViewProps } from '@unity/canvas-kit';
 
 export default function View({ canvas }: CanvasViewProps) {
   const rows = canvas.data.tasks ?? [];
   return (
     <Canvas>
-      <Card>
-        <CardContent>
-          <Stat label="Open" value={rows.length} />
-        </CardContent>
-      </Card>
+      <div className={cn('rounded-xl border bg-card p-6 text-card-foreground')}>
+        <p className="text-sm text-muted-foreground">Open</p>
+        <p className="text-2xl font-semibold">{rows.length}</p>
+      </div>
     </Canvas>
   );
 }
@@ -51,7 +50,7 @@ export default function View({ canvas }: CanvasViewProps) {
 # rows, and it throws the moment the binding comes back empty.
 THROWS_ON_MOUNT = """
 import * as React from 'react';
-import { Canvas, Card, CardContent, Text, type CanvasViewProps } from '@unity/canvas-kit';
+import { Canvas, type CanvasViewProps } from '@unity/canvas-kit';
 
 interface Row extends Record<string, unknown> {
   nested: { label: string };
@@ -62,11 +61,9 @@ export default function View({ canvas }: CanvasViewProps) {
   const first = rows[0] as Row;
   return (
     <Canvas>
-      <Card>
-        <CardContent>
-          <Text>{first.nested.label}</Text>
-        </CardContent>
-      </Card>
+      <div className="rounded-xl border bg-card p-6">
+        <p>{first.nested.label}</p>
+      </div>
     </Canvas>
   );
 }
@@ -97,6 +94,7 @@ class TestHarnessContract:
     def test_only_the_named_aliases_are_offered(self):
         html = review_ops._parent_html(
             host_origin="http://127.0.0.1:1",
+            host_document="host/v1/index.html",
             source="export default () => null",
             props={"title": "T"},
             rows={"tasks": [{"a": 1}], "people": []},
@@ -108,6 +106,7 @@ class TestHarnessContract:
         # action design exists to prevent; the harness must not be the exception.
         html = review_ops._parent_html(
             host_origin="http://127.0.0.1:1",
+            host_document="host/v1/index.html",
             source="export default () => null",
             props={},
             rows={},
@@ -119,6 +118,7 @@ class TestHarnessContract:
     def test_the_frame_is_sandboxed_the_way_console_sandboxes_it(self):
         html = review_ops._parent_html(
             host_origin="http://127.0.0.1:1",
+            host_document="host/v1/index.html",
             source="",
             props={},
             rows={},
@@ -135,6 +135,7 @@ class TestHarnessContract:
         # down and be reported as a render failure it did not cause.
         html = review_ops._parent_html(
             host_origin="http://127.0.0.1:1",
+            host_document="host/v1/index.html",
             source='const s = "</script><script>alert(1)</script>";',
             props={"note": "</script>"},
             rows={"a": [{"html": "<!-- </script> -->"}]},
