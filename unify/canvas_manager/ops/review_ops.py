@@ -55,8 +55,10 @@ _HOST_FALLBACKS = (
     Path.home() / ".unity" / "canvas-host",
 )
 
-# The document the runtime is served under, fixed by the host build's `base`.
-_HOST_DOCUMENT = "host/v1/index.html"
+# The documents the runtime is served under, newest first. Authoring always
+# reviews against the newest runtime present — that is the one a canvas built
+# by this toolchain will be routed to — while v1 keeps older installs working.
+_HOST_DOCUMENTS = ("host/v2/index.html", "host/v1/index.html")
 
 # Generous enough for a cold chromium launch on a throttled pod, short enough
 # that a canvas whose effect loops on mount fails rather than hangs.
@@ -72,9 +74,18 @@ def _host_root() -> Optional[Path]:
     candidates += list(_HOST_FALLBACKS)
 
     for candidate in candidates:
-        if (candidate / _HOST_DOCUMENT).is_file():
-            return candidate
+        for document in _HOST_DOCUMENTS:
+            if (candidate / document).is_file():
+                return candidate
     return None
+
+
+def _host_document(host: Path) -> str:
+    """The newest runtime document this host root serves."""
+    for document in _HOST_DOCUMENTS:
+        if (host / document).is_file():
+            return document
+    raise FileNotFoundError(f"no host document under {host}")
 
 
 def _browser_available() -> bool:
@@ -213,6 +224,7 @@ def _js(value: Any) -> str:
 def _parent_html(
     *,
     host_origin: str,
+    host_document: str,
     source: str,
     props: Dict[str, Any],
     rows: Dict[str, Any],
@@ -225,7 +237,7 @@ def _parent_html(
     races the host's deferred module script and the init is dropped.
     """
     return f"""<!doctype html><meta charset="utf-8"><body style="margin:0">
-<iframe id="f" src="{host_origin}/{_HOST_DOCUMENT}" sandbox="allow-scripts"
+<iframe id="f" src="{host_origin}/{host_document}" sandbox="allow-scripts"
         style="width:1024px;height:768px;border:0" allow="" referrerpolicy="no-referrer"></iframe>
 <script>
   window.__log = {{ ready: null, errors: [], aliases: [], height: 0 }};
@@ -313,6 +325,7 @@ def _render(
     )
     parent_config.index_body = _parent_html(
         host_origin=host_origin,
+        host_document=_host_document(host),
         source=source,
         props=props,
         rows=rows,
@@ -410,6 +423,7 @@ def render_and_review(
     props: Dict[str, Any],
     rows: Optional[Dict[str, Any]] = None,
     out_dir: Optional[Path] = None,
+    intent: str = "",
 ) -> ReviewReport:
     """Render one canvas in both themes and report what happened.
 
@@ -442,6 +456,7 @@ def render_and_review(
             props=props,
             rows=rows or {},
             out_dir=target,
+            intent=intent,
         ).result()
 
 
@@ -468,7 +483,7 @@ and not the author's to change), or on features you think are missing. If it rea
 well, say so and return no issues."""
 
 
-def _critique(shots: List[str]) -> Tuple[str, List[str]]:
+def _critique(shots: List[str], *, intent: str = "") -> Tuple[str, List[str]]:
     """Look at the screenshots and report what a viewer would notice.
 
     Advisory by construction. A critique that cannot run -- no vision model
@@ -483,12 +498,22 @@ def _critique(shots: List[str]) -> Tuple[str, List[str]]:
 
     from unify.common.reasoning import query_llm
 
+    prompt = _CRITIQUE_PROMPT
+    if intent:
+        prompt += (
+            f"\n\nThe view was built for this request: {intent!r}. Also report "
+            f"where what is rendered plainly fails to serve that request — a "
+            f"missing panel it asked for, an empty region where its data should "
+            f"be, a control it named that is absent. Judge fitness from what is "
+            f"visible; do not speculate about behaviour you cannot see."
+        )
+
     try:
         # Safe on this thread by construction: the pool worker has no running
         # loop, which is the same reason playwright's sync API works here.
         result = asyncio.run(
             query_llm(
-                _CRITIQUE_PROMPT,
+                prompt,
                 images=list(shots),
                 response_format=_Critique,
                 origin="CanvasManager.review",
@@ -503,7 +528,7 @@ def _critique(shots: List[str]) -> Tuple[str, List[str]]:
     return "rendered", []
 
 
-def _render_and_critique(**kwargs: Any) -> ReviewReport:
+def _render_and_critique(intent: str = "", **kwargs: Any) -> ReviewReport:
     """Render, then look at the result.
 
     Kept separate from ``_render`` so the mechanical half stays testable without a
@@ -518,5 +543,5 @@ def _render_and_critique(**kwargs: Any) -> ReviewReport:
     if not report.rendered or not report.screenshots:
         return report
 
-    verdict, issues = _critique(report.screenshots)
+    verdict, issues = _critique(report.screenshots, intent=intent)
     return report.model_copy(update={"verdict": verdict, "issues": issues})
