@@ -65,7 +65,8 @@ class TestPrimitiveSurface:
 
     def test_the_spec_warns_off_colour(self):
         note = get_registry().get_manager_spec("canvas").special_note or ""
-        assert "NEVER write a colour" in note
+        assert "COLOUR enters only through semantic token utilities" in note
+        assert "rejected" in note
 
 
 class TestRuntimeWiring:
@@ -158,14 +159,19 @@ class TestKitReference:
         assert "# @unity/canvas-kit" in digest
         # A parse regression would emit a plausible-looking file with no
         # components in it, which is worse than none because it reads as coverage.
-        assert digest.count("\n### ") > 20
+        # The kit is protocol-only, so the surface is small and every entry is
+        # load-bearing.
+        assert digest.count("\n### ") >= 5
+        for name in ("<Canvas>", "<ActionButton>", "<ActionForm>", "<ActionResult>"):
+            assert name in digest
 
     def test_the_digest_reaches_the_prompt(self):
         examples = get_registry().prompt_examples(CANVAS_SCOPE)
         assert "@unity/canvas-kit" in examples
-        # Enumerated scales, because a prop typed `tone?: Tone` is unusable
-        # without the values Tone admits and a guess is a typecheck failure.
-        assert "`Tone` =" in examples
+        # The authoring-model preamble is the digest's distinctive text: seeing
+        # it proves the digest itself reached the prompt, not just an example
+        # that happens to name the kit.
+        assert "The kit carries no presentational vocabulary" in examples
 
     def test_every_component_the_examples_use_is_documented(self):
         import re
