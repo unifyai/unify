@@ -579,6 +579,19 @@ class _VenvConnection:
                     if steering is not None
                     else None
                 )
+                pause_watcher = (
+                    asyncio.create_task(
+                        steering.relay_pause(
+                            lambda paused: self._function_manager._set_process_paused(
+                                self._process,
+                                use_process_group=sys.platform != "win32",
+                                paused=paused,
+                            ),
+                        ),
+                    )
+                    if steering is not None
+                    else None
+                )
 
                 try:
                     while True:
@@ -619,19 +632,27 @@ class _VenvConnection:
                                 f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
                             )
                 finally:
-                    if watcher is not None:
-                        watcher.cancel()
+                    for task in (watcher, pause_watcher):
+                        if task is None:
+                            continue
+                        task.cancel()
                         try:
-                            await watcher
+                            await task
                         except asyncio.CancelledError:
                             pass
                         except Exception:
-                            # A control send can lose the race with the run
-                            # ending; the attempt's own outcome stands.
+                            # A watcher can lose the race with the run ending;
+                            # the attempt's own outcome stands.
                             logger.debug(
-                                "steering: correction watcher failed",
+                                "steering: subprocess watcher failed",
                                 exc_info=True,
                             )
+                    if pause_watcher is not None:
+                        await self._function_manager._set_process_paused(
+                            self._process,
+                            use_process_group=sys.platform != "win32",
+                            paused=False,
+                        )
 
             async def _run(source: str) -> dict:
                 if timeout is None:
@@ -6655,6 +6676,19 @@ class FunctionManager(BaseFunctionManager):
                 if steering is not None
                 else None
             )
+            pause_watcher = (
+                asyncio.create_task(
+                    steering.relay_pause(
+                        lambda paused: self._set_process_paused(
+                            process,
+                            use_process_group=use_process_group,
+                            paused=paused,
+                        ),
+                    ),
+                )
+                if steering is not None
+                else None
+            )
 
             try:
                 while True:
@@ -6743,17 +6777,19 @@ class FunctionManager(BaseFunctionManager):
                     "stderr": "".join(stderr_output),
                 }
             finally:
-                if watcher is not None:
-                    watcher.cancel()
+                for task in (watcher, pause_watcher):
+                    if task is None:
+                        continue
+                    task.cancel()
                     try:
-                        await watcher
+                        await task
                     except asyncio.CancelledError:
                         pass
                     except Exception:
-                        # A control send can lose the race with the run
-                        # ending; the attempt's own outcome stands.
+                        # A watcher can lose the race with the run ending;
+                        # the attempt's own outcome stands.
                         logger.debug(
-                            "steering: correction watcher failed",
+                            "steering: subprocess watcher failed",
                             exc_info=True,
                         )
 
@@ -6787,8 +6823,37 @@ class FunctionManager(BaseFunctionManager):
                 "stderr": "",
             }
 
+    @staticmethod
+    async def _set_process_paused(
+        process: asyncio.subprocess.Process,
+        *,
+        use_process_group: bool,
+        paused: bool,
+    ) -> None:
+        """Freeze or thaw a subprocess with SIGSTOP/SIGCONT.
+
+        OS-level pause is what makes pause mean pause out-of-process: it holds
+        the child wherever it is — mid-loop, mid-sleep, even inside blocking
+        sync code no checkpoint can reach — where in-process pause can only
+        hold at the next checkpoint. Resuming a process that never stopped is
+        harmless, so callers thaw unconditionally on the way out; a frozen
+        child would otherwise sit on SIGTERM forever. No-op on Windows, which
+        has no stop signal.
+        """
+        if sys.platform == "win32" or process.returncode is not None:
+            return
+        sig = signal.SIGSTOP if paused else signal.SIGCONT
+        try:
+            if use_process_group and process.pid is not None:
+                os.killpg(os.getpgid(process.pid), sig)
+            else:
+                process.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            # The process ended while the pause state was changing.
+            pass
+
+    @staticmethod
     async def _terminate_process_group(
-        self,
         process: asyncio.subprocess.Process,
         use_process_group: bool,
     ) -> None:
@@ -6796,12 +6861,18 @@ class FunctionManager(BaseFunctionManager):
         Terminate a subprocess and all its children (process group).
 
         Sends SIGTERM first for graceful shutdown, then SIGKILL if the process
-        doesn't terminate within the timeout.
+        doesn't terminate within the timeout. A stopped (SIGSTOP) process is
+        continued first so the termination signal can be delivered.
 
         Args:
             process: The subprocess to terminate.
             use_process_group: Whether the process was started with start_new_session=True.
         """
+        await FunctionManager._set_process_paused(
+            process,
+            use_process_group=use_process_group,
+            paused=False,
+        )
         try:
             if use_process_group and process.pid is not None:
                 # Kill the entire process group (subprocess + all its children)
@@ -7934,6 +8005,11 @@ if __name__ == "__main__":
                 start_new_session=use_process_group,
             )
             steering = active_session()
+            if steering is not None:
+                # Shell never reaches run_with_steering (there is no source to
+                # splice), so the script is bound here for the patch author to
+                # read when it decides between stopping and doing nothing.
+                steering.bind_source(implementation)
             stopped: Optional[ExecutionStopped] = None
 
             async def stop_process(request: Any) -> None:
@@ -8067,6 +8143,19 @@ if __name__ == "__main__":
                 if steering is not None
                 else None
             )
+            pause_watcher = (
+                asyncio.create_task(
+                    steering.relay_pause(
+                        lambda paused: self._set_process_paused(
+                            process,
+                            use_process_group=use_process_group,
+                            paused=paused,
+                        ),
+                    ),
+                )
+                if steering is not None
+                else None
+            )
 
             try:
                 # Wait for process to complete with timeout
@@ -8120,10 +8209,12 @@ if __name__ == "__main__":
 
             finally:
                 # Clean up
-                if watcher is not None:
-                    watcher.cancel()
+                for task in (watcher, pause_watcher):
+                    if task is None:
+                        continue
+                    task.cancel()
                     try:
-                        await watcher
+                        await task
                     except asyncio.CancelledError:
                         pass
 

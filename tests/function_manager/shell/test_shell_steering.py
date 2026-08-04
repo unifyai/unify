@@ -135,6 +135,30 @@ async def test_patch_author_can_stop_source_with_no_python_functions():
     assert request.patches == []
 
 
+@pytest.mark.asyncio
+async def test_stop_terminates_a_stateless_shell_command():
+    """The plain execute_code shell path has no primitives bridge at all, so
+    the watcher is the only thing that can reach it."""
+    from unify.actor.execution.session import _execute_shell_stateless
+
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the command")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with use_session(session):
+        result = await _execute_shell_stateless(
+            language="bash",
+            command="echo started\nsleep 30\necho finished",
+        )
+
+    assert result["error"] is None
+    assert result["result"] == {
+        "status": "stopped",
+        "reason": "cancel the command",
+    }
+    assert "finished" not in result["stdout"]
+
+
 @_handle_project
 @pytest.mark.asyncio
 async def test_stop_terminates_shell_between_dispatches(function_manager_factory):

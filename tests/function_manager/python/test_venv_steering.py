@@ -680,3 +680,79 @@ async def test_pooled_connection_outlives_the_session_that_steered_it(
     finally:
         await pool.close()
         _cleanup_venv(fm, venv_id)
+
+
+# ── pause, mirrored into the child process ──────────────────────────────────
+@pytest.mark.asyncio
+async def test_relay_pause_mirrors_state_transitions():
+    session = SteeringSession()
+    seen: list = []
+
+    async def _deliver(paused: bool) -> None:
+        seen.append(paused)
+
+    relay = asyncio.create_task(session.relay_pause(_deliver, poll_interval=0.005))
+    await asyncio.sleep(0.03)
+    assert seen == [], "running from the start needs no resume signal"
+
+    session.runtime.pause()
+    await asyncio.sleep(0.03)
+    session.runtime.resume()
+    await asyncio.sleep(0.03)
+
+    relay.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await relay
+    assert seen == [True, False]
+
+
+PAUSABLE_IMPLEMENTATION = (
+    "async def tick():\n"
+    "    await primitives.comms.send(to='started')\n"
+    "    for i in range(25):\n"
+    "        await asyncio.sleep(0.02)\n"
+    "    await primitives.comms.send(to='finished')\n"
+    "    return 'done'\n"
+)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_pause_freezes_a_venv_child_between_dispatches(
+    function_manager_factory,
+):
+    """In-process pause can only hold at a checkpoint; a subprocess is frozen
+    wherever it is, dispatching or not."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+    comms = _Comms()
+    session = SteeringSession()
+
+    try:
+        with use_session(session):
+            run = asyncio.create_task(
+                fm.execute_in_venv(
+                    venv_id=venv_id,
+                    implementation=PAUSABLE_IMPLEMENTATION,
+                    call_kwargs={},
+                    is_async=True,
+                    primitives=_Prims(comms),
+                ),
+            )
+            while "started" not in comms.sent:
+                await asyncio.sleep(0)
+            session.runtime.pause()
+            # Unfrozen, the remaining loop takes ~0.5s; a full second of
+            # silence is the child holding still.
+            await asyncio.sleep(1.0)
+            assert not run.done(), "the child kept running while paused"
+            assert "finished" not in comms.sent
+            session.runtime.resume()
+            out = await asyncio.wait_for(run, timeout=60)
+
+        assert out["error"] is None, out["error"]
+        assert out["result"] == "done"
+        assert "finished" in comms.sent
+    finally:
+        _cleanup_venv(fm, venv_id)

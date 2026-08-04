@@ -152,15 +152,16 @@ class SteeringRuntime:
     number of steps in.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pause_event: Optional[asyncio.Event] = None) -> None:
         self.action_counter = 0
         self.path_context: List[str] = []
         self.call_stack: List[Tuple[int, str]] = []
         self._frame_counter = 0
         self._loop_stack: List[Tuple[str, int]] = []
         self._occurrences: Dict[Tuple[str, str], int] = {}
-        self._pause = asyncio.Event()
-        self._pause.set()
+        self._pause = pause_event or asyncio.Event()
+        if pause_event is None:
+            self._pause.set()
 
     def next_occurrence(self, signature: Tuple[str, str]) -> int:
         """How many times this exact call has been made during this attempt.
@@ -323,8 +324,9 @@ class SteeringSession:
         interject_q: Optional[asyncio.Queue] = None,
         notification_q: Optional[asyncio.Queue] = None,
         patch_author: Optional[Any] = None,
+        pause_event: Optional[asyncio.Event] = None,
     ) -> None:
-        self.runtime = SteeringRuntime()
+        self.runtime = SteeringRuntime(pause_event=pause_event)
         self.cache = IdempotencyCache()
         self.interruption: Optional[InterruptionRequest] = None
         self.retries = 0
@@ -433,6 +435,28 @@ class SteeringSession:
             if request is not None and _targets_running_block(request, source):
                 await deliver(request)
                 return
+            await asyncio.sleep(poll_interval)
+
+    async def relay_pause(
+        self,
+        deliver: typing.Callable[[bool], typing.Awaitable[None]],
+        *,
+        poll_interval: float = 0.01,
+    ) -> None:
+        """Mirror pause-state changes into a running subprocess.
+
+        The outer tool handle owns the event behind ``runtime.paused``. A
+        subprocess cannot await that in-process event, so each execution
+        boundary translates state changes into process-level pause/resume
+        operations. Starting from running avoids an unnecessary resume signal;
+        an attempt created while already paused is stopped immediately.
+        """
+        delivered = False
+        while True:
+            paused = self.runtime.paused
+            if paused != delivered:
+                await deliver(paused)
+                delivered = paused
             await asyncio.sleep(poll_interval)
 
     def notify(self, payload: Dict[str, Any]) -> None:
