@@ -185,6 +185,28 @@ async def test_stop_is_returned_as_a_clean_function_result():
 
 
 @pytest.mark.asyncio
+async def test_pending_stop_reaches_a_sync_function():
+    """A sync frame cannot await a checkpoint, but raising needs no await:
+    a correction already pending when the call begins fires at entry."""
+    from unify.function_manager.steering import InterruptionRequest
+
+    manager = _manager()
+    session = SteeringSession()
+    session.interruption = InterruptionRequest(reason="task revoked", stop=True)
+
+    with use_session(session):
+        out = await manager._execute_in_default_env(
+            implementation="def add(a, b):\n    return a + b\n",
+            call_kwargs={"a": 2, "b": 3},
+            is_async=False,
+            extra_namespaces={},
+        )
+
+    assert out["error"] is None
+    assert out["result"] == {"status": "stopped", "reason": "task revoked"}
+
+
+@pytest.mark.asyncio
 async def test_completed_calls_replay_rather_than_repeat():
     comms = _Comms()
     queue: asyncio.Queue = asyncio.Queue()

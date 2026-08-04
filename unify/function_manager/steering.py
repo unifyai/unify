@@ -69,6 +69,7 @@ logger = logging.getLogger(__name__)
 #: for the lifetime of one call and removed afterwards.
 CP_FN = "_cp"
 INT_FN = "_int"
+INT_SYNC_FN = "_int_s"
 AROUND_CP_FN = "_around_cp"
 RUNTIME_GLOBAL = "runtime"
 SESSION_GLOBAL = "__steering_session__"
@@ -372,6 +373,19 @@ class SteeringSession:
         if request is not None and (request.stop or request.targets(func_name)):
             raise ControlledInterruption(request.reason or "steered")
 
+    def interrupt_point_sync(self, func_name: str) -> None:
+        """The interrupt check a synchronous frame can make.
+
+        No collection — that needs the event loop this frame is holding — so
+        in-process this only fires for a correction that was already pending
+        when the sync code began. It exists because raising, unlike pausing,
+        needs no await; the request stays in place for
+        :func:`run_with_steering` to consume, as with the async probe.
+        """
+        request = self.interruption
+        if request is not None and (request.stop or request.targets(func_name)):
+            raise ControlledInterruption(request.reason or "steered")
+
     async def around(self, label: str, awaitable: Any) -> Any:
         """Bracket one awaited call with checkpoints.
 
@@ -546,9 +560,10 @@ class _Instrumenter(ast.NodeTransformer):
     * ``_around_cp`` — awaits nested inside expressions, which no
       statement-level probe can reach.
 
-    A synchronous ``def`` gets the loop and path probes but not ``_cp`` /
-    ``_int``, which are awaits it cannot make. It still contributes correct
-    position to the cache key; it just cannot suspend.
+    A synchronous ``def`` gets the loop and path probes plus a synchronous
+    interrupt probe (``_int_s``) at entry and per iteration — raising needs
+    no await, only pausing does. It still contributes correct position to
+    the cache key; it just cannot suspend.
     """
 
     def __init__(self, tool_namespaces: typing.Set[str]) -> None:
@@ -584,6 +599,19 @@ class _Instrumenter(ast.NodeTransformer):
 
     def _int_node(self, func_name: str) -> ast.Expr:
         return self._awaited_stmt(self._call(INT_FN, [ast.Constant(value=func_name)]))
+
+    def _int_sync_node(self, func_name: str) -> ast.Expr:
+        """The interrupt probe a synchronous function can afford.
+
+        Raising needs no await — only pause does — so sync code checks a
+        pending correction with a plain call. In-process it fires when a
+        correction was already pending as the sync frame was entered;
+        out-of-process the child's reader thread keeps the flag fresh, so a
+        sync loop is interruptible mid-run.
+        """
+        return ast.Expr(
+            value=self._call(INT_SYNC_FN, [ast.Constant(value=func_name)]),
+        )
 
     @staticmethod
     def _runtime_call(method: str, args: List[ast.expr]) -> ast.Expr:
@@ -637,6 +665,16 @@ class _Instrumenter(ast.NodeTransformer):
         was_async, self._in_async = self._in_async, False
         try:
             self.generic_visit(node)
+            # After the docstring, so the function keeps it.
+            offset = (
+                1
+                if node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+                else 0
+            )
+            node.body[offset:offset] = [self._int_sync_node(node.name)]
         finally:
             self._in_async = was_async
             self._function_context.pop()
@@ -733,6 +771,8 @@ class _Instrumenter(ast.NodeTransformer):
             # side effect rather than after it.
             probes.append(self._cp_node(f"Iteration of {loop_id} in {enclosing}"))
             probes.append(self._int_node(enclosing))
+        else:
+            probes.append(self._int_sync_node(enclosing))
         node.body = probes + node.body
 
         return ast.Try(
@@ -1023,11 +1063,12 @@ def bind_session(
     rather than deleted, so a nested call restores the outer block's session
     instead of clearing it.
     """
-    names = [CP_FN, INT_FN, AROUND_CP_FN, RUNTIME_GLOBAL, SESSION_GLOBAL]
+    names = [CP_FN, INT_FN, INT_SYNC_FN, AROUND_CP_FN, RUNTIME_GLOBAL, SESSION_GLOBAL]
     previous: Dict[str, Any] = {n: global_state.get(n, _MISSING) for n in names}
 
     global_state[CP_FN] = session.cp
     global_state[INT_FN] = session.interrupt_point
+    global_state[INT_SYNC_FN] = session.interrupt_point_sync
     global_state[AROUND_CP_FN] = session.around
     global_state[RUNTIME_GLOBAL] = session.runtime
     global_state[SESSION_GLOBAL] = session

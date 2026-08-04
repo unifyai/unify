@@ -131,6 +131,16 @@ def test_sync_function_gets_position_probes_but_cannot_suspend():
     assert f"await {CP_FN}" not in inner
 
 
+def test_sync_function_gets_a_sync_interrupt_probe():
+    """Raising needs no await, so sync frames check for a pending correction
+    at entry and at every iteration — without gaining an await they cannot
+    make."""
+    out = built("def helper():\n    for i in xs:\n        pass\n")
+    inner = out.split("def helper")[1]
+    assert inner.count("_int_s('helper')") == 2
+    assert "await _int_s" not in inner
+
+
 def test_class_bodies_are_left_alone():
     out = built("class C:\n    for i in xs:\n        pass\n")
     assert CP_FN not in out.split("class C")[1]
