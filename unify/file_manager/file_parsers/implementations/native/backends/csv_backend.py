@@ -161,6 +161,7 @@ class NativeCsvBackend(BaseFileParserBackend):
                 if should_inline_tabular_rows(
                     row_count=row_count,
                     settings=FILE_PARSER_SETTINGS,
+                    sample_rows=sample_rows,
                 ):
                     inline_rows = _normalize_row_dicts(lazy_frame.collect().to_dicts())
                 step.counters["rows"] = row_count

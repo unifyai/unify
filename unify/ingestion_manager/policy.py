@@ -12,7 +12,7 @@ from typing import List, Literal, Optional
 
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.ingestion_manager.types.request import IngestionRequest
-from unify.ingestion_manager.types.run import StageProgress
+from unify.ingestion_manager.types.run import TERMINAL_STATES, StageProgress
 
 Tier = Literal["inline", "dispatched"]
 
@@ -139,12 +139,23 @@ def next_step(
     return "Unrecognised state; read get_logs() to see what happened."
 
 
-def stages_from_events(events: List[dict]) -> List[StageProgress]:
+def stages_from_events(
+    events: List[dict],
+    *,
+    run_state: Optional[str] = None,
+) -> List[StageProgress]:
     """Fold recorded events into current per-stage progress.
 
     Progress is derived rather than stored so there is one source of truth. A
     separately maintained counter drifts from the events the moment a worker dies
     between incrementing it and recording why.
+
+    ``run_state`` closes the stages when the run itself is over. Stage events are
+    append-only and a stage that simply ran to completion records no closing
+    event, so a terminal run otherwise reports stages still ``running`` -- a
+    failed run showed ``parse: running`` beside ``ingest: failed`` even though
+    parsing had finished and it was the write that failed. A stage that reached
+    its total finished; one that did not ended however the run did.
     """
     ordered: dict[str, StageProgress] = {}
     for event in events:
@@ -166,4 +177,13 @@ def stages_from_events(events: List[dict]) -> List[StageProgress]:
             current.total = total
         if event.get("level") == "error" and event.get("message"):
             current.error = event["message"]
+
+    if run_state in TERMINAL_STATES:
+        for progress in ordered.values():
+            if progress.state not in TERMINAL_STATES:
+                reached_total = (
+                    progress.total is not None and progress.done >= progress.total
+                )
+                progress.state = "succeeded" if reached_total else run_state
+
     return list(ordered.values())
