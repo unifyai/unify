@@ -117,6 +117,9 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[CustomTaskSourceEntry]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
+        # A malformed line must fail the collection, not be skipped: a
+        # silently dropped key reads as "removed from the source" and the
+        # reconcile prunes the live task it still owns.
         try:
             payload = json.loads(line)
             if not isinstance(payload, dict):
@@ -125,20 +128,14 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[CustomTaskSourceEntry]:
                 _normalize_task_payload(payload),
             )
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
-            logger.warning(
-                "Skipping invalid tasks.jsonl line %s:%d: %s",
-                jsonl_path,
-                line_no,
-                exc,
-            )
-            continue
+            raise ValueError(
+                f"Invalid tasks.jsonl line {jsonl_path}:{line_no}: {exc}",
+            ) from exc
         if entry.schedule is not None and entry.trigger is not None:
-            logger.warning(
-                "Skipping tasks.jsonl line %s:%d: schedule and trigger are mutually exclusive",
-                jsonl_path,
-                line_no,
+            raise ValueError(
+                f"Invalid tasks.jsonl line {jsonl_path}:{line_no}: "
+                "schedule and trigger are mutually exclusive",
             )
-            continue
         if entry.trigger is not None:
             try:
                 entry = entry.model_copy(
@@ -149,13 +146,10 @@ def _parse_jsonl_file(jsonl_path: Path) -> List[CustomTaskSourceEntry]:
                     },
                 )
             except ValidationError as exc:
-                logger.warning(
-                    "Skipping tasks.jsonl line %s:%d: invalid trigger: %s",
-                    jsonl_path,
-                    line_no,
-                    exc,
-                )
-                continue
+                raise ValueError(
+                    f"Invalid tasks.jsonl line {jsonl_path}:{line_no}: "
+                    f"invalid trigger: {exc}",
+                ) from exc
         if not entry.auto_sync:
             logger.debug("Skipping %s: auto_sync=False", entry.key)
             continue
