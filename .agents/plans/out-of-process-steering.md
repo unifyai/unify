@@ -214,18 +214,24 @@ per `execute` call, inside the connection lock, so the session follows the
 call and a long-lived `_VenvConnection` never holds one. There is a test
 pinning that a later call on the same connection runs unsteered.
 
-**Synchronous blocking code** remains opaque, exactly as in-process. A
-blocking call holds the child between dispatches, and during that window a
-correction cannot land; synchronous ``def``s get no await probes on either
-side of the boundary. (One extra wrinkle out-of-process: the child's RPC wait
+**Synchronous blocking code** cannot take a correction, exactly as
+in-process: a blocking call holds the child between dispatches, and
+synchronous ``def``s get no await probes on either side of the boundary. It
+can now be *paused*, though — see below — which is one place out-of-process
+exceeds in-process. (One extra wrinkle out-of-process: the child's RPC wait
 has a 300 s timeout, so a pause held longer than that fails the blocked call
 rather than extending it.)
 
-**Pause is not propagated between dispatches.** The parent holds RPC replies
-while paused, which stalls the child at its next dispatch, but the child's
-``_cp`` shim is a plain yield point. Nothing in the runtime drives
-``SteeringRuntime.pause`` today; if something starts to, the control channel
-is where a pause directive would ride.
+**Pause is process-level, not protocol-level** (was: not propagated). The
+tool handle's pause event now feeds the steering session
+(`_sandbox_call_binding` → `SteeringRuntime(pause_event=...)`), in-process
+checkpoints hold on it as before, and each subprocess boundary runs a
+`relay_pause` watcher that mirrors state changes into SIGSTOP/SIGCONT on the
+child's process group (`FunctionManager._set_process_paused`). Freezing the
+process holds it *anywhere* — mid-loop, mid-`time.sleep`, inside a C
+extension — which no checkpoint could. Terminate paths thaw first, so a
+frozen child never sits on an undeliverable SIGTERM. Windows has no stop
+signal, so pause degrades to the dispatch-boundary hold there.
 
 **Retraction** is still impossible. Replay records that a side effect
 happened; it cannot undo one. A patch redirects work that has not happened

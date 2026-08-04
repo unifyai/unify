@@ -2884,6 +2884,7 @@ class CodeActActor(BaseCodeActActor):
         clarification_down_q: asyncio.Queue[str] | None,
         interject_q: asyncio.Queue | None = None,
         notification_q: asyncio.Queue | None = None,
+        pause_event: asyncio.Event | None = None,
     ):
         """Bind one tool call's channels onto the live sandbox.
 
@@ -2931,6 +2932,7 @@ class CodeActActor(BaseCodeActActor):
                 interject_q=interject_q,
                 notification_q=notification_q,
                 patch_author=build_patch_author() if interject_q is not None else None,
+                pause_event=pause_event,
             )
             # Carried by context rather than installed on this sandbox: only
             # one execution mode actually runs here, and the default
@@ -2969,6 +2971,7 @@ class CodeActActor(BaseCodeActActor):
             _clarification_up_q: asyncio.Queue[str] | None = None,
             _clarification_down_q: asyncio.Queue[str] | None = None,
             _interject_queue: asyncio.Queue | None = None,
+            _pause_event: asyncio.Event | None = None,
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
             """
@@ -3233,6 +3236,7 @@ class CodeActActor(BaseCodeActActor):
                         clarification_down_q=_clarification_down_q,
                         interject_q=_interject_queue,
                         notification_q=notification_q,
+                        pause_event=_pause_event,
                     ) as _steering:
                         try:
                             out = await self._session_executor.execute(
@@ -3758,6 +3762,7 @@ class CodeActActor(BaseCodeActActor):
                 _clarification_up_q: asyncio.Queue[str] | None = None,
                 _clarification_down_q: asyncio.Queue[str] | None = None,
                 _interject_queue: asyncio.Queue | None = None,
+                _pause_event: asyncio.Event | None = None,
                 _parent_chat_context: list[dict] | None = None,
             ) -> Any:
                 """
@@ -4033,6 +4038,7 @@ class CodeActActor(BaseCodeActActor):
                         clarification_down_q=_clarification_down_q,
                         interject_q=_interject_queue,
                         notification_q=notification_q,
+                        pause_event=_pause_event,
                     ) as _ef_steering:
                         if (
                             isinstance(function_data, dict)

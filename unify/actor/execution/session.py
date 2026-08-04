@@ -1412,6 +1412,10 @@ async def _execute_shell_stateless(
 ) -> Dict[str, Any]:
     """
     Execute shell code in an ephemeral subprocess (stateless).
+
+    Shell has nothing a patch can rewrite, so steering here means the two
+    process-level verbs: a stop request terminates the group, and pause
+    freezes it wherever it is.
     """
     if language == "python":
         raise ValueError("Shell stateless executor called with language='python'")
@@ -1432,6 +1436,12 @@ async def _execute_shell_stateless(
     # secrets (e.g. ORCHESTRA_ADMIN_KEY) reach the ephemeral shell. Without an
     # explicit ``env=`` the subprocess would inherit the full pod environment.
     from unify.provider_proxy.session import build_sandbox_env
+    from unify.function_manager.function_manager import FunctionManager
+
+    steering = active_session()
+    if steering is not None:
+        steering.bind_source(command)
+    use_process_group = sys.platform != "win32"
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1440,14 +1450,8 @@ async def _execute_shell_stateless(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=build_sandbox_env(),
+            start_new_session=use_process_group,
         )
-        stdout_b, stderr_b = await proc.communicate()
-        return {
-            "stdout": (stdout_b or b"").decode(errors="replace"),
-            "stderr": (stderr_b or b"").decode(errors="replace"),
-            "result": int(proc.returncode or 0),
-            "error": None,
-        }
     except Exception as e:
         return {
             "stdout": "",
@@ -1455,3 +1459,65 @@ async def _execute_shell_stateless(
             "result": None,
             "error": f"{type(e).__name__}: {e}",
         }
+
+    stopped: Optional[ExecutionStopped] = None
+
+    async def _stop(request: Any) -> None:
+        nonlocal stopped
+        stopped = ExecutionStopped(request.reason or "steered")
+        if proc.returncode is None:
+            await FunctionManager._terminate_process_group(proc, use_process_group)
+
+    watcher = (
+        asyncio.create_task(steering.relay_corrections(command, _stop))
+        if steering is not None
+        else None
+    )
+    pause_watcher = (
+        asyncio.create_task(
+            steering.relay_pause(
+                lambda paused: FunctionManager._set_process_paused(
+                    proc,
+                    use_process_group=use_process_group,
+                    paused=paused,
+                ),
+            ),
+        )
+        if steering is not None
+        else None
+    )
+
+    try:
+        stdout_b, stderr_b = await proc.communicate()
+    except Exception as e:
+        return {
+            "stdout": "",
+            "stderr": "",
+            "result": None,
+            "error": f"{type(e).__name__}: {e}",
+        }
+    finally:
+        for task in (watcher, pause_watcher):
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if proc.returncode is None:
+            await FunctionManager._terminate_process_group(proc, use_process_group)
+
+    if stopped is not None:
+        return {
+            "stdout": (stdout_b or b"").decode(errors="replace"),
+            "stderr": (stderr_b or b"").decode(errors="replace"),
+            "result": stopped.outcome,
+            "error": None,
+        }
+    return {
+        "stdout": (stdout_b or b"").decode(errors="replace"),
+        "stderr": (stderr_b or b"").decode(errors="replace"),
+        "result": int(proc.returncode or 0),
+        "error": None,
+    }
