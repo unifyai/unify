@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import copy
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +24,11 @@ from unify.common._async_tool.context_compression import (
     _make_archive_lookup_tool,
     _scan_surviving_image_ids,
 )
+
+# Vision-aware compression is handed the real image bytes, so a placeholder
+# data URL is rejected by the provider before the compressor ever runs.
+with open(Path(__file__).parent / "cat.jpg", "rb") as _f:
+    _CAT_IMG = base64.b64encode(_f.read()).decode("utf-8")
 
 
 class TestCompressContextTool:
@@ -641,25 +648,44 @@ async def test_compress_compacts_tool_call_messages(llm_config):
 @pytest.mark.asyncio
 @_handle_project
 async def test_compress_preserves_image_placeholders(llm_config):
+    """An image the conversation still depends on keeps its ``[img:N]`` tag.
+
+    ``compress_messages`` requires images to already be tagged and reports the
+    tags that survived rather than describing them in prose, so the tagging step
+    is part of the exercise and the image has to be a real one -- it is delivered
+    inline for the compressor to look at. The trailing question is what makes
+    preservation the correct outcome: the compressor is told to drop images the
+    conversation has moved past, and only an open question about the picture
+    keeps this one live.
+    """
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What breed is this dog?"},
+                {"type": "text", "text": "What breed is this cat?"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."},
+                    "image_url": {"url": f"data:image/jpeg;base64,{_CAT_IMG}"},
                 },
             ],
         },
         {
             "role": "assistant",
-            "content": "This is a Golden Retriever, approximately 2-3 years old.",
+            "content": "It looks like a domestic shorthair tabby.",
+        },
+        {
+            "role": "user",
+            "content": "What colour are its eyes in that photo?",
         },
     ]
-    result = await compress_messages(messages, llm_config["model"])
-    assert len(result.messages) == 2
-    assert "image" in result.messages[0].content.lower()
+    tagged, image_blocks, _ = tag_images_in_messages(messages)
+    result = await compress_messages(
+        tagged,
+        llm_config["model"],
+        image_blocks=image_blocks,
+    )
+    assert len(result.messages) == len(messages)
+    assert result.surviving_image_ids == {0}
 
 
 _VERBOSE_TRACEBACK = (
@@ -776,17 +802,18 @@ class TestMultiPassCompression:
 
         assert len(result.messages) == 3
 
-    def test_new_indices_validation(self):
-        """new_indices must match messages length."""
-        import asyncio
+    @pytest.mark.asyncio
+    async def test_new_indices_validation(self):
+        """new_indices must match messages length.
 
+        The mismatch is rejected before any LLM call, so awaiting the coroutine
+        is enough and no event loop has to be managed by hand.
+        """
         with pytest.raises(ValueError, match="new_indices length"):
-            asyncio.get_event_loop().run_until_complete(
-                compress_messages(
-                    [{"role": "user", "content": "a"}],
-                    "openai/gpt-4o@openrouter",
-                    new_indices=[0, 1],
-                ),
+            await compress_messages(
+                [{"role": "user", "content": "a"}],
+                "openai/gpt-4o@openrouter",
+                new_indices=[0, 1],
             )
 
 
