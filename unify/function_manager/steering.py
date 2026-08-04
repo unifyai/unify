@@ -395,7 +395,15 @@ class SteeringSession:
         """
         await self.cp(f"Before: {label}")
         try:
-            return await awaitable
+            # The bracket goes around a *call*, not only an awaited one, so a
+            # synchronous primitive (``user_desktop.list_linked``, documented as
+            # "do not await it") arrives here as its own return value. Awaiting
+            # that unconditionally raised "object list can't be used in 'await'
+            # expression" and made every such primitive unreachable through
+            # ``execute_function``. Same guard ``_dispatch`` already applies.
+            if _inspect_isawaitable(awaitable):
+                return await awaitable
+            return awaitable
         finally:
             await self.cp(f"After: {label}")
 
