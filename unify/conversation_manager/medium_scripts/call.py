@@ -68,6 +68,7 @@ from unify.conversation_manager.medium_scripts.common import (
     should_dispatch_livekit_agent,
     start_event_broker_receive,
     UserTrackCaptureManager,
+    MAX_VISUALS_PER_SOURCE,
     ScreenshotHistory,
     capture_assistant_screenshot,
     fetch_meet_screenshare_frame,
@@ -1636,6 +1637,34 @@ async def entrypoint(ctx: agents.JobContext):
             "is_system": True,
         }
 
+    def _sharer_name_for_identity(identity: str) -> str:
+        """Who a captured video frame belongs to, or "" when unknown.
+
+        Tried against the org-call roster first, since that carries the names
+        the rest of the call already uses. The room's own participant name is
+        the fallback for surfaces with no roster behind them (the LiveKit
+        Playground, a dev client), and an empty result is honest: a frame
+        labelled with a guessed owner is worse than one labelled with none,
+        because the brains will repeat the guess back to the room.
+        """
+        if not identity:
+            return ""
+        user_id = _user_id_from_livekit_identity(identity)
+        if user_id:
+            member = _roster_member_for_user_id(user_id)
+            if member is not None:
+                name = (member.get("display_name") or "").strip()
+                # The roster self-heals from LiveKit identities, so a member
+                # discovered that way carries the identity as its name; that is
+                # not a display name and should not be shown as one.
+                if name and name != identity:
+                    return name
+        remotes = getattr(ctx.room, "remote_participants", {}) or {}
+        for participant in remotes.values():
+            if getattr(participant, "identity", "") == identity:
+                return (getattr(participant, "name", "") or "").strip()
+        return ""
+
     def _merge_unify_meet_roster_from_identity(identity: str) -> None:
         """Append a human roster entry discovered via LiveKit when missing."""
         user_id = _user_id_from_livekit_identity(identity)
@@ -2440,30 +2469,31 @@ async def entrypoint(ctx: agents.JobContext):
         (user screen, webcam) are ~1 ms.  The assistant capture reads from the
         agent-service screenshot cache (~0 ms) unless the user has remote
         control, in which case a live capture (~500 ms) is used.
+
+        Every publisher of a source is filed, not just the focused one: a group
+        call has several screens and several faces, and taking one frame per
+        source made the others invisible to both brains. Bounded by the same
+        limit the fast brain applies, since a frame filed beyond it is written
+        and published only to be dropped again.
         """
         from datetime import datetime, timezone
 
-        b64 = screen_capture.capture_screenshot()
-        if b64:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=b64,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source="user",
-                ),
-            )
-
-        b64 = webcam_capture.capture_screenshot()
-        if b64:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=b64,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source="webcam",
-                ),
-            )
+        for source, capture_manager in (
+            ("user", screen_capture),
+            ("webcam", webcam_capture),
+        ):
+            for b64, identity in capture_manager.capture_screenshots(
+                limit=MAX_VISUALS_PER_SOURCE,
+            ):
+                _handle_screenshot(
+                    ScreenshotEntry(
+                        b64=b64,
+                        utterance="",
+                        timestamp=datetime.now(timezone.utc),
+                        source=source,
+                        attribution=_sharer_name_for_identity(identity),
+                    ),
+                )
 
         if assistant_screen_share_active:
             entry = await capture_assistant_screenshot(
@@ -2605,26 +2635,25 @@ async def entrypoint(ctx: agents.JobContext):
         if role == "user":
             from datetime import datetime, timezone
 
-            b64 = screen_capture.capture_screenshot()
-            if b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=b64,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source="user",
-                    ),
-                )
-            webcam_b64 = webcam_capture.capture_screenshot()
-            if webcam_b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=webcam_b64,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source="webcam",
-                    ),
-                )
+            # Paired with the utterance, one entry per publisher: "what am I
+            # looking at here?" asked in a room of several shares needs all of
+            # them, each named, rather than whichever happened to be focused.
+            for shot_source, capture_manager in (
+                ("user", screen_capture),
+                ("webcam", webcam_capture),
+            ):
+                for b64, identity in capture_manager.capture_screenshots(
+                    limit=MAX_VISUALS_PER_SOURCE,
+                ):
+                    _handle_screenshot(
+                        ScreenshotEntry(
+                            b64=b64,
+                            utterance=text,
+                            timestamp=datetime.now(timezone.utc),
+                            source=shot_source,
+                            attribution=_sharer_name_for_identity(identity),
+                        ),
+                    )
             if channel in ("google_meet", "teams_meet"):
                 _push_meet_frame(utterance=text)
 
