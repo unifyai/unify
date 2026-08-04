@@ -33,9 +33,5 @@ class LLMPayload(BaseModel):
     # Cost information (only for cache misses)
     provider_cost: Optional[float] = Field(
         default=None,
-        description="Raw cost charged by the LLM provider (USD)",
-    )
-    billed_cost: Optional[float] = Field(
-        default=None,
-        description="Cost charged to the user (provider_cost × margin, USD)",
+        description="What the call cost, as charged by the provider (USD)",
     )

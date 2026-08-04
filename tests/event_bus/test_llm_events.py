@@ -38,25 +38,21 @@ class TestLLMPayloadModel:
         assert payload.request["model"] == "gpt-4o"
         assert payload.response is None
         assert payload.provider_cost is None
-        assert payload.billed_cost is None
 
     def test_create_full_payload(self):
         payload = LLMPayload(
             request={"model": "gpt-4o", "messages": []},
             response={"id": "chatcmpl-123", "model": "gpt-4o", "choices": []},
             provider_cost=0.001,
-            billed_cost=0.005,
         )
         assert payload.request["model"] == "gpt-4o"
         assert payload.response["id"] == "chatcmpl-123"
         assert payload.provider_cost == 0.001
-        assert payload.billed_cost == 0.005
 
     def test_payload_costs_default_to_none(self):
-        """Cost fields should default to None."""
+        """Cost should default to None."""
         payload = LLMPayload(request={"model": "gpt-4o"})
         assert payload.provider_cost is None
-        assert payload.billed_cost is None
 
     def test_payload_allows_extra_fields(self):
         """LLMPayload should accept extra fields for forward compatibility."""
@@ -127,12 +123,11 @@ class TestLLMEventToEventBusConversion:
     @pytest.mark.asyncio
     @_handle_project
     async def test_event_with_costs(self):
-        """Events should include provider_cost and billed_cost."""
+        """Events should include the call's cost."""
         async with capture_events("LLM") as captured:
             llm_event = LLMEvent(
                 request={"model": "gpt-4o", "messages": []},
                 provider_cost=0.001,
-                billed_cost=0.005,
             )
             _llm_event_to_eventbus(llm_event)
 
@@ -141,7 +136,6 @@ class TestLLMEventToEventBusConversion:
         assert len(captured) == 1
         evt = captured[0]
         assert evt.payload["provider_cost"] == 0.001
-        assert evt.payload["billed_cost"] == 0.005
 
     @pytest.mark.asyncio
     @_handle_project
@@ -343,7 +337,7 @@ async def test_llm_events_searchable_in_eventbus():
 @pytest.mark.llm_call
 @_handle_project
 async def test_llm_event_includes_cost_fields():
-    """LLM events should include provider_cost and billed_cost for cache misses."""
+    """LLM events should include the call's cost for cache misses."""
     install_llm_event_hook()
 
     # Use a unique prompt to force a cache miss
@@ -366,13 +360,9 @@ async def test_llm_event_includes_cost_fields():
     # Verify event structure
     assert evt.type == "LLM"
 
-    # For cache misses, costs should be present and positive
-    # (we can check by seeing if provider_cost is set)
+    # For cache misses, the cost should be present and positive
     if evt.payload["provider_cost"] is not None:
         assert evt.payload["provider_cost"] > 0
-        assert evt.payload["billed_cost"] is not None
-        assert evt.payload["billed_cost"] > 0
-        assert evt.payload["billed_cost"] >= evt.payload["provider_cost"]
 
 
 # ---------------------------------------------------------------------------
@@ -577,7 +567,7 @@ async def test_llm_event_includes_time_columns():
     async with capture_events("LLM") as captured:
         llm_event = LLMEvent(
             request={"model": "gpt-4o", "messages": []},
-            billed_cost=0.001,
+            provider_cost=0.001,
         )
         _llm_event_to_eventbus(llm_event)
 
