@@ -683,3 +683,99 @@ class TestSyncIntegration:
         fm = function_manager_factory()
         fm._fm = None
         assert fm._get_sync_manager() is None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 5. Steering
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestRemoteWindowsSteering:
+    """A stop that the agent acknowledged is the run's outcome.
+
+    The exec layer already reports it; this pins that the result-file flow
+    above it recognises the stopped result instead of misreading the dead
+    script as "Execution failed" — and that the stop wins even over a result
+    file the script managed to write while the kill was landing.
+    """
+
+    @_handle_project
+    @pytest.mark.asyncio
+    async def test_stop_surfaces_as_the_run_outcome(
+        self,
+        function_manager_factory,
+        mock_session_details_windows,
+        windows_local_root,
+        mock_bisync,
+        monkeypatch,
+    ):
+        import asyncio
+
+        from unify.function_manager.steering import (
+            InterruptionRequest,
+            SteeringSession,
+            use_session,
+        )
+
+        killed = asyncio.Event()
+
+        class _BlockingExec(MockResponse):
+            """/api/exec that only completes once the stop signal lands."""
+
+            async def json(self):
+                await killed.wait()
+                return await super().json()
+
+        class _SignallingSession(MockClientSession):
+            def post(self, url: str, **kwargs):
+                body = kwargs.get("json") or {}
+                if "/api/exec/signal" in url and body.get("action") == "stop":
+                    killed.set()
+                return super().post(url, **kwargs)
+
+        session_mock = _SignallingSession()
+        session_mock.set_response(
+            "/api/exec/signal",
+            MockResponse({"status": "ok", "action": "stop"}),
+        )
+        session_mock.set_response(
+            "/api/exec",
+            _BlockingExec(
+                {"exitCode": 143, "stdout": "partial", "stderr": "", "duration": 5},
+            ),
+        )
+
+        import aiohttp
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **k: session_mock)
+
+        async def _stop_author(*, interjections, session):
+            return InterruptionRequest(reason=interjections[0], stop=True)
+
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait("wrong VM, stop it")
+        steering = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+        fm = function_manager_factory()
+        # Even a result file the VM materialised must not mask the stop.
+        mock_bisync.state.result_payload = {"result": 42, "error": None}
+
+        with use_session(steering):
+            result = await fm._execute_python_function_on_remote_windows(
+                func_data={"name": "test_func", "windows_os_required": True},
+                implementation=SIMPLE_WINDOWS_FUNC,
+                call_kwargs={"input_path": "/test/path"},
+            )
+
+        assert result["error"] is None
+        assert result["result"] == {
+            "status": "stopped",
+            "reason": "wrong VM, stop it",
+        }
+        stop_signals = [
+            r
+            for r in session_mock.requests
+            if "/api/exec/signal" in r["url"]
+            and r.get("json", {}).get("action") == "stop"
+        ]
+        assert len(stop_signals) == 1

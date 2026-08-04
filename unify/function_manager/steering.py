@@ -103,6 +103,16 @@ class ExecutionStopped(Exception):
         return {"status": "stopped", "reason": str(self)}
 
 
+def is_stopped_outcome(value: Any) -> bool:
+    """Whether *value* is the result an execution boundary returns for a stop.
+
+    Callers that post-process a boundary's result — reading artifacts the run
+    was expected to produce — use this to recognise that the run was ended by
+    a correction, rather than misreading the missing artifacts as failure.
+    """
+    return isinstance(value, dict) and value.get("status") == "stopped"
+
+
 @dataclass
 class Patch:
     """Replacement source for one function, and what it invalidates.
