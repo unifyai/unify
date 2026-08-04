@@ -571,8 +571,8 @@
       "date": "2026-02-18",
       "kind": "Improved",
       "area": "Billing",
-      "title": "Lower default droid usage prices",
-      "body": "Droid usage now uses a lower default price margin. Charges based on LLM costs are now set at 2\u00d7 the underlying cost instead of 5\u00d7."
+      "title": "Lower droid usage prices",
+      "body": "Droid usage now costs substantially less for the same work."
     },
     {
       "date": "2026-02-18",
