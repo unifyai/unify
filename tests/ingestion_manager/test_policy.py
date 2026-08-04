@@ -258,6 +258,66 @@ class TestStageFolding:
         assert stages_from_events([{"message": "queued"}]) == []
 
 
+class TestStagesOnATerminalRun:
+    """A run that is over must not report a stage still running.
+
+    Stage events are append-only and a stage that runs to completion records no
+    closing event, so a failed file ingestion reported ``parse: running`` beside
+    ``ingest: failed`` -- parsing had finished and the write was what failed, but
+    anything reading the stage list saw a run still in flight. These pin the
+    fold, which is where the answer has to come from: there is no stored counter
+    to correct.
+    """
+
+    def test_a_stage_that_reached_its_total_closes_as_succeeded(self):
+        # This is the live case: parse finished, ingest failed after it.
+        stages = stages_from_events(
+            [
+                {"stage": "parse", "state": "running", "done": 1, "total": 1},
+                {
+                    "stage": "ingest",
+                    "state": "failed",
+                    "level": "error",
+                    "message": "x",
+                },
+            ],
+            run_state="failed",
+        )
+        by_stage = {s.stage: s for s in stages}
+        assert by_stage["parse"].state == "succeeded"
+        assert by_stage["ingest"].state == "failed"
+
+    def test_an_unfinished_stage_ends_however_the_run_ended(self):
+        # Short of its total, so it did not finish -- claiming otherwise would
+        # hide exactly the partial work a reader needs to see.
+        stages = stages_from_events(
+            [{"stage": "parse", "state": "running", "done": 1, "total": 4}],
+            run_state="cancelled",
+        )
+        assert stages[0].state == "cancelled"
+
+    def test_a_stage_with_no_declared_total_ends_however_the_run_ended(self):
+        stages = stages_from_events(
+            [{"stage": "ingest", "state": "running", "done": 7}],
+            run_state="failed",
+        )
+        assert stages[0].state == "failed"
+
+    def test_a_live_run_leaves_its_stages_alone(self):
+        stages = stages_from_events(
+            [{"stage": "parse", "state": "running", "done": 1, "total": 1}],
+            run_state="running",
+        )
+        assert stages[0].state == "running"
+
+    def test_a_stage_that_already_closed_is_not_reopened_or_relabelled(self):
+        stages = stages_from_events(
+            [{"stage": "parse", "state": "succeeded", "done": 2, "total": 2}],
+            run_state="cancelled",
+        )
+        assert stages[0].state == "succeeded"
+
+
 class TestRequestValidation:
     def test_rows_cannot_target_a_collection(self):
         # Rows have no documents to keep whole. The message has to name the
