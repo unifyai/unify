@@ -113,6 +113,54 @@ def _get_current_time_in_timezone(tz_name: str) -> str:
     return result
 
 
+def _room_addressing_clause(mentions: list[dict] | None) -> str:
+    """Who a room message named, said from this assistant's point of view.
+
+    A room delivers every message to every member assistant, so "was I asked, or
+    was someone else?" decides whether this one should answer. Two things make
+    that easy to get wrong, and both have:
+
+    * **Say "me", not my name.** A bare list of names leaves the reader to work
+      out which entry is itself, and an assistant that reads its own name as a
+      teammate's stands down from a message addressed straight at it. Identity
+      is matched on the mention's ``id``, never its display name, because two
+      teammates may share a name and a string match would recreate the same
+      confusion it is here to remove.
+    * **Say nothing when nothing is known.** An empty list is not evidence that
+      nobody was addressed — it also means the sender typed the ``@`` by hand
+      rather than picking from autocomplete. Asserting "nobody addressed by
+      name" on that turns a missing signal into a false negative, which reads as
+      permission to stay quiet.
+    """
+    own_agent_id = str(SESSION_DETAILS.assistant.agent_id or "")
+    names: list[str] = []
+    addressed_self = False
+
+    for mention in mentions or []:
+        if not isinstance(mention, dict):
+            continue
+        mention_id = str(mention.get("id") or "")
+        if (
+            mention.get("kind") == "assistant"
+            and own_agent_id
+            and mention_id == own_agent_id
+        ):
+            addressed_self = True
+            continue
+        name = str(mention.get("name") or "").strip()
+        if name:
+            names.append(name)
+
+    if addressed_self and names:
+        return f" addressed to me and {', '.join(names)};"
+    if addressed_self:
+        return " addressed to me;"
+    if names:
+        return f" addressed to {', '.join(names)} (not me);"
+    # Nothing known about addressing: leave the clause out entirely.
+    return ""
+
+
 def _format_timezone_block(
     assistant_tz: str | None,
     participants: list[tuple[str, str | None]],
@@ -1528,24 +1576,7 @@ class Renderer:
             # target the room via send_unify_message(team_id=/group_id=).
             room_line = ""
             if isinstance(message, UnifyMessage):
-                # Who the sender named, if anyone. Every member assistant gets
-                # its own copy of a room message, so without this each one reads
-                # an unaddressed message as its own to answer, and a message
-                # addressed to one teammate as equally its own.
-                addressed = ", ".join(
-                    name
-                    for name in (
-                        str(mention.get("name") or "").strip()
-                        for mention in (message.mentions or [])
-                        if isinstance(mention, dict)
-                    )
-                    if name
-                )
-                addressed_line = (
-                    f" addressed to {addressed};"
-                    if addressed
-                    else " nobody addressed by name;"
-                )
+                addressed_line = _room_addressing_clause(message.mentions)
                 if message.group_id is not None:
                     room_line = (
                         f' [group chat group_id="{message.group_id}" — visible to '
