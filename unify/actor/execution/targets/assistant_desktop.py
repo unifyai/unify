@@ -119,6 +119,7 @@ class AssistantDesktopTarget(ExecutionTarget):
             _inline_python_command(code, self._os),
             shell_mode=self._shell_mode(),
             timeout_ms=self._timeout_ms(timeout),
+            source=code,
         )
 
     async def put_file(self, local_path: str | Path, remote_rel: str) -> None:

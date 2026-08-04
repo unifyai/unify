@@ -16,6 +16,7 @@ import fs from 'fs';
 import net from 'net';
 import { randomUUID } from 'crypto';
 import { ChildProcess, spawn, execSync } from 'child_process';
+import { registerExec, signalExec } from './execControl';
 import multer from 'multer';
 import { jsonSchemaToZod } from './jsonSchemaToZod';
 import { getLlmConfig, resolveAgentServiceModel } from './llmConfig';
@@ -193,18 +194,30 @@ function getShellConfig(shellMode: ShellMode): string | boolean {
   return 'powershell.exe';
 }
 
-function executeCommand(command: string, cwd: string, timeout: number, shellMode: ShellMode = 'powershell'): Promise<ExecResult> {
+function executeCommand(
+  command: string,
+  cwd: string,
+  timeout: number,
+  shellMode: ShellMode = 'powershell',
+  onSpawn?: (proc: ChildProcess) => void,
+): Promise<ExecResult> {
   return new Promise((resolve) => {
     const startTime = Date.now();
     let stdout = '';
     let stderr = '';
     let killed = false;
 
+    // Detached on POSIX so the shell leads its own process group: steering
+    // signals (see execControl) and the post-exit sweep reach the whole
+    // pipeline, not just the shell.
+    const detached = process.platform !== 'win32';
     const proc = spawn(command, [], {
       shell: getShellConfig(shellMode),
       cwd,
       timeout,
+      detached,
     });
+    onSpawn?.(proc);
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -223,6 +236,14 @@ function executeCommand(command: string, cwd: string, timeout: number, shellMode
       if (signal === 'SIGTERM') {
         killed = true;
         stderr += `\nProcess killed after ${timeout}ms timeout`;
+      }
+      if (detached && proc.pid != null) {
+        // The shell is gone; sweep any group members it left behind.
+        try {
+          process.kill(-proc.pid, 'SIGKILL');
+        } catch {
+          // No survivors — the common case.
+        }
       }
       resolve({
         exitCode: code ?? (killed ? 124 : 1),
@@ -2633,9 +2654,15 @@ app.post('/resume', isAgentReady, async (req: Request, res: Response) => {
 });
 
 // --- /exec endpoint: Execute shell commands (use /files first to upload files) ---
+const EXEC_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 app.post('/exec', auth, async (req: Request, res: Response) => {
-  const { command, cwd, timeout, shell_mode } = req.body;
-  const execId = randomUUID().slice(0, 8);
+  const { command, cwd, timeout, shell_mode, exec_id } = req.body;
+  // A caller that wants to steer the run supplies its own id, so it can
+  // address /exec/signal at it while this request is still blocking.
+  const execId = typeof exec_id === 'string' && EXEC_ID_PATTERN.test(exec_id)
+    ? exec_id
+    : randomUUID().slice(0, 8);
 
   if (!command || typeof command !== 'string') {
     return res.status(400).json({ error: 'bad_request', message: 'command is required and must be a string.' });
@@ -2650,7 +2677,13 @@ app.post('/exec', auth, async (req: Request, res: Response) => {
     await ensureDir(resolvedWorkDir);
 
     console.log(`[exec] Running command: ${command} (cwd: ${resolvedWorkDir}, timeout: ${execTimeout}ms, shell: ${shellMode}, execId: ${execId})`);
-    const result = await executeCommand(command, resolvedWorkDir, execTimeout, shellMode);
+    const result = await executeCommand(
+      command,
+      resolvedWorkDir,
+      execTimeout,
+      shellMode,
+      (proc) => registerExec(execId, proc),
+    );
 
     res.json({
       status: result.exitCode === 0 ? 'success' : 'error',
@@ -2670,6 +2703,24 @@ app.post('/exec', auth, async (req: Request, res: Response) => {
       execId,
     });
   }
+});
+
+app.post('/exec/signal', auth, async (req: Request, res: Response) => {
+  const { exec_id, action } = req.body;
+
+  if (typeof exec_id !== 'string' || !EXEC_ID_PATTERN.test(exec_id)) {
+    return res.status(400).json({ error: 'bad_request', message: 'exec_id is required and must be a string.' });
+  }
+  if (action !== 'stop' && action !== 'pause' && action !== 'resume') {
+    return res.status(400).json({ error: 'bad_request', message: "action must be 'stop', 'pause', or 'resume'." });
+  }
+
+  const outcome = signalExec(exec_id, action);
+  console.log(`[exec] signal ${action} for ${exec_id}: ${outcome}`);
+  if (outcome === 'not_found') {
+    return res.status(404).json({ error: 'not_found', message: 'No running exec with that id.' });
+  }
+  res.json({ status: outcome, exec_id, action });
 });
 
 // --- /files endpoint: Unified file management (JSON + Multipart) ---
