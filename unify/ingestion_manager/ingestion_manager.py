@@ -1053,7 +1053,12 @@ class IngestionManager(BaseIngestionManager):
         state = row.get("state") or "queued"
 
         return RunStatus(
-            run_id=str(row.get("run_id", row["run_key"])),
+            # The key the caller was handed, never the row's auto-counted id.
+            # Lookups accept either, but a status that renames the run it
+            # describes is a trap: a plan holding `z9YfymthyUKj` was told
+            # `run_id='14'`, and every log line, notification and retry then
+            # names an identifier that appears nowhere else in the plan.
+            run_id=str(row["run_key"]),
             state=state,  # type: ignore[arg-type]
             executed_as=row.get("executed_as"),
             stages=stages_from_events(events, run_state=state),
