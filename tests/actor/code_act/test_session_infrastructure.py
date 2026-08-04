@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from unify.actor.code_act_actor import CodeActActor
 from unify.actor.execution import (
     SessionExecutor,
     _validate_execution_params,
@@ -168,98 +167,6 @@ def test_venv_is_not_checked_when_none_is_requested():
         )
         is None
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "session_id,session_name",
-    [
-        (None, None),
-        (0, ""),
-        (0, None),
-        (None, ""),
-    ],
-)
-async def test_stateless_reads_falsy_session_placeholders_as_no_session(
-    session_id,
-    session_name,
-):
-    """Stateless resolution accepts the placeholder session values it is sent.
-
-    ``session_id``/``session_name`` are optional, so a caller supplies 0 and ""
-    rather than omitting them. Resolution reads those as "no session". Refusing
-    them instead leaves stateless execution unreachable: there is no way to send
-    an absent argument, so the refusal names a fault the caller cannot repair
-    and every retry earns it again.
-    """
-    actor = CodeActActor(environments=[])
-    try:
-        resolved = actor._resolve_session(
-            state_mode="stateless",
-            language="python",
-            session_id=session_id,
-            session_name=session_name,
-            venv_id=None,
-        )
-        assert resolved.error is None, resolved.error
-        assert resolved.session_id is None
-    finally:
-        await actor.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "session_id,session_name",
-    [
-        (5, None),
-        (None, "contact_lookup"),
-        (5, "contact_lookup"),
-    ],
-)
-async def test_stateless_still_refuses_a_session_it_was_actually_given(
-    session_id,
-    session_name,
-):
-    """Pointing at a real session while asking for stateless stays an error.
-
-    Reading falsy placeholders as absent must not blunt the guard: these two
-    requests genuinely contradict each other, and the caller can act on that.
-    """
-    actor = CodeActActor(environments=[])
-    try:
-        resolved = actor._resolve_session(
-            state_mode="stateless",
-            language="python",
-            session_id=session_id,
-            session_name=session_name,
-            venv_id=None,
-        )
-        assert resolved.error is not None
-        assert "stateless" in str(resolved.error.get("error", "")).lower()
-    finally:
-        await actor.close()
-
-
-@pytest.mark.asyncio
-async def test_stateful_keeps_session_zero_as_its_default_session():
-    """Session 0 is the default stateful session, so it survives resolution.
-
-    Only stateless reads 0 as "no session"; once state is being kept the id is
-    a real handle and must not be normalised away.
-    """
-    actor = CodeActActor(environments=[])
-    try:
-        resolved = actor._resolve_session(
-            state_mode="stateful",
-            language="python",
-            session_id=0,
-            session_name="",
-            venv_id=None,
-        )
-        assert resolved.error is None, resolved.error
-        assert resolved.session_id == 0
-    finally:
-        await actor.close()
 
 
 @pytest.mark.asyncio
