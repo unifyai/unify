@@ -5206,6 +5206,14 @@ class FunctionManager(BaseFunctionManager):
             for reason in coerce_stale_reasons(existing)
             if reason.dep_kind != "depends_on"
         ]
+        # Primitive references ("primitives.<manager>.<method>") are resolved
+        # against whatever environments the runtime injects, not against this
+        # FunctionManager instance's own primitive catalog. Whether that
+        # catalog contains a given name reflects this instance's own
+        # scope/sync state, not whether the primitive actually exists and
+        # runs -- so it can never be an authoritative "missing" signal.
+        # Compositional dependencies are the only category this FunctionManager
+        # owns outright (Functions/Compositional), so only those are checked.
         missing = [
             StaleReason(
                 dep_kind="depends_on",
@@ -5213,7 +5221,7 @@ class FunctionManager(BaseFunctionManager):
                 message=f"missing dependency name={name}",
             )
             for name in depends_on
-            if name not in available_names
+            if not name.startswith("primitives.") and name not in available_names
         ]
         return merge_stale_reasons(preserved, *missing)
 
@@ -5226,16 +5234,11 @@ class FunctionManager(BaseFunctionManager):
                 context=self._compositional_ctx,
                 exclude_fields=list_private_fields(self._compositional_ctx),
             )
-        available = {
+        return {
             str(log.entries["name"])
             for log in compositional_logs
             if log.entries.get("name")
         }
-        if self._include_primitives:
-            available.update(
-                str(row["name"]) for row in self._primitive_logs() if row.get("name")
-            )
-        return available
 
     def _append_missing_dependency_reasons(
         self,
