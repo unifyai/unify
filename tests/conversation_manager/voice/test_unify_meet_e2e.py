@@ -840,13 +840,13 @@ class TestRealLiveKitUnifyMeet:
         )
 
         proc = None
-        call_py = (
-            Path(__file__).parent.parent.parent.parent
-            / "unity"
-            / "conversation_manager"
-            / "medium_scripts"
-            / "call.py"
-        )
+        # Located through the imported module rather than by walking up from
+        # this file: the hand-built path still said "unity", so every run of
+        # this test spawned a python that exited 2 on a missing file and
+        # reported it as the voice agent crashing.
+        from unify.conversation_manager.medium_scripts import call as call_module
+
+        call_py = Path(call_module.__file__)
 
         sample_contact = {
             "contact_id": 2,
