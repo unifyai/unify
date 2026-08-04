@@ -314,7 +314,13 @@ class BaseFunctionManager(BaseStateManager):
             A boolean expression evaluated per row with fields of the
             ``Function`` model in scope (e.g. ``name``, ``argspec``,
             ``docstring``, ``depends_on``). When ``None``, returns all rows subject
-            to pagination.
+            to pagination. Supported grammar: comparisons (==, !=, <, <=, >, >=),
+            membership tests (in / not in), and boolean combinators (and, or,
+            not) over field names and literal values, plus a fixed set of
+            helpers (``len()``, string methods like ``.lower()`` /
+            ``.startswith()``, ``embed()``). Arbitrary Python calls outside
+            that set — e.g. ``' '.join(depends_on)`` or a list comprehension —
+            are rejected.
         offset : int, default ``0``
             Zero‑based index of the first result to return.
         limit : int, default ``100``
