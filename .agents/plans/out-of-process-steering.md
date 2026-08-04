@@ -214,13 +214,18 @@ per `execute` call, inside the connection lock, so the session follows the
 call and a long-lived `_VenvConnection` never holds one. There is a test
 pinning that a later call on the same connection runs unsteered.
 
-**Synchronous blocking code** cannot take a correction, exactly as
-in-process: a blocking call holds the child between dispatches, and
-synchronous ``def``s get no await probes on either side of the boundary. It
-can now be *paused*, though — see below — which is one place out-of-process
-exceeds in-process. (One extra wrinkle out-of-process: the child's RPC wait
-has a 300 s timeout, so a pause held longer than that fails the blocked call
-rather than extending it.)
+**Synchronous code is narrower than async, but no longer opaque.** Raising
+needs no await, so sync ``def``s now carry a synchronous interrupt probe
+(``_int_s``) at entry and per loop iteration. In-process that fires only when
+a correction was already pending as the sync frame began — the frame holds
+the event loop, so nothing can *collect* while it runs. In a venv child the
+stdin reader keeps the directive state fresh from its own thread, which makes
+a sync busy-loop genuinely interruptible mid-run — a case in-process
+execution fundamentally cannot reach. What remains out of reach on both
+sides: a single blocking *call* (``time.sleep``, sync HTTP) between probes,
+which pause (below) can at least freeze. (One extra wrinkle out-of-process:
+the child's RPC wait has a 300 s timeout, so a pause held longer than that
+fails the blocked call rather than extending it.)
 
 **Pause is process-level, not protocol-level** (was: not propagated). The
 tool handle's pause event now feeds the steering session

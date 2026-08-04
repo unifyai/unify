@@ -524,6 +524,19 @@ async def _int(func_name: str) -> None:
         raise ControlledInterruption(_interrupt_reason)
 
 
+def _int_s(func_name: str) -> None:
+    """The interrupt probe for synchronous functions.
+
+    Raising needs no await, and the stdin reader keeps the directive state
+    fresh from its own thread — so unlike in-process, a sync loop here is
+    interruptible mid-run.
+    """
+    if _interrupt_reason is not None and (
+        _interrupt_stop or func_name in _interrupt_functions
+    ):
+        raise ControlledInterruption(_interrupt_reason)
+
+
 async def _around_cp(label: str, awaitable: Any) -> Any:
     """Bracket one awaited dispatch, mirroring the in-process probe."""
     await _cp(f"Before: {label}")
@@ -657,6 +670,7 @@ def create_safe_globals(is_async: bool = True):
         # until a control directive arrives.
         "_cp": _cp,
         "_int": _int,
+        "_int_s": _int_s,
         "_around_cp": _around_cp,
         "runtime": _ChildRuntime(),
     }

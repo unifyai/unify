@@ -682,6 +682,66 @@ async def test_pooled_connection_outlives_the_session_that_steered_it(
         _cleanup_venv(fm, venv_id)
 
 
+# ── interrupts inside synchronous functions ─────────────────────────────────
+SYNC_LOOP_IMPLEMENTATION = (
+    "def crunch_sync():\n"
+    "    time_mod = __import__('time')\n"
+    "    primitives.comms.send(to='started')\n"
+    "    deadline = time_mod.time() + 30\n"
+    "    total = 0\n"
+    "    while time_mod.time() < deadline:\n"
+    "        total += 1\n"
+    "    primitives.comms.send(to='finished')\n"
+    "    return total\n"
+)
+
+
+class _SyncComms:
+    def __init__(self) -> None:
+        self.sent: List[str] = []
+
+    def send(self, to: str) -> str:
+        self.sent.append(to)
+        return f"sent:{to}"
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_reaches_a_sync_busy_loop_in_a_venv_child(
+    function_manager_factory,
+):
+    """No awaits anywhere: the reader thread keeps the directive state fresh
+    while the sync loop runs, and the sync probe raises without one — the
+    case in-process execution fundamentally cannot interrupt."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+    comms = _SyncComms()
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+    steerer = _patch_after(comms, 1, queue, "abandon the crunch")
+
+    try:
+        with use_session(session):
+            out = await fm.execute_in_venv(
+                venv_id=venv_id,
+                implementation=SYNC_LOOP_IMPLEMENTATION,
+                call_kwargs={},
+                is_async=False,
+                primitives=_Prims(comms),  # type: ignore[arg-type]
+            )
+        await steerer
+
+        assert out["error"] is None, out["error"]
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "abandon the crunch",
+        }
+        assert "finished" not in comms.sent
+    finally:
+        _cleanup_venv(fm, venv_id)
+
+
 # ── pause, mirrored into the child process ──────────────────────────────────
 @pytest.mark.asyncio
 async def test_relay_pause_mirrors_state_transitions():
