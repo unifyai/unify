@@ -4,7 +4,10 @@ These assert on the rclone ``--exclude`` args produced for each operation
 without needing a live SFTP link or rclone binary.
 """
 
+import asyncio
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 from unify.file_manager.sync.user_sftp import (
     EDITS_DIR,
@@ -79,3 +82,64 @@ def test_sync_args_exclude_noise_secrets_and_carry_stats():
     assert "--stats-one-line" in args
     assert "--stats-log-level" in args
     assert "NOTICE" in args
+
+
+def _filters(args: list[str]) -> list[str]:
+    """Extract the rule operands following each ``--filter`` flag."""
+    return [args[i + 1] for i, a in enumerate(args) if a == "--filter"]
+
+
+@pytest.mark.asyncio
+async def test_pull_copies_the_parent_and_narrows_to_the_entry(monkeypatch):
+    """A single-file pull must not use ``copyto`` while filters are set.
+
+    rclone refuses ``copyto`` against one file whenever any filter is present
+    ("can't limit to single files when using filters"), so every single-file
+    pull failed with the exclude tiers attached.
+    """
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = ""
+
+    captured: list[str] = []
+
+    async def fake_run(args, *, operation, capture=None, stream=False):
+        captured.extend(args)
+        return True
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    dest = await client.pull("Desktop/shot.png")
+
+    assert dest == str(client.local_root / "Desktop" / "shot.png")
+    assert captured[0] == "copy"
+    assert captured[1] == f"{UserHomeSFTP.REMOTE_NAME}:/Desktop"
+    assert captured[2] == str(client.local_root / "Desktop")
+
+    rules = _filters(captured)
+    assert "+ /shot.png" in rules
+    assert "+ /shot.png/**" in rules  # the entry may be a directory
+    assert rules[-1] == "- *"
+    # Exclude tiers survive the move to filter form ...
+    assert "- /.ssh/**" in rules
+    assert "- node_modules/**" in rules
+    # ... and none of them ride along as --exclude/--include, whose parse order
+    # against --filter is indeterminate (rclone warns at ERROR level).
+    assert "--exclude" not in captured
+    assert "--include" not in captured
+
+
+@pytest.mark.asyncio
+async def test_pull_failure_names_the_rclone_cause(monkeypatch):
+    """A bare "failed to pull" left the actor guessing at unrelated theories."""
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = "CRITICAL: can't limit to single files when using filters"
+
+    async def fake_run(args, *, operation, capture=None, stream=False):
+        return False
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="can't limit to single files"):
+        await client.pull("Desktop/shot.png")

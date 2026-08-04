@@ -100,8 +100,8 @@ _SECRET_EXCLUDES: tuple[str, ...] = (
 )
 
 
-def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
-    """Flatten the requested exclude tiers into ``--exclude PAT`` rclone args.
+def _exclude_patterns(*, noise: bool, secrets: bool) -> list[str]:
+    """The requested exclude tiers as raw rclone patterns.
 
     Tier 1 (the writeback dir) is always included; ``noise`` adds tier 2 and
     ``secrets`` adds tier 3.
@@ -111,8 +111,13 @@ def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
         patterns += _NOISE_EXCLUDES
     if secrets:
         patterns += _SECRET_EXCLUDES
+    return patterns
+
+
+def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
+    """Flatten the requested exclude tiers into ``--exclude PAT`` rclone args."""
     args: list[str] = []
-    for pattern in patterns:
+    for pattern in _exclude_patterns(noise=noise, secrets=secrets):
         args += ["--exclude", pattern]
     return args
 
@@ -148,6 +153,9 @@ class UserHomeSFTP:
         self._key_path: Optional[str] = None
         self._op_lock = asyncio.Lock()
         self._setup_done = False
+        # Why the last rclone call failed, so callers can raise something the
+        # actor can act on instead of a bare "failed".
+        self._last_error = ""
 
     @property
     def local_root(self) -> Path:
@@ -243,20 +251,42 @@ class UserHomeSFTP:
         """
         rel = _normalize_remote(remote_path)
         dest = self.local_root / rel
+        # rclone refuses ``copyto`` against a single file whenever any filter is
+        # set ("can't limit to single files when using filters"), so every
+        # single-file pull failed while the exclude tiers were passed. ``copy``
+        # accepts filters, so copy the containing directory and narrow to this
+        # entry: ``+ /name`` matches a file, ``+ /name/**`` its contents when it
+        # is a directory, and the trailing ``- *`` drops the rest. Rules are all
+        # ``--filter`` because mixing ``--include``/``--exclude`` leaves rclone's
+        # parse order indeterminate (it warns at ERROR level).
+        rules: list[str] = []
+        for pattern in _exclude_patterns(noise=True, secrets=True):
+            rules += ["--filter", f"- {pattern}"]
+        rules += [
+            "--filter",
+            f"+ /{rel.name}",
+            "--filter",
+            f"+ /{rel.name}/**",
+            "--filter",
+            "- *",
+        ]
         async with self._op_lock:
             dest.parent.mkdir(parents=True, exist_ok=True)
             ok = await self._run(
                 [
-                    "copyto",
-                    f"{self.REMOTE_NAME}:/{rel}",
-                    str(dest),
-                    *_build_excludes(noise=True, secrets=True),
+                    "copy",
+                    f"{self.REMOTE_NAME}:/{rel.parent}",
+                    str(dest.parent),
+                    *rules,
                     "-v",
                 ],
                 operation=f"pull {rel}",
             )
             if not ok:
-                raise RuntimeError(f"Failed to pull {rel} from {self._user_id}'s home")
+                raise RuntimeError(
+                    f"Failed to pull {rel} from {self._user_id}'s home"
+                    f"{f': {self._last_error}' if self._last_error else ''}",
+                )
             return str(dest)
 
     def _sync_args(self, rel: PurePosixPath, dest: Path) -> list[str]:
@@ -382,11 +412,19 @@ class UserHomeSFTP:
             stderr_summary = stderr.decode() if stderr else ""
 
         if proc.returncode != 0:
+            # rclone prints advisory NOTICEs (host-key validation, config
+            # defaults) before the line that explains the failure, so keeping
+            # the first 500 characters hid the actual cause and left callers
+            # guessing at unrelated theories. Keep the lines that name it.
+            lines = stderr_summary.splitlines()
+            blamed = [ln for ln in lines if "CRITICAL" in ln or "ERROR" in ln]
+            self._last_error = "\n".join(blamed or lines[-5:])[:500]
             LOGGER.error(
                 f"{ICONS['file_sync']} [UserSFTP] {operation} failed: "
-                f"{stderr_summary[:500]}",
+                f"{self._last_error}",
             )
             return False
+        self._last_error = ""
         if capture is not None and stdout:
             capture.append(stdout.decode())
         return True
