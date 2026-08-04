@@ -40,28 +40,14 @@ OUTPUT = (
 # Declaration files, in the order they should appear in the digest: layout before
 # the things that go inside it, primitives before the charts that use them.
 _ORDER = (
-    "layout/layout.d.ts",
-    "display/card.d.ts",
-    "display/typography.d.ts",
-    "display/indicators.d.ts",
-    "display/table.d.ts",
-    "display/lists.d.ts",
-    "display/states.d.ts",
-    "charts/charts.d.ts",
-    "interaction/controls.d.ts",
+    "canvas.d.ts",
+    "display/freshness.d.ts",
     "interaction/actions.d.ts",
 )
 
 _SECTION_TITLES = {
-    "layout/layout.d.ts": "Layout",
-    "display/card.d.ts": "Cards",
-    "display/typography.d.ts": "Typography",
-    "display/indicators.d.ts": "Indicators",
-    "display/table.d.ts": "Tables",
-    "display/lists.d.ts": "Lists",
-    "display/states.d.ts": "States",
-    "charts/charts.d.ts": "Charts",
-    "interaction/controls.d.ts": "Form controls",
+    "canvas.d.ts": "Canvas root",
+    "display/freshness.d.ts": "Freshness",
     "interaction/actions.d.ts": "Actions",
 }
 
@@ -300,23 +286,23 @@ def render(kit: Path) -> str:
     out: List[str] = [
         "# @unity/canvas-kit",
         "",
-        "The component vocabulary a canvas is written against. Generated from the",
-        "kit's type declarations by `scripts/generate_canvas_kit_api.py` — do not",
-        "edit by hand.",
+        "The protocol and brand layer a canvas is authored against. Generated",
+        "from the kit's type declarations by `scripts/generate_canvas_kit_api.py`",
+        "— do not edit by hand.",
         "",
-        "Import everything from `@unity/canvas-kit`. Two rules the API enforces:",
-        "no component takes a raw colour (only `tone` and chart series indices),",
-        "and layout props are enumerated scales rather than class strings.",
+        "The kit carries no presentational vocabulary. Cards, tables, badges,",
+        "dialogs, inputs and charts are shadcn component source INLINED into the",
+        "canvas module and compiled against the vendored substrate — the",
+        "`@radix-ui/react-*` set, `class-variance-authority`, `clsx`,",
+        "`tailwind-merge`, `lucide-react` and `recharts` are importable, and",
+        "nothing else resolves at view time. When inlining shadcn source,",
+        "rewrite `@/lib/utils` to `@unity/canvas-kit` (for `cn`) and inline any",
+        "`@/components/ui/*` sibling into the same module. Colour enters only",
+        "through semantic token utilities (`bg-primary`, `text-muted-foreground`,",
+        "`bg-destructive`, ...) and `seriesColor(n)` / `var(--chart-N)` for",
+        "chart fills; a class the shipped stylesheet lacks fails lint.",
         "",
     ]
-
-    scales = _scales(kit)
-    if scales:
-        out.append("## Scales")
-        out.append("")
-        for name, value in sorted(scales.items()):
-            out.append(f"- `{name}` = {value}")
-        out.append("")
 
     total = 0
     missing: List[str] = []

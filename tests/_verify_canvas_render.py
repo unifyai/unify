@@ -19,31 +19,37 @@ from unify.canvas_manager.ops.review_ops import _host_root, render_and_review
 
 WORKS = """
 import * as React from 'react';
-import { Canvas, Card, CardContent, CardHeader, CardTitle, Heading, Stack, Stat, Table, type CanvasViewProps } from '@unity/canvas-kit';
+import { Canvas, cn, type CanvasViewProps } from '@unity/canvas-kit';
 
 interface Row extends Record<string, unknown> {
   title: string;
   status: string;
 }
 
+function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('rounded-xl border bg-card p-6 text-card-foreground shadow', className)} {...props} />;
+}
+
 export default function Tracker({ canvas }: CanvasViewProps) {
   const rows = (canvas.data.tasks ?? []) as Row[];
   return (
     <Canvas>
-      <Stack gap="lg">
-        <Heading level={2}>{String(canvas.props.title ?? 'Tasks')}</Heading>
+      <div className="flex flex-col gap-4">
+        <h2 className="text-2xl font-semibold">{String(canvas.props.title ?? 'Tasks')}</h2>
         <Card>
-          <CardHeader>
-            <CardTitle>Open</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Stack gap="md">
-              <Stat label="Total" value={rows.length} />
-              <Table rows={rows} columns={[{ key: 'title', header: 'Task' }, { key: 'status', header: 'Status' }]} />
-            </Stack>
-          </CardContent>
+          <p className="mb-2 font-semibold">Open ({rows.length})</p>
+          <table className="w-full text-sm">
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.title} className="border-b">
+                  <td className="p-2">{row.title}</td>
+                  <td className="p-2 text-muted-foreground">{row.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </Card>
-      </Stack>
+      </div>
     </Canvas>
   );
 }
@@ -54,7 +60,7 @@ export default function Tracker({ canvas }: CanvasViewProps) {
 # of mistake an assistant makes when it assumes a binding returned rows.
 THROWS_ON_MOUNT = """
 import * as React from 'react';
-import { Canvas, Card, CardContent, Text, type CanvasViewProps } from '@unity/canvas-kit';
+import { Canvas, type CanvasViewProps } from '@unity/canvas-kit';
 
 interface Row extends Record<string, unknown> {
   nested: { label: string };
@@ -65,11 +71,9 @@ export default function Broken({ canvas }: CanvasViewProps) {
   const first = rows[0] as Row;
   return (
     <Canvas>
-      <Card>
-        <CardContent>
-          <Text>{first.nested.label}</Text>
-        </CardContent>
-      </Card>
+      <div className="rounded-xl border bg-card p-6">
+        <p>{first.nested.label}</p>
+      </div>
     </Canvas>
   );
 }

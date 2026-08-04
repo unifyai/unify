@@ -18,9 +18,9 @@ from unify.canvas_manager.ops.build_ops import (
 
 CLEAN = (
     'import * as React from "react";\n'
-    'import { Canvas, Badge, BarChart } from "@unity/canvas-kit";\n'
+    'import { Canvas, cn } from "@unity/canvas-kit";\n'
     "export default function View({ canvas }) {\n"
-    '  return <Canvas><Badge tone="success">ok</Badge></Canvas>;\n'
+    '  return <Canvas><span className={cn("bg-primary text-primary-foreground")}>ok</span></Canvas>;\n'
     "}\n"
 )
 
@@ -71,7 +71,10 @@ class TestFalsePositives:
         )
 
     def test_tone_props_are_untouched(self):
-        assert lint_source('<Badge tone="danger" /><Stat tone="warning" />') == []
+        assert (
+            lint_source('<div className="bg-destructive text-muted-foreground" />')
+            == []
+        )
 
 
 class TestImports:

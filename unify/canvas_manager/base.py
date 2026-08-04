@@ -240,26 +240,33 @@ class BaseCanvasManager:
 
             result = primitives.canvas.create_view(
                 tsx='''
-                import { Canvas, Stack, Section, KpiRow, Table } from "@unity/canvas-kit";
+                import { Canvas, cn } from "@unity/canvas-kit";
 
+                // Presentational pieces are inlined shadcn source; the kit
+                // supplies only the protocol layer and brand helpers.
                 export default function Tracker({ canvas }) {
                   const tasks = canvas.data.tasks ?? [];
                   return (
                     <Canvas>
-                      <Stack gap="lg">
-                        <KpiRow items={[
-                          { label: "Open", value: tasks.length },
-                        ]} />
-                        <Section title="Pending">
-                          <Table
-                            columns={[
-                              { key: "name", header: "Task" },
-                              { key: "due", header: "Due" },
-                            ]}
-                            rows={tasks}
-                          />
-                        </Section>
-                      </Stack>
+                      <div className="flex flex-col gap-4">
+                        <div className={cn("rounded-xl border bg-card p-6")}>
+                          <p className="text-sm text-muted-foreground">Open</p>
+                          <p className="text-2xl font-semibold">{tasks.length}</p>
+                        </div>
+                        <div className="rounded-xl border bg-card p-6">
+                          <p className="mb-2 font-semibold">Pending</p>
+                          <table className="w-full text-sm">
+                            <tbody>
+                              {tasks.map((task) => (
+                                <tr key={task.name} className="border-b">
+                                  <td className="p-2">{task.name}</td>
+                                  <td className="p-2">{task.due}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </Canvas>
                   );
                 }
@@ -297,33 +304,40 @@ class BaseCanvasManager:
 
             result = primitives.canvas.create_view(
                 tsx='''
-                import { Canvas, Grid, Card, CardHeader, CardTitle,
-                         CardContent, BarChart, Table } from "@unity/canvas-kit";
+                import { Canvas, seriesColor } from "@unity/canvas-kit";
+                import { Bar, BarChart, ResponsiveContainer, XAxis } from "recharts";
 
                 export default function Delivery({ canvas }) {
+                  const issues = canvas.data.issues ?? [];
+                  const deals = canvas.data.deals ?? [];
                   return (
                     <Canvas>
-                      <Grid columns={2}>
-                        <Card>
-                          <CardHeader><CardTitle>Open issues</CardTitle></CardHeader>
-                          <CardContent>
-                            <BarChart data={canvas.data.issues ?? []}
-                                      x="repo" y="count" />
-                          </CardContent>
-                        </Card>
-                        <Card>
-                          <CardHeader><CardTitle>Pipeline</CardTitle></CardHeader>
-                          <CardContent>
-                            <Table
-                              columns={[
-                                { key: "name", header: "Deal" },
-                                { key: "amount", header: "Amount", numeric: true },
-                              ]}
-                              rows={canvas.data.deals ?? []}
-                            />
-                          </CardContent>
-                        </Card>
-                      </Grid>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="rounded-xl border bg-card p-6">
+                          <p className="mb-2 font-semibold">Open issues</p>
+                          <div style={{ height: 200 }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={issues}>
+                                <XAxis dataKey="repo" />
+                                <Bar dataKey="count" fill={seriesColor(0)} radius={4} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                        <div className="rounded-xl border bg-card p-6">
+                          <p className="mb-2 font-semibold">Pipeline</p>
+                          <table className="w-full text-sm">
+                            <tbody>
+                              {deals.map((deal) => (
+                                <tr key={deal.name} className="border-b">
+                                  <td className="p-2">{deal.name}</td>
+                                  <td className="p-2 text-right tabular-nums">{deal.amount}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </Canvas>
                   );
                 }
@@ -347,14 +361,15 @@ class BaseCanvasManager:
 
             result = primitives.canvas.create_view(
                 tsx='''
-                import { Canvas, Section, ActionForm } from "@unity/canvas-kit";
+                import { ActionForm, Canvas } from "@unity/canvas-kit";
 
                 export default function BulkMail({ canvas }) {
                   return (
                     <Canvas>
-                      <Section title="Send an update">
+                      <div className="rounded-xl border bg-card p-6">
+                        <p className="mb-4 font-semibold">Send an update</p>
                         <ActionForm action="bulk_send" canvas={canvas} />
-                      </Section>
+                      </div>
                     </Canvas>
                   );
                 }

@@ -47,6 +47,12 @@ REACT_TYPES_VERSION="18.3.12"
 RECHARTS_VERSION="3.10.1"
 CLSX_VERSION="2.1.1"
 TAILWIND_MERGE_VERSION="2.6.1"
+# The vocabulary substrate: what inlined shadcn component source compiles
+# against. Kept in step with apps/canvas-host/package.json in branding — the
+# toolchain typechecks against the same versions the runtime host vendors.
+CVA_VERSION="0.7.1"
+LUCIDE_VERSION="0.475.0"
+RADIX_PACKAGES="accordion alert-dialog aspect-ratio avatar checkbox collapsible dialog dropdown-menu hover-card label menubar navigation-menu popover progress radio-group scroll-area select separator slider slot switch tabs toggle toggle-group tooltip"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -159,6 +165,12 @@ echo ">> installing the canvas build toolchain"
 rm -rf "$TOOLCHAIN_ROOT"
 mkdir -p "$TOOLCHAIN_ROOT"
 
+RADIX_DEPS=""
+for pkg in $RADIX_PACKAGES; do
+    RADIX_DEPS="${RADIX_DEPS},
+    \"@radix-ui/react-${pkg}\": \"^1\""
+done
+
 cat > "$TOOLCHAIN_ROOT/package.json" <<JSON
 {
   "name": "@unity/canvas-toolchain",
@@ -173,7 +185,9 @@ cat > "$TOOLCHAIN_ROOT/package.json" <<JSON
     "react-dom": "${REACT_VERSION}",
     "clsx": "${CLSX_VERSION}",
     "recharts": "${RECHARTS_VERSION}",
-    "tailwind-merge": "${TAILWIND_MERGE_VERSION}"
+    "tailwind-merge": "${TAILWIND_MERGE_VERSION}",
+    "class-variance-authority": "${CVA_VERSION}",
+    "lucide-react": "${LUCIDE_VERSION}"${RADIX_DEPS}
   }
 }
 JSON
@@ -218,6 +232,15 @@ cat > "$KIT_PKG/package.json" <<JSON
   }
 }
 JSON
+
+# The authoring contract artifacts. build_ops reads the externals list (one
+# source of truth with the host's import map) and the class manifest (a class
+# the shipped stylesheet lacks silently styles nothing, so the lint refuses
+# it); the vocabulary corpus is the reference source authoring guidance quotes.
+node -e "import('$BRANDING_PATH/apps/canvas-host/canvas-specifiers.mjs').then(m => console.log(JSON.stringify(Object.keys(m.CANVAS_SPECIFIERS), null, 1)))" \
+    > "$TOOLCHAIN_ROOT/canvas-externals.json"
+cp "$HOST_ROOT"/host/*/classes.json "$TOOLCHAIN_ROOT/classes.json"
+cp -R "$BRANDING_PATH/apps/canvas-host/vocabulary" "$TOOLCHAIN_ROOT/vocabulary"
 
 # Canvas builds happen in a subdirectory of the toolchain so ordinary node
 # resolution walks up into its node_modules; no baseUrl or path mapping needed.
