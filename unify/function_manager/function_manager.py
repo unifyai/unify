@@ -44,10 +44,12 @@ from ..common.authorship import strip_authoring_assistant_id
 from ..common.log_utils import create_logs as unity_create_logs
 from ..common.embed_utils import ensure_vector_column, list_private_fields
 from ..common.custom_sync import (
+    MANAGED_BY_DEPLOYMENT,
     CustomSyncAdapter,
     CustomSyncPartialFailure,
     managed_rows_filter,
     run_custom_sync,
+    stored_hash_field,
 )
 from ..common.sync_lease import exclusive_sync_lease
 from ..common.federated_search import (
@@ -1868,11 +1870,10 @@ class FunctionManager(BaseFunctionManager):
         )
         self._meta_ctx = ContextRegistry.get_context(self, FUNCTIONS_META_TABLE)
 
-        # Track whether custom venvs and custom functions have been synced
-        self._custom_venvs_synced = False
-        self._custom_functions_synced = False
-        self._custom_venvs_synced_contexts: set[str] = set()
-        self._custom_functions_synced_contexts: set[str] = set()
+        # (context, managed_by) pairs whose custom sync already ran this
+        # process; each source's pass is memoised independently.
+        self._custom_venvs_synced_sources: set[tuple[str, str]] = set()
+        self._custom_functions_synced_sources: set[tuple[str, str]] = set()
         self._destination_context_lock = threading.RLock()
         self._destination_write_scoped = False
 
@@ -2685,10 +2686,8 @@ class FunctionManager(BaseFunctionManager):
         # Reset any manager-local counters or caches
         try:
             self._next_id = None
-            self._custom_venvs_synced = False
-            self._custom_functions_synced = False
-            self._custom_venvs_synced_contexts.clear()
-            self._custom_functions_synced_contexts.clear()
+            self._custom_venvs_synced_sources.clear()
+            self._custom_functions_synced_sources.clear()
             # Clear in-process session state
             self._in_process_sessions.clear()
         except Exception:
@@ -3638,8 +3637,12 @@ class FunctionManager(BaseFunctionManager):
     #  Custom Functions Sync                                              #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_functions_hash(self) -> str:
-        """Retrieve the stored custom functions hash from the Meta context."""
+    def _get_stored_custom_functions_hash(
+        self,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> str:
+        """Retrieve one source's stored custom functions hash."""
+        field = stored_hash_field("custom_functions_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3647,13 +3650,19 @@ class FunctionManager(BaseFunctionManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_functions_hash", "")
+                return logs[0].entries.get(field, "")
         except Exception as e:
             logger.warning(f"Failed to retrieve custom functions hash: {e}")
         return ""
 
-    def _store_custom_functions_hash(self, hash_value: str) -> None:
-        """Store the custom functions hash in the Meta context."""
+    def _store_custom_functions_hash(
+        self,
+        hash_value: str,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> None:
+        """Store one source's custom functions hash in the Meta context."""
+        field = stored_hash_field("custom_functions_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3664,14 +3673,14 @@ class FunctionManager(BaseFunctionManager):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_functions_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 # Create the meta row if it doesn't exist
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_functions_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as e:
@@ -3688,11 +3697,20 @@ class FunctionManager(BaseFunctionManager):
             lg.entries.get("name"): lg.entries for lg in logs if lg.entries.get("name")
         }
 
-    def _delete_custom_function_by_name(self, name: str) -> bool:
-        """Delete a custom function by name."""
+    def _delete_custom_function_by_name(
+        self,
+        name: str,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> bool:
+        """Delete one source's custom function by name.
+
+        Scoped to *managed_by*: two sources may each own a function of the
+        same name, and a prune must reach only its own.
+        """
         logs = unisdk.get_logs(
             context=self._compositional_ctx,
-            filter=f"name == '{name}' and custom_hash != None",
+            filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
             limit=1,
         )
         if not logs:
@@ -3770,8 +3788,12 @@ class FunctionManager(BaseFunctionManager):
     #  Custom Venvs Sync                                                  #
     # ------------------------------------------------------------------ #
 
-    def _get_stored_custom_venvs_hash(self) -> str:
-        """Retrieve the stored custom venvs hash from the Meta context."""
+    def _get_stored_custom_venvs_hash(
+        self,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> str:
+        """Retrieve one source's stored custom venvs hash."""
+        field = stored_hash_field("custom_venvs_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3779,13 +3801,19 @@ class FunctionManager(BaseFunctionManager):
                 limit=1,
             )
             if logs:
-                return logs[0].entries.get("custom_venvs_hash", "")
+                return logs[0].entries.get(field, "")
         except Exception as e:
             logger.warning(f"Failed to retrieve custom venvs hash: {e}")
         return ""
 
-    def _store_custom_venvs_hash(self, hash_value: str) -> None:
-        """Store the custom venvs hash in the Meta context."""
+    def _store_custom_venvs_hash(
+        self,
+        hash_value: str,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> None:
+        """Store one source's custom venvs hash in the Meta context."""
+        field = stored_hash_field("custom_venvs_hash", managed_by)
         try:
             logs = unisdk.get_logs(
                 context=self._meta_ctx,
@@ -3796,13 +3824,13 @@ class FunctionManager(BaseFunctionManager):
                 unisdk.update_logs(
                     context=self._meta_ctx,
                     logs=[logs[0].id],
-                    entries={"custom_venvs_hash": hash_value},
+                    entries={field: hash_value},
                     overwrite=True,
                 )
             else:
                 unity_create_logs(
                     context=self._meta_ctx,
-                    entries=[{"meta_id": 1, "custom_venvs_hash": hash_value}],
+                    entries=[{"meta_id": 1, field: hash_value}],
                     stamp_authoring=True,
                 )
         except Exception as e:
@@ -3819,11 +3847,20 @@ class FunctionManager(BaseFunctionManager):
             lg.entries.get("name"): lg.entries for lg in logs if lg.entries.get("name")
         }
 
-    def _delete_custom_venv_by_name(self, name: str) -> bool:
-        """Delete a custom venv by name."""
+    def _delete_custom_venv_by_name(
+        self,
+        name: str,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> bool:
+        """Delete one source's custom venv by name.
+
+        Scoped to *managed_by*: two sources may each own a venv of the
+        same name, and a prune must reach only its own.
+        """
         logs = unisdk.get_logs(
             context=self._venvs_ctx,
-            filter=f"name == '{name}' and custom_hash != None",
+            filter=f"name == '{name}' and {managed_rows_filter(managed_by)}",
             limit=1,
         )
         if not logs:
@@ -3883,6 +3920,7 @@ class FunctionManager(BaseFunctionManager):
         *,
         source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
         destination: str | None = None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> Dict[str, int]:
         """
         Ensure custom venvs in the database match source definitions.
@@ -3918,25 +3956,21 @@ class FunctionManager(BaseFunctionManager):
             self._temporary_function_context("_meta_ctx", meta_context),
         ):
             source_venvs = source_venvs or {}
-
-            def _mark_synced() -> None:
-                if is_personal:
-                    self._custom_venvs_synced = True
-                else:
-                    self._custom_venvs_synced_contexts.add(venv_context)
+            synced_key = (venv_context, managed_by)
 
             run_custom_sync(
-                adapter=_VenvSyncAdapter(self),
+                adapter=_VenvSyncAdapter(self, managed_by=managed_by),
                 source=source_venvs,
                 expected_hash=compute_custom_venvs_hash(source_venvs=source_venvs),
-                stored_hash=self._get_stored_custom_venvs_hash(),
-                already_synced=(
-                    self._custom_venvs_synced
-                    if is_personal
-                    else venv_context in self._custom_venvs_synced_contexts
+                stored_hash=self._get_stored_custom_venvs_hash(managed_by),
+                already_synced=synced_key in self._custom_venvs_synced_sources,
+                mark_synced=lambda: self._custom_venvs_synced_sources.add(
+                    synced_key,
                 ),
-                mark_synced=_mark_synced,
-                store_hash=self._store_custom_venvs_hash,
+                store_hash=lambda value: self._store_custom_venvs_hash(
+                    value,
+                    managed_by=managed_by,
+                ),
             )
             db_venvs = self._get_custom_venvs_from_db()
             return {name: v["venv_id"] for name, v in db_venvs.items()}
@@ -3947,6 +3981,7 @@ class FunctionManager(BaseFunctionManager):
         *,
         source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
         destination: str | None = None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
         """
         Ensure custom functions in the database match source definitions.
@@ -3986,31 +4021,30 @@ class FunctionManager(BaseFunctionManager):
             self._temporary_function_context("_meta_ctx", meta_context),
         ):
             source_functions = source_functions or {}
-
-            def _mark_synced() -> None:
-                if is_personal:
-                    self._custom_functions_synced = True
-                else:
-                    self._custom_functions_synced_contexts.add(function_context)
+            synced_key = (function_context, managed_by)
 
             try:
                 return run_custom_sync(
                     adapter=_FunctionSyncAdapter(
                         self,
                         venv_name_to_id=venv_name_to_id or {},
+                        managed_by=managed_by,
                     ),
                     source=source_functions,
                     expected_hash=compute_custom_functions_hash(
                         source_functions=source_functions,
                     ),
-                    stored_hash=self._get_stored_custom_functions_hash(),
+                    stored_hash=self._get_stored_custom_functions_hash(managed_by),
                     already_synced=(
-                        self._custom_functions_synced
-                        if is_personal
-                        else function_context in self._custom_functions_synced_contexts
+                        synced_key in self._custom_functions_synced_sources
                     ),
-                    mark_synced=_mark_synced,
-                    store_hash=self._store_custom_functions_hash,
+                    mark_synced=lambda: self._custom_functions_synced_sources.add(
+                        synced_key,
+                    ),
+                    store_hash=lambda value: self._store_custom_functions_hash(
+                        value,
+                        managed_by=managed_by,
+                    ),
                 )
             except CustomFunctionSyncPartialFailure:
                 raise
@@ -4023,17 +4057,21 @@ class FunctionManager(BaseFunctionManager):
         source_functions: Optional[Dict[str, Dict[str, Any]]] = None,
         source_venvs: Optional[Dict[str, Dict[str, Any]]] = None,
         destination: str | None = None,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> bool:
         """
         Sync custom venvs and functions from pre-collected sources.
 
         Ensures venvs are synced first (so venv_name can be resolved),
-        then syncs functions.
+        then syncs functions. Reconciles only the rows *managed_by* owns;
+        rows planted in the same context by other sources are neither
+        read nor pruned.
 
         Args:
             source_functions: Pre-collected functions dict.
             source_venvs: Pre-collected venvs dict.
             destination: Where the custom functions and venvs live.
+            managed_by: The source whose rows this pass reconciles.
 
         Returns:
             True if any sync was performed, False if everything up-to-date.
@@ -4054,18 +4092,20 @@ class FunctionManager(BaseFunctionManager):
                 ),
                 self._temporary_function_context("_meta_ctx", meta_context),
             ):
-                venvs_hash_changed = self._get_stored_custom_venvs_hash() != (
-                    compute_custom_venvs_hash(source_venvs=source_venvs or {})
-                )
+                venvs_hash_changed = self._get_stored_custom_venvs_hash(
+                    managed_by,
+                ) != compute_custom_venvs_hash(source_venvs=source_venvs or {})
 
             venv_name_to_id = self.sync_custom_venvs(
                 source_venvs=source_venvs,
                 destination=destination,
+                managed_by=managed_by,
             )
             functions_changed = self.sync_custom_functions(
                 venv_name_to_id,
                 source_functions=source_functions,
                 destination=destination,
+                managed_by=managed_by,
             )
 
             return venvs_hash_changed or functions_changed
@@ -8360,8 +8400,14 @@ class _VenvSyncAdapter(CustomSyncAdapter):
 
     kind = "venvs"
 
-    def __init__(self, manager: FunctionManager) -> None:
+    def __init__(
+        self,
+        manager: FunctionManager,
+        *,
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
+    ) -> None:
         self._manager = manager
+        self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
@@ -8394,7 +8440,10 @@ class _VenvSyncAdapter(CustomSyncAdapter):
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_venv_by_name(str(live_row["name"]))
+        self._manager._delete_custom_venv_by_name(
+            str(live_row["name"]),
+            managed_by=self.managed_by,
+        )
 
     def find_adoptable(
         self,
@@ -8402,7 +8451,16 @@ class _VenvSyncAdapter(CustomSyncAdapter):
         fields: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """Claim any same-named row rather than reinserting, preserving
-        the ``venv_id`` that function rows reference."""
+        the ``venv_id`` that function rows reference.
+
+        Deployment-only: the unscoped probe exists to adopt legacy rows
+        written before ``custom_key``/``managed_by``, all of which belong
+        to the deployment. Any other source adopting by bare name would
+        steal a sibling source's row — restamping it, breaking the
+        sibling's next reconcile, and ping-ponging ownership between the
+        two."""
+        if self.managed_by != MANAGED_BY_DEPLOYMENT:
+            return None
         existing = unisdk.get_logs(
             context=self._manager._venvs_ctx,
             filter=f"name == '{fields['name']}'",
@@ -8431,9 +8489,11 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         manager: FunctionManager,
         *,
         venv_name_to_id: Dict[str, int],
+        managed_by: str = MANAGED_BY_DEPLOYMENT,
     ) -> None:
         self._manager = manager
         self._venv_name_to_id = venv_name_to_id
+        self.managed_by = managed_by
 
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
@@ -8474,7 +8534,25 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         )
 
     def delete(self, key: str, live_row: Dict[str, Any]) -> None:
-        self._manager._delete_custom_function_by_name(str(live_row["name"]))
+        self._manager._delete_custom_function_by_name(
+            str(live_row["name"]),
+            managed_by=self.managed_by,
+        )
+
+    def derived_stale(
+        self,
+        key: str,
+        live_row: Dict[str, Any],
+        fields: Dict[str, Any],
+    ) -> bool:
+        """Refresh workflow membership when it moved without the content.
+
+        ``workflows`` records which installed workflows reference a shared
+        function. It is deliberately outside the content hash — two
+        installs of one bundle must plant byte-identical rows — so a
+        membership change alone leaves the hash equal and the engine
+        would otherwise skip the update that records it."""
+        return (live_row.get("workflows") or []) != (fields.get("workflows") or [])
 
     def find_adoptable(
         self,
@@ -8486,7 +8564,15 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         Adoption updates in place via ``function_id``, so references held
         by task entrypoints stay valid; the update stamps
         ``custom_key``/``custom_hash``/``managed_by`` alongside the body.
-        """
+
+        Deployment-only: the unscoped probe exists to adopt legacy rows
+        written before ``custom_key``/``managed_by``, all of which belong
+        to the deployment. Any other source adopting by bare name would
+        steal a sibling source's row — restamping it, breaking the
+        sibling's next reconcile, and ping-ponging ownership between the
+        two."""
+        if self.managed_by != MANAGED_BY_DEPLOYMENT:
+            return None
         existing = unisdk.get_logs(
             context=self._manager._compositional_ctx,
             filter=f"name == '{fields['name']}'",
