@@ -164,6 +164,9 @@ def test_allowlist_dense_under_task_run_lineage():
             "method": "ask",
             "manager": "ContactManager",
             "task_id": 5,
+            # Attribution is the pair: a task id alone no longer identifies a
+            # run, so the join Tasks/Executions makes on run_key needs it here.
+            "run_key": "live:scheduled:1:5:abc:once",
         },
         mode="allowlist",
         tools=tools,
@@ -173,6 +176,10 @@ def test_allowlist_dense_under_task_run_lineage():
         {
             "kind": ToolLoopKind.THOUGHT.value,
             "message": {"role": "assistant", "content": "thinking"},
+            # TaskRunLineage carries task_id as a required field and run_key as
+            # an optional one, so a stamped payload never arrives with the
+            # second and not the first.
+            "task_id": 5,
             "run_key": "live:scheduled:1:5:abc:once",
         },
         mode="allowlist",
