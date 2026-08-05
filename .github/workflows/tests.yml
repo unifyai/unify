@@ -120,6 +120,23 @@ jobs:
         PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         REF_NAME: ${{ github.ref_name }}
       run: |
+        # The deterministic tier a release carries whatever else runs: fast,
+        # model-free, and covering contracts every request or flow is built on.
+        # Both the staging -> main PR and a direct push to staging/main resolve
+        # to it, so it is named once here rather than twice below.
+        #
+        # test_schemas.py earns its place by generation, not by area: a tool
+        # schema is assembled for every tool in every flow, and a defect there
+        # is invisible to end-to-end smoke while breaking what the model is able
+        # to ask for. Optional[T] collapsing to a bare T left no way to express
+        # "no value", so execute_code was unusable without a venv for months
+        # while the live flows stayed green.
+        #
+        # Keep this tier file-level. Whole directories here run 5-15 minutes
+        # because they drive a local Orchestra over HTTP, and a release gate
+        # measured in double-digit minutes is one people learn to route around.
+        RELEASE_SMOKE_PATHS="tests/common/test_production_settings.py tests/common/test_schemas.py"
+
         # Helper function to extract [parallel_run.sh ...] content
         # Matches ALL occurrences and combines their arguments
         extract_parallel_cmd() {
@@ -183,7 +200,7 @@ jobs:
           # them the same smoke tier as a staging->main PR rather than skipping.
           if [[ "$REF_NAME" == "staging" || "$REF_NAME" == "main" ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "parallel_run_cmd=tests/common/test_production_settings.py" >> "$GITHUB_OUTPUT"
+            echo "parallel_run_cmd=$RELEASE_SMOKE_PATHS" >> "$GITHUB_OUTPUT"
             echo "Smoke tests auto-triggered: direct push to $REF_NAME (release-gate safety)"
             exit 0
           fi
@@ -200,7 +217,7 @@ jobs:
           # LLM matrix must be triggered manually with confirm_full_matrix.
           if [[ "$PR_BASE_REF" == "main" && "$PR_HEAD_REF" == "staging" ]]; then
             echo "run_tests=true" >> "$GITHUB_OUTPUT"
-            echo "parallel_run_cmd=tests/common/test_production_settings.py" >> "$GITHUB_OUTPUT"
+            echo "parallel_run_cmd=$RELEASE_SMOKE_PATHS" >> "$GITHUB_OUTPUT"
             echo "Smoke tests auto-triggered: staging → main PR"
             exit 0
           fi
