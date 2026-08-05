@@ -123,6 +123,14 @@ class ProductionSettings(BaseSettings):
     UNITY_BUILTINS_PROJECT: str = "Builtins"
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Workflow Catalogue
+    # ─────────────────────────────────────────────────────────────────────────
+    # Root directory holding the curated workflow bundles (one directory
+    # per workflow: manifest.yaml + guidance/ + tasks/ + ...). Empty means
+    # no catalogue: the WorkflowManager is not built at boot.
+    UNITY_WORKFLOWS_DIR: str = ""
+
+    # ─────────────────────────────────────────────────────────────────────────
     # GCP Project
     # ─────────────────────────────────────────────────────────────────────────
     # GCP project ID for Pub/Sub topics and subscriptions. Override via
