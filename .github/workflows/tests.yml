@@ -46,6 +46,18 @@ on:
         type: number
         default: 120
 
+  # Callable so the release gate can run this matrix without duplicating the
+  # provisioning that already runs the tier on a staging -> main PR. The gate
+  # asks for the tier by name rather than passing paths, so the list stays
+  # defined in exactly one place.
+  workflow_call:
+    inputs:
+      release_tier:
+        description: "Run the deterministic release tier"
+        required: false
+        type: boolean
+        default: false
+
   # Push events - tests only run if commit message contains [run-tests]
   push:
     branches:
@@ -119,6 +131,8 @@ jobs:
         PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         REF_NAME: ${{ github.ref_name }}
+        # Empty on every trigger that is not a workflow_call.
+        RELEASE_TIER: ${{ inputs.release_tier }}
       run: |
         # The deterministic tier a release carries whatever else runs: fast,
         # model-free, and covering contracts every request or flow is built on.
@@ -163,6 +177,17 @@ jobs:
             echo "$result"
           fi
         }
+
+        # The release gate asks for the tier explicitly, and gets it whatever
+        # event carried the call: a workflow_call run reports its caller's
+        # event, so keying off the event name here would send a dispatched gate
+        # run down the full-matrix path instead.
+        if [[ "$RELEASE_TIER" == "true" ]]; then
+          echo "run_tests=true" >> "$GITHUB_OUTPUT"
+          echo "parallel_run_cmd=$RELEASE_SMOKE_PATHS" >> "$GITHUB_OUTPUT"
+          echo "Release tier requested by caller"
+          exit 0
+        fi
 
         # workflow_dispatch always runs tests, but the discover job enforces
         # cost-policy guardrails before any matrix jobs are created.

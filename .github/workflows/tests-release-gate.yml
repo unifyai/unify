@@ -1,0 +1,71 @@
+name: Contract tests release gate
+run-name: >-
+  ${{
+    github.event_name == 'workflow_dispatch' && 'Contract tests (manual)' ||
+    'Contract tests (release)'
+  }}
+
+# Publishes the required "Contract tests" context for a staging -> main PR: the
+# deterministic tier — production settings and the tool-schema contract — with
+# no model in the loop, so it is fast enough to sit in the merge path.
+#
+# This must stay a separate file with no push trigger. Branch protection counts
+# any check run matching the required name for a SHA, and a staging -> main PR
+# shares its head SHA with the last push to staging; a gate living in a
+# push-triggered workflow would attach that push's verdict to the release PR
+# and let it merge before the pull_request-triggered run answered. A skipped
+# job publishes a check run too, and a skipped required check is satisfied
+# exactly like a pass — so the only way an ordinary push publishes nothing
+# under this name is for this file never to run on one.
+#
+# It calls the Tests matrix rather than provisioning its own. That matrix
+# already runs this tier on a staging -> main PR, so the local Orchestra it
+# needs is known to work there; standing up a second copy would put a required
+# check behind provisioning nobody has exercised. The tier itself is named in
+# tests.yml and asked for here by name, so the two cannot drift.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The Tests matrix reads the cross-branch llm-cache-ndjson artifact.
+  actions: read
+
+# A running gate finishes rather than being replaced: cancelling it mid-flight
+# leaves the required context unanswered on the release PR.
+concurrency:
+  group: contract-tests-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tier:
+    name: Contract tests (run)
+    # Reusable-workflow plumbing, not a credential: the Tests matrix needs the
+    # same repository secrets it already runs with on its own triggers, so
+    # inheriting grants no access it does not have anyway.
+    secrets: inherit  # pragma: allowlist secret
+    uses: ./.github/workflows/tests.yml
+    with:
+      release_tier: true
+
+  contract-tests-required:
+    name: Contract tests
+    needs: tier
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require the contract tier to have passed
+      run: |
+        result="${{ needs.tier.result }}"
+        echo "contract tier result: $result"
+        if [[ "$result" == "success" ]]; then
+          exit 0
+        fi
+        if [[ "$result" == "skipped" || "$result" == "cancelled" ]]; then
+          echo "::error::The contract tier did not run to completion for this"
+          echo "::error::commit, so the release gate cannot pass."
+        fi
+        exit 1
