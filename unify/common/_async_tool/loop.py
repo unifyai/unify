@@ -1,5 +1,6 @@
 import asyncio
 import unillm
+import hashlib
 import json
 import inspect
 import copy
@@ -80,6 +81,13 @@ class ToolLoopRuntimeState:
     step_index: int = 0
     consecutive_failures: int = 0
     message_count_offset: int = 0
+    # Refused calls, tallied two ways so that working out an argspec is free
+    # while repeating a rejected call is not. Both persist for the run: a call
+    # refused identically three times is not being learned from, and a success
+    # elsewhere does not change that.
+    refusals_by_call: Dict[str, int] = field(default_factory=dict)
+    refusals_by_complaint: Dict[str, int] = field(default_factory=dict)
+    pending_stop_reason: Optional[str] = None
 
 
 def _parse_tool_policy_result(
@@ -251,6 +259,70 @@ class _LoopToolFailureTracker:
 
     def reset_failures(self):
         self._runtime_state.consecutive_failures = 0
+
+    # ── refused calls ──────────────────────────────────────────────────────
+    #
+    # A refusal is not a fault the way an unexpected exception is: converging on
+    # an argspec means being told what is wrong and trying again, so counting
+    # refusals against `max_consecutive_failures` would abort exactly the
+    # behaviour the messages exist to produce. What is never progress is
+    # repetition, so refusals are counted by what repeats rather than by how
+    # many there are.
+
+    # The same call, refused and sent again unchanged. Nothing was read.
+    IDENTICAL_CALL_LIMIT = 3
+    # The same complaint, however the arguments are dressed. Something is being
+    # varied, but not the part the refusal is about.
+    SAME_COMPLAINT_LIMIT = 6
+
+    def note_refusal(self, *, tool_name: str, args: Any, message: str) -> Optional[str]:
+        """Record a refused call; return why to stop, or ``None`` to continue."""
+        state = self._runtime_state
+
+        call_key = f"{tool_name}::{_fingerprint(args)}"
+        state.refusals_by_call[call_key] = state.refusals_by_call.get(call_key, 0) + 1
+        seen = state.refusals_by_call[call_key]
+        if seen >= self.IDENTICAL_CALL_LIMIT:
+            return self._stop(
+                f"{tool_name} was called with the same arguments and refused "
+                f"{seen} times, so the refusal is not being read. Last refusal: "
+                f"{message}",
+            )
+
+        complaint_key = f"{tool_name}::{_fingerprint(message)}"
+        state.refusals_by_complaint[complaint_key] = (
+            state.refusals_by_complaint.get(complaint_key, 0) + 1
+        )
+        same_complaint = state.refusals_by_complaint[complaint_key]
+        if same_complaint >= self.SAME_COMPLAINT_LIMIT:
+            return self._stop(
+                f"{tool_name} was refused {same_complaint} times for the same "
+                f"reason while the arguments varied around it, so the part being "
+                f"varied is not the part at fault. Refusal: {message}",
+            )
+
+        return None
+
+    def _stop(self, reason: str) -> str:
+        self._runtime_state.pending_stop_reason = reason
+        return reason
+
+    def stop_reason(self) -> Optional[str]:
+        """Why the loop should end now, or ``None`` to keep going."""
+        if self._runtime_state.pending_stop_reason is not None:
+            return self._runtime_state.pending_stop_reason
+        if self.has_exceeded_failures():
+            return "Aborted after too many consecutive tool failures."
+        return None
+
+
+def _fingerprint(value: Any) -> str:
+    """Stable short digest of *value*, so tallies cost no memory of their own."""
+    try:
+        rendered = json.dumps(value, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        rendered = repr(value)
+    return hashlib.sha256(rendered.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def _check_valid_response_format(response_format: Any) -> dict[str, Any]:
