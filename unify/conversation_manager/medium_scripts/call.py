@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from importlib import resources
@@ -1193,6 +1194,48 @@ def _describe_call_opening_config(raw: object) -> str:
     )
 
 
+#: Splits ``recordingAsset`` into ``recording_Asset`` so a camelCase spelling
+#: can be matched against the snake_case field names below.
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+
+_CALL_OPENING_FIELDS = frozenset(
+    {
+        "mode",
+        "opener_text",
+        "briefing",
+        "simulated_utterance",
+        "source",
+        "transcript",
+        "recording_asset",
+        "recording_path",
+        "recording_url",
+    },
+)
+
+
+def _reject_camel_cased_opening_fields(raw: dict) -> None:
+    """Refuse a config whose fields were never converted to snake_case.
+
+    Every field is read by its snake_case name, so a camelCase spelling is
+    simply invisible: the mode still says ``recorded`` while the asset naming
+    what to play is silently absent, and the failure surfaces as a missing
+    transcript several frames away from the sender that caused it. Name the
+    offending keys instead. Fields this function does not recognise at all are
+    left alone — an unrelated extra key is not a casing bug.
+    """
+    unconverted = sorted(
+        key
+        for key in raw
+        if key not in _CALL_OPENING_FIELDS
+        and _CAMEL_BOUNDARY.sub(r"\1_\2", key).lower() in _CALL_OPENING_FIELDS
+    )
+    if unconverted:
+        raise ValueError(
+            "opening_config fields must be snake_case; received "
+            f"{unconverted} — the sender did not convert the nested object",
+        )
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
     # Logged before validation: a rejected config raises out of here, and the
     # shape it arrived in is the only way to tell a caller sending the wrong
@@ -1204,6 +1247,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
         raw = json.loads(raw)
     if not isinstance(raw, dict):
         raise ValueError("opening_config must be an object")
+
+    _reject_camel_cased_opening_fields(raw)
 
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
