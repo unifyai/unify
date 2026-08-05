@@ -129,6 +129,7 @@ jobs:
       shell: bash
       run: |
         TEST_PATH="${{ inputs.test_path }}"
+        EXTRA_ARGS="${{ inputs.parallel_run_args }}"
         declare -a RAW_PATHS=()
         declare -a PATHS=()
 
@@ -138,15 +139,23 @@ jobs:
           exit 0
         fi
 
+        # Recording the eval corpus means dispatching this with --eval-only, so
+        # discovery has to narrow to the paths that carry those tests: a shard
+        # whose filter selects nothing is a hard error in parallel_run.sh.
+        DISCOVERY_FLAGS=()
+        if [[ " $EXTRA_ARGS " == *" --eval-only "* ]]; then
+          DISCOVERY_FLAGS+=(--eval-only)
+        fi
+
         if [[ "$TEST_PATH" == "." ]]; then
           while IFS= read -r path; do
             PATHS+=("$path")
-          done < <(python3 .github/scripts/discover_test_paths.py)
+          done < <(python3 .github/scripts/discover_test_paths.py ${DISCOVERY_FLAGS[@]+"${DISCOVERY_FLAGS[@]}"})
         else
           read -ra RAW_PATHS <<< "$TEST_PATH"
           while IFS= read -r path; do
             PATHS+=("$path")
-          done < <(python3 .github/scripts/discover_test_paths.py "${RAW_PATHS[@]}")
+          done < <(python3 .github/scripts/discover_test_paths.py ${DISCOVERY_FLAGS[@]+"${DISCOVERY_FLAGS[@]}"} "${RAW_PATHS[@]}")
         fi
 
         # Flows fill the shared cache from their own workflow: flow-smoke.yml
