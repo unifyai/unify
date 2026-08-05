@@ -290,7 +290,7 @@ jobs:
       # Orchestra branch for local deployment
       orchestra_branch: ${{ steps.set-matrix.outputs.orchestra_branch }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - id: set-matrix
       shell: bash
@@ -677,7 +677,7 @@ jobs:
       # No fallback - if delete_on_start is enabled, ORCHESTRA_URL must be set
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -685,7 +685,7 @@ jobs:
         python-version: '3.12'
 
     - name: Clone unisdk client
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
@@ -782,12 +782,12 @@ jobs:
       # The repos are cloned to ./unillm/ and ./unisdk/, with packages inside
       PYTHONPATH: ${{ github.workspace }}/unillm:${{ github.workspace }}/unisdk
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 1
 
     - name: Clone orchestra repo for local deployment
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/orchestra
         ref: ${{ needs.discover.outputs.orchestra_branch }}
@@ -796,7 +796,7 @@ jobs:
         fetch-depth: 1
 
     - name: Clone unify repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
@@ -805,7 +805,7 @@ jobs:
         fetch-depth: 1
 
     - name: Clone unillm repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unillm
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
@@ -1118,7 +1118,7 @@ jobs:
 
     - name: Clone magnitude repo (agent-service tests)
       if: contains(matrix.test_path, 'agent_service')
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/magnitude
         ref: unity-modifications
@@ -1507,7 +1507,7 @@ jobs:
       # No fallback - if delete_on_exit is enabled, ORCHESTRA_URL must be set
       ORCHESTRA_URL: ${{ vars.ORCHESTRA_URL }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -1515,7 +1515,7 @@ jobs:
         python-version: '3.12'
 
     - name: Clone unisdk client
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         repository: unifyai/unisdk
         ref: ${{ github.ref_name == 'main' && 'main' || 'staging' }}
