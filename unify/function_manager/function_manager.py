@@ -62,11 +62,14 @@ from .execution_env import ENVIRONMENT_MODULES, create_base_globals
 from .steering import (
     DEFAULT_TOOL_NAMESPACES,
     ControlledInterruption,
+    ExecutionStopped,
     MemoisedDispatch,
     active_session,
     bind_session,
     dispatch_with_steering,
     instrument,
+    interrupt_directive,
+    is_stopped_outcome,
     restore_session,
     run_with_steering,
 )
@@ -567,7 +570,25 @@ class _VenvConnection:
                 # through the control channel, not through an RPC reply.
                 watcher = (
                     asyncio.create_task(
-                        steering.relay_corrections(source, self._write_message),
+                        steering.relay_corrections(
+                            source,
+                            lambda request: self._write_message(
+                                interrupt_directive(request),
+                            ),
+                        ),
+                    )
+                    if steering is not None
+                    else None
+                )
+                pause_watcher = (
+                    asyncio.create_task(
+                        steering.relay_pause(
+                            lambda paused: self._function_manager._set_process_paused(
+                                self._process,
+                                use_process_group=sys.platform != "win32",
+                                paused=paused,
+                            ),
+                        ),
                     )
                     if steering is not None
                     else None
@@ -612,19 +633,27 @@ class _VenvConnection:
                                 f"Venv {self._venv_id}: unexpected message type '{msg_type}'",
                             )
                 finally:
-                    if watcher is not None:
-                        watcher.cancel()
+                    for task in (watcher, pause_watcher):
+                        if task is None:
+                            continue
+                        task.cancel()
                         try:
-                            await watcher
+                            await task
                         except asyncio.CancelledError:
                             pass
                         except Exception:
-                            # A control send can lose the race with the run
-                            # ending; the attempt's own outcome stands.
+                            # A watcher can lose the race with the run ending;
+                            # the attempt's own outcome stands.
                             logger.debug(
-                                "steering: correction watcher failed",
+                                "steering: subprocess watcher failed",
                                 exc_info=True,
                             )
+                    if pause_watcher is not None:
+                        await self._function_manager._set_process_paused(
+                            self._process,
+                            use_process_group=sys.platform != "win32",
+                            paused=False,
+                        )
 
             async def _run(source: str) -> dict:
                 if timeout is None:
@@ -639,7 +668,19 @@ class _VenvConnection:
 
             if steering is None:
                 return await _run(implementation)
-            return await run_with_steering(implementation, _run, session=steering)
+            try:
+                return await run_with_steering(
+                    implementation,
+                    _run,
+                    session=steering,
+                )
+            except ExecutionStopped as stopped:
+                return {
+                    "result": stopped.outcome,
+                    "error": None,
+                    "stdout": "",
+                    "stderr": "",
+                }
 
     async def _handle_rpc_call(
         self,
@@ -5166,6 +5207,14 @@ class FunctionManager(BaseFunctionManager):
             for reason in coerce_stale_reasons(existing)
             if reason.dep_kind != "depends_on"
         ]
+        # Primitive references ("primitives.<manager>.<method>") are resolved
+        # against whatever environments the runtime injects, not against this
+        # FunctionManager instance's own primitive catalog. Whether that
+        # catalog contains a given name reflects this instance's own
+        # scope/sync state, not whether the primitive actually exists and
+        # runs -- so it can never be an authoritative "missing" signal.
+        # Compositional dependencies are the only category this FunctionManager
+        # owns outright (Functions/Compositional), so only those are checked.
         missing = [
             StaleReason(
                 dep_kind="depends_on",
@@ -5173,7 +5222,7 @@ class FunctionManager(BaseFunctionManager):
                 message=f"missing dependency name={name}",
             )
             for name in depends_on
-            if name not in available_names
+            if not name.startswith("primitives.") and name not in available_names
         ]
         return merge_stale_reasons(preserved, *missing)
 
@@ -5186,16 +5235,11 @@ class FunctionManager(BaseFunctionManager):
                 context=self._compositional_ctx,
                 exclude_fields=list_private_fields(self._compositional_ctx),
             )
-        available = {
+        return {
             str(log.entries["name"])
             for log in compositional_logs
             if log.entries.get("name")
         }
-        if self._include_primitives:
-            available.update(
-                str(row["name"]) for row in self._primitive_logs() if row.get("name")
-            )
-        return available
 
     def _append_missing_dependency_reasons(
         self,
@@ -5560,12 +5604,15 @@ class FunctionManager(BaseFunctionManager):
             for spec in contexts
         ]
 
-        rows = federated_filter(
-            contexts,
-            filter=caller_filter,
-            offset=offset,
-            limit=limit,
-        )
+        try:
+            rows = federated_filter(
+                contexts,
+                filter=caller_filter,
+                offset=offset,
+                limit=limit,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
 
         if not _return_callable:
             # Strip implementations if not requested (reduces payload size)
@@ -6627,7 +6674,25 @@ class FunctionManager(BaseFunctionManager):
             # Corrections that land between dispatches reach the child
             # through the control channel, not through an RPC reply.
             watcher = (
-                asyncio.create_task(steering.relay_corrections(source, _send))
+                asyncio.create_task(
+                    steering.relay_corrections(
+                        source,
+                        lambda request: _send(interrupt_directive(request)),
+                    ),
+                )
+                if steering is not None
+                else None
+            )
+            pause_watcher = (
+                asyncio.create_task(
+                    steering.relay_pause(
+                        lambda paused: self._set_process_paused(
+                            process,
+                            use_process_group=use_process_group,
+                            paused=paused,
+                        ),
+                    ),
+                )
                 if steering is not None
                 else None
             )
@@ -6719,17 +6784,19 @@ class FunctionManager(BaseFunctionManager):
                     "stderr": "".join(stderr_output),
                 }
             finally:
-                if watcher is not None:
-                    watcher.cancel()
+                for task in (watcher, pause_watcher):
+                    if task is None:
+                        continue
+                    task.cancel()
                     try:
-                        await watcher
+                        await task
                     except asyncio.CancelledError:
                         pass
                     except Exception:
-                        # A control send can lose the race with the run
-                        # ending; the attempt's own outcome stands.
+                        # A watcher can lose the race with the run ending;
+                        # the attempt's own outcome stands.
                         logger.debug(
-                            "steering: correction watcher failed",
+                            "steering: subprocess watcher failed",
                             exc_info=True,
                         )
 
@@ -6749,10 +6816,51 @@ class FunctionManager(BaseFunctionManager):
         # prefix across attempts.
         if steering is None:
             return await _attempt(implementation)
-        return await run_with_steering(implementation, _attempt, session=steering)
+        try:
+            return await run_with_steering(
+                implementation,
+                _attempt,
+                session=steering,
+            )
+        except ExecutionStopped as stopped:
+            return {
+                "result": stopped.outcome,
+                "error": None,
+                "stdout": "",
+                "stderr": "",
+            }
 
+    @staticmethod
+    async def _set_process_paused(
+        process: asyncio.subprocess.Process,
+        *,
+        use_process_group: bool,
+        paused: bool,
+    ) -> None:
+        """Freeze or thaw a subprocess with SIGSTOP/SIGCONT.
+
+        OS-level pause is what makes pause mean pause out-of-process: it holds
+        the child wherever it is — mid-loop, mid-sleep, even inside blocking
+        sync code no checkpoint can reach — where in-process pause can only
+        hold at the next checkpoint. Resuming a process that never stopped is
+        harmless, so callers thaw unconditionally on the way out; a frozen
+        child would otherwise sit on SIGTERM forever. No-op on Windows, which
+        has no stop signal.
+        """
+        if sys.platform == "win32" or process.returncode is not None:
+            return
+        sig = signal.SIGSTOP if paused else signal.SIGCONT
+        try:
+            if use_process_group and process.pid is not None:
+                os.killpg(os.getpgid(process.pid), sig)
+            else:
+                process.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            # The process ended while the pause state was changing.
+            pass
+
+    @staticmethod
     async def _terminate_process_group(
-        self,
         process: asyncio.subprocess.Process,
         use_process_group: bool,
     ) -> None:
@@ -6760,12 +6868,18 @@ class FunctionManager(BaseFunctionManager):
         Terminate a subprocess and all its children (process group).
 
         Sends SIGTERM first for graceful shutdown, then SIGKILL if the process
-        doesn't terminate within the timeout.
+        doesn't terminate within the timeout. A stopped (SIGSTOP) process is
+        continued first so the termination signal can be delivered.
 
         Args:
             process: The subprocess to terminate.
             use_process_group: Whether the process was started with start_new_session=True.
         """
+        await FunctionManager._set_process_paused(
+            process,
+            use_process_group=use_process_group,
+            paused=False,
+        )
         try:
             if use_process_group and process.pid is not None:
                 # Kill the entire process group (subprocess + all its children)
@@ -7313,7 +7427,14 @@ if __name__ == "__main__":
         # Step 6: Pull the result file back via bisync, then read it locally.
         await self._sync_from_remote()
 
-        if result_local.exists():
+        if is_stopped_outcome(exec_res.result):
+            # A steering stop ended the script mid-run. Whatever it wrote
+            # before dying has been pulled back; the stop is the run's
+            # outcome, not a failure to produce a result file — and it wins
+            # even over a result the script managed to write while the kill
+            # was landing, matching the venv boundaries.
+            result_data = {"result": exec_res.result, "error": None}
+        elif result_local.exists():
             try:
                 result_data = json.loads(result_local.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
@@ -7685,6 +7806,8 @@ if __name__ == "__main__":
                         _run_implementation,
                         session=steering,
                     )
+        except ExecutionStopped as stopped:
+            result = stopped.outcome
         except Exception:
             error = traceback.format_exc()
         finally:
@@ -7895,6 +8018,20 @@ if __name__ == "__main__":
                 cwd=cwd,
                 start_new_session=use_process_group,
             )
+            steering = active_session()
+            if steering is not None:
+                # Shell never reaches run_with_steering (there is no source to
+                # splice), so the script is bound here for the patch author to
+                # read when it decides between stopping and doing nothing.
+                steering.bind_source(implementation)
+            stopped: Optional[ExecutionStopped] = None
+
+            async def stop_process(request: Any) -> None:
+                """Terminate the shell process when a correction abandons it."""
+                nonlocal stopped
+                stopped = ExecutionStopped(request.reason or "steered")
+                if process.returncode is None:
+                    await self._terminate_process_group(process, use_process_group)
 
             stdout_output: List[str] = []
             stderr_output: List[str] = []
@@ -7968,6 +8105,14 @@ if __name__ == "__main__":
                                 "id": request_id,
                                 "result": result,
                             }
+                        except ControlledInterruption:
+                            request = (
+                                steering.interruption if steering is not None else None
+                            )
+                            if request is None or not request.stop:
+                                raise
+                            await stop_process(request)
+                            return
                         except Exception as e:
                             logger.error(f"RPC error for {path}: {e}", exc_info=True)
                             response = {
@@ -8005,6 +8150,26 @@ if __name__ == "__main__":
             stdout_task = asyncio.create_task(read_stdout())
             stderr_task = asyncio.create_task(read_stderr())
             rpc_task = asyncio.create_task(accept_rpc_connections())
+            watcher = (
+                asyncio.create_task(
+                    steering.relay_corrections(implementation, stop_process),
+                )
+                if steering is not None
+                else None
+            )
+            pause_watcher = (
+                asyncio.create_task(
+                    steering.relay_pause(
+                        lambda paused: self._set_process_paused(
+                            process,
+                            use_process_group=use_process_group,
+                            paused=paused,
+                        ),
+                    ),
+                )
+                if steering is not None
+                else None
+            )
 
             try:
                 # Wait for process to complete with timeout
@@ -8022,6 +8187,14 @@ if __name__ == "__main__":
 
                 # Wait for stdout/stderr to be fully read
                 await asyncio.gather(stdout_task, stderr_task)
+
+                if stopped is not None:
+                    return {
+                        "result": stopped.outcome,
+                        "error": None,
+                        "stdout": "".join(stdout_output),
+                        "stderr": "".join(stderr_output),
+                    }
 
                 # Build result
                 exit_code = process.returncode
@@ -8050,6 +8223,15 @@ if __name__ == "__main__":
 
             finally:
                 # Clean up
+                for task in (watcher, pause_watcher):
+                    if task is None:
+                        continue
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
                 rpc_task.cancel()
                 try:
                     await rpc_task

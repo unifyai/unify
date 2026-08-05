@@ -106,6 +106,10 @@ async def _author(*, interjections, session):
     )
 
 
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
+
+
 # ── unsteered behaviour is unchanged ───────────────────────────────────────
 @pytest.mark.asyncio
 async def test_runs_normally_with_no_session():
@@ -160,6 +164,46 @@ async def test_correction_reaches_the_function_body():
     # Already contacted, so replayed rather than contacted again.
     assert comms.sent.count("eu-alpha") == 1
     assert "eu-delta" in comms.sent
+
+
+@pytest.mark.asyncio
+async def test_stop_is_returned_as_a_clean_function_result():
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the remaining sends")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with use_session(session):
+        out = await _execute(_manager(), comms)
+
+    assert out["error"] is None
+    assert out["result"] == {
+        "status": "stopped",
+        "reason": "cancel the remaining sends",
+    }
+    assert comms.sent == []
+
+
+@pytest.mark.asyncio
+async def test_pending_stop_reaches_a_sync_function():
+    """A sync frame cannot await a checkpoint, but raising needs no await:
+    a correction already pending when the call begins fires at entry."""
+    from unify.function_manager.steering import InterruptionRequest
+
+    manager = _manager()
+    session = SteeringSession()
+    session.interruption = InterruptionRequest(reason="task revoked", stop=True)
+
+    with use_session(session):
+        out = await manager._execute_in_default_env(
+            implementation="def add(a, b):\n    return a + b\n",
+            call_kwargs={"a": 2, "b": 3},
+            is_async=False,
+            extra_namespaces={},
+        )
+
+    assert out["error"] is None
+    assert out["result"] == {"status": "stopped", "reason": "task revoked"}
 
 
 @pytest.mark.asyncio

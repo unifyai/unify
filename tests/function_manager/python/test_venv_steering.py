@@ -35,6 +35,7 @@ from unify.function_manager.steering import (
     InterruptionRequest,
     Patch,
     SteeringSession,
+    interrupt_directive,
     use_session,
 )
 
@@ -106,6 +107,10 @@ async def _author(*, interjections, session):
         reason=interjections[0],
         patches=[Patch(function_name="notify_vendors", source=EU_ONLY_PATCH)],
     )
+
+
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
 
 
 @pytest.fixture
@@ -293,6 +298,36 @@ async def test_one_shot_venv_run_is_unchanged_without_a_session(
         _cleanup_venv(fm, venv_id)
 
 
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_ends_a_one_shot_venv_run_cleanly(function_manager_factory):
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the sends")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    try:
+        with use_session(session):
+            out = await fm.execute_in_venv(
+                venv_id=venv_id,
+                implementation=IMPLEMENTATION,
+                call_kwargs={"vendors": list(VENDORS)},
+                is_async=True,
+                primitives=_Prims(comms),
+            )
+
+        assert out["error"] is None
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "cancel the sends",
+        }
+        assert comms.sent == []
+    finally:
+        _cleanup_venv(fm, venv_id)
+
+
 # ── the full loop, pooled persistent connection ─────────────────────────────
 @_handle_project
 @pytest.mark.asyncio
@@ -329,6 +364,41 @@ async def test_correction_reaches_a_pooled_venv_run(function_manager_factory):
         assert "eu-delta" in comms.sent
         assert session.cache.hits >= 1, "the retry redid the prefix"
         assert out["result"] == ["sent:eu-alpha", "sent:eu-delta"]
+    finally:
+        await pool.close()
+        _cleanup_venv(fm, venv_id)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_ends_a_pooled_venv_run_cleanly(function_manager_factory):
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+    await fm.prepare_venv(venv_id=venv_id)
+    pool = VenvPool()
+    comms = _Comms()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the sends")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    try:
+        with use_session(session):
+            out = await pool.execute_in_venv(
+                venv_id=venv_id,
+                implementation=IMPLEMENTATION,
+                call_kwargs={"vendors": list(VENDORS)},
+                is_async=True,
+                session_id=0,
+                primitives=_Prims(comms),
+                function_manager=fm,
+            )
+
+        assert out["error"] is None
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "cancel the sends",
+        }
+        assert comms.sent == []
     finally:
         await pool.close()
         _cleanup_venv(fm, venv_id)
@@ -397,13 +467,33 @@ async def test_child_int_shim_raises_only_for_targeted_functions():
 
 
 @pytest.mark.asyncio
+async def test_child_checkpoint_raises_for_a_stop_directive():
+    from unify.function_manager import venv_runner
+
+    venv_runner._apply_control(
+        {
+            "type": "control",
+            "action": "interrupt",
+            "reason": "cancel the run",
+            "functions": [],
+            "stop": True,
+        },
+    )
+    try:
+        with pytest.raises(venv_runner.ControlledInterruption, match="cancel the run"):
+            await venv_runner._cp("before a bare statement")
+    finally:
+        venv_runner._clear_interrupt()
+
+
+@pytest.mark.asyncio
 async def test_relay_sends_one_directive_when_a_correction_targets():
     queue: asyncio.Queue = asyncio.Queue()
     session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
     sent: list = []
 
-    async def _send_control(message):
-        sent.append(message)
+    async def _send_control(request):
+        sent.append(interrupt_directive(request))
 
     relay = asyncio.create_task(
         session.relay_corrections(
@@ -428,8 +518,8 @@ async def test_relay_ignores_corrections_that_target_nothing_here():
     session = SteeringSession(interject_q=queue, patch_author=_cut_short_author)
     sent: list = []
 
-    async def _send_control(message):
-        sent.append(message)
+    async def _send_control(request):
+        sent.append(interrupt_directive(request))
 
     relay = asyncio.create_task(
         session.relay_corrections(
@@ -589,4 +679,140 @@ async def test_pooled_connection_outlives_the_session_that_steered_it(
         assert later.sent == VENDORS, "a dead session still steered this call"
     finally:
         await pool.close()
+        _cleanup_venv(fm, venv_id)
+
+
+# ── interrupts inside synchronous functions ─────────────────────────────────
+SYNC_LOOP_IMPLEMENTATION = (
+    "def crunch_sync():\n"
+    "    time_mod = __import__('time')\n"
+    "    primitives.comms.send(to='started')\n"
+    "    deadline = time_mod.time() + 30\n"
+    "    total = 0\n"
+    "    while time_mod.time() < deadline:\n"
+    "        total += 1\n"
+    "    primitives.comms.send(to='finished')\n"
+    "    return total\n"
+)
+
+
+class _SyncComms:
+    def __init__(self) -> None:
+        self.sent: List[str] = []
+
+    def send(self, to: str) -> str:
+        self.sent.append(to)
+        return f"sent:{to}"
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_reaches_a_sync_busy_loop_in_a_venv_child(
+    function_manager_factory,
+):
+    """No awaits anywhere: the reader thread keeps the directive state fresh
+    while the sync loop runs, and the sync probe raises without one — the
+    case in-process execution fundamentally cannot interrupt."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+    comms = _SyncComms()
+    queue: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+    steerer = _patch_after(comms, 1, queue, "abandon the crunch")
+
+    try:
+        with use_session(session):
+            out = await fm.execute_in_venv(
+                venv_id=venv_id,
+                implementation=SYNC_LOOP_IMPLEMENTATION,
+                call_kwargs={},
+                is_async=False,
+                primitives=_Prims(comms),  # type: ignore[arg-type]
+            )
+        await steerer
+
+        assert out["error"] is None, out["error"]
+        assert out["result"] == {
+            "status": "stopped",
+            "reason": "abandon the crunch",
+        }
+        assert "finished" not in comms.sent
+    finally:
+        _cleanup_venv(fm, venv_id)
+
+
+# ── pause, mirrored into the child process ──────────────────────────────────
+@pytest.mark.asyncio
+async def test_relay_pause_mirrors_state_transitions():
+    session = SteeringSession()
+    seen: list = []
+
+    async def _deliver(paused: bool) -> None:
+        seen.append(paused)
+
+    relay = asyncio.create_task(session.relay_pause(_deliver, poll_interval=0.005))
+    await asyncio.sleep(0.03)
+    assert seen == [], "running from the start needs no resume signal"
+
+    session.runtime.pause()
+    await asyncio.sleep(0.03)
+    session.runtime.resume()
+    await asyncio.sleep(0.03)
+
+    relay.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await relay
+    assert seen == [True, False]
+
+
+PAUSABLE_IMPLEMENTATION = (
+    "async def tick():\n"
+    "    await primitives.comms.send(to='started')\n"
+    "    for i in range(25):\n"
+    "        await asyncio.sleep(0.02)\n"
+    "    await primitives.comms.send(to='finished')\n"
+    "    return 'done'\n"
+)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_pause_freezes_a_venv_child_between_dispatches(
+    function_manager_factory,
+):
+    """In-process pause can only hold at a checkpoint; a subprocess is frozen
+    wherever it is, dispatching or not."""
+    fm = function_manager_factory()
+    venv_id = fm.add_venv(venv=MINIMAL_VENV_CONTENT)
+
+    comms = _Comms()
+    session = SteeringSession()
+
+    try:
+        with use_session(session):
+            run = asyncio.create_task(
+                fm.execute_in_venv(
+                    venv_id=venv_id,
+                    implementation=PAUSABLE_IMPLEMENTATION,
+                    call_kwargs={},
+                    is_async=True,
+                    primitives=_Prims(comms),
+                ),
+            )
+            while "started" not in comms.sent:
+                await asyncio.sleep(0)
+            session.runtime.pause()
+            # Unfrozen, the remaining loop takes ~0.5s; a full second of
+            # silence is the child holding still.
+            await asyncio.sleep(1.0)
+            assert not run.done(), "the child kept running while paused"
+            assert "finished" not in comms.sent
+            session.runtime.resume()
+            out = await asyncio.wait_for(run, timeout=60)
+
+        assert out["error"] is None, out["error"]
+        assert out["result"] == "done"
+        assert "finished" in comms.sent
+    finally:
         _cleanup_venv(fm, venv_id)

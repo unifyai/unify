@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
@@ -194,12 +195,50 @@ def finalize_spreadsheet_result(
     )
 
 
+def measure_row_bytes(rows: Sequence[JsonObject]) -> int:
+    """Serialised size of *rows*, as the transport and the backend will see it.
+
+    JSON length rather than an object-graph estimate, because that is the form
+    the rows travel in and the form the backend is handed, so one number bounds
+    both the memory a materialised table occupies and the payload each write
+    carries.
+    """
+    return len(json.dumps(list(rows), default=str))
+
+
 def should_inline_tabular_rows(
     *,
     row_count: int,
     settings: FileParserSettings,
+    sample_rows: Sequence[JsonObject] | None = None,
 ) -> bool:
-    return row_count <= max(int(settings.TABULAR_INLINE_ROW_LIMIT), 0)
+    """Whether a parsed table's rows should be carried inline.
+
+    Bounded on both axes, because a table is only cheap to carry when it is
+    short *and* narrow. Rows alone let a thousand-row sheet two hundred wide
+    columns across through, which costs twice: it is materialised whole in the
+    process that parsed it, and it is then written in chunks whose payloads
+    contend for the same bandwidth the assistant is already using. Neither cost
+    is visible in a row count.
+
+    ``sample_rows`` is the bounded preview the caller has already collected, so
+    the width bound is measured on real cells rather than assumed. Projecting
+    the sample's mean row size across the count is the only estimated step, and
+    it is used solely to decline: being wrong the conservative way means the
+    rows stream from their source instead, which is always correct and never
+    lossy. Callers that stream row by row should accumulate with
+    ``measure_row_bytes`` rather than project.
+    """
+    if row_count > max(int(settings.TABULAR_INLINE_ROW_LIMIT), 0):
+        return False
+    ceiling = max(int(settings.TABULAR_INLINE_MAX_BYTES), 0)
+    if not ceiling:
+        return True
+    if not sample_rows or row_count <= 0:
+        return True
+    sample = list(sample_rows)
+    projected = measure_row_bytes(sample) / len(sample) * row_count
+    return projected <= ceiling
 
 
 def take_sample_rows(

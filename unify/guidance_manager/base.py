@@ -100,7 +100,13 @@ class BaseGuidanceManager(BaseStateManager, metaclass=SingletonABCMeta):
         filter : str | None, default None
             A Python boolean expression evaluated with column names in
             scope (e.g. ``"guidance_id == 42"``).  When ``None``, returns
-            all guidance records subject to pagination.
+            all guidance records subject to pagination. Supported grammar:
+            comparisons (==, !=, <, <=, >, >=), membership tests (in / not
+            in), and boolean combinators (and, or, not) over field names and
+            literal values, plus a fixed set of helpers (``len()``, string
+            methods like ``.lower()`` / ``.startswith()``, ``embed()``).
+            Arbitrary Python calls outside that set — e.g. ``' '.join(x)`` or
+            a list comprehension — are rejected.
         offset : int, default 0
             Zero-based index of the first result to include.
         limit : int, default 100

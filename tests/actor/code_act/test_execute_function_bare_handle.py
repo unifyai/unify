@@ -120,6 +120,12 @@ class _FakeFunctionManager:
             "is_primitive": False,
         }
 
+    def get_venv(self, *, venv_id: int):
+        """Only venv 31 exists here — the one ``stored_report`` is stored against."""
+        if venv_id != 31:
+            return None
+        return {"venv_id": 31, "requirements": []}
+
     def search_functions(self, **kwargs):
         return {"metadata": []}
 

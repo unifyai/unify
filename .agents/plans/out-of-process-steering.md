@@ -1,10 +1,13 @@
 # Plan: steering out-of-process execution
 
-**Status:** Phases 1 and 2 built and tested. Phase 1 — dispatch-boundary
+**Status:** built and tested end to end. Phase 1 — dispatch-boundary
 steering over the RPC channel — covers venv (one-shot and pooled) and shell.
 Phase 2 — instrumented child source plus a push control channel — closes the
-non-dispatching-loop gap for venv. Non-local surfaces turned out not to share
-the RPC transport at all (see below) and are out of scope for this mechanism.
+non-dispatching-loop gap for venv, including synchronous busy-loops via the
+sync interrupt probe. Stop requests end any path cleanly while preserving
+completed work; pause freezes subprocesses at the OS level; non-local
+surfaces take stop and pause through the agent-service `/exec/signal` route.
+What remains excluded is deliberate — see the boundaries section.
 
 Live steering — correcting a block of code while it is still running — works
 for every in-process Python path, at the dispatch boundary for venv and shell
@@ -36,13 +39,19 @@ no primitive call:
 - One-shot venv subprocesses — `FunctionManager.execute_in_venv`
 - Pooled persistent venv sessions — `_VenvConnection.execute`
 
-Shell scripts using the `unity-primitive` bridge get dispatch-boundary
-steering only — `FunctionManager.execute_shell_script` (cache and pause; see
-the boundaries section for why interrupts cannot fire on shell).
+Shell scripts using the `unity-primitive` bridge get dispatch-boundary cache
+and pause. They can also be stopped between dispatches: a stop request
+terminates the subprocess group and returns the same structured stopped
+outcome as Python execution. Function patches remain Python-only.
 
-**Not covered.** Non-local surfaces (`surface != "local"`), synchronous
-functions (no awaits, so no probes — parity with in-process), and blocking
-calls between checkpoints.
+Non-local surfaces (`surface != "local"`) get the two process-level verbs —
+stop and pause — through the agent-service's `/exec/signal` route, addressed
+at a client-chosen exec id while `/api/exec` blocks. Dispatch-level steering
+(memoise, patch, replay) deliberately does not exist there; see the
+boundaries section.
+
+**Not covered.** Blocking calls between checkpoints (freezable via pause,
+not correctable), and the deliberate exclusions in the boundaries section.
 
 ---
 
@@ -60,7 +69,7 @@ docstring:
 {"type": "rpc_error",     "id": str, "error": str}                   # parent → child
 {"type": "rpc_interrupt", "id": str, "reason": str}                  # parent → child
 {"type": "control", "action": "interrupt",
- "reason": str, "functions": [str]}                                  # parent → child, unsolicited
+ "reason": str, "functions": [str], "stop": bool}                   # parent → child, unsolicited
 ```
 
 Every `primitives.*` call made inside a venv or shell child round-trips to the
@@ -83,8 +92,8 @@ One checkpoint, one convergence point, three loops that translate:
 
 - `dispatch_with_steering` (`steering.py`) is the parent-side checkpoint: it
   honours pause, collects interjections, raises `ControlledInterruption` when
-  a pending correction targets the running block, replays memoised dispatches,
-  and memoises fresh ones.
+  a pending correction targets the running block or requests a stop, replays
+  memoised dispatches, and memoises fresh ones.
 - `FunctionManager._handle_rpc_call` routes **every** RPC through that
   checkpoint before resolving the path (`_dispatch_rpc_path`). The plan's
   "two handlers, not one" risk — the pooled `_VenvConnection._handle_rpc_call`
@@ -164,8 +173,9 @@ Two constraints the reader thread has to honour, both learned the hard way:
 `SteeringSession.relay_corrections` runs alongside each attempt's message
 loop, collecting interjections while the child runs between dispatches —
 without it, nothing would even author a patch until the next RPC arrived. When
-a correction targets the running block it sends one directive and returns; the
-attempt's loops handle the rest through the same retry path as Phase 1.
+a correction targets the running block, or asks to stop it, the watcher sends
+one directive and returns; the attempt's loops handle a patch through the same
+retry path as Phase 1 and translate a stop into a clean terminal outcome.
 
 Tests: the "corrections between dispatches" section of
 `test_venv_steering.py` — a 2000-iteration loop with no primitive calls is cut
@@ -179,26 +189,31 @@ the same pooled connection.
 
 State these as boundaries rather than as work items:
 
-**Non-local surfaces do not share the transport.** This was the plan's
-load-bearing open question, and the answer is no: `surface != "local"` routes
-through `unify/actor/execution/targets`, whose `AgentServiceExecClient` POSTs
-the whole command to the desktop agent-service `/api/exec` and blocks for a
-single JSON response — python is shipped as a base64'd `python3 -c` one-liner.
-There is no primitives round-trip, no mid-run message of any kind, and so no
-dispatch boundary to steer at. Steering a remote surface means changing the
-agent-service protocol itself (a streaming or bidirectional exec endpoint),
-which is a separate piece of work, not a third integration point on this
-mechanism.
+**Non-local surfaces are stop/pause-only, by design.** They never shared the
+RPC transport: `AgentServiceExecClient` POSTs the whole command to the
+desktop agent-service `/api/exec` and blocks for one JSON response, with no
+primitives round-trip and therefore no dispatch record. What rolled out is
+the honest subset: the client supplies its own exec id, the agent registers
+the running process group, and a second route (`POST /exec/signal`, actions
+`stop`/`pause`/`resume`) reaches it mid-run — SIGTERM-with-SIGKILL-sweep and
+SIGSTOP/SIGCONT on the group (`agent-service/src/execControl.ts`). A stop
+becomes the run's outcome only when the agent *acknowledged* it; an agent too
+old to know the route answers 404 and the run proceeds unsteered, which is
+how old deployed desktops keep working until they update.
 
-**Shell interrupts cannot fire.** Shell has no AST and no Python, so there is
-no function a patch can name: `_targets_running_block` finds nothing in shell
-source, and the patch author (`steering_patcher.LLMPatchAuthor`) already
-declines to author patches when the source defines no functions. Shell
-therefore gets dispatch memoisation and pause from the shared checkpoint, and
-nothing else. An interjection against a running shell script is recorded and
-reported, not acted on. Making shell stoppable would need its own decision
-path (e.g. "any interjection terminates the script"), which is a product
-question before it is a mechanism.
+Patches are deliberately inert remotely, not merely unbuilt: replay is what
+makes a patched re-run safe, and with no dispatch record a re-run would
+repeat every side effect. The client watches corrections with empty targeting
+source so only stop requests can fire. Dispatch-level steering remotely means
+building a remote primitives bridge first — a different project.
+
+**Shell patches cannot fire, but stops can.** Shell has no AST and no Python,
+so there is no function a patch can name: `_targets_running_block` finds
+nothing in shell source. The patch author can nevertheless decide that a
+correction revokes the task or makes all remaining work wrong and return a
+language-independent stop request. `execute_shell_script` then terminates the
+subprocess group. Corrections that need to alter and continue shell source are
+still recorded but cannot be applied live.
 
 **Child-local state across a retry** (was open question 2). One-shot venv
 retries run in a fresh subprocess — a genuinely clean slate, stronger than
@@ -212,18 +227,45 @@ per `execute` call, inside the connection lock, so the session follows the
 call and a long-lived `_VenvConnection` never holds one. There is a test
 pinning that a later call on the same connection runs unsteered.
 
-**Synchronous blocking code** remains opaque, exactly as in-process. A
-blocking call holds the child between dispatches, and during that window a
-correction cannot land; synchronous ``def``s get no await probes on either
-side of the boundary. (One extra wrinkle out-of-process: the child's RPC wait
-has a 300 s timeout, so a pause held longer than that fails the blocked call
-rather than extending it.)
+**Synchronous code is narrower than async, but no longer opaque.** Raising
+needs no await, so sync ``def``s now carry a synchronous interrupt probe
+(``_int_s``) at entry and per loop iteration. In-process that fires only when
+a correction was already pending as the sync frame began — the frame holds
+the event loop, so nothing can *collect* while it runs. In a venv child the
+stdin reader keeps the directive state fresh from its own thread, which makes
+a sync busy-loop genuinely interruptible mid-run — a case in-process
+execution fundamentally cannot reach. What remains out of reach on both
+sides: a single blocking *call* (``time.sleep``, sync HTTP) between probes,
+which pause (below) can at least freeze. (One extra wrinkle out-of-process:
+the child's RPC wait has a 300 s timeout, so a pause held longer than that
+fails the blocked call rather than extending it.)
 
-**Pause is not propagated between dispatches.** The parent holds RPC replies
-while paused, which stalls the child at its next dispatch, but the child's
-``_cp`` shim is a plain yield point. Nothing in the runtime drives
-``SteeringRuntime.pause`` today; if something starts to, the control channel
-is where a pause directive would ride.
+**Pause is process-level, not protocol-level** (was: not propagated). The
+tool handle's pause event now feeds the steering session
+(`_sandbox_call_binding` → `SteeringRuntime(pause_event=...)`), in-process
+checkpoints hold on it as before, and each subprocess boundary runs a
+`relay_pause` watcher that mirrors state changes into SIGSTOP/SIGCONT on the
+child's process group (`FunctionManager._set_process_paused`). Freezing the
+process holds it *anywhere* — mid-loop, mid-`time.sleep`, inside a C
+extension — which no checkpoint could. Terminate paths thaw first, so a
+frozen child never sits on an undeliverable SIGTERM. Windows has no stop
+signal, so pause degrades to the dispatch-boundary hold there.
+
+**Stateful shell sessions** (`ShellPool`) have no primitives bridge and no
+per-command subprocess: the session *is* the long-lived process, so a stop
+that kills it destroys the state the mode exists to keep. Stopping one
+command inside a persistent shell means signalling the pty's foreground
+group, which is its own piece of work if a real need appears.
+
+**Pooled retry residue stays.** A pooled venv retry could snapshot and
+restore child state around attempts, but state serialization is best-effort
+— a half-restored namespace is worse than the residue, and in-process
+stateful sessions have the identical property. Parity is the correct
+behaviour, not a gap.
+
+**Windows children cannot pause.** No stop signal exists; pause degrades to
+the dispatch-boundary hold, and remote pause on a Windows VM answers
+`unsupported`. Stop works everywhere.
 
 **Retraction** is still impossible. Replay records that a side effect
 happened; it cannot undo one. A patch redirects work that has not happened

@@ -59,7 +59,15 @@ class TestingSettings(ProductionSettings):
     UNIFY_DELETE_CONTEXT_ON_EXIT: bool = False
     UNIFY_OVERWRITE_PROJECT: bool = False
     UNIFY_TESTS_RAND_PROJ: bool = False
-    UNIFY_TESTS_DELETE_PROJ_ON_START: bool = True
+    # Deleting the test project is opt-in, like its on-exit twin below. The
+    # project is shared: parallel_run.sh prepares it once and every session
+    # runs against it, so a session that deletes it on the way in destroys the
+    # baseline (the Combined context, assistant contexts, builtins catalogues)
+    # and 404s whatever else is mid-run. parallel_run.sh reads these flags from
+    # the environment, where unset means off, and deletes at script level
+    # instead; defaulting on here made a bare `pytest` the one caller that
+    # still wiped a project other runs were using.
+    UNIFY_TESTS_DELETE_PROJ_ON_START: bool = False
     UNIFY_TESTS_DELETE_PROJ_ON_EXIT: bool = False
     UNITY_CACHE_STATS: bool = False
     UNIFY_PRETEST_CONTEXT_CREATE: bool = False

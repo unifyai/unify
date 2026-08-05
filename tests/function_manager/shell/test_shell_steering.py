@@ -1,15 +1,15 @@
 """Steering at the shell RPC bridge.
 
-Shell scripts have no AST to patch and the patch author declines to author
-corrections for non-Python source, so shell tops out at dispatch-boundary
-steering: every ``unity-primitive`` call round-trips through the same RPC
-handler the venv paths use, where an in-flight session memoises it and pause
-holds the reply. These tests pin that the bridge actually flows through the
-session — and that a pending correction can never fire on shell source.
+Every ``unity-primitive`` call round-trips through the same RPC handler the
+venv paths use, where an in-flight session memoises it and pause holds the
+reply. Shell has no functions the patch author can rewrite, so a correction
+that invalidates remaining work becomes a stop request and terminates the
+process group directly, including while the script is between dispatches.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import List
 
 import pytest
@@ -17,12 +17,27 @@ import pytest
 from tests.helpers import _handle_project
 from unify.common.context_registry import ContextRegistry
 from unify.function_manager.function_manager import FunctionManager
-from unify.function_manager.steering import SteeringSession, use_session
+from unify.function_manager.steering import (
+    InterruptionRequest,
+    SteeringSession,
+    use_session,
+)
+from unify.function_manager.steering_patcher import LLMPatchAuthor
 
 SCRIPT_SENDS_TWICE = """#!/bin/bash
 unity-primitive comms send --to eu-alpha
 unity-primitive comms send --to us-beta
 """
+
+SCRIPT_WITHOUT_DISPATCHES = """#!/bin/bash
+echo started
+sleep 30
+echo finished
+"""
+
+
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
 
 
 class _Comms:
@@ -101,3 +116,66 @@ async def test_shell_runs_unchanged_without_a_session(function_manager_factory):
 
     assert result["error"] is None, result["error"]
     assert comms.sent == ["eu-alpha", "us-beta"]
+
+
+@pytest.mark.asyncio
+async def test_patch_author_can_stop_source_with_no_python_functions():
+    class _Client:
+        async def generate(self, **kwargs):
+            return '{"reason":"cancel it","stop":true,"patches":[]}'
+
+    session = SteeringSession()
+    session.bind_source(SCRIPT_WITHOUT_DISPATCHES)
+    author = LLMPatchAuthor(client_factory=_Client)
+
+    request = await author(interjections=["cancel it"], session=session)
+
+    assert request is not None
+    assert request.stop is True
+    assert request.patches == []
+
+
+@pytest.mark.asyncio
+async def test_stop_terminates_a_stateless_shell_command():
+    """The plain execute_code shell path has no primitives bridge at all, so
+    the watcher is the only thing that can reach it."""
+    from unify.actor.execution.session import _execute_shell_stateless
+
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the command")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with use_session(session):
+        result = await _execute_shell_stateless(
+            language="bash",
+            command="echo started\nsleep 30\necho finished",
+        )
+
+    assert result["error"] is None
+    assert result["result"] == {
+        "status": "stopped",
+        "reason": "cancel the command",
+    }
+    assert "finished" not in result["stdout"]
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_stop_terminates_shell_between_dispatches(function_manager_factory):
+    fm = function_manager_factory()
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("cancel the script")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with use_session(session):
+        result = await fm.execute_shell_script(
+            implementation=SCRIPT_WITHOUT_DISPATCHES,
+            language="bash",
+        )
+
+    assert result["error"] is None
+    assert result["result"] == {
+        "status": "stopped",
+        "reason": "cancel the script",
+    }
+    assert "finished" not in result["stdout"]

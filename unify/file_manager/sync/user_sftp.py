@@ -97,11 +97,63 @@ _SECRET_EXCLUDES: tuple[str, ...] = (
     # Windows credential stores under %APPDATA% (AppData/Roaming).
     "/AppData/Roaming/gcloud/**",
     "/AppData/Roaming/Microsoft/Credentials/**",
+    # Any-depth forms: the same credential dirs/files nested inside a copied
+    # subtree (a checked-out repo with its own .netrc, a project folder with
+    # deploy keys under .ssh/, dotfiles with a nested .config/gcloud) must
+    # never leave the machine either. Kept alongside the anchored forms
+    # above rather than replacing them.
+    ".ssh/**",
+    ".gnupg/**",
+    ".aws/**",
+    ".kube/**",
+    ".config/gcloud/**",
+    ".docker/**",
+    ".netrc",
+    ".git-credentials",
+    "AppData/Roaming/gcloud/**",
+    "AppData/Roaming/Microsoft/Credentials/**",
 )
 
+# Credential dir/file names, used to refuse a pull/sync request that targets
+# a credential path *directly* (see _is_credential_path below) rather than
+# rely on the exclude patterns above, which don't cover that case. Keep in
+# sync with the entries in _SECRET_EXCLUDES.
+_SECRET_DIR_NAMES: tuple[str, ...] = (".ssh", ".gnupg", ".aws", ".kube", ".docker")
+_SECRET_DIR_PATH_NAMES: tuple[tuple[str, ...], ...] = (
+    (".config", "gcloud"),
+    ("AppData", "Roaming", "gcloud"),
+    ("AppData", "Roaming", "Microsoft", "Credentials"),
+)
+_SECRET_FILE_NAMES: tuple[str, ...] = (".netrc", ".git-credentials")
 
-def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
-    """Flatten the requested exclude tiers into ``--exclude PAT`` rclone args.
+
+def _is_credential_path(rel: PurePosixPath) -> bool:
+    """True if ``rel`` names, or falls inside, a credential dir/file.
+
+    The exclude patterns above only protect a credential dir/file *nested
+    inside* a larger requested subtree. They can't protect a request that
+    targets the credential path directly: ``pull``/``sync`` make the
+    requested entry's own directory the copy's rclone source root, which
+    absorbs the credential path segment out of every relative path the
+    filters test against (e.g. pulling ``.ssh/id_rsa`` copies from a source
+    rooted at ``.ssh``, so no remaining path segment still says ".ssh") — so
+    the filters silently let it through. Call this before any rclone call is
+    made and refuse outright instead.
+    """
+    parts = rel.parts
+    if parts and parts[-1] in _SECRET_FILE_NAMES:
+        return True
+    for i in range(len(parts)):
+        if parts[i] in _SECRET_DIR_NAMES:
+            return True
+        for seq in _SECRET_DIR_PATH_NAMES:
+            if parts[i : i + len(seq)] == seq:
+                return True
+    return False
+
+
+def _exclude_patterns(*, noise: bool, secrets: bool) -> list[str]:
+    """The requested exclude tiers as raw rclone patterns.
 
     Tier 1 (the writeback dir) is always included; ``noise`` adds tier 2 and
     ``secrets`` adds tier 3.
@@ -111,8 +163,13 @@ def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
         patterns += _NOISE_EXCLUDES
     if secrets:
         patterns += _SECRET_EXCLUDES
+    return patterns
+
+
+def _build_excludes(*, noise: bool, secrets: bool) -> list[str]:
+    """Flatten the requested exclude tiers into ``--exclude PAT`` rclone args."""
     args: list[str] = []
-    for pattern in patterns:
+    for pattern in _exclude_patterns(noise=noise, secrets=secrets):
         args += ["--exclude", pattern]
     return args
 
@@ -148,6 +205,9 @@ class UserHomeSFTP:
         self._key_path: Optional[str] = None
         self._op_lock = asyncio.Lock()
         self._setup_done = False
+        # Why the last rclone call failed, so callers can raise something the
+        # actor can act on instead of a bare "failed".
+        self._last_error = ""
 
     @property
     def local_root(self) -> Path:
@@ -238,25 +298,54 @@ class UserHomeSFTP:
 
         Noise (caches, deps, VCS metadata) and credential dirs (``.ssh``,
         ``.gnupg``, ``.aws``, …) are skipped, so pulling a directory won't drag
-        in its dependency trees or secrets. Use :meth:`list_dir` to see the
-        full tree first.
+        in its dependency trees or secrets. A request that targets a
+        credential path directly (e.g. ``.ssh/id_rsa``) is refused outright
+        rather than silently copying it — see :func:`_is_credential_path`.
+        Use :meth:`list_dir` to see the full tree first.
         """
         rel = _normalize_remote(remote_path)
+        if _is_credential_path(rel):
+            raise ValueError(
+                f"Refusing to pull {rel}: path is a credential file or "
+                "directory and must not leave the user's machine",
+            )
         dest = self.local_root / rel
+        # rclone refuses ``copyto`` against a single file whenever any filter is
+        # set ("can't limit to single files when using filters"), so every
+        # single-file pull failed while the exclude tiers were passed. ``copy``
+        # accepts filters, so copy the containing directory and narrow to this
+        # entry: ``+ /name`` matches a file, ``+ /name/**`` its contents when it
+        # is a directory, and the trailing ``- *`` drops the rest. Rules are all
+        # ``--filter`` because mixing ``--include``/``--exclude`` leaves rclone's
+        # parse order indeterminate (it warns at ERROR level).
+        rules: list[str] = []
+        for pattern in _exclude_patterns(noise=True, secrets=True):
+            rules += ["--filter", f"- {pattern}"]
+        rules += [
+            "--filter",
+            f"+ /{rel.name}",
+            "--filter",
+            f"+ /{rel.name}/**",
+            "--filter",
+            "- *",
+        ]
         async with self._op_lock:
             dest.parent.mkdir(parents=True, exist_ok=True)
             ok = await self._run(
                 [
-                    "copyto",
-                    f"{self.REMOTE_NAME}:/{rel}",
-                    str(dest),
-                    *_build_excludes(noise=True, secrets=True),
+                    "copy",
+                    f"{self.REMOTE_NAME}:/{rel.parent}",
+                    str(dest.parent),
+                    *rules,
                     "-v",
                 ],
                 operation=f"pull {rel}",
             )
             if not ok:
-                raise RuntimeError(f"Failed to pull {rel} from {self._user_id}'s home")
+                raise RuntimeError(
+                    f"Failed to pull {rel} from {self._user_id}'s home"
+                    f"{f': {self._last_error}' if self._last_error else ''}",
+                )
             return str(dest)
 
     def _sync_args(self, rel: PurePosixPath, dest: Path) -> list[str]:
@@ -284,9 +373,16 @@ class UserHomeSFTP:
 
         ``remote_path`` is home-relative (``""`` mirrors the whole home, which
         can be large and slow — scope to a subtree like ``"Documents"`` when
-        possible). Returns the absolute local paths now staged.
+        possible). A request that targets a credential path directly (e.g.
+        ``.ssh``) is refused outright — see :func:`_is_credential_path`.
+        Returns the absolute local paths now staged.
         """
         rel = _normalize_remote(remote_path)
+        if _is_credential_path(rel):
+            raise ValueError(
+                f"Refusing to sync {rel}: path is a credential file or "
+                "directory and must not leave the user's machine",
+            )
         dest = self.local_root / rel
         async with self._op_lock:
             dest.mkdir(parents=True, exist_ok=True)
@@ -382,11 +478,19 @@ class UserHomeSFTP:
             stderr_summary = stderr.decode() if stderr else ""
 
         if proc.returncode != 0:
+            # rclone prints advisory NOTICEs (host-key validation, config
+            # defaults) before the line that explains the failure, so keeping
+            # the first 500 characters hid the actual cause and left callers
+            # guessing at unrelated theories. Keep the lines that name it.
+            lines = stderr_summary.splitlines()
+            blamed = [ln for ln in lines if "CRITICAL" in ln or "ERROR" in ln]
+            self._last_error = "\n".join(blamed or lines[-5:])[:500]
             LOGGER.error(
                 f"{ICONS['file_sync']} [UserSFTP] {operation} failed: "
-                f"{stderr_summary[:500]}",
+                f"{self._last_error}",
             )
             return False
+        self._last_error = ""
         if capture is not None and stdout:
             capture.append(stdout.decode())
         return True

@@ -89,8 +89,7 @@ def test_sync_custom_tasks_allows_personal_label_when_resolved_to_team(
         "unify.task_scheduler.task_scheduler.compute_custom_tasks_hash",
         lambda **_: "same",
     )
-    scheduler._custom_tasks_synced_sources.clear()
-
+    scheduler._custom_tasks_synced_sources = set()
     scheduler._ctx = "Teams/11/Tasks"
     scheduler._store = MagicMock()
     scheduler._root_stores = {}

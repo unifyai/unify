@@ -386,7 +386,7 @@ class TestLLMEventPayloadAttribution:
                 with patch("unify.events.event_bus.Event") as MockEvent:
                     llm_event = LLMEvent(
                         request={"model": "gpt-4o", "messages": []},
-                        billed_cost=0.01,
+                        provider_cost=0.01,
                     )
                     _llm_event_to_eventbus(llm_event)
 
@@ -412,7 +412,7 @@ class TestLLMEventPayloadAttribution:
                 with patch("unify.events.event_bus.Event") as MockEvent:
                     llm_event = LLMEvent(
                         request={"model": "gpt-4o", "messages": []},
-                        billed_cost=0.01,
+                        provider_cost=0.01,
                     )
                     _llm_event_to_eventbus(llm_event)
 

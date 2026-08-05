@@ -24,6 +24,7 @@ from unify.function_manager.steering import (
     AROUND_CP_FN,
     CP_FN,
     ControlledInterruption,
+    ExecutionStopped,
     InterruptionRequest,
     Patch,
     SteeringSession,
@@ -51,7 +52,23 @@ async def run_block(source: str, session: SteeringSession, namespace: dict) -> o
     return await namespace["__w"]()
 
 
+async def _stop_author(*, interjections, session):
+    return InterruptionRequest(reason=interjections[0], stop=True)
+
+
 # ── probes ─────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_plain_checkpoint_fires_a_stop_request():
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("abandon this")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+
+    with pytest.raises(ControlledInterruption, match="abandon this"):
+        await session.cp("before a bare statement")
+
+
 def test_loop_body_is_probed_before_its_side_effect():
     out = built("for v in vendors:\n    await primitives.comms.send(v)\n")
     body = out.split("for v in vendors:\n")[1]
@@ -112,6 +129,16 @@ def test_sync_function_gets_position_probes_but_cannot_suspend():
     inner = out.split("def helper")[1]
     assert "increment_loop_iteration" in inner
     assert f"await {CP_FN}" not in inner
+
+
+def test_sync_function_gets_a_sync_interrupt_probe():
+    """Raising needs no await, so sync frames check for a pending correction
+    at entry and at every iteration — without gaining an await they cannot
+    make."""
+    out = built("def helper():\n    for i in xs:\n        pass\n")
+    inner = out.split("def helper")[1]
+    assert inner.count("_int_s('helper')") == 2
+    assert "await _int_s" not in inner
 
 
 def test_class_bodies_are_left_alone():
@@ -391,6 +418,52 @@ async def test_correction_that_cannot_be_applied_surfaces():
 
 
 @pytest.mark.asyncio
+async def test_stop_request_ends_without_a_retry():
+    notifications: asyncio.Queue = asyncio.Queue()
+    session = SteeringSession(notification_q=notifications)
+    session.interruption = InterruptionRequest(reason="no longer needed", stop=True)
+
+    async def run_source(_: str):
+        raise ControlledInterruption("no longer needed")
+
+    with pytest.raises(ExecutionStopped, match="no longer needed") as exc_info:
+        await run_with_steering(
+            "value = 1\n",
+            run_source,
+            session=session,
+        )
+
+    assert exc_info.value.outcome == {
+        "status": "stopped",
+        "reason": "no longer needed",
+    }
+    assert session.retries == 0
+    assert (await notifications.get())["type"] == "steering_stop"
+
+
+@pytest.mark.asyncio
+async def test_in_process_stop_is_a_clean_execution_result():
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait("do not run this")
+    session = SteeringSession(interject_q=queue, patch_author=_stop_author)
+    sandbox = PythonExecutionSession()
+
+    try:
+        from unify.function_manager.steering import use_session
+
+        with use_session(session):
+            out = await sandbox.execute("value = 1\n")
+    finally:
+        await sandbox.close()
+
+    assert out["error"] is None
+    assert out["result"] == {
+        "status": "stopped",
+        "reason": "do not run this",
+    }
+
+
+@pytest.mark.asyncio
 async def test_retries_are_bounded():
     session = SteeringSession()
 
@@ -526,3 +599,22 @@ async def test_steering_reaches_a_sandbox_the_tool_never_saw():
     await sandbox.close()
     assert after["result"] == 6
     assert current_session(sandbox.global_state) is None
+
+
+@pytest.mark.asyncio
+async def test_around_passes_through_a_synchronous_result():
+    """The bracket wraps a call, not only an awaited one.
+
+    ``user_desktop.list_linked`` is documented as synchronous, so it reaches
+    ``around`` as a plain list. Awaiting that unconditionally raised "object
+    list can't be used in 'await' expression", which made every synchronous
+    primitive unreachable through ``execute_function``.
+    """
+    session = SteeringSession()
+
+    assert await session.around("list_linked", ["a-desktop"]) == ["a-desktop"]
+
+    async def _coro():
+        return "awaited"
+
+    assert await session.around("async call", _coro()) == "awaited"

@@ -26,6 +26,7 @@ from tests.helpers import _handle_project
 from unify.conversation_manager.domains.event_handlers import (
     EventHandler,
     OPEN_SLOW_BRAIN_TURN_NOTIFICATION,
+    _MEET_STATE_FLAGS,
     _event_type_to_log_key,
 )
 from unify.conversation_manager.cm_types import ScreenshotEntry
@@ -1264,6 +1265,65 @@ class TestUnifyMeetHandlers:
         assert mock_cm.mode == Mode.MEET
         mock_cm.call_manager.cleanup_call_proc.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_unify_meet_received_resets_meet_surfaces(self, mock_cm):
+        """A new call starts with its shared surfaces closed."""
+        mock_cm.mode = Mode.TEXT
+        event = UnifyMeetReceived(
+            contact={"contact_id": 1},
+            room_name="room_123",
+            call_session_id="session-123",
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.reset_meet_surfaces.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_roster_refresh_leaves_meet_surfaces_alone(self, mock_cm):
+        """A mid-call roster refresh is not a new call.
+
+        Late joins arrive as a fresh dispatch for the session already running,
+        so resetting here would close a share while it is still on screen.
+        """
+        mock_cm.mode = Mode.MEET
+        mock_cm.call_manager.has_active_call = True
+        mock_cm.call_manager.unify_meet_call_session_id = "session-123"
+        mock_cm.call_manager.refresh_unify_meet_roster = AsyncMock()
+        event = UnifyMeetReceived(
+            contact={"contact_id": 1},
+            room_name="room_123",
+            call_session_id="session-123",
+            participants=[{"kind": "human", "user_id": "u1"}],
+        )
+
+        await EventHandler.handle_event(event, mock_cm)
+
+        mock_cm.call_manager.refresh_unify_meet_roster.assert_awaited_once()
+        mock_cm.reset_meet_surfaces.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unify_meet_ended_resets_meet_surfaces(self, mock_cm):
+        """Hanging up closes the shared surfaces the call opened."""
+        mock_cm.mode = Mode.MEET
+        mock_cm.call_manager.unify_meet_call_session_id = "current-session"
+        mock_cm.contact_index.push_message(
+            contact_id=1,
+            sender_name="Boss",
+            thread_name=Medium.UNIFY_MEET,
+            message_content="test",
+        )
+
+        await EventHandler.handle_event(
+            UnifyMeetEnded(
+                contact={"contact_id": 1},
+                call_session_id="current-session",
+            ),
+            mock_cm,
+        )
+
+        mock_cm.reset_meet_surfaces.assert_called_once()
+
 
 # =============================================================================
 # 7. Voice Utterance Event Handler Tests
@@ -2147,6 +2207,143 @@ class TestMeetInteractionEventHandlers:
         )
 
         assert len(mock_cm.notifications_bar.notifications) == count_after_first
+
+    def test_every_meet_surface_is_scoped(self):
+        """Every handled surface is classified as call- or desktop-scoped.
+
+        A call boundary closes one group and must not touch the other, so a new
+        surface that joins ``_MEET_STATE_FLAGS`` without picking a side would
+        otherwise be silently treated as desktop-scoped — never reset, and
+        leaking across calls exactly as before.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            CALL_SCOPED_MEET_SURFACES,
+            DESKTOP_SCOPED_MEET_SURFACES,
+        )
+
+        handled = {attr for attr, _ in _MEET_STATE_FLAGS.values()}
+        call_scoped = set(CALL_SCOPED_MEET_SURFACES)
+        desktop_scoped = set(DESKTOP_SCOPED_MEET_SURFACES)
+
+        assert call_scoped | desktop_scoped == handled
+        assert call_scoped.isdisjoint(desktop_scoped)
+
+    def test_reset_meet_surfaces_spares_the_assistant_desktop(self):
+        """A call boundary closes the call's surfaces and only those.
+
+        The Console's Desktop tab opens the assistant's desktop with no call in
+        sight, so clearing it on a call boundary would tell the assistant nobody
+        is watching while that pane is still open — and hand back control the
+        user still holds.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            CALL_SCOPED_MEET_SURFACES,
+            DESKTOP_SCOPED_MEET_SURFACES,
+            ConversationManager,
+        )
+
+        every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
+        cm = SimpleNamespace(
+            _frontend_reported_meet_surfaces=set(every_surface),
+            drop_unpaired_screenshots=lambda _source: 0,
+            **{name: True for name in every_surface},
+        )
+
+        ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
+
+        for name in CALL_SCOPED_MEET_SURFACES:
+            assert getattr(cm, name) is False, name
+        for name in DESKTOP_SCOPED_MEET_SURFACES:
+            assert getattr(cm, name) is True, name
+        assert cm._frontend_reported_meet_surfaces == set(DESKTOP_SCOPED_MEET_SURFACES)
+
+    def test_reset_meet_surfaces_drops_the_frames_those_surfaces_fed(self):
+        """Closing a surface takes its unpaired frames with it.
+
+        A flag saying nobody is sharing while the buffer still offers that screen
+        as current is the same stale-visual bug in a subtler form: the next turn
+        describes a screen that has been taken down.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            CALL_SCOPED_MEET_SURFACES,
+            DESKTOP_SCOPED_MEET_SURFACES,
+            ConversationManager,
+        )
+
+        dropped: list[str] = []
+        every_surface = (*CALL_SCOPED_MEET_SURFACES, *DESKTOP_SCOPED_MEET_SURFACES)
+        cm = SimpleNamespace(
+            _frontend_reported_meet_surfaces=set(),
+            drop_unpaired_screenshots=lambda source: dropped.append(source),
+            **{name: True for name in every_surface},
+        )
+
+        ConversationManager.reset_meet_surfaces(cm)  # type: ignore[arg-type]
+
+        expected = [
+            source
+            for sources in CALL_SCOPED_MEET_SURFACES.values()
+            for source in sources
+        ]
+        assert sorted(dropped) == sorted(expected)
+        # The assistant's own frames belong to a surface that survives the call.
+        assert "assistant" not in dropped
+
+    @pytest.mark.asyncio
+    async def test_frontend_surface_claim_does_not_outlive_its_call(self, mock_cm):
+        """A 1:1 call's frontend claim must not silence the next call's tracks.
+
+        Surface ownership is per call: the Console speaks for the surfaces it
+        renders, and an org call has no Console reporting on either of them.
+        Carrying the claim forward left the assistant capturing frames from a
+        share it never registered as having started.
+        """
+        from unify.conversation_manager.conversation_manager import (
+            ConversationManager,
+        )
+
+        mock_cm.reset_meet_surfaces = lambda: ConversationManager.reset_meet_surfaces(
+            mock_cm,
+        )
+        mock_cm.mode = Mode.MEET
+        mock_cm.user_screen_share_active = False
+        mock_cm.call_manager.unify_meet_call_session_id = "call-one"
+        mock_cm.contact_index.push_message(
+            contact_id=1,
+            sender_name="Boss",
+            thread_name=Medium.UNIFY_MEET,
+            message_content="test",
+        )
+
+        # Call one: the Console reports the share, claiming the surface.
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason="User started sharing their screen"),
+            mock_cm,
+        )
+        assert "user_screen_share_active" in mock_cm._frontend_reported_meet_surfaces
+
+        await EventHandler.handle_event(
+            UnifyMeetEnded(contact={"contact_id": 1}, call_session_id="call-one"),
+            mock_cm,
+        )
+        await EventHandler.handle_event(
+            UnifyMeetReceived(
+                contact={"contact_id": 1},
+                room_name="room_two",
+                call_session_id="call-two",
+            ),
+            mock_cm,
+        )
+
+        # Call two has no frontend on the surface, so the track speaks for it.
+        count_before = len(mock_cm.notifications_bar.notifications)
+        await EventHandler.handle_event(
+            UserScreenShareStarted(reason=TRACK_AUTODETECT_REASON),
+            mock_cm,
+        )
+
+        assert mock_cm.user_screen_share_active is True
+        assert len(mock_cm.notifications_bar.notifications) == count_before + 1
 
     @pytest.mark.asyncio
     async def test_meet_interaction_does_not_trigger_slow_brain(self, mock_cm):

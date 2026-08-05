@@ -7,9 +7,9 @@ from unify.canvas_manager.simulated import SimulatedCanvasManager
 # Minimal canvas that passes every authoring gate. Tests that care about a
 # specific gate mutate a copy of this rather than restating a whole component.
 VALID_TSX = (
-    'import { Canvas, Stack } from "@unity/canvas-kit";\n'
+    'import { Canvas } from "@unity/canvas-kit";\n'
     "export default function View({ canvas }) {\n"
-    '  return <Canvas><Stack gap="md" /></Canvas>;\n'
+    '  return <Canvas><div className="flex flex-col gap-4" /></Canvas>;\n'
     "}\n"
 )
 

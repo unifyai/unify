@@ -279,6 +279,7 @@ async def async_tool_loop_inner(
     max_consecutive_failures: int = 3,
     prune_tool_duplicates: bool = True,
     interrupt_llm_with_interjections: bool = True,
+    interrupt_llm_on_tool_completion: bool = True,
     propagate_chat_context: ChatContextPropagation = ChatContextPropagation.LLM_DECIDES,
     parent_chat_context: Optional[list[dict]] = None,
     caller_description: Optional[str] = None,
@@ -2430,6 +2431,10 @@ async def async_tool_loop_inner(
                 cfg,
             )
 
+            # Set only by patient mode below, to keep hold of the assistant
+            # message this step produced.
+            _patient_asst_msg: Optional[dict] = None
+
             if interrupt_llm_with_interjections:
                 # ––––– new *pre-emptive* mode ––––––––––––––––––––––––––––
                 # ➊ start the LLM step …
@@ -2504,7 +2509,8 @@ async def async_tool_loop_inner(
                 # Helper cleanup: cancel auxiliary waiters only.
                 # NOTE: llm_task is deliberately NOT cancelled here. Each branch
                 # below decides whether to cancel the LLM based on context:
-                # - Tool finished → cancel LLM (needs new context)
+                # - Tool finished → cancel LLM (needs new context), unless
+                #   ``interrupt_llm_on_tool_completion`` is False
                 # - Immediate interjection → cancel LLM (user wants immediate response)
                 # - Patient interjection → DO NOT cancel (let LLM finish naturally)
                 # - Clarification/notification → cancel LLM (needs to surface event)
@@ -2531,37 +2537,76 @@ async def async_tool_loop_inner(
                         f"⏱️ [ToolLoop] tool(s) finished during LLM race: "
                         f"{len(done & pending_snapshot)} completed",
                     )
-                    # — cancel the half-finished reasoning step
-                    if not llm_task.done():
-                        llm_task.cancel()
-                    for aux in (interject_w, cancel_waiter):
-                        if aux not in done and not aux.done():
-                            aux.cancel()
-                    await asyncio.gather(
-                        llm_task,
-                        interject_w,
-                        cancel_waiter,
-                        return_exceptions=True,
-                    )
-                    # — handle each newly-finished task exactly as branch A does
-                    needs_turn = False
-                    for task in _sort_completed_tasks_by_call_id(
-                        done & pending_snapshot,
-                        tools_data,
-                    ):
-                        if await tools_data.process_completed_task(
-                            task=task,
-                            consecutive_failures=consecutive_failures,
-                            outer_handle_container=outer_handle_container,
-                            assistant_meta=assistant_meta,
-                            msg_dispatcher=_msg_dispatcher,
+                    if not interrupt_llm_on_tool_completion:
+                        # Patient mode: the reasoning step already sent its
+                        # prompt to the provider, which bills it whether or not
+                        # the answer is collected, so discarding it to re-ask
+                        # with the tool result costs a whole step and buys only
+                        # latency. Let it finish and be used instead.
+                        #
+                        # The results still have to be ingested here: leaving the
+                        # task pending makes section F read it as work in flight,
+                        # and ``cancel_pending_tasks`` drops it without
+                        # processing, losing the very result this branch fired
+                        # for. ``deferred_llm_turn`` then guarantees a further
+                        # turn, so the model always sees these results before it
+                        # can conclude; it reasons one step behind, never without.
+                        #
+                        # Order matters. The step is awaited first so its own
+                        # assistant message can be captured, because ingesting a
+                        # result whose placeholder is no longer at the tail
+                        # appends a synthetic assistant/tool status pair, and the
+                        # loop would otherwise mistake that pair's tool message
+                        # for this step's turn.
+                        deferred_llm_turn = True
+                        await asyncio.gather(llm_task, return_exceptions=True)
+                        _patient_asst_msg = client.messages[-1]
+                        completed_snapshot = {
+                            task for task in pending_snapshot if task.done()
+                        }
+                        for task in _sort_completed_tasks_by_call_id(
+                            completed_snapshot,
+                            tools_data,
                         ):
-                            needs_turn = True
+                            await tools_data.process_completed_task(
+                                task=task,
+                                consecutive_failures=consecutive_failures,
+                                outer_handle_container=outer_handle_container,
+                                assistant_meta=assistant_meta,
+                                msg_dispatcher=_msg_dispatcher,
+                            )
+                    else:
+                        # — cancel the half-finished reasoning step
+                        if not llm_task.done():
+                            llm_task.cancel()
+                        for aux in (interject_w, cancel_waiter):
+                            if aux not in done and not aux.done():
+                                aux.cancel()
+                        await asyncio.gather(
+                            llm_task,
+                            interject_w,
+                            cancel_waiter,
+                            return_exceptions=True,
+                        )
+                        # — handle each newly-finished task exactly as branch A does
+                        needs_turn = False
+                        for task in _sort_completed_tasks_by_call_id(
+                            done & pending_snapshot,
+                            tools_data,
+                        ):
+                            if await tools_data.process_completed_task(
+                                task=task,
+                                consecutive_failures=consecutive_failures,
+                                outer_handle_container=outer_handle_container,
+                                assistant_meta=assistant_meta,
+                                msg_dispatcher=_msg_dispatcher,
+                            ):
+                                needs_turn = True
 
-                    # …then restart the main loop so the model sees the new info
-                    if needs_turn:  # assistant speaks only if needed
-                        llm_turn_required = True
-                    continue
+                        # …then restart the main loop so the model sees the new info
+                        if needs_turn:  # assistant speaks only if needed
+                            llm_turn_required = True
+                        continue
 
                 # 1️⃣ user interjected → restart immediately
                 if interject_w in done:
@@ -2678,7 +2723,14 @@ async def async_tool_loop_inner(
                         f"LLM call failed: {type(e).__name__}: {e}",
                     ) from e
 
-            msg = client.messages[-1]
+            # Normally the step's assistant message is the tail. Patient mode
+            # ingests tool results after it lands, which can append a synthetic
+            # status pair on top, so it captures the message itself.
+            msg = (
+                _patient_asst_msg
+                if _patient_asst_msg is not None
+                else client.messages[-1]
+            )
             await to_event_bus(msg, cfg)
 
             # Update context threshold from the LLM response usage data.

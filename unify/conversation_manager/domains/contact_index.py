@@ -77,6 +77,10 @@ class UnifyMessage(CommsMessage):
     ``team_id`` / ``group_id`` mark room-scoped messages (team group chat /
     org chat group) as opposed to a private 1:1 Console thread — replies to a
     room must pass the same scope back to ``send_unify_message``.
+
+    ``mentions`` names who the sender addressed, which only matters in a room:
+    every member assistant receives the message, so this is what distinguishes
+    being asked from being copied in.
     """
 
     name: str
@@ -87,6 +91,7 @@ class UnifyMessage(CommsMessage):
     thread_id: int | None = None
     team_id: int | None = None
     group_id: int | None = None
+    mentions: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -597,6 +602,7 @@ class ContactIndex:
         bot_id: str | None = None,
         tenant_id: str | None = None,
         conversation_id: str | None = None,
+        mentions: list[dict] | None = None,
     ) -> "GlobalThreadEntry":
         """
         Build a GlobalThreadEntry without appending it to the global thread.
@@ -646,6 +652,7 @@ class ContactIndex:
                 thread_id=int(thread_id) if thread_id else None,
                 team_id=int(team_id) if team_id else None,
                 group_id=int(group_id) if group_id else None,
+                mentions=mentions or [],
             )
         elif thread_name == Medium.WHATSAPP_MESSAGE:
             message = WhatsAppMessage(
@@ -800,6 +807,7 @@ class ContactIndex:
         bot_id: str | None = None,
         tenant_id: str | None = None,
         conversation_id: str | None = None,
+        mentions: list[dict] | None = None,
     ) -> int:
         """
         Build a message and append it to the shared global thread.
@@ -835,6 +843,7 @@ class ContactIndex:
             bot_id=bot_id,
             tenant_id=tenant_id,
             conversation_id=conversation_id,
+            mentions=mentions,
         )
         self.global_thread.append(entry)
         msg = entry.message

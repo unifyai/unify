@@ -24,6 +24,7 @@ from unify.data_manager.ops.mutation_ops import (
     insert_rows_impl,
     update_rows_impl,
     claim_impl,
+    reclaim_impl,
     delete_rows_impl,
 )
 from unify.data_manager.ops.join_ops import (
@@ -49,6 +50,7 @@ __all__ = [
     "insert_rows_impl",
     "update_rows_impl",
     "claim_impl",
+    "reclaim_impl",
     "delete_rows_impl",
     # Join operations
     "join_tables_impl",

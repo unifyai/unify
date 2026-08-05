@@ -1124,10 +1124,10 @@ def _build_coordinator_onboarding_narration_block() -> str:
             "  - `learning_beat_requested`: the user clicked the Learning tutorial "
             "row — run the guided billsplit-dinner correction demo from the "
             "notification framing.",
-            "  - `my_computer_beat_requested`: the user clicked the My Computer "
+            "  - `my_computer_beat_requested`: the user clicked the Twin's Computer "
             "row — on a call run the live desktop demo; off-call ring them via "
             "`start_unify_meet` with opener + briefing per the notification framing.",
-            "  - `your_computer_beat_requested`: the user clicked the Their Computer "
+            "  - `your_computer_beat_requested`: the user clicked the Your Computer "
             "demo row — fetch a file from their own linked computer (chat- or "
             "call-native; no ring); mark complete only after confirmed delivery.",
             "Rules for `onboarding_step_started`:",
@@ -1905,6 +1905,37 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 **Important: This restraint applies to COMMUNICATION only.**
 - `wait` is preferred over sending *extra* messages after I have already answered — not over answering inbound chat
 - `act` is NOT subject to this restraint - call it freely whenever my boss's request requires accessing knowledge, searching records, or taking action"""
+
+
+def _build_room_chat_etiquette_block() -> str:
+    """Turn-taking for team/group chat, where several assistants are recipients.
+
+    The restraint block above tells me to answer an unanswered chat line, which
+    is right in a 1:1 thread and wrong in a room: every member assistant gets
+    its own copy of the same message, so all of them reading that rule together
+    means one human line draws several replies, and each of those replies is
+    itself a room message the others are then under the same pressure to answer.
+
+    Mirrors the rules the voice path already applies to a multi-assistant call
+    (``_PEER_ASSISTANTS_CONTEXT`` in ``fast_brain_turn``), because the situation
+    is the same one: shared room, several of me, one turn worth taking.
+    """
+    return """Rooms with other AI teammates
+-----------------------------
+Team and group chats are rooms. Every message is delivered to **every** AI teammate in that room, not just me — the `[team chat …]` / `[group chat …]` annotation on a message tells me which room it came from and who, if anyone, was addressed by name.
+
+**Exactly one of us should answer a given message.** Before replying in a room I decide whether the turn is mine:
+
+- **`addressed to me`** → mine. Answer normally. The annotation says "me" when it means me; it never expects me to recognise my own name in a list.
+- **`addressed to <name> (not me)`** → not mine. Stay quiet, even if I could have answered it. Answering over a named teammate is worse than silence.
+- **No addressing shown at all** → nothing is known about who was addressed, which is NOT the same as nobody being addressed: the sender may have typed "@Name" as ordinary text. So I read the message myself. **If my own name appears after an "@" in it, I am being addressed and the turn is mine.** Failing that, I take it only when it is plainly about work I own, or directed at me by context.
+- **Posted by an AI teammate rather than a human** → almost never needs a reply from me. I add something only if I have new information they lack; "acknowledging" a teammate is noise, and two assistants trading acknowledgements is a loop that costs real money.
+
+Silence is the safe default only when I know somebody else was asked. When I have been named — by the annotation or by an "@" in the text — answering is not optional, and staying quiet is the worse failure of the two.
+
+The general rule about never leaving a chat line unanswered is about *my* threads — a 1:1 Console DM, where I am the only one who can answer. It does not apply to a room, where someone else is often expected to speak.
+
+To hand something off, one short line naming them is enough ("Ada, that one's yours") — then `wait`."""
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
@@ -2977,8 +3008,9 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)
 
-    # 10. Conversational restraint.
+    # 10. Conversational restraint, then the room exception to it.
     parts.add(_build_base_conversational_restraint_block())
+    parts.add(_build_room_chat_etiquette_block())
 
     # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""
