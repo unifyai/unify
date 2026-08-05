@@ -19,6 +19,7 @@ Option A algorithm:
   direct test files (space-separated), plus recursive jobs for subdirs
 """
 
+import ast
 import os
 import sys
 from pathlib import Path
@@ -411,17 +412,79 @@ def discover_all():
     return paths
 
 
+def _declares_eval(test_file: Path) -> bool:
+    """Whether *test_file* applies the eval marker.
+
+    Both spellings live in the file that applies them — the module-level
+    ``pytestmark = [pytest.mark.eval, ...]`` and the ``@pytest.mark.eval``
+    decorator — so the source answers this without importing anything or
+    resolving pytest plugins.
+
+    Reading the AST rather than searching the text is what separates applying
+    the marker from naming it: a test that asserts something *about* the marker
+    quotes the same dotted path, and counting that mention would hand the
+    matrix a directory the filter then empties.
+    """
+    try:
+        tree = ast.parse(test_file.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    return any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "eval"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "mark"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+        for node in ast.walk(tree)
+    )
+
+
+def narrow_to_eval(entry: str) -> str:
+    """Narrow one matrix entry to the members that declare eval tests.
+
+    An entry is either a directory or a space-separated bundle of test files,
+    so both shapes have to be handled: globbing a bundle as if it were a path
+    matches nothing and silently drops it from the matrix.
+
+    Narrowing matters because a shard whose filter selects no test at all is a
+    hard error in parallel_run.sh. Discovering every path under --eval-only
+    would fail almost every job for having nothing to run, which reads as a
+    broken suite rather than an empty one.
+
+    A conftest that applies the marker to files beside it is invisible here.
+    tests/flows is the only place that does that, and it is excluded from
+    discovery anyway — its per-run identifiers mean it can never replay from a
+    cache.
+    """
+    kept = []
+    for token in entry.split():
+        path = Path(token)
+        if path.is_dir():
+            if any(_declares_eval(f) for f in path.glob("test_*.py")):
+                kept.append(token)
+        elif path.is_file() and _declares_eval(path):
+            kept.append(token)
+    return " ".join(kept)
+
+
 def main():
-    if len(sys.argv) > 1:
+    args = [a for a in sys.argv[1:] if a != "--eval-only"]
+    eval_only = "--eval-only" in sys.argv[1:]
+
+    if args:
         # Explicit paths provided - expand each one
         all_paths = []
-        for arg in sys.argv[1:]:
+        for arg in args:
             expanded = expand_path(arg)
             all_paths.extend(expanded)
         paths = all_paths
     else:
         # No arguments - discover all from tests/
         paths = discover_all()
+
+    if eval_only:
+        paths = [narrowed for p in paths if (narrowed := narrow_to_eval(p))]
 
     # Output unique paths, sorted
     for p in sorted(set(paths)):
