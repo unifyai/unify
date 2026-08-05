@@ -324,3 +324,62 @@ async def test_reconcile_applies_a_new_bundle_version_and_keeps_params(
     assert record["params"] == {"mailbox": "work@unify.ai"}
 
     wm.uninstall_workflow(slug=SLUG)
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_bootstrap_fills_the_shelf_and_reconciles_installed(
+    live_managers,
+    tmp_path: Path,
+):
+    """The production boot path end to end: a bundle directory on disk
+    becomes an installable catalogue entry, and a later boot with a
+    changed bundle carries the change into existing installations —
+    the upkeep tick is the catalogue load itself."""
+    from unify.workflow_manager.catalog import (
+        MANIFEST_FILENAME,
+        bootstrap_workflow_catalog,
+    )
+
+    gm, ts, wm = live_managers
+
+    root = tmp_path / "workflows"
+    bundle_dir = root / "shelf_demo"
+    guidance_dir = bundle_dir / "guidance"
+    guidance_dir.mkdir(parents=True)
+    (bundle_dir / MANIFEST_FILENAME).write_text(
+        "slug: shelf_demo\nname: Shelf demo\nversion: '1.0.0'\ncategory: ops\n",
+    )
+    _write_jsonl(
+        guidance_dir,
+        GUIDANCE_JSONL_FILENAME,
+        [{"key": "shelf/how", "title": "How", "content": "First pass."}],
+    )
+
+    manager = bootstrap_workflow_catalog(root=root)
+    assert manager is not None
+    listed = manager.list_workflows()
+    assert any(w["slug"] == "shelf_demo" for w in listed["workflows"])
+
+    manager.install_workflow(slug="shelf_demo")
+    (rows_before,) = _rows(gm._ctx, "shelf_demo")
+    assert rows_before["content"] == "First pass."
+
+    # The catalogue moves in git; the next boot reconciles installs to it.
+    _write_jsonl(
+        guidance_dir,
+        GUIDANCE_JSONL_FILENAME,
+        [{"key": "shelf/how", "title": "How", "content": "Second pass."}],
+    )
+    (bundle_dir / MANIFEST_FILENAME).write_text(
+        "slug: shelf_demo\nname: Shelf demo\nversion: '1.1.0'\ncategory: ops\n",
+    )
+
+    bootstrap_workflow_catalog(root=root)
+
+    (row,) = _rows(gm._ctx, "shelf_demo")
+    assert row["content"] == "Second pass."
+    assert manager.get_workflow(slug="shelf_demo")["installed_version"] == "1.1.0"
+
+    manager.uninstall_workflow(slug="shelf_demo")
+    assert _rows(gm._ctx, "shelf_demo") == []
