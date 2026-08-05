@@ -406,21 +406,21 @@ def build_update_prompt(
     usage_lines.extend(
         [
             "",
-            "Recurring and triggered workflows",
+            "Recurring and triggered tasks",
             "---------------------------------",
             f"Pass schedule/repeat in the SAME `{create_task_fname}` call. If the request mentions a time, cadence, or recurrence "
             f"(e.g. 'every Monday', 'weekly', 'tomorrow at 9', 'first run Monday 12:00 UTC, repeat weekly'), include "
             f"`schedule={{'start_at': <iso8601>}}` and (for recurrence) `repeat=[...]` in the create call.",
             "For requests like 'do this every Monday' or 'send this report daily', create a live scheduled task with `schedule.start_at` for the first run and `repeat` for the cadence.",
             "For requests like 'whenever Alice emails about invoices', create a live task with a `trigger`. Use contact lookup first when the trigger references a person.",
-            "A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language workflows.",
+            "A scheduled/triggered live task may have `entrypoint=None`. This is the normal default for newly described natural-language tasks.",
             "Do not create an entrypoint function merely because a recurring task is being created. Entrypoint creation should follow an explicit user request or a successful run that has been reviewed as stable enough to store.",
             "Offline is a delivery lane, not an execution style. An offline task may be agentic (`entrypoint=None`) or symbolic (`entrypoint=<function_id>`).",
             "Offline Jobs already run under `asyncio.run`. Sync symbolic entrypoints/helpers must not nest another `asyncio.run` — prefer `async def` + `await`, or `run_coro_sync(factory)`.",
             "A stored entrypoint can still call `query_llm(...)` for bounded semantic judgment such as summarization, classification, ranking, or drafting.",
             "Resource opt-ins are independent of delivery: `requires_filesystem=True` waits for assistant Local (~/Unity/Local) to be ready; `requires_computer=True` waits for a computer-use desktop to be connected.",
             "The simplest offline symbolic task leaves both resource flags false (standalone function, no Local, no VM). The fullest live task sets both true so ConversationManager can steer with Local and computer use available.",
-            "Default both resource flags to false unless the workflow clearly needs Local files or desktop computer use.",
+            "Default both resource flags to false unless the task clearly needs Local files or desktop computer use.",
             "",
             "Repeat field examples",
             "---------------------",

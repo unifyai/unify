@@ -1,10 +1,10 @@
 """
 Multi-step ConversationManager → CodeActActor integration tests.
 
-These cover realistic “do X then Y” workflows where ConversationManager must:
+These cover realistic “do X then Y” sequences where ConversationManager must:
 - start an actor action
 - observe completion (sometimes via injected ActorResult in step-driven tests)
-- continue the workflow and emit the correct outbound events / persist side effects
+- continue the sequence and emit the correct outbound events / persist side effects
 """
 
 import pytest
@@ -34,7 +34,7 @@ async def test_find_contact_then_send_sms(initialized_cm_codeact):
     """
     Find a contact, then send an SMS.
 
-    Contract: CM can take an actor result (contact lookup) and continue the workflow
+    Contract: CM can take an actor result (contact lookup) and continue the sequence
     by emitting the correct outbound channel event.
     """
     cm = initialized_cm_codeact
@@ -166,7 +166,7 @@ async def test_single_message_file_then_create_task(
     """
     Single-message multi-step: read a file, extract a token, then create a follow-up task.
 
-    Contract: CM receives a compound instruction and completes the full workflow. The CM
+    Contract: CM receives a compound instruction and completes the full sequence. The CM
     may either:
     - Execute everything in a single actor call, OR
     - Break it into multiple serial actor calls (e.g., read file → create task)
@@ -243,7 +243,7 @@ async def test_single_message_update_contact_then_create_task(initialized_cm_cod
     """
     Single-message multi-step: update a contact, then create a task referencing the updated value.
 
-    Contract: CM receives a compound instruction and completes the full workflow. The CM
+    Contract: CM receives a compound instruction and completes the full sequence. The CM
     may either:
     - Execute everything in a single actor call, OR
     - Break it into multiple serial actor calls (e.g., update contact → create task)

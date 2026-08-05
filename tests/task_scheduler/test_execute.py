@@ -1086,7 +1086,7 @@ async def test_direct_description_driven_recurring_execution_passes_entrypoint_r
     assert "task_entrypoint_review" not in calls[0]["kwargs"]
     post_run_review_context = calls[0]["post_run_review_context"]
     assert post_run_review_context is not None
-    assert post_run_review_context.display_label == "Storing reusable workflow"
+    assert post_run_review_context.display_label == "Storing reusable procedure"
     review = post_run_review_context.extensions.get("task_entrypoint_review")
     assert review is not None
     assert review["metadata"]["task_id"] == task_id

@@ -159,7 +159,7 @@ class BaseFileManager(BaseStateManager):
         """
         Run the complete file processing pipeline: parse, ingest, and embed.
 
-        This method orchestrates the full file processing workflow:
+        This method orchestrates the full file processing pipeline:
         1. Parse files using the configured parser to extract structured content
         2. Ingest parsed content into storage contexts (per-file or unified)
         3. Create embeddings based on the configured strategy (along, after, or off)
@@ -171,7 +171,7 @@ class BaseFileManager(BaseStateManager):
         destination : str | None, default None
             Where the file's metadata row lives. Pass ``"personal"`` (the
             default) for personal screenshots, private working files, drafts,
-            and anything tied only to your individual workflow. Pass
+            and anything tied only to your individual working set. Pass
             ``"team:<id>"`` for shared media artifacts the team needs:
             operational reference documents, shared media assets, and
             team-level deliverables. The blob remains in GCS regardless of
@@ -1646,7 +1646,7 @@ class BaseFileManager(BaseStateManager):
         and layout cues that are critical for understanding real-world
         spreadsheets.
 
-        Recommended workflow
+        Recommended steps
         ~~~~~~~~~~~~~~~~~~~~
         1. Open the workbook with ``openpyxl`` and iterate over visible
            sheets (skip sheets where ``sheet.sheet_state != 'visible'``).
@@ -1691,7 +1691,7 @@ class BaseFileManager(BaseStateManager):
         multi-column layouts all render faithfully as images, whereas
         text-based parsing frequently drops or garbles content.
 
-        Recommended workflow
+        Recommended steps
         ~~~~~~~~~~~~~~~~~~~~
         1. Get the total page count (e.g. via ``pymupdf``).
         2. Render **2–3 pages at a time** and ``display()`` each image.

@@ -259,7 +259,7 @@ async def test_discovery_first_prefers_minimal_exact_call_over_execute_code(
 
     try:
         handle = await actor.act(
-            "Use the required discovery-first workflow: search both "
+            "Use the required discovery-first procedure: search both "
             "FunctionManager and GuidanceManager first. After discovery, choose "
             "the minimal correct execution path. One exact primitive call is "
             "sufficient here: primitives.contacts.ask(text='Find all contacts "

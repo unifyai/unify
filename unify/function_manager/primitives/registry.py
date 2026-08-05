@@ -405,7 +405,7 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         excluded_methods=frozenset(),
         priority=5,
         domain="Time-Sensitive & External Research",
-        description="Quick one-off internet queries against the public web (headlines, weather, definitions, current events). Not for gated sites, browser automation, or multi-step web workflows — use Tavily + SecretManager + ComputerPrimitives directly for those",
+        description="Quick one-off internet queries against the public web (headlines, weather, definitions, current events). Not for gated sites, browser automation, or multi-step web procedures — use Tavily + SecretManager + ComputerPrimitives directly for those",
         use_when="Fast, simple public-web lookups: current events, weather, news, definitions, stock prices, quick factual questions",
         examples="'What is the Eisenhower Matrix?', 'Weather in Berlin today?', 'Latest AI news?', 'Current stock price?'",
     ),
@@ -1396,7 +1396,7 @@ class ToolSurfaceRegistry:
                     "- **External REST sync:** use "
                     "`create_external_column` + `filter(..., hydrate=...)` for "
                     "remote facts and `request_external_write` for mutations. "
-                    "Keep workflow/queue state as ordinary local columns. "
+                    "Keep process/queue state as ordinary local columns. "
                     "`auth_secret_ref` must exist in the owning `Secrets` "
                     "vault — never inline API keys in bindings. Do not "
                     "full-mirror a remote REST DB into Orchestra.",

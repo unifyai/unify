@@ -580,7 +580,7 @@ The `logs/` directory is gitignored, which affects tool availability:
 | `logs/orchestra/` | Orchestra session logs with per-request API traces |
 | `logs/all/` | Cross-repo OTEL traces |
 
-## Practical Workflow
+## Practical Steps
 
 **Step 1: Explore with Shell**
 ```bash
@@ -676,7 +676,7 @@ For long-running test suites, you can run in the background and analyze failures
 3. Analyze failures immediately
 4. Check back later for final results
 
-## Workflow (Background Mode)
+## Steps (Background Mode)
 
 ```bash
 # 1. Start tests in background (use block_until_ms: 0 in Shell tool call)
@@ -844,7 +844,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### WebSearcher
 - **Role**: Lightweight, text-based retrieval engine for quick one-off internet queries (headlines, weather, definitions, current events).
-- **Scope**: ask only (search, extract, crawl, map against the public web); returns live handle. No gated-site access, no browser automation, no credentials. For authenticated or complex web workflows, use Tavily + SecretManager + ComputerPrimitives directly via code-first plans.
+- **Scope**: ask only (search, extract, crawl, map against the public web); returns live handle. No gated-site access, no browser automation, no credentials. For authenticated or complex web procedures, use Tavily + SecretManager + ComputerPrimitives directly via code-first plans.
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.web.*`).
   - **Steers**: — (results may subsequently be persisted as typed claims via `KnowledgeManager_add_knowledge` when requested).
@@ -891,7 +891,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Scope**: Managers publish structured events (notably `ManagerMethod` for incoming/outgoing `ask`/`update`/`execute`) via a thin logging wrapper; the bus supports `publish`, `search` (filterable queries), `join_published`/`join_callbacks` for deterministic flushing, per‑type window sizing, auto‑pinning, and callback registration.
 - **Connections**:
   - **Steered by**: All public manager methods (through the logging decorator) and other components that emit operational events.
-  - **Steers**: `MemoryManager` (registers callbacks to react to message and `ManagerMethod` events for maintenance workflows); tests and higher‑level orchestrators query the bus to observe recent activity.
+  - **Steers**: `MemoryManager` (registers callbacks to react to message and `ManagerMethod` events for maintenance passes); tests and higher‑level orchestrators query the bus to observe recent activity.
 
 ### Precedence and source of truth
 - **Code is canonical**: This guide is descriptive. If the implementation ever contradicts these descriptions or relationships, the current code takes precedence.
@@ -932,7 +932,7 @@ A targeted verification script can validate a fix in **seconds** rather than wai
 4. **Run fast**: Should complete in seconds, not minutes
 5. **Print clear pass/fail output**: Make success/failure obvious
 
-## Example Workflow
+## Example Sequence
 
 ```bash
 # 1. Implement the fix

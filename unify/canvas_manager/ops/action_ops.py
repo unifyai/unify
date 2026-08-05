@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Sequence
 
 from unify.canvas_manager.types.action import CanvasAction
 
-# Ceiling on actions per canvas. A surface with more than this is a workflow
+# Ceiling on actions per canvas. A surface with more than this is an app
 # tool rather than a view, and should be several canvases.
 MAX_ACTIONS = 12
 
