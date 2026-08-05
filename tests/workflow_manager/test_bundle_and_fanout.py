@@ -16,7 +16,6 @@ from unify.workflow_manager.bundle import (
     UnscopedSurfaceError,
     WorkflowBundle,
 )
-from unify.workflow_manager.types.workflow import WorkflowMode
 from unify.workflow_manager.workflow_manager import WorkflowManager
 
 WORKFLOW = "draft_email_replies"
@@ -247,11 +246,6 @@ def test_missing_required_param_is_refused():
 def test_optional_params_are_not_required():
     bundle = _bundle(params_schema={"tone": {"required": False}})
     assert WorkflowManager._validate_params(bundle, {}) == {}
-
-
-def test_mode_default_is_seed():
-    """Seed is the safe default: pinned silently reverts local edits."""
-    assert _bundle().mode is WorkflowMode.seed
 
 
 # --------------------------------------------------------------------- #

@@ -6,7 +6,7 @@ from .bundle import (
     WorkflowBundle,
 )
 from .surfaces import PENDING_SCOPING, SCOPED_SURFACES, register_default_surfaces
-from .types.workflow import WorkflowInstallation, WorkflowMode
+from .types.workflow import WorkflowInstallation
 from .workflow_manager import WorkflowManager
 
 __all__ = [
@@ -19,6 +19,5 @@ __all__ = [
     "WorkflowBundle",
     "WorkflowInstallation",
     "WorkflowManager",
-    "WorkflowMode",
     "register_default_surfaces",
 ]

@@ -269,3 +269,58 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
 
     wm.uninstall_workflow(slug=SLUG)
     assert _rows(ts._ctx, SLUG) == []
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_reconcile_applies_a_new_bundle_version_and_keeps_params(
+    live_managers,
+    bundle,
+    tmp_path: Path,
+):
+    """The upkeep path: a catalogue version bump reaches installed rows
+    through reconcile_installed, with the installation's recorded
+    settings preserved — and the settings are readable at run time
+    through get_installation_params, never from the planted rows."""
+    gm, ts, wm = live_managers
+    wm.register_bundle(bundle)
+    wm.install_workflow(slug=SLUG, params={"mailbox": "work@unify.ai"})
+
+    assert wm.get_installation_params(slug=SLUG) == {"mailbox": "work@unify.ai"}
+
+    # The catalogue moves: one procedure's content changes, one is dropped.
+    revised_dir = _write_jsonl(
+        tmp_path / "revised_guidance",
+        GUIDANCE_JSONL_FILENAME,
+        [
+            {
+                "key": "wf/triage",
+                "title": "Workflow triage procedure",
+                "content": "Read the inbox newest-first.",
+            },
+        ],
+    )
+    revised = WorkflowBundle(
+        slug=bundle.slug,
+        name=bundle.name,
+        version="2.0.0",
+        surfaces={
+            "guidance": collect_custom_guidance(path=revised_dir),
+            "tasks": bundle.surfaces["tasks"],
+        },
+    )
+    wm.register_bundle(revised)
+
+    result = wm.reconcile_installed()
+
+    assert SLUG in result["reconciled"]
+    assert "orphaned" not in result
+    rows = _rows(gm._ctx, SLUG)
+    assert len(rows) == 1, "the dropped procedure must be pruned"
+    assert rows[0]["content"] == "Read the inbox newest-first."
+
+    record = wm.get_workflow(slug=SLUG)
+    assert record["installed_version"] == "2.0.0"
+    assert record["params"] == {"mailbox": "work@unify.ai"}
+
+    wm.uninstall_workflow(slug=SLUG)
