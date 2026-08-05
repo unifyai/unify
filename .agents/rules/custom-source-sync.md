@@ -8,10 +8,20 @@ integration registry) reconcile through the shared engine in
 
 ## Invariants
 
-- A deployment-owned row has `custom_key` **and** `custom_hash`; rows
-  authored by users/actors have neither. `custom_key` is the identity;
-  auto-counted ids (`task_id`, `function_id`, …) are environment-local
-  handles that source code must never reference.
+- A managed row has `custom_key`, `custom_hash` **and** `managed_by`
+  (which source reconciles it: the deployment or a workflow slug); rows
+  authored by users/actors have none of them. `custom_key` is the
+  identity; auto-counted ids (`task_id`, `function_id`, …) are
+  environment-local handles that source code must never reference.
+- Every reconcile pass is scoped to ONE `managed_by`. `live_rows` and
+  `find_collision` filter with `managed_rows_filter(managed_by)`, never
+  a bare `custom_hash != None` — an unscoped query hands one source its
+  siblings' rows and prune then deletes them. Rows with a null
+  `managed_by` belong to the deployment and are stamped on their next
+  content change.
+- `managed_by` is reconcile provenance only — who may overwrite/prune
+  the row. Which workflows *reference* a row is membership, a separate
+  multi-valued field; never encode membership into `managed_by`.
 - Each manager declares its key policy in ONE place (its `custom_*.py`
   collector). Changing a key policy is an identity migration for every
   deployment — plan it, never drive-by edit it.
@@ -41,6 +51,9 @@ integration registry) reconcile through the shared engine in
 - Changing a manager's key derivation (or making an optional source
   `key` mandatory) without a migration plan for live rows in every
   deployment.
+- Registering a surface for workflow installs while its adapter still
+  queries unscoped. The `SurfaceRegistry` refuses these
+  (`UnscopedSurfaceError`); routing around it reintroduces mutual prune.
 
 ## Deviations are declared knobs, not forks
 
