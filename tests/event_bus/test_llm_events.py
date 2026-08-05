@@ -168,9 +168,9 @@ class TestHookInstallation:
         import unify
 
         unify.init()
-        # Unity uses the global hook (works across threads)
-        hook = unillm.get_global_llm_event_hook()
-        assert hook is _llm_event_to_eventbus
+        # Unity registers a unillm listener (process-wide, works across threads)
+        callbacks = [listener.callback for listener in unillm.llm_event_listeners()]
+        assert _llm_event_to_eventbus in callbacks
 
     def test_install_hook_multiple_calls_safe(self):
         """Calling install_llm_event_hook multiple times should not crash."""
@@ -431,29 +431,20 @@ async def test_hook_works_when_installed_from_different_thread():
     - unify.init() is called from a thread pool worker (via asyncio.to_thread)
     - LLM calls happen from the main async context
 
-    The global hook mechanism ensures events are captured regardless of which
-    thread installed the hook vs which thread makes the LLM call.
+    Listener registration is process-global, so events are captured regardless
+    of which thread registered the listener vs which thread makes the LLM call.
     """
     import concurrent.futures
 
-    # Clear any existing hook
     unillm.set_llm_event_hook(None)
-    try:
-        unillm.set_global_llm_event_hook(None)
-    except AttributeError:
-        pass  # Function doesn't exist yet
+    unillm.clear_llm_event_listeners()
 
-    # Install hook from a worker thread (mimicking asyncio.to_thread behavior)
-    def install_hook_in_thread():
-        try:
-            # Use global hook (the fix)
-            unillm.set_global_llm_event_hook(_llm_event_to_eventbus)
-        except AttributeError:
-            # Fall back to context hook (current broken behavior)
-            unillm.set_llm_event_hook(_llm_event_to_eventbus)
-
+    # Register from a worker thread (mimicking asyncio.to_thread behavior)
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        executor.submit(install_hook_in_thread).result()
+        executor.submit(
+            unillm.add_llm_event_listener,
+            _llm_event_to_eventbus,
+        ).result()
 
     # Now make LLM call from main thread and verify event is captured
     async with capture_events("LLM") as captured:
@@ -465,11 +456,9 @@ async def test_hook_works_when_installed_from_different_thread():
         await asyncio.sleep(0.1)
         EVENT_BUS.join_published()
 
-    # This test will FAIL until the global hook is implemented
     assert len(captured) >= 1, (
-        "No LLM events captured! This indicates the hook installed from a worker thread "
-        "is not visible to the main thread. The fix is to use set_global_llm_event_hook() "
-        "which uses a module-level global instead of a ContextVar."
+        "No LLM events captured! This indicates the listener registered from a "
+        "worker thread is not visible to the main thread."
     )
 
 
@@ -485,21 +474,11 @@ async def test_hook_works_when_installed_via_asyncio_to_thread():
     Where _init_managers calls unify.init() which installs the LLM event hook.
     """
 
-    # Clear any existing hook
     unillm.set_llm_event_hook(None)
-    try:
-        unillm.set_global_llm_event_hook(None)
-    except AttributeError:
-        pass  # Function doesn't exist yet
+    unillm.clear_llm_event_listeners()
 
-    # Install hook via asyncio.to_thread (exactly like production)
-    def install_hook_sync():
-        try:
-            unillm.set_global_llm_event_hook(_llm_event_to_eventbus)
-        except AttributeError:
-            unillm.set_llm_event_hook(_llm_event_to_eventbus)
-
-    await asyncio.to_thread(install_hook_sync)
+    # Register via asyncio.to_thread (exactly like production)
+    await asyncio.to_thread(unillm.add_llm_event_listener, _llm_event_to_eventbus)
 
     # Make LLM call from main async context
     async with capture_events("LLM") as captured:
