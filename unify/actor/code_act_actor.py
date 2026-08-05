@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+    from unify.workflow_manager.workflow_manager import WorkflowManager
 
 
 # ---------------------------------------------------------------------------
@@ -2310,6 +2311,7 @@ class CodeActActor(BaseCodeActActor):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
+        workflow_manager: Optional["WorkflowManager"] = None,
         can_compose: object = _UNSET,
         can_store: object = _UNSET,
         timeout: object = _UNSET,
@@ -2336,6 +2338,10 @@ class CodeActActor(BaseCodeActActor):
             knowledge_manager: Manages durable sourced knowledge claims (the *is*).
                 Exposes JSON CRUD/lifecycle tools on the main loop and in the
                 post-completion storage check loop when present.
+            workflow_manager: Catalogue of installable workflow bundles. Exposes
+                JSON install/uninstall/list/get tools on the main loop when the
+                curated catalogue is configured; absent otherwise, so the tool
+                schema is unchanged for deployments without the shelf.
             can_compose: Whether the LLM can write and execute arbitrary code via
                 ``execute_code``. Set to False for function-execution-only mode.
             can_store: Whether a post-completion review loop should run to
@@ -2372,6 +2378,7 @@ class CodeActActor(BaseCodeActActor):
             function_manager=function_manager,
             guidance_manager=guidance_manager,
             knowledge_manager=knowledge_manager,
+            workflow_manager=workflow_manager,
         )
 
         can_compose = can_compose if can_compose is not _UNSET else True
@@ -3627,6 +3634,34 @@ class CodeActActor(BaseCodeActActor):
                     ToolSpec(
                         fn=km.reconcile_sources,
                         display_label="Reconciling knowledge provenance",
+                    ),
+                    include_class_name=True,
+                ),
+            )
+
+        if self.workflow_manager:
+            wm = self.workflow_manager
+            tools.update(
+                methods_to_tool_dict(
+                    ToolSpec(
+                        fn=wm.list_workflows,
+                        display_label="Listing installable workflows",
+                    ),
+                    ToolSpec(
+                        fn=wm.get_workflow,
+                        display_label="Reading a workflow's record",
+                    ),
+                    ToolSpec(
+                        fn=wm.install_workflow,
+                        display_label="Installing a workflow",
+                    ),
+                    ToolSpec(
+                        fn=wm.uninstall_workflow,
+                        display_label="Uninstalling a workflow",
+                    ),
+                    ToolSpec(
+                        fn=wm.get_installation_params,
+                        display_label="Reading a workflow's settings",
                     ),
                     include_class_name=True,
                 ),

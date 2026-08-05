@@ -23,6 +23,7 @@ from unify.data_manager.settings import DataSettings
 from unify.file_manager.settings import FileSettings
 from unify.function_manager.settings import FunctionSettings
 from unify.guidance_manager.settings import GuidanceSettings
+from unify.workflow_manager.settings import WorkflowSettings
 from unify.image_manager.settings import ImageSettings
 from unify.ingestion_manager.settings import IngestionSettings
 from unify.knowledge_manager.settings import KnowledgeSettings
@@ -269,6 +270,7 @@ class ProductionSettings(BaseSettings):
     task: TaskSettings = Field(default_factory=TaskSettings)
     transcript: TranscriptSettings = Field(default_factory=TranscriptSettings)
     web: WebSettings = Field(default_factory=WebSettings)
+    workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Validators
