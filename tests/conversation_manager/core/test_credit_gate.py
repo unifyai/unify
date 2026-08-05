@@ -5,12 +5,19 @@ import pytest
 
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.conversation_manager import (
+    ACCOUNT_SUSPENDED_EMAIL_SUBJECT,
+    ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE,
     CREDIT_GATE_REPLY_THROTTLE_SECONDS,
     DEPLETED_CREDITS_EMAIL_SUBJECT,
     DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
     ConversationManager,
 )
-from unify.spending_limits import CreditGateState
+from unify.spending_limits import (
+    GATE_BLOCK_ACCOUNT_SUSPENDED,
+    GATE_BLOCK_CREDITS_DEPLETED,
+    BillingGateState,
+    _billing_gate_from_spend_data,
+)
 
 
 def _cm_for_queued_run(*, reply_context: dict | None):
@@ -35,7 +42,7 @@ def _cm_for_queued_run(*, reply_context: dict | None):
     cm.mode = "text"
     cm.loop = SimpleNamespace(time=MagicMock(return_value=1000.0))
     cm.run_llm = AsyncMock()
-    cm._send_credit_gate_reply = AsyncMock(return_value=True)
+    cm._send_billing_gate_reply = AsyncMock(return_value=True)
     return cm
 
 
@@ -75,9 +82,9 @@ async def test_flush_depleted_credits_sends_reply_and_skips_llm():
     cm = _cm_for_queued_run(reply_context=reply_context)
 
     with patch(
-        "unify.conversation_manager.conversation_manager.check_credit_gate_state",
+        "unify.conversation_manager.conversation_manager.check_billing_gate_state",
         AsyncMock(
-            return_value=CreditGateState(
+            return_value=BillingGateState(
                 allowed=False,
                 reason="Insufficient credits",
                 credit_balance=0.0,
@@ -87,7 +94,10 @@ async def test_flush_depleted_credits_sends_reply_and_skips_llm():
     ):
         await ConversationManager.flush_llm_requests(cm)
 
-    cm._send_credit_gate_reply.assert_awaited_once_with(reply_context)
+    cm._send_billing_gate_reply.assert_awaited_once_with(
+        reply_context,
+        "credits_depleted",
+    )
     cm.run_llm.assert_not_awaited()
     assert cm._pending_llm_requests == []
     assert cm._pending_llm_request_meta == []
@@ -102,12 +112,12 @@ async def test_flush_allowed_credits_submits_llm():
     cm = _cm_for_queued_run(reply_context=reply_context)
 
     with patch(
-        "unify.conversation_manager.conversation_manager.check_credit_gate_state",
-        AsyncMock(return_value=CreditGateState(allowed=True, credit_balance=10.0)),
+        "unify.conversation_manager.conversation_manager.check_billing_gate_state",
+        AsyncMock(return_value=BillingGateState(allowed=True, credit_balance=10.0)),
     ):
         await ConversationManager.flush_llm_requests(cm)
 
-    cm._send_credit_gate_reply.assert_not_awaited()
+    cm._send_billing_gate_reply.assert_not_awaited()
     cm.run_llm.assert_awaited_once()
 
 
@@ -161,12 +171,13 @@ async def test_credit_gate_reply_routes_unify_message():
         "unify.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
         return_value=tools,
     ):
-        sent = await ConversationManager._send_credit_gate_reply(
+        sent = await ConversationManager._send_billing_gate_reply(
             cm,
             {
                 "medium": Medium.UNIFY_MESSAGE.value,
                 "contact_id": 1,
             },
+            "credits_depleted",
         )
 
     assert sent is True
@@ -186,7 +197,7 @@ async def test_credit_gate_reply_routes_email_replies():
         "unify.conversation_manager.conversation_manager.ConversationManagerBrainActionTools",
         return_value=tools,
     ):
-        sent = await ConversationManager._send_credit_gate_reply(
+        sent = await ConversationManager._send_billing_gate_reply(
             cm,
             {
                 "medium": Medium.EMAIL.value,
@@ -194,6 +205,7 @@ async def test_credit_gate_reply_routes_email_replies():
                 "email_id": "message-id",
                 "thread_id": "gmail-thread-id",
             },
+            "credits_depleted",
         )
 
     assert sent is True
@@ -204,3 +216,78 @@ async def test_credit_gate_reply_routes_email_replies():
         email_id_to_reply_to="message-id",
         thread_id="gmail-thread-id",
     )
+
+
+class TestEveryRefusalTheSpendPayloadCarriesIsRead:
+    """A cause the gate cannot name reaches the user as a transient fault.
+
+    The generic slow-brain failure reply tells them to try again in a moment.
+    Neither a suspension nor an empty wallet clears on a retry, and any work
+    needing a model turn — an onboarding trigger row, say — is dropped in
+    silence while they do.
+    """
+
+    def test_suspension_outranks_billing_mode(self):
+        state = _billing_gate_from_spend_data(
+            {
+                "account_suspended": True,
+                "billing_mode": "METERED",
+                "credit_balance": 500.0,
+            },
+        )
+
+        assert state.allowed is False
+        assert state.blocked_by == GATE_BLOCK_ACCOUNT_SUSPENDED
+
+    def test_an_empty_wallet_is_named_as_such(self):
+        state = _billing_gate_from_spend_data(
+            {"credit_balance": 0.0, "billing_mode": "CREDITS"},
+        )
+
+        assert state.allowed is False
+        assert state.blocked_by == GATE_BLOCK_CREDITS_DEPLETED
+
+    def test_an_invoiced_account_is_not_gated_on_a_zero_wallet(self):
+        state = _billing_gate_from_spend_data(
+            {"credit_balance": 0.0, "billing_mode": "METERED"},
+        )
+
+        assert state.allowed is True
+
+    def test_an_unreadable_account_is_not_a_refused_one(self):
+        assert _billing_gate_from_spend_data({}).allowed is True
+
+
+class TestTheRefusalCarriesActionableAdvice:
+    @pytest.mark.asyncio
+    async def test_a_suspension_does_not_borrow_the_credits_copy(self):
+        cm = object.__new__(ConversationManager)
+        tools = MagicMock()
+        tools.send_unify_message = AsyncMock(return_value={"status": "ok"})
+
+        with patch(
+            "unify.conversation_manager.conversation_manager."
+            "ConversationManagerBrainActionTools",
+            return_value=tools,
+        ):
+            sent = await ConversationManager._send_billing_gate_reply(
+                cm,
+                {"medium": Medium.UNIFY_MESSAGE.value, "contact_id": 1},
+                GATE_BLOCK_ACCOUNT_SUSPENDED,
+            )
+
+        assert sent is True
+        tools.send_unify_message.assert_awaited_once_with(
+            contact_id=1,
+            content=ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE,
+        )
+
+    def test_neither_refusal_tells_the_user_to_retry(self):
+        for copy in (
+            ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE,
+            DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
+        ):
+            assert "try again" not in copy.lower()
+
+    def test_the_two_refusals_are_distinguishable_in_a_mailbox(self):
+        assert ACCOUNT_SUSPENDED_EMAIL_SUBJECT != DEPLETED_CREDITS_EMAIL_SUBJECT
