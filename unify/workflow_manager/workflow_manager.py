@@ -1,12 +1,16 @@
 """Installable workflow bundles.
 
 Installing a workflow is a fan-out of ordinary custom syncs, one per
-surface the bundle covers, each stamped with the bundle's slug as its
-``managed_by``. That is the whole mechanism: there is no second reconcile
-loop, no parallel store for workflow content, and no lookup path that
-knows about workflows. What the slug buys is provenance — the ability to
-ask a surface "which rows did this bundle plant?" and get an exact
-answer, which is what makes update and uninstall possible at all.
+surface the bundle covers. Per-slug surfaces (guidance, knowledge,
+tasks) are stamped with the bundle's slug as their ``managed_by``;
+shared-identity surfaces (functions) re-sync the union of every
+installed bundle's entries under the single ``WORKFLOW_LIBRARY`` source,
+with each row's ``workflows`` field recording which installs reference
+it. That is the whole mechanism: there is no second reconcile loop, no
+parallel store for workflow content, and no lookup path that knows about
+workflows. What the stamps buy is provenance — the ability to ask a
+surface "which rows did this bundle plant?" and get an exact answer,
+which is what makes update and uninstall possible at all.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from ..common.model_to_fields import model_to_fields
 from ..common.sync_lease import exclusive_sync_lease
 from ..common.tool_outcome import ToolErrorException
 from .base import BaseWorkflowManager
-from .bundle import SurfaceRegistry, WorkflowBundle
+from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
 from .types.meta import WorkflowMeta
 from .types.workflow import UNASSIGNED, WorkflowInstallation, WorkflowMode
 
@@ -189,15 +193,91 @@ class WorkflowManager(BaseWorkflowManager):
     # ------------------------------------------------------------------ #
     # Fan-out                                                            #
     # ------------------------------------------------------------------ #
+    def _shared_union(
+        self,
+        surface_name: str,
+        bundles: List[WorkflowBundle],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Merge every bundle's entries for one shared surface.
+
+        A shared atom referenced by several bundles converges to one
+        entry carrying all their slugs in its ``workflows`` field —
+        provided the content is byte-identical. Two bundles shipping the
+        same key with different content is a curation error the install
+        must surface, not a survivor to pick: whichever won, the other
+        workflow would be running someone else's code under its own name.
+        """
+
+        union: Dict[str, Dict[str, Any]] = {}
+        owners: Dict[str, List[str]] = {}
+        for bundle in sorted(bundles, key=lambda b: b.slug):
+            for key, fields in bundle.surfaces.get(surface_name, {}).items():
+                if key in union:
+                    if union[key].get("custom_hash") != fields.get("custom_hash"):
+                        raise ToolErrorException(
+                            {
+                                "error": "conflicting_content",
+                                "surface": surface_name,
+                                "key": key,
+                                "workflows": sorted(
+                                    owners[key] + [bundle.slug],
+                                ),
+                                "message": (
+                                    f"Workflows {sorted(owners[key])} and "
+                                    f"{bundle.slug!r} both define "
+                                    f"{key!r} on {surface_name!r} with "
+                                    "different content; identical atoms "
+                                    "share one row, divergent ones must "
+                                    "be renamed."
+                                ),
+                            },
+                        )
+                    owners[key].append(bundle.slug)
+                else:
+                    union[key] = dict(fields)
+                    owners[key] = [bundle.slug]
+        for key, slugs in owners.items():
+            union[key]["workflows"] = sorted(slugs)
+        return union
+
+    def _installed_bundles(self, context: str) -> List[WorkflowBundle]:
+        """Catalogue bundles whose slug has an installation row in *context*.
+
+        An installed slug whose bundle has left the catalogue cannot
+        contribute to a union, so its shared atoms are pruned by the next
+        install or uninstall that re-syncs the library. Hand-curated
+        bundles are not dropped while installed; ``list_workflows`` flags
+        such orphans.
+        """
+        logs = unisdk.get_logs(
+            context=context,
+            exclude_fields=list_private_fields(context),
+        )
+        slugs = {
+            str((lg.entries or {}).get("slug"))
+            for lg in logs
+            if (lg.entries or {}).get("slug")
+        }
+        with self._lock:
+            return [self._catalogue[s] for s in sorted(slugs) if s in self._catalogue]
+
     def _plant(
         self,
         bundle: WorkflowBundle,
         *,
         destination: Optional[str],
+        installed: List[WorkflowBundle],
         surface_names: Optional[List[str]] = None,
         empty: bool = False,
     ) -> tuple[Dict[str, Any], Dict[str, BaseException]]:
-        """Sync each covered surface under the bundle's slug at *destination*.
+        """Sync each covered surface at *destination*.
+
+        Per-slug surfaces sync the bundle's own entries under its slug.
+        Shared surfaces sync the union of every installed bundle's entries
+        under ``WORKFLOW_LIBRARY`` — *installed* is the set of already
+        installed catalogue bundles at this destination, and the current
+        bundle is added to it (install) or dropped from it (uninstall)
+        before the union is taken.
 
         The installation's destination governs where every entry lands —
         a team install plants team content, a personal install plants
@@ -205,25 +285,47 @@ class WorkflowManager(BaseWorkflowManager):
         per-destination sync, so the fan-out never depends on per-entry
         destination fields in the bundle.
 
-        With ``empty=True`` every surface receives an empty source, which
-        prunes exactly the rows carrying this slug at this destination and
-        leaves every other source's rows — the deployment's, another
-        workflow's, the user's own — untouched. That is uninstall, and it
-        is the same code path as install precisely because the scoping is
-        what does the work.
+        With ``empty=True`` every per-slug surface receives an empty
+        source, which prunes exactly the rows carrying this slug at this
+        destination; shared surfaces receive the union minus this bundle,
+        which prunes exactly the atoms no remaining workflow references.
+        Either way nobody else's rows — the deployment's, another
+        workflow's, the user's own — can be touched. Uninstall is the same
+        code path as install precisely because the scoping is what does
+        the work.
+
+        Union sources (and their conflict errors) are computed for every
+        covered shared surface before anything syncs, so a conflicting
+        install fails whole rather than half-planted.
         """
 
         planted: Dict[str, Any] = {}
         failures: Dict[str, BaseException] = {}
         names = surface_names if surface_names is not None else bundle.surface_names()
 
+        union_bundles = [b for b in installed if b.slug != bundle.slug]
+        if not empty:
+            union_bundles.append(bundle)
+
+        sources: Dict[str, tuple[Dict[str, Any], str]] = {}
         for name in names:
-            source = {} if empty else bundle.surfaces.get(name, {})
+            surface = self._surfaces.get(name)
+            if surface.shared:
+                sources[name] = (
+                    self._shared_union(name, union_bundles),
+                    WORKFLOW_LIBRARY,
+                )
+            else:
+                source = {} if empty else bundle.surfaces.get(name, {})
+                sources[name] = (source, bundle.slug)
+
+        for name in names:
+            source, managed_by = sources[name]
             try:
                 surface = self._surfaces.get(name)
                 changed = surface.sync(
                     source,
-                    managed_by=bundle.slug,
+                    managed_by=managed_by,
                     destination=destination,
                 )
                 planted[name] = {"entries": len(source), "changed": bool(changed)}
@@ -381,7 +483,11 @@ class WorkflowManager(BaseWorkflowManager):
                 planted: Dict[str, Any] = {}
                 failures: Dict[str, BaseException] = {}
             else:
-                planted, failures = self._plant(bundle, destination=destination)
+                planted, failures = self._plant(
+                    bundle,
+                    destination=destination,
+                    installed=self._installed_bundles(context),
+                )
 
             record = WorkflowInstallation(
                 workflow_id=(
@@ -456,6 +562,7 @@ class WorkflowManager(BaseWorkflowManager):
             removed, failures = self._plant(
                 bundle,
                 destination=destination,
+                installed=self._installed_bundles(context),
                 surface_names=recorded,
                 empty=True,
             )

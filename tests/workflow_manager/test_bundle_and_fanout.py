@@ -56,7 +56,10 @@ class RecordingSurface:
         return bool(source)
 
 
-def _registry(**surfaces: RecordingSurface) -> SurfaceRegistry:
+def _registry(
+    shared: tuple[str, ...] = (),
+    **surfaces: RecordingSurface,
+) -> SurfaceRegistry:
     registry = SurfaceRegistry()
     for name, syncer in surfaces.items():
         registry.register(
@@ -64,6 +67,7 @@ def _registry(**surfaces: RecordingSurface) -> SurfaceRegistry:
             syncer,
             source_kwarg=f"source_{name}",
             source_scoped=True,
+            shared=name in shared,
         )
     return registry
 
@@ -157,7 +161,7 @@ def test_install_stamps_every_surface_with_the_slug():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle(), destination=None)
+    planted, failures = manager._plant(_bundle(), destination=None, installed=[])
 
     assert not failures
     assert planted["guidance"]["entries"] == 1
@@ -173,7 +177,7 @@ def test_the_install_destination_reaches_every_surface():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    manager._plant(_bundle(), destination="team:7")
+    manager._plant(_bundle(), destination="team:7", installed=[])
 
     assert [c["destination"] for c in guidance.calls] == ["team:7"]
     assert [c["destination"] for c in tasks.calls] == ["team:7"]
@@ -185,7 +189,12 @@ def test_uninstall_sends_an_empty_source_per_recorded_surface():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    removed, failures = manager._plant(_bundle(), destination=None, empty=True)
+    removed, failures = manager._plant(
+        _bundle(),
+        destination=None,
+        installed=[],
+        empty=True,
+    )
 
     assert not failures
     assert guidance.calls[0]["source"] == {}
@@ -202,6 +211,7 @@ def test_uninstall_uses_recorded_surfaces_not_the_current_bundle():
     manager._plant(
         shrunk,
         destination=None,
+        installed=[],
         surface_names=["guidance", "tasks"],
         empty=True,
     )
@@ -215,7 +225,7 @@ def test_one_failing_surface_does_not_stop_the_others():
     tasks = RecordingSurface(fail=True)
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle(), destination=None)
+    planted, failures = manager._plant(_bundle(), destination=None, installed=[])
 
     assert sorted(failures) == ["tasks"]
     assert guidance.calls, "a failing surface must not skip the rest"
@@ -256,12 +266,18 @@ def test_registered_specs_match_the_real_sync_signatures():
     declared source kwarg (KnowledgeManager's ``source_claims`` is the
     asymmetry that motivated this), and it takes ``managed_by`` and
     ``destination`` — the two arguments that make an empty-source
-    uninstall prune the right rows in the right place. The
-    destination-grouping ``sync_custom`` wrappers must never be
-    registered: they drop an empty source before the engine.
+    uninstall prune the right rows in the right place.
+
+    The ``destination`` requirement is the load-bearing one: the
+    destination-grouping wrappers (guidance/knowledge/tasks
+    ``sync_custom``) have no such parameter because they derive
+    destinations from the entries, which is exactly why they discard an
+    empty source before the engine and must never be registered.
+    FunctionManager's ``sync_custom`` is destination-explicit and passes.
     """
     import inspect
 
+    from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
     from unify.task_scheduler.task_scheduler import TaskScheduler
@@ -271,20 +287,19 @@ def test_registered_specs_match_the_real_sync_signatures():
         "guidance": GuidanceManager,
         "knowledge": KnowledgeManager,
         "tasks": TaskScheduler,
+        "functions": FunctionManager,
     }
     for surface, spec in SCOPED_SURFACES.items():
-        assert spec.method != "sync_custom", (
-            f"{surface}: the destination-grouping wrapper discards empty "
-            "sources; register the per-destination method instead"
-        )
         method = getattr(managers[surface], spec.method)
         params = inspect.signature(method).parameters
         kwarg = spec.source_kwarg
         assert kwarg in params, f"{surface}: {spec.method} has no {kwarg!r}"
         assert "managed_by" in params, f"{surface}: {spec.method} is not managed-scoped"
-        assert (
-            "destination" in params
-        ), f"{surface}: {spec.method} cannot take the install destination"
+        assert "destination" in params, (
+            f"{surface}: {spec.method} has no destination parameter — a "
+            "grouping wrapper that derives destinations from its entries "
+            "discards an empty source and must never be registered"
+        )
 
 
 def test_pending_surfaces_are_not_registered():
@@ -293,3 +308,110 @@ def test_pending_surfaces_are_not_registered():
     from unify.workflow_manager.surfaces import PENDING_SCOPING, SCOPED_SURFACES
 
     assert not set(PENDING_SCOPING) & set(SCOPED_SURFACES)
+
+
+# --------------------------------------------------------------------- #
+# Shared surfaces                                                       #
+# --------------------------------------------------------------------- #
+def _shared_bundle(slug: str, atoms: Dict[str, str]) -> WorkflowBundle:
+    """A bundle shipping only functions; *atoms* maps name -> content hash."""
+    return WorkflowBundle(
+        slug=slug,
+        name=slug,
+        surfaces={
+            "functions": {
+                name: {"custom_key": name, "name": name, "custom_hash": h}
+                for name, h in atoms.items()
+            },
+        },
+    )
+
+
+def test_shared_surface_syncs_the_union_under_the_library_source():
+    """Functions key on their name, so a shared atom must be one row: the
+    fan-out sends the union of installed bundles under WORKFLOW_LIBRARY,
+    never the bundle's own entries under its slug."""
+    from unify.workflow_manager.bundle import WORKFLOW_LIBRARY
+
+    functions = RecordingSurface()
+    manager = _manager(_registry(shared=("functions",), functions=functions))
+
+    installed = [_shared_bundle("wf_a", {"send_email": "h1", "only_a": "h2"})]
+    incoming = _shared_bundle("wf_b", {"send_email": "h1", "only_b": "h3"})
+
+    manager._plant(incoming, destination=None, installed=installed)
+
+    (call,) = functions.calls
+    assert call["managed_by"] == WORKFLOW_LIBRARY
+    union = call["source"]
+    assert set(union) == {"send_email", "only_a", "only_b"}
+    assert union["send_email"]["workflows"] == ["wf_a", "wf_b"]
+    assert union["only_a"]["workflows"] == ["wf_a"]
+    assert union["only_b"]["workflows"] == ["wf_b"]
+
+
+def test_uninstall_of_a_shared_surface_keeps_the_other_workflows_atoms():
+    """Uninstall re-syncs the union minus the leaving bundle: the shared
+    atom survives with the remaining membership, and only the atoms no
+    workflow references any more leave the source (the engine then prunes
+    exactly those rows)."""
+    functions = RecordingSurface()
+    manager = _manager(_registry(shared=("functions",), functions=functions))
+
+    leaving = _shared_bundle("wf_a", {"send_email": "h1", "only_a": "h2"})
+    staying = _shared_bundle("wf_b", {"send_email": "h1", "only_b": "h3"})
+    manager._catalogue = {"wf_a": leaving, "wf_b": staying}
+
+    manager._plant(
+        leaving,
+        destination=None,
+        installed=[leaving, staying],
+        empty=True,
+    )
+
+    (call,) = functions.calls
+    union = call["source"]
+    assert set(union) == {"send_email", "only_b"}
+    assert union["send_email"]["workflows"] == ["wf_b"]
+
+
+def test_conflicting_shared_content_refuses_before_anything_syncs():
+    """Two bundles shipping one name with different content is a curation
+    error: whichever copy won, the other workflow would run someone
+    else's code under its own name. The union raises before any surface
+    is reached, so nothing half-plants."""
+    from unify.common.tool_outcome import ToolErrorException
+
+    functions, guidance = RecordingSurface(), RecordingSurface()
+    manager = _manager(
+        _registry(shared=("functions",), functions=functions, guidance=guidance),
+    )
+
+    installed = [_shared_bundle("wf_a", {"send_email": "OLD"})]
+    incoming = WorkflowBundle(
+        slug="wf_b",
+        name="wf_b",
+        surfaces={
+            "guidance": {"g": {"custom_key": "g", "custom_hash": "hg"}},
+            "functions": {
+                "send_email": {
+                    "custom_key": "send_email",
+                    "name": "send_email",
+                    "custom_hash": "NEW",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ToolErrorException) as excinfo:
+        manager._plant(incoming, destination=None, installed=installed)
+
+    assert excinfo.value.payload["error"] == "conflicting_content"
+    assert excinfo.value.payload["workflows"] == ["wf_a", "wf_b"]
+    assert not functions.calls, "nothing may sync after a conflict"
+    assert not guidance.calls, "no other surface may half-plant either"
+
+
+def test_bundle_cannot_claim_the_library_source():
+    with pytest.raises(ValueError, match="reserved"):
+        WorkflowBundle(slug="workflow_library", name="Impostor")
