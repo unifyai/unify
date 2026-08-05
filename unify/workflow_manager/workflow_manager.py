@@ -193,16 +193,24 @@ class WorkflowManager(BaseWorkflowManager):
         self,
         bundle: WorkflowBundle,
         *,
+        destination: Optional[str],
         surface_names: Optional[List[str]] = None,
         empty: bool = False,
     ) -> tuple[Dict[str, Any], Dict[str, BaseException]]:
-        """Sync each covered surface under the bundle's slug.
+        """Sync each covered surface under the bundle's slug at *destination*.
+
+        The installation's destination governs where every entry lands —
+        a team install plants team content, a personal install plants
+        personal content. Surfaces receive it directly on their
+        per-destination sync, so the fan-out never depends on per-entry
+        destination fields in the bundle.
 
         With ``empty=True`` every surface receives an empty source, which
-        prunes exactly the rows carrying this slug and leaves every other
-        source's rows — the deployment's, another workflow's, the user's
-        own — untouched. That is uninstall, and it is the same code path
-        as install precisely because the scoping is what does the work.
+        prunes exactly the rows carrying this slug at this destination and
+        leaves every other source's rows — the deployment's, another
+        workflow's, the user's own — untouched. That is uninstall, and it
+        is the same code path as install precisely because the scoping is
+        what does the work.
         """
 
         planted: Dict[str, Any] = {}
@@ -213,7 +221,11 @@ class WorkflowManager(BaseWorkflowManager):
             source = {} if empty else bundle.surfaces.get(name, {})
             try:
                 surface = self._surfaces.get(name)
-                changed = surface.sync(source, managed_by=bundle.slug)
+                changed = surface.sync(
+                    source,
+                    managed_by=bundle.slug,
+                    destination=destination,
+                )
                 planted[name] = {"entries": len(source), "changed": bool(changed)}
             except CustomSyncPartialFailure as exc:
                 failures[name] = exc
@@ -369,7 +381,7 @@ class WorkflowManager(BaseWorkflowManager):
                 planted: Dict[str, Any] = {}
                 failures: Dict[str, BaseException] = {}
             else:
-                planted, failures = self._plant(bundle)
+                planted, failures = self._plant(bundle, destination=destination)
 
             record = WorkflowInstallation(
                 workflow_id=(
@@ -413,10 +425,22 @@ class WorkflowManager(BaseWorkflowManager):
         with exclusive_sync_lease(f"{meta_context}:workflow_install"):
             existing = self._read_installation(slug, context=context)
             if existing is None:
+                # The slug may be installed at a different destination —
+                # say where, so the caller can retry with the right one
+                # instead of concluding the workflow does not exist.
+                installed_at = sorted(
+                    {
+                        row.get("destination", "personal")
+                        for row in self._installations()
+                        if row.get("slug") == slug
+                    },
+                )
                 raise ToolErrorException(
                     {
                         "error": "not_installed",
                         "slug": slug,
+                        "destination": destination or "personal",
+                        "installed_at": installed_at,
                     },
                 )
 
@@ -431,9 +455,13 @@ class WorkflowManager(BaseWorkflowManager):
 
             removed, failures = self._plant(
                 bundle,
+                destination=destination,
                 surface_names=recorded,
                 empty=True,
             )
+            # The installation row goes only after every surface actually
+            # cleared. On failure it stays — it holds the recorded surfaces,
+            # which are the only durable record of what still needs pruning.
             if not failures:
                 self._delete_installation(slug, context=context)
 

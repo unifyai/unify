@@ -17,7 +17,16 @@ from typing import Any, Callable, Dict, Mapping
 from unify.workflow_manager.types.workflow import WorkflowMode
 
 SurfaceSyncer = Callable[..., bool]
-"""A manager's ``sync_custom``, called with its source kwarg and ``managed_by``."""
+"""A manager's per-destination custom sync (``sync_custom_guidance``,
+``sync_custom_tasks``, ...), called with its source kwarg, ``managed_by``
+and ``destination``.
+
+The destination-grouping wrappers (``sync_custom``) are deliberately not
+accepted here: they derive destinations from the entries themselves, so an
+empty source never reaches the reconcile engine and an uninstall would
+prune nothing while reporting success. The per-destination methods run the
+engine unconditionally, which is what makes an empty source a genuine
+"remove everything this workflow planted here"."""
 
 
 class UnscopedSurfaceError(RuntimeError):
@@ -48,13 +57,30 @@ class Surface:
     """Bundle key, e.g. ``"guidance"``."""
 
     syncer: SurfaceSyncer
-    """The manager's ``sync_custom``."""
+    """The manager's per-destination custom sync (see :data:`SurfaceSyncer`)."""
 
     source_kwarg: str
     """Keyword its collected source arrives on, e.g. ``"source_guidance"``."""
 
-    def sync(self, source: Mapping[str, Dict[str, Any]], *, managed_by: str) -> bool:
-        return self.syncer(**{self.source_kwarg: dict(source)}, managed_by=managed_by)
+    def sync(
+        self,
+        source: Mapping[str, Dict[str, Any]],
+        *,
+        managed_by: str,
+        destination: str | None,
+    ) -> bool:
+        """Run one reconcile pass for *managed_by* at *destination*.
+
+        The installation's destination governs where every entry lands; a
+        per-entry ``destination`` field in the source is ignored (the
+        adapters drop it in ``transform``). An empty *source* prunes all
+        of *managed_by*'s rows at that destination and nothing else.
+        """
+        return self.syncer(
+            **{self.source_kwarg: dict(source)},
+            managed_by=managed_by,
+            destination=destination,
+        )
 
 
 @dataclass
