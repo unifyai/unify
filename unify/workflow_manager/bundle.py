@@ -86,6 +86,22 @@ class Surface:
     under the single :data:`WORKFLOW_LIBRARY` source, so a shared atom is
     one row for as long as any installed workflow references it."""
 
+    armer: Callable[..., Any] | None = None
+    """Arms or disarms one source's planted rows, where the surface has
+    such a notion — tasks, whose definitions are born disarmed by the
+    custom sync and only fire once armed. Called with ``managed_by``,
+    ``enabled`` and ``destination`` keywords. ``None`` for surfaces whose
+    content is inert until read (guidance, knowledge, functions)."""
+
+    def arm(self, *, managed_by: str, enabled: bool, destination: str | None) -> Any:
+        if self.armer is None:
+            return None
+        return self.armer(
+            managed_by=managed_by,
+            enabled=enabled,
+            destination=destination,
+        )
+
     def sync(
         self,
         source: Mapping[str, Dict[str, Any]],
@@ -107,6 +123,36 @@ class Surface:
         )
 
 
+@dataclass(frozen=True)
+class WorkflowRequirement:
+    """One integration a workflow needs connected before its jobs may run.
+
+    Requirements are declared and checked, never carried: a bundle ships
+    no OAuth connection and no secret value, only the names of the
+    secrets whose presence means the integration is usable. An unmet
+    requirement does not refuse the install — content plants and the
+    workflow's tasks stay disarmed until the connection lands.
+    """
+
+    slug: str
+    """Canonical integration slug, the same id space as the integrations
+    gallery (e.g. ``"gmail"``)."""
+
+    name: str = ""
+    """Display name; falls back to the slug."""
+
+    required_secrets: tuple[str, ...] = ()
+    """Secret names whose presence in the assistant's keyset marks this
+    requirement connected. Empty means nothing gates on it yet, so the
+    requirement reads as met."""
+
+    def connected(self, keyset: frozenset[str]) -> bool:
+        return all(secret in keyset for secret in self.required_secrets)
+
+    def missing_secrets(self, keyset: frozenset[str]) -> list[str]:
+        return [s for s in self.required_secrets if s not in keyset]
+
+
 @dataclass
 class WorkflowBundle:
     """A workflow's identity and its per-surface content."""
@@ -115,6 +161,13 @@ class WorkflowBundle:
     name: str
     version: str = ""
     description: str = ""
+    category: str = ""
+    """Catalogue grouping, e.g. ``"comms"`` / ``"growth"`` / ``"ops"`` /
+    ``"build"``."""
+
+    icon_id: str = ""
+    """Key into the console's workflow tile icon set."""
+
     mode: WorkflowMode = WorkflowMode.seed
     surfaces: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     """Surface name -> collected source, keyed by ``custom_key``."""
@@ -122,6 +175,15 @@ class WorkflowBundle:
     params_schema: Dict[str, Any] = field(default_factory=dict)
     """Declared install-time settings. Values are supplied per install and
     read at run time; they never enter the collected sources above."""
+
+    requirements: tuple[WorkflowRequirement, ...] = ()
+    """Integrations that must be connected before this workflow's jobs
+    are armed. Checked at install and on every reconcile."""
+
+    capabilities: tuple[str, ...] = ()
+    """Assistant capabilities the workflow needs beyond connected apps,
+    e.g. ``"computer"`` or ``"filesystem"``. Declared for the catalogue;
+    not gated at install."""
 
     def __post_init__(self) -> None:
         if not self.slug:
@@ -172,6 +234,7 @@ class SurfaceRegistry:
         source_kwarg: str,
         source_scoped: bool,
         shared: bool = False,
+        armer: Callable[..., Any] | None = None,
     ) -> None:
         if not source_scoped:
             raise UnscopedSurfaceError(name)
@@ -180,6 +243,7 @@ class SurfaceRegistry:
             syncer=syncer,
             source_kwarg=source_kwarg,
             shared=shared,
+            armer=armer,
         )
 
     def get(self, name: str) -> Surface:

@@ -2022,6 +2022,45 @@ class TaskScheduler(BaseTaskScheduler):
                 )
         return last_result
 
+    def set_custom_tasks_enabled(
+        self,
+        *,
+        managed_by: str,
+        enabled: bool,
+        destination: str | None = None,
+    ) -> List[int]:
+        """Arm or disarm every task definition one source planted.
+
+        Custom-synced tasks are born disarmed (``_insert_custom_task``
+        writes ``enabled=False``), so the installer that planted them must
+        arm them once their requirements are met — and hold them, still
+        planted and visible, while a required connection is missing.
+
+        When arming, a one-shot whose run already happened is skipped
+        rather than raised on: re-arming the rest of a source's tasks must
+        not fail because its provisioning task already did its job.
+
+        Returns the ids of the definitions whose flag was written.
+        """
+        tasks_context, _meta_context, _is_personal = self._sync_destination_contexts(
+            destination,
+        )
+        store = self._store_for_task_context(tasks_context)
+        rows = store.get_rows(filter=managed_rows_filter(managed_by), limit=1000)
+        touched: List[int] = []
+        for row in rows:
+            entries = dict(row.entries or {})
+            task_id = entries.get("task_id")
+            if task_id is None:
+                continue
+            if enabled:
+                task = self._get_task_or_raise(int(task_id))
+                if self._one_shot_already_ran(task) is not None:
+                    continue
+            self._set_tasks_enabled(task_ids=int(task_id), enabled=enabled)
+            touched.append(int(task_id))
+        return touched
+
     def _update_task(
         self,
         *,

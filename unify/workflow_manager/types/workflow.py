@@ -88,10 +88,13 @@ class WorkflowInstallation(AuthoredRow):
         ),
     )
     status: str = Field(
-        default="installed",
+        default="active",
         description=(
-            "'installed' when the last reconcile completed, 'partial' when "
-            "some entries failed and the next pass will retry them."
+            "'active' when the last reconcile completed, 'partial' when "
+            "some entries failed and the next pass will retry them. "
+            "'needs_connection' is never stored — connections change "
+            "without this row being touched, so reads derive it from the "
+            "bundle's requirements and the current secret keyset."
         ),
     )
     params: str = Field(

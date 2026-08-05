@@ -104,11 +104,20 @@ def register_default_surfaces(
         if manager is None:
             continue
         spec = SCOPED_SURFACES[name]
+        # Custom-synced task definitions are born disarmed; the installer
+        # arms them once the workflow's requirements are met, and holds
+        # them while a required connection is missing.
+        armer = (
+            task_scheduler.set_custom_tasks_enabled
+            if name == "tasks" and task_scheduler is not None
+            else None
+        )
         registry.register(
             name,
             getattr(manager, spec.method),
             source_kwarg=spec.source_kwarg,
             source_scoped=True,
             shared=spec.shared,
+            armer=armer,
         )
     return registry
