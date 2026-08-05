@@ -956,3 +956,53 @@ class TestOpeningConfigIsDescribedForTheLog:
         )
         assert "carried=['opener_text']" in described
         assert "renewal" not in described
+
+
+class TestTheOpeningConfigWireFormatIsEnforced:
+    """The runtime reads these fields by snake_case name.
+
+    A camelCase spelling is invisible rather than invalid: the mode still reads
+    ``recorded`` while the asset naming what to play is absent, so the failure
+    surfaces as a missing transcript a long way from the sender that caused it.
+    """
+
+    def test_a_camel_cased_field_names_itself(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        with pytest.raises(ValueError, match="must be snake_case"):
+            _normalize_call_opening_config(
+                json.dumps(
+                    {
+                        "mode": "recorded",
+                        "recordingAsset": "coordinator_onboarding_intro",
+                        "source": "coordinator_onboarding_intro",
+                    },
+                ),
+            )
+
+    def test_the_converted_form_is_accepted(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        config = _normalize_call_opening_config(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recording_asset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config["recording_asset"] == "coordinator_onboarding_intro"
+
+    def test_an_unrelated_extra_key_is_not_a_casing_bug(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        config = _normalize_call_opening_config({"mode": "speak", "someOtherThing": 1})
+
+        assert config["mode"] == "speak"
