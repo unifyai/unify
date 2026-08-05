@@ -863,3 +863,212 @@ class TestIPCSocketInit:
         assert client._socket_path == "/tmp/test_job.sock"
 
         del os.environ[CM_EVENT_SOCKET_ENV]
+
+
+class TestCallScopedEnvIsNotCarriedOver:
+    """The subprocess path configures itself from the pod's own environment.
+
+    That environment outlives the call, so anything describing a single call
+    has to be cleared when the next one does not supply it — otherwise a
+    recorded onboarding intro re-opens later calls in the same pod, and the
+    entrypoint rejects the stale config outright.
+    """
+
+    @staticmethod
+    def _apply(extra_env):
+        """Mirror of the per-spawn env write in ``_start_call_subprocess``."""
+        from unify.conversation_manager.domains.call_manager import (
+            _CALL_SCOPED_ENV_KEYS,
+        )
+
+        supplied = {k.upper(): str(v) for k, v in (extra_env or {}).items()}
+        for key in _CALL_SCOPED_ENV_KEYS:
+            value = supplied.pop(key, None)
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        os.environ.update(supplied)
+
+    def test_a_recorded_opening_does_not_survive_into_the_next_call(self):
+        recorded = json.dumps(
+            {"mode": "recorded", "recording_asset": "coordinator_onboarding_intro"},
+        )
+        self._apply({"opening_config": recorded})
+        assert os.environ["OPENING_CONFIG"] == recorded
+
+        self._apply(None)
+        assert "OPENING_CONFIG" not in os.environ
+
+    def test_a_spent_hang_up_gate_does_not_pre_arm_the_next_call(self):
+        self._apply({"hang_up_gate_reason": "boss asked to wrap up"})
+        assert os.environ["HANG_UP_GATE_REASON"] == "boss asked to wrap up"
+
+        self._apply({"opening_config": json.dumps({"mode": "speak"})})
+        assert "HANG_UP_GATE_REASON" not in os.environ
+        os.environ.pop("OPENING_CONFIG", None)
+
+    def test_keys_that_are_not_call_scoped_pass_through(self):
+        self._apply({"some_pod_setting": "kept"})
+        assert os.environ["SOME_POD_SETTING"] == "kept"
+        os.environ.pop("SOME_POD_SETTING", None)
+
+
+class TestOpeningConfigIsDescribedForTheLog:
+    """A rejected opening config raises, so its shape is the only diagnostic."""
+
+    def test_the_shape_that_fails_validation_is_named(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _describe_call_opening_config,
+            _normalize_call_opening_config,
+        )
+
+        # 'source' carries the intro's name while 'recording_asset' is unset —
+        # a recorded opening with nothing to play.
+        raw = json.dumps(
+            {"mode": "recorded", "source": "coordinator_onboarding_intro"},
+        )
+        described = _describe_call_opening_config(raw)
+        assert "mode=recorded" in described
+        assert "recording_asset=-" in described
+        assert "asset_resolves=False" in described
+
+        with pytest.raises(ValueError, match="recorded opening requires transcript"):
+            _normalize_call_opening_config(raw)
+
+    def test_a_resolvable_asset_is_reported_as_such(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _describe_call_opening_config,
+        )
+
+        described = _describe_call_opening_config(
+            {"mode": "recorded", "recording_asset": "coordinator_onboarding_intro"},
+        )
+        assert "asset_resolves=True" in described
+
+    def test_the_spoken_copy_is_reported_but_not_quoted(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _describe_call_opening_config,
+        )
+
+        described = _describe_call_opening_config(
+            {"mode": "opener", "opener_text": "Hi Dan, it's about your renewal"},
+        )
+        assert "carried=['opener_text']" in described
+        assert "renewal" not in described
+
+
+class TestTheOpeningConfigWireFormatIsEnforced:
+    """The runtime reads these fields by snake_case name.
+
+    A camelCase spelling is invisible rather than invalid: the mode still reads
+    ``recorded`` while the asset naming what to play is absent, so the failure
+    surfaces as a missing transcript a long way from the sender that caused it.
+    """
+
+    def test_a_camel_cased_field_names_itself(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        with pytest.raises(ValueError, match="must be snake_case"):
+            _normalize_call_opening_config(
+                json.dumps(
+                    {
+                        "mode": "recorded",
+                        "recordingAsset": "coordinator_onboarding_intro",
+                        "source": "coordinator_onboarding_intro",
+                    },
+                ),
+            )
+
+    def test_the_converted_form_is_accepted(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        config = _normalize_call_opening_config(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recording_asset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config["recording_asset"] == "coordinator_onboarding_intro"
+
+    def test_an_unrelated_extra_key_is_not_a_casing_bug(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _normalize_call_opening_config,
+        )
+
+        config = _normalize_call_opening_config({"mode": "speak", "someOtherThing": 1})
+
+        assert config["mode"] == "speak"
+
+
+class TestAnUnusableOpeningDoesNotKillTheCall:
+    """A rejected opening used to raise out of the job entrypoint.
+
+    That killed the voice agent before it made a sound, so the caller sat in
+    silence over a config problem they could neither see nor act on. A generated
+    greeting is a worse opening than the one asked for and a far better one than
+    none.
+    """
+
+    def test_a_rejected_config_degrades_to_a_spoken_greeting(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        config = _call_opening_or_spoken(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recordingAsset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config == {"mode": "speak"}
+
+    def test_a_usable_config_is_returned_intact(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        config = _call_opening_or_spoken(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recording_asset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config["mode"] == "recorded"
+        assert config["recording_asset"] == "coordinator_onboarding_intro"
+
+    def test_an_absent_config_still_speaks(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        assert _call_opening_or_spoken(None) == {"mode": "speak"}
+
+    def test_the_rejection_is_logged_with_the_shape_that_caused_it(self):
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        seen = []
+        original = call_mod._log.error
+        call_mod._log.error = lambda msg, *a, **k: seen.append(str(msg))
+        try:
+            call_mod._call_opening_or_spoken(
+                {"mode": "recorded", "recordingAsset": "x"},
+            )
+        finally:
+            call_mod._log.error = original
+
+        assert seen, "a rejected opening must be logged, not swallowed"
+        assert "recordingAsset" in seen[0]

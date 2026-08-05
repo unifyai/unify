@@ -274,9 +274,9 @@ def test_annotated_string_metadata_becomes_property_description():
     assert described["type"] == "string"
     assert described["description"] == "why you are calling"
 
-    # Description is preserved through Optional[...] unwrapping.
+    # Description survives the nullable widening of Optional[...].
     optional = llmh.annotation_to_schema(Optional[Annotated[str, "opt rationale"]])
-    assert optional["type"] == "string"
+    assert optional["type"] == ["string", "null"]
     assert optional["description"] == "opt rationale"
 
     # And attaches to the item schema inside a list.
@@ -530,18 +530,19 @@ def test_schema_hides_context_param() -> None:
 # --------------------------------------------------------------------------- #
 def test_optional_dict_schema_simplification() -> None:
     """
-    Optional[Dict[str, str]] should collapse to a plain object schema.
-    Prior to the fix, NoneType was treated as "string", producing
-    anyOf [object, string]. This test ensures only the object form remains.
+    Optional[Dict[str, str]] should stay one nullable object schema.
+    NoneType was once treated as "string", producing anyOf [object, string] and
+    inviting serialized strings; the object form must remain the only non-null
+    branch, with null expressible so the model can omit the argument outright.
     """
 
     schema = llmh.method_to_schema(_tool_with_optional_mapping)
     params = schema["function"]["parameters"]["properties"]
     refs_schema = params["references"]
 
-    # Must be a plain object with string values
+    # One nullable object with string values — no second branch to mistake.
     assert "anyOf" not in refs_schema
-    assert refs_schema["type"] == "object"
+    assert refs_schema["type"] == ["object", "null"]
     assert refs_schema["additionalProperties"]["type"] == "string"
 
 
@@ -556,9 +557,9 @@ def _tool_with_optional_builtin_mapping(
 
 def test_optional_builtin_dict_schema() -> None:
     """
-    Optional[builtin dict] should surface as a plain object to the LLM.
-    Prior to the fix, builtin dict could degrade to "string" in unions,
-    leading the model to send serialized strings for images.
+    Optional[builtin dict] should surface as a nullable object to the LLM.
+    Builtin dict could once degrade to "string" in unions, leading the model to
+    send serialized strings for images.
     """
 
     schema = llmh.method_to_schema(_tool_with_optional_builtin_mapping)
@@ -566,7 +567,7 @@ def test_optional_builtin_dict_schema() -> None:
     images_schema = params["images"]
 
     assert "anyOf" not in images_schema
-    assert images_schema["type"] == "object"
+    assert images_schema["type"] == ["object", "null"]
     # Unknown value types → allow arbitrary properties
     assert images_schema.get("additionalProperties") is True
 
@@ -1059,3 +1060,44 @@ def test_wrapped_methods_resolve_type_hints() -> None:
         "(likely TYPE_CHECKING imports in the base module):\n"
         + "\n".join(f"  - {f}" for f in failures)
     )
+
+
+# --------------------------------------------------------------------------- #
+#  OPTIONAL PARAMETERS STAY EXPRESSIBLE AS ABSENT                             #
+# --------------------------------------------------------------------------- #
+def _tool_with_optional_scalars(
+    venv_id: int | None = None,
+    session_name: str | None = None,
+    ratio: float | None = None,
+    flag: bool | None = None,
+) -> None:  # pragma: no cover - schema only
+    return None
+
+
+def test_optional_scalars_are_nullable() -> None:
+    """An optional scalar must advertise null.
+
+    Collapsed to a bare integer, `venv_id` gave the model no way to say "no
+    venv", so it sent sentinels (0, -1, 999, 2147483647) that the receiver read
+    as real requests for environments that never existed.
+    """
+    schema = llmh.method_to_schema(_tool_with_optional_scalars)
+    params = schema["function"]["parameters"]["properties"]
+
+    assert params["venv_id"]["type"] == ["integer", "null"]
+    assert params["session_name"]["type"] == ["string", "null"]
+    assert params["ratio"]["type"] == ["number", "null"]
+    assert params["flag"]["type"] == ["boolean", "null"]
+
+
+def test_optional_list_keeps_its_item_schema() -> None:
+    from typing import List, Optional
+
+    schema = llmh.annotation_to_schema(Optional[List[str]])
+    assert schema["type"] == ["array", "null"]
+    assert schema["items"] == {"type": "string"}
+
+
+def test_required_scalar_stays_non_nullable() -> None:
+    """Widening must apply to Optional only, never to a plain annotation."""
+    assert llmh.annotation_to_schema(int) == {"type": "integer"}

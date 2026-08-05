@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from importlib import resources
@@ -68,6 +69,7 @@ from unify.conversation_manager.medium_scripts.common import (
     should_dispatch_livekit_agent,
     start_event_broker_receive,
     UserTrackCaptureManager,
+    MAX_VISUALS_PER_SOURCE,
     ScreenshotHistory,
     capture_assistant_screenshot,
     fetch_meet_screenshare_frame,
@@ -189,28 +191,28 @@ async def _normalize_elevenlabs_twin_pronunciation_stream(
         yield pending
 
 
-class FastBrainCreditGateMonitor:
-    """Polls credit state off the voice response path."""
+class FastBrainBillingGateMonitor:
+    """Polls billing state off the voice response path."""
 
     def __init__(self, refresh_interval_s: float = 5.0) -> None:
-        from unify.spending_limits import CreditGateState
+        from unify.spending_limits import BillingGateState
 
         self._refresh_interval_s = refresh_interval_s
-        self._state = CreditGateState()
+        self._state = BillingGateState()
 
     @property
     def state(self):
         return self._state
 
     async def refresh_once(self) -> None:
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
-        next_state = await check_credit_gate_state()
+        next_state = await check_billing_gate_state()
         if next_state.allowed != self._state.allowed:
             if next_state.allowed:
-                _log.info("Credit gate cleared")
+                _log.info("Billing gate cleared")
             else:
-                _log.warning(next_state.reason or "Credit gate active")
+                _log.warning(next_state.reason or "Billing gate active")
         self._state = next_state
 
     async def run(self) -> None:
@@ -1156,13 +1158,118 @@ def _strip_chat_html(raw: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(without_tags)).strip()
 
 
+def _describe_call_opening_config(raw: object) -> str:
+    """Summarise an opening config for the log, without its copy.
+
+    Names the fields that decide how the call opens — and, for a recorded
+    opening, whether the asset actually resolves against
+    ``_RECORDED_OPENINGS``. The spoken text itself is the boss's own words
+    and is reported only as present or absent.
+    """
+    if raw in (None, ""):
+        return "absent"
+    parsed: object = raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return f"unparseable-json len={len(raw)}"
+    if not isinstance(parsed, dict):
+        return f"non-object {type(parsed).__name__}"
+
+    def _val(key: str) -> str:
+        return str(parsed.get(key, "") or "").strip()
+
+    asset = _val("recording_asset")
+    carried = sorted(
+        key
+        for key in ("opener_text", "briefing", "simulated_utterance", "transcript")
+        if _val(key)
+    )
+    return (
+        f"mode={_val('mode') or '-'} source={_val('source') or '-'} "
+        f"recording_asset={asset or '-'} asset_resolves={asset in _RECORDED_OPENINGS} "
+        f"recording_path={bool(_val('recording_path'))} "
+        f"recording_url={bool(_val('recording_url'))} carried={carried}"
+    )
+
+
+#: Splits ``recordingAsset`` into ``recording_Asset`` so a camelCase spelling
+#: can be matched against the snake_case field names below.
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+
+_CALL_OPENING_FIELDS = frozenset(
+    {
+        "mode",
+        "opener_text",
+        "briefing",
+        "simulated_utterance",
+        "source",
+        "transcript",
+        "recording_asset",
+        "recording_path",
+        "recording_url",
+    },
+)
+
+
+def _reject_camel_cased_opening_fields(raw: dict) -> None:
+    """Refuse a config whose fields were never converted to snake_case.
+
+    Every field is read by its snake_case name, so a camelCase spelling is
+    simply invisible: the mode still says ``recorded`` while the asset naming
+    what to play is silently absent, and the failure surfaces as a missing
+    transcript several frames away from the sender that caused it. Name the
+    offending keys instead. Fields this function does not recognise at all are
+    left alone — an unrelated extra key is not a casing bug.
+    """
+    unconverted = sorted(
+        key
+        for key in raw
+        if key not in _CALL_OPENING_FIELDS
+        and _CAMEL_BOUNDARY.sub(r"\1_\2", key).lower() in _CALL_OPENING_FIELDS
+    )
+    if unconverted:
+        raise ValueError(
+            "opening_config fields must be snake_case; received "
+            f"{unconverted} — the sender did not convert the nested object",
+        )
+
+
+def _call_opening_or_spoken(raw: object) -> dict:
+    """Normalise the opening, falling back to a spoken greeting if unusable.
+
+    A rejected opening raised straight out of the job entrypoint, killing the
+    voice agent before it made a sound: the caller sat in silence over a config
+    problem they could neither see nor do anything about, and the only trace was
+    a traceback in a subprocess. A generated greeting is a worse opening than the
+    one that was asked for and a far better one than none, so the call proceeds
+    and the rejection is logged loudly against the shape that caused it.
+    """
+    try:
+        return _normalize_call_opening_config(raw)
+    except ValueError as exc:
+        _log.error(
+            f"Opening config rejected ({exc}); opening with a generated greeting "
+            f"instead of failing the call. Arrived as: "
+            f"{_describe_call_opening_config(raw)}",
+        )
+        return {"mode": "speak"}
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
+    # Logged before validation: a rejected config raises out of here, and the
+    # shape it arrived in is the only way to tell a caller sending the wrong
+    # thing from a call opening on stale state.
+    _log.info(f"Opening config: {_describe_call_opening_config(raw)}")
     if raw in (None, ""):
         return {"mode": "speak"}
     if isinstance(raw, str):
         raw = json.loads(raw)
     if not isinstance(raw, dict):
         raise ValueError("opening_config must be an object")
+
+    _reject_camel_cased_opening_fields(raw)
 
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
@@ -1264,7 +1371,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = meta.get("assistant_bio", "")
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
-        opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        opening_config = _call_opening_or_spoken(meta.get("opening_config"))
         pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
@@ -1299,7 +1406,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = SESSION_DETAILS.assistant.about
         contact = json.loads(SESSION_DETAILS.voice_call.contact_json or "{}")
         boss = json.loads(SESSION_DETAILS.voice_call.boss_json or "{}")
-        opening_config = _normalize_call_opening_config(
+        opening_config = _call_opening_or_spoken(
             os.environ.get("OPENING_CONFIG"),
         )
         pre_armed_hang_up_gate = os.environ.get("HANG_UP_GATE_REASON", "").strip()
@@ -1635,6 +1742,34 @@ async def entrypoint(ctx: agents.JobContext):
             "surname": surname.strip(),
             "is_system": True,
         }
+
+    def _sharer_name_for_identity(identity: str) -> str:
+        """Who a captured video frame belongs to, or "" when unknown.
+
+        Tried against the org-call roster first, since that carries the names
+        the rest of the call already uses. The room's own participant name is
+        the fallback for surfaces with no roster behind them (the LiveKit
+        Playground, a dev client), and an empty result is honest: a frame
+        labelled with a guessed owner is worse than one labelled with none,
+        because the brains will repeat the guess back to the room.
+        """
+        if not identity:
+            return ""
+        user_id = _user_id_from_livekit_identity(identity)
+        if user_id:
+            member = _roster_member_for_user_id(user_id)
+            if member is not None:
+                name = (member.get("display_name") or "").strip()
+                # The roster self-heals from LiveKit identities, so a member
+                # discovered that way carries the identity as its name; that is
+                # not a display name and should not be shown as one.
+                if name and name != identity:
+                    return name
+        remotes = getattr(ctx.room, "remote_participants", {}) or {}
+        for participant in remotes.values():
+            if getattr(participant, "identity", "") == identity:
+                return (getattr(participant, "name", "") or "").strip()
+        return ""
 
     def _merge_unify_meet_roster_from_identity(identity: str) -> None:
         """Append a human roster entry discovered via LiveKit when missing."""
@@ -2440,30 +2575,31 @@ async def entrypoint(ctx: agents.JobContext):
         (user screen, webcam) are ~1 ms.  The assistant capture reads from the
         agent-service screenshot cache (~0 ms) unless the user has remote
         control, in which case a live capture (~500 ms) is used.
+
+        Every publisher of a source is filed, not just the focused one: a group
+        call has several screens and several faces, and taking one frame per
+        source made the others invisible to both brains. Bounded by the same
+        limit the fast brain applies, since a frame filed beyond it is written
+        and published only to be dropped again.
         """
         from datetime import datetime, timezone
 
-        b64 = screen_capture.capture_screenshot()
-        if b64:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=b64,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source="user",
-                ),
-            )
-
-        b64 = webcam_capture.capture_screenshot()
-        if b64:
-            _handle_screenshot(
-                ScreenshotEntry(
-                    b64=b64,
-                    utterance="",
-                    timestamp=datetime.now(timezone.utc),
-                    source="webcam",
-                ),
-            )
+        for source, capture_manager in (
+            ("user", screen_capture),
+            ("webcam", webcam_capture),
+        ):
+            for b64, identity in capture_manager.capture_screenshots(
+                limit=MAX_VISUALS_PER_SOURCE,
+            ):
+                _handle_screenshot(
+                    ScreenshotEntry(
+                        b64=b64,
+                        utterance="",
+                        timestamp=datetime.now(timezone.utc),
+                        source=source,
+                        attribution=_sharer_name_for_identity(identity),
+                    ),
+                )
 
         if assistant_screen_share_active:
             entry = await capture_assistant_screenshot(
@@ -2605,26 +2741,25 @@ async def entrypoint(ctx: agents.JobContext):
         if role == "user":
             from datetime import datetime, timezone
 
-            b64 = screen_capture.capture_screenshot()
-            if b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=b64,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source="user",
-                    ),
-                )
-            webcam_b64 = webcam_capture.capture_screenshot()
-            if webcam_b64:
-                _handle_screenshot(
-                    ScreenshotEntry(
-                        b64=webcam_b64,
-                        utterance=text,
-                        timestamp=datetime.now(timezone.utc),
-                        source="webcam",
-                    ),
-                )
+            # Paired with the utterance, one entry per publisher: "what am I
+            # looking at here?" asked in a room of several shares needs all of
+            # them, each named, rather than whichever happened to be focused.
+            for shot_source, capture_manager in (
+                ("user", screen_capture),
+                ("webcam", webcam_capture),
+            ):
+                for b64, identity in capture_manager.capture_screenshots(
+                    limit=MAX_VISUALS_PER_SOURCE,
+                ):
+                    _handle_screenshot(
+                        ScreenshotEntry(
+                            b64=b64,
+                            utterance=text,
+                            timestamp=datetime.now(timezone.utc),
+                            source=shot_source,
+                            attribution=_sharer_name_for_identity(identity),
+                        ),
+                    )
             if channel in ("google_meet", "teams_meet"):
                 _push_meet_frame(utterance=text)
 
@@ -2877,7 +3012,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant._chat_ctx.add_message(role="system", content=[briefing_note])
         session.history.add_message(role="system", content=[briefing_note])
         _log.info("Injected call briefing into voice context")
-    credit_gate_monitor = FastBrainCreditGateMonitor()
+    credit_gate_monitor = FastBrainBillingGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
     # in _say_meta_queue until their playout commits them to history. Set as a

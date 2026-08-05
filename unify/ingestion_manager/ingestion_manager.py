@@ -103,6 +103,20 @@ def _safe_id(value: str) -> str:
     )[-48:]
 
 
+def _handle_can_yield(handle: Any) -> bool:
+    """Whether a transport handle can actually produce the rows it claims.
+
+    Every handle carries a ``row_count``, but only the source-referencing ones
+    can stream it: ``build_table_handles`` falls back to an empty
+    ``InlineRowsHandle`` when a format defers its rows and is neither CSV nor
+    XLSX, so a count without inline rows and without a source to read is a
+    promise the transport cannot keep.
+    """
+    if isinstance(handle, InlineRowsHandle):
+        return bool(handle.rows)
+    return True
+
+
 class IngestionManager(BaseIngestionManager):
     """Ingestion over Unify contexts, the shared ingest core and the fleet."""
 
@@ -280,11 +294,12 @@ class IngestionManager(BaseIngestionManager):
         # rather than by reading it, which is what keeps the count cheap enough
         # to take before committing to anything.
         declared = self._count_source(request)
+        fleet = self._fleet_reachable()
         tier = choose_tier(
             request,
             self._settings,
             row_count=declared,
-            has_fleet=self._fleet_reachable(),
+            has_fleet=fleet,
         )
 
         key = _run_key()
@@ -305,6 +320,28 @@ class IngestionManager(BaseIngestionManager):
             created_at=_now(),
         )
         self._get_dm().insert_rows(runs_context, [record.model_dump(exclude_none=True)])
+
+        if not fleet and source.kind in {"files", "folder"}:
+            # Files are meant to parse off this process, and a deployment whose
+            # control plane cannot reach its backends reads as having no fleet
+            # at all -- correctly, since dispatching there would send work
+            # nowhere. But the fallback then does the very thing the boundary
+            # exists to prevent, and it did so silently on staging for three
+            # files of 130-346 MB. Recording it means the run itself says so.
+            #
+            # Stageless on purpose: this is a fact about the run rather than
+            # progress through one, and naming a stage would fabricate progress
+            # for a stage that has not started.
+            self._record_event(
+                key,
+                destination=destination,
+                level="warning",
+                message=(
+                    "No worker fleet is reachable, so these files parse in the "
+                    "assistant's own process. Configure the pipeline control "
+                    "plane to move file parsing off it."
+                ),
+            )
 
         self._start(key, runs_context, request, tier=tier, declared=declared)
         return IngestionRun(run_id=key, state="queued", executed_as=tier)
@@ -783,7 +820,21 @@ class IngestionManager(BaseIngestionManager):
         and the rest proceed. The extracted rows then flow through the shared
         engine, one work unit per extracted table, so the write half is
         checkpointed and verified exactly like any other ingestion.
+
+        Transport handles come from ``build_table_handles``, the same helper the
+        parse worker lowers through, rather than being built from
+        ``table.rows`` here. That is not tidiness. A parser inlines rows only
+        below ``TABULAR_INLINE_ROW_LIMIT`` and above it returns the columns, the
+        dialect and the row count with ``rows`` deliberately empty, because the
+        rows are meant to be streamed from the source. Reading ``rows`` directly
+        therefore saw nothing for every table of consequence, and this tier
+        failed each one as "no tabular content" -- a 346 MB CSV of 622k rows
+        included. Sharing the helper also means ``declared_rows`` is the
+        parser's count rather than the length of whatever happened to be
+        inlined, which is what the completion check verifies the durable
+        checkpoint against.
         """
+        from unify.common.pipeline.transport import build_table_handles
         from unify.file_manager.file_parsers.file_parser import FileParser
         from unify.file_manager.file_parsers.types.contracts import FileParseRequest
 
@@ -791,7 +842,9 @@ class IngestionManager(BaseIngestionManager):
         parser = FileParser()
         work: List[TableWork] = []
         parsed = 0
+        tables_seen = 0
         failures: List[str] = []
+        unusable: List[str] = []
 
         for path in paths:
             if control["cancel"]:
@@ -819,9 +872,23 @@ class IngestionManager(BaseIngestionManager):
                 total=len(paths),
                 message=f"Parsed {path} ({len(result.tables)} table(s)).",
             )
+            handles = build_table_handles(result, job_id=run_key)
             for table in result.tables:
-                rows = [dict(row) for row in table.rows]
-                if not rows:
+                tables_seen += 1
+                handle = handles.get(table.table_id)
+                declared = table.num_rows
+                if declared is None:
+                    declared = getattr(handle, "row_count", None)
+                if not declared:
+                    # An empty sheet is not a failure; there is simply nothing
+                    # to write for it.
+                    continue
+                if handle is None or not _handle_can_yield(handle):
+                    # The parser counted rows this transport cannot reach, so
+                    # writing what is reachable would be a silent under-ingest.
+                    # The dispatched tier refuses the same case for the same
+                    # reason.
+                    unusable.append(f"{path}:{table.label or table.table_id}")
                     continue
                 work.append(
                     self._table_work(
@@ -829,12 +896,8 @@ class IngestionManager(BaseIngestionManager):
                         # the same checkpoint whatever order parsing returned.
                         table_id=f"run-{run_key}-{_safe_id(path)}-{table.table_id}",
                         label=table.label or path,
-                        handle=InlineRowsHandle(
-                            rows=rows,
-                            columns=list(table.columns or rows[0].keys()),
-                            row_count=len(rows),
-                        ),
-                        declared=len(rows),
+                        handle=handle,
+                        declared=int(declared),
                         request=request,
                     ),
                 )
@@ -843,10 +906,21 @@ class IngestionManager(BaseIngestionManager):
             raise RuntimeError(
                 f"Every file failed to parse: {'; '.join(failures)}",
             )
-        if not work:
+        if unusable:
+            raise RuntimeError(
+                "Parsed tables whose rows this ingestion cannot read: "
+                f"{'; '.join(unusable)}. Nothing was stored, because storing "
+                "the readable part would under-ingest without reporting it.",
+            )
+        if not tables_seen:
             raise RuntimeError(
                 "Parsing found no tables to store. A table target needs tabular "
                 "content; use CollectionTarget to keep these documents whole.",
+            )
+        if not work:
+            raise RuntimeError(
+                f"Parsed {tables_seen} table(s) and every one was empty; there "
+                "were no rows to store.",
             )
 
         outcome = self._run_engine(run_key, work, request=request, control=control)
@@ -979,10 +1053,15 @@ class IngestionManager(BaseIngestionManager):
         state = row.get("state") or "queued"
 
         return RunStatus(
-            run_id=str(row.get("run_id", row["run_key"])),
+            # The key the caller was handed, never the row's auto-counted id.
+            # Lookups accept either, but a status that renames the run it
+            # describes is a trap: a plan holding `z9YfymthyUKj` was told
+            # `run_id='14'`, and every log line, notification and retry then
+            # names an identifier that appears nowhere else in the plan.
+            run_id=str(row["run_key"]),
             state=state,  # type: ignore[arg-type]
             executed_as=row.get("executed_as"),
-            stages=stages_from_events(events),
+            stages=stages_from_events(events, run_state=state),
             contexts=contexts,
             rows_written=int(row.get("rows_written") or 0),
             files_processed=int(row.get("files_processed") or 0),

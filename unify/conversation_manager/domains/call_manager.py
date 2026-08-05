@@ -80,6 +80,11 @@ OUTBOUND_CALL_READINESS_TIMEOUT_S = 30.0
 # gate, so an unregistered worker should fall back to a per-call subprocess.
 WORKER_DISPATCH_REGISTERED_TIMEOUT_S = 2.0
 
+# Env keys that describe one call rather than the pod. The subprocess path
+# configures itself from the pod's environment, so each of these is written or
+# removed per spawn — never allowed to carry over from the call before it.
+_CALL_SCOPED_ENV_KEYS = ("OPENING_CONFIG", "HANG_UP_GATE_REASON")
+
 # How long the worker may stay alive-but-unwarmed while the manager is fully
 # idle before the watchdog force-restarts it to recover. Post-job re-warm usually
 # completes in seconds, but a cold container prewarm can take the full LiveKit
@@ -1524,9 +1529,18 @@ class LivekitCallManager:
         """Legacy path: spawn a fresh subprocess per call."""
         self._refresh_config()
         socket_path = await self._ensure_socket_server()
-        if extra_env:
-            for k, v in extra_env.items():
-                os.environ[k.upper()] = str(v)
+        # These land in the pod's own environment, which outlives the call, so
+        # every call-scoped key is set or cleared on each spawn. Left to
+        # accumulate, a recorded onboarding intro re-opens later calls in this
+        # pod, and a spent hang-up gate pre-arms them.
+        supplied = {k.upper(): str(v) for k, v in (extra_env or {}).items()}
+        for key in _CALL_SCOPED_ENV_KEYS:
+            value = supplied.pop(key, None)
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        os.environ.update(supplied)
         # Voice profiles ride the dispatch metadata on the worker path; this
         # path has no metadata, so without an env equivalent speaker pinning is
         # silently off for every env-configured call. Cleared rather than left

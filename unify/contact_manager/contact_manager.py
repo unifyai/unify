@@ -783,7 +783,12 @@ class ContactManager(BaseContactManager):
             - ``"email_address.endswith('@company.com')"``
             - ``"email_address.endswith('@company.com')"``
             When ``None``, returns all contacts. String comparisons are case‑sensitive unless
-            your expression applies a case‑normalisation.
+            your expression applies a case‑normalisation. Supported grammar: comparisons
+            (==, !=, <, <=, >, >=), membership tests (in / not in), and boolean combinators
+            (and, or, not) over field names and literal values, plus a fixed set of helpers
+            (``len()``, string methods like ``.lower()`` / ``.startswith()``, ``embed()``).
+            Arbitrary Python calls outside that set — e.g. ``' '.join(x)`` or a list
+            comprehension — are rejected.
         offset : int, default 0
             Zero‑based index of the first result to include.
         limit : int, default 100
@@ -842,12 +847,15 @@ class ContactManager(BaseContactManager):
             )
             for context in self._read_contact_contexts()
         ]
-        annotated_rows = federated_filter(
-            contexts,
-            filter=normalize_filter_expr(filter),
-            offset=offset,
-            limit=eff_limit,
-        )
+        try:
+            annotated_rows = federated_filter(
+                contexts,
+                filter=normalize_filter_expr(filter),
+                offset=offset,
+                limit=eff_limit,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
         rows: list[dict] = []
         for annotated in annotated_rows:
             row = {

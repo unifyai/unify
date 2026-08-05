@@ -10,6 +10,8 @@ Each test gets a fresh, isolated Unify context that is cleaned up after the test
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from unisdk.utils.http import RequestError
 
@@ -479,6 +481,129 @@ def test_delete_rows_requires_filter_or_log_ids():
 
     with pytest.raises(ValueError, match="filter or log_ids"):
         dm.delete_rows(path, dangerous_ok=True)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Claim / reclaim (queue primitives)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _queue_table(dm: DataManager, name: str) -> str:
+    return dm.create_table(
+        f"test_real/{name}",
+        fields={"job_id": "str", "status": "str", "updated_at": "str"},
+    )
+
+
+def _stamp(seconds_ago: float = 0) -> str:
+    moment = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return moment.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+@_handle_project
+def test_claim_hands_a_row_to_exactly_one_caller():
+    """claim is compare-and-set: the second caller loses the race."""
+    dm = _fresh_dm()
+
+    path = _queue_table(dm, "claim_race")
+    dm.insert_rows(
+        path,
+        [{"job_id": "a", "status": "queued", "updated_at": _stamp()}],
+    )
+
+    won = dm.claim(
+        path,
+        expect={"job_id": "a", "status": "queued"},
+        updates={"status": "processing", "updated_at": _stamp()},
+    )
+    lost = dm.claim(
+        path,
+        expect={"job_id": "a", "status": "queued"},
+        updates={"status": "processing", "updated_at": _stamp()},
+    )
+
+    assert len(won) == 1
+    assert lost == []
+
+
+@_handle_project
+def test_reclaim_requeues_only_expired_claims():
+    """A dead worker's row comes back; a live worker's row stays claimed."""
+    dm = _fresh_dm()
+
+    path = _queue_table(dm, "reclaim_lease")
+    dm.insert_rows(
+        path,
+        [
+            # Claimed an hour ago by a worker that never came back.
+            {"job_id": "stranded", "status": "processing", "updated_at": _stamp(3600)},
+            # Claimed seconds ago; its worker is still alive.
+            {"job_id": "live", "status": "processing", "updated_at": _stamp()},
+        ],
+    )
+
+    reclaimed = dm.reclaim(
+        path,
+        claimed={"status": "processing"},
+        updates={"status": "queued"},
+        older_than_seconds=1800,
+    )
+
+    assert [row["data"]["job_id"] for row in reclaimed] == ["stranded"]
+    assert [r["job_id"] for r in dm.filter(path, filter="status == 'queued'")] == [
+        "stranded",
+    ]
+    assert [r["job_id"] for r in dm.filter(path, filter="status == 'processing'")] == [
+        "live",
+    ]
+
+
+@_handle_project
+def test_reclaim_refreshes_the_lease():
+    """Reclaim stamps the row, so a second sweep no longer sees it as expired."""
+    dm = _fresh_dm()
+
+    path = _queue_table(dm, "reclaim_refresh")
+    dm.insert_rows(
+        path,
+        [{"job_id": "stranded", "status": "processing", "updated_at": _stamp(3600)}],
+    )
+
+    # Re-lease in place: same claimed state, refreshed timestamp.
+    first = dm.reclaim(
+        path,
+        claimed={"status": "processing"},
+        updates={"status": "processing"},
+        older_than_seconds=1800,
+    )
+    second = dm.reclaim(
+        path,
+        claimed={"status": "processing"},
+        updates={"status": "processing"},
+        older_than_seconds=1800,
+    )
+
+    assert len(first) == 1
+    assert second == []
+
+
+@_handle_project
+def test_reclaim_ignores_rows_without_a_timestamp():
+    """A row that never carried a lease stamp is not silently reclaimed."""
+    dm = _fresh_dm()
+
+    path = _queue_table(dm, "reclaim_no_stamp")
+    dm.insert_rows(path, [{"job_id": "unstamped", "status": "processing"}])
+
+    assert (
+        dm.reclaim(
+            path,
+            claimed={"status": "processing"},
+            updates={"status": "queued"},
+            older_than_seconds=1800,
+        )
+        == []
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -634,6 +634,161 @@ class TestSendUnifyMessage:
             }
 
 
+class TestRoomMemberResolutionIsBestEffort:
+    """Resolving a room's members enriches a send; it does not authorise one.
+
+    These contact ids only widen the local Transcripts mirror's receiver ids —
+    Orchestra already knows the recipients from the room id. Treating them as
+    required meant one unsynced contact row stopped the assistant posting to a
+    room at all, reported to the user as "a member isn't synced to Contacts yet"
+    with nothing in the log to say which member or why.
+    """
+
+    def _roster(self, **overrides):
+        roster = {
+            "teams": [
+                {
+                    "team_id": 7,
+                    "member_user_ids": ["u-known", "u-unsynced"],
+                    "assistant_member_ids": [],
+                },
+            ],
+            "groups": [],
+        }
+        roster.update(overrides)
+        return roster
+
+    def _contact_manager(self, known: dict[str, int]):
+        """A ContactManager that only knows the ids in *known*."""
+        manager = MagicMock()
+
+        def _filter(*, filter: str, limit: int = 1):  # noqa: A002
+            for key, contact_id in known.items():
+                if f"'{key}'" in filter:
+                    return {"contacts": [{"contact_id": contact_id}]}
+            return {"contacts": []}
+
+        manager.filter_contacts.side_effect = _filter
+        return manager
+
+    def test_an_unsynced_member_no_longer_blocks_the_others(self):
+        """The regression: one missing row used to discard every resolved id."""
+        with (
+            patch.object(
+                comms_utils,
+                "_fetch_org_roster",
+                return_value=self._roster(),
+            ),
+            patch(
+                "unify.manager_registry.ManagerRegistry.get_contact_manager",
+                return_value=self._contact_manager({"u-known": 4}),
+            ),
+            patch.object(comms_utils, "SESSION_DETAILS") as mock_session,
+        ):
+            mock_session.self_contact_id = 0
+
+            ids, error = comms_utils.resolve_unify_room_member_contact_ids(team_id=7)
+
+        assert ids == [4]
+        assert error is None
+
+    def test_an_unresolvable_roster_yields_no_ids_and_no_error(self):
+        """A misconfigured runtime must not present as a send failure."""
+        with patch.object(comms_utils, "_fetch_org_roster", return_value=None):
+            ids, error = comms_utils.resolve_unify_room_member_contact_ids(team_id=7)
+
+        assert ids == []
+        assert error is None
+
+    def test_a_room_absent_from_the_roster_yields_no_ids_and_no_error(self):
+        """The roster lists only rooms the caller belongs to, so absence is normal."""
+        with patch.object(
+            comms_utils,
+            "_fetch_org_roster",
+            return_value=self._roster(teams=[], groups=[]),
+        ):
+            team_ids, team_error = comms_utils.resolve_unify_room_member_contact_ids(
+                team_id=7,
+            )
+            group_ids, group_error = comms_utils.resolve_unify_room_member_contact_ids(
+                group_id=9,
+            )
+
+        assert (team_ids, team_error) == ([], None)
+        assert (group_ids, group_error) == ([], None)
+
+    def test_asking_without_a_room_is_still_an_error(self):
+        """Caller misuse stays an error; only environment problems are softened."""
+        _, neither = comms_utils.resolve_unify_room_member_contact_ids()
+        _, both = comms_utils.resolve_unify_room_member_contact_ids(
+            team_id=7,
+            group_id=9,
+        )
+
+        assert neither and both
+
+    @staticmethod
+    def _warnings(mock_logger) -> str:
+        """All warning text as one blob. ``LOGGER.propagate`` is False in this
+        runtime, so pytest's ``caplog`` never sees these records — the logger
+        itself is the only place to read them from."""
+        return " ".join(str(call) for call in mock_logger.warning.call_args_list)
+
+    def test_the_missing_member_is_named_in_the_log(self):
+        """Skipping quietly would trade one invisible failure for another."""
+        with (
+            patch.object(
+                comms_utils,
+                "_fetch_org_roster",
+                return_value=self._roster(),
+            ),
+            patch(
+                "unify.manager_registry.ManagerRegistry.get_contact_manager",
+                return_value=self._contact_manager({"u-known": 4}),
+            ),
+            patch.object(comms_utils, "SESSION_DETAILS") as mock_session,
+            patch.object(comms_utils, "LOGGER") as mock_logger,
+        ):
+            mock_session.self_contact_id = 0
+            comms_utils.resolve_unify_room_member_contact_ids(team_id=7)
+
+        assert "u-unsynced" in self._warnings(mock_logger)
+
+    def test_a_roster_fetch_failure_names_what_was_missing(self):
+        """The silent return that cost a debugging session."""
+        with (
+            patch.object(comms_utils, "SESSION_DETAILS") as mock_session,
+            patch.object(comms_utils, "SETTINGS") as mock_settings,
+            patch.object(comms_utils, "LOGGER") as mock_logger,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.org_id = None
+
+            assert comms_utils._fetch_org_roster() is None
+
+        assert "ORG_ID" in self._warnings(mock_logger)
+
+    def test_a_non_2xx_roster_response_is_logged(self):
+        """Only exceptions used to log; a 403 fell through in silence."""
+        response = MagicMock()
+        response.status_code = 403
+
+        with (
+            patch("unisdk.utils.http.get", return_value=response),
+            patch.object(comms_utils, "SESSION_DETAILS") as mock_session,
+            patch.object(comms_utils, "SETTINGS") as mock_settings,
+            patch.object(comms_utils, "LOGGER") as mock_logger,
+        ):
+            mock_settings.ORCHESTRA_URL = "http://orchestra.test/v0"
+            mock_session.unify_key = "test-key"
+            mock_session.org_id = 219
+
+            assert comms_utils._fetch_org_roster() is None
+
+        assert "403" in self._warnings(mock_logger)
+
+
 class TestSendEmailViaAddress:
     """Tests for send_email_via_address function with attachments."""
 

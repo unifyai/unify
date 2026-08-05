@@ -69,6 +69,7 @@ logger = logging.getLogger(__name__)
 #: for the lifetime of one call and removed afterwards.
 CP_FN = "_cp"
 INT_FN = "_int"
+INT_SYNC_FN = "_int_s"
 AROUND_CP_FN = "_around_cp"
 RUNTIME_GLOBAL = "runtime"
 SESSION_GLOBAL = "__steering_session__"
@@ -85,6 +86,31 @@ class ControlledInterruption(Exception):
 
     Carries the reason so the retry can report what redirected it.
     """
+
+
+class ExecutionStopped(Exception):
+    """A correction asked for the remaining work to be abandoned.
+
+    Distinct from :class:`ControlledInterruption`, which unwinds one attempt
+    so a patched retry can run: this ends the call. Callers surface it as the
+    call's outcome — what was already done stands, the rest never runs — not
+    as a failure traceback.
+    """
+
+    @property
+    def outcome(self) -> Dict[str, str]:
+        """The ordinary result value returned by execution boundaries."""
+        return {"status": "stopped", "reason": str(self)}
+
+
+def is_stopped_outcome(value: Any) -> bool:
+    """Whether *value* is the result an execution boundary returns for a stop.
+
+    Callers that post-process a boundary's result — reading artifacts the run
+    was expected to produce — use this to recognise that the run was ended by
+    a correction, rather than misreading the missing artifacts as failure.
+    """
+    return isinstance(value, dict) and value.get("status") == "stopped"
 
 
 @dataclass
@@ -106,10 +132,18 @@ class Patch:
 
 @dataclass
 class InterruptionRequest:
-    """A decision about work that is currently running."""
+    """A decision about work that is currently running.
+
+    ``stop`` means the remaining work should be abandoned rather than
+    redirected — the decision when there is nothing a patch can rewrite (a
+    shell script, a block defining no functions) or when the correction
+    simply revokes the task. A stop fires at the next checkpoint wherever the
+    work runs, and ends the call instead of retrying it.
+    """
 
     reason: str
     patches: List[Patch] = field(default_factory=list)
+    stop: bool = False
 
     def targets(self, function_name: str) -> bool:
         return any(p.function_name == function_name for p in self.patches)
@@ -129,15 +163,16 @@ class SteeringRuntime:
     number of steps in.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pause_event: Optional[asyncio.Event] = None) -> None:
         self.action_counter = 0
         self.path_context: List[str] = []
         self.call_stack: List[Tuple[int, str]] = []
         self._frame_counter = 0
         self._loop_stack: List[Tuple[str, int]] = []
         self._occurrences: Dict[Tuple[str, str], int] = {}
-        self._pause = asyncio.Event()
-        self._pause.set()
+        self._pause = pause_event or asyncio.Event()
+        if pause_event is None:
+            self._pause.set()
 
     def next_occurrence(self, signature: Tuple[str, str]) -> int:
         """How many times this exact call has been made during this attempt.
@@ -300,8 +335,9 @@ class SteeringSession:
         interject_q: Optional[asyncio.Queue] = None,
         notification_q: Optional[asyncio.Queue] = None,
         patch_author: Optional[Any] = None,
+        pause_event: Optional[asyncio.Event] = None,
     ) -> None:
-        self.runtime = SteeringRuntime()
+        self.runtime = SteeringRuntime(pause_event=pause_event)
         self.cache = IdempotencyCache()
         self.interruption: Optional[InterruptionRequest] = None
         self.retries = 0
@@ -330,6 +366,9 @@ class SteeringSession:
         if self.runtime.paused:
             await self.runtime.wait_if_paused()
         await self._collect()
+        request = self.interruption
+        if request is not None and request.stop:
+            raise ControlledInterruption(request.reason or "steered")
 
     async def interrupt_point(self, func_name: str) -> None:
         """Raise if a pending correction targets *func_name*.
@@ -341,7 +380,20 @@ class SteeringSession:
         """
         await self._collect()
         request = self.interruption
-        if request is not None and request.targets(func_name):
+        if request is not None and (request.stop or request.targets(func_name)):
+            raise ControlledInterruption(request.reason or "steered")
+
+    def interrupt_point_sync(self, func_name: str) -> None:
+        """The interrupt check a synchronous frame can make.
+
+        No collection — that needs the event loop this frame is holding — so
+        in-process this only fires for a correction that was already pending
+        when the sync code began. It exists because raising, unlike pausing,
+        needs no await; the request stays in place for
+        :func:`run_with_steering` to consume, as with the async probe.
+        """
+        request = self.interruption
+        if request is not None and (request.stop or request.targets(func_name)):
             raise ControlledInterruption(request.reason or "steered")
 
     async def around(self, label: str, awaitable: Any) -> Any:
@@ -353,7 +405,15 @@ class SteeringSession:
         """
         await self.cp(f"Before: {label}")
         try:
-            return await awaitable
+            # The bracket goes around a *call*, not only an awaited one, so a
+            # synchronous primitive (``user_desktop.list_linked``, documented as
+            # "do not await it") arrives here as its own return value. Awaiting
+            # that unconditionally raised "object list can't be used in 'await'
+            # expression" and made every such primitive unreachable through
+            # ``execute_function``. Same guard ``_dispatch`` already applies.
+            if _inspect_isawaitable(awaitable):
+                return await awaitable
+            return awaitable
         finally:
             await self.cp(f"After: {label}")
 
@@ -386,7 +446,7 @@ class SteeringSession:
     async def relay_corrections(
         self,
         source: str,
-        send_control: typing.Callable[[Dict[str, Any]], typing.Awaitable[None]],
+        deliver: typing.Callable[["InterruptionRequest"], typing.Awaitable[None]],
         *,
         poll_interval: float = 0.05,
     ) -> None:
@@ -396,25 +456,39 @@ class SteeringSession:
         dispatches; a child inside a loop that makes no primitive call never
         gives the parent a chance to collect interjections, let alone act on
         them. This watches the intake while an attempt runs and, once a
-        correction targets the running block, pushes one interrupt directive
-        over *send_control* so the child's next instrumented checkpoint
-        raises. Runs until then, or until the attempt ends and cancels it.
+        correction applies to the running block, hands it to *deliver* — a
+        venv attempt pushes an interrupt directive down its control channel, a
+        shell attempt terminates the subprocess. Runs until then, or until the
+        attempt ends and cancels it.
         """
         while True:
             await self._collect()
             request = self.interruption
             if request is not None and _targets_running_block(request, source):
-                await send_control(
-                    {
-                        "type": "control",
-                        "action": "interrupt",
-                        "reason": request.reason or "steered",
-                        "functions": sorted(
-                            {patch.function_name for patch in request.patches},
-                        ),
-                    },
-                )
+                await deliver(request)
                 return
+            await asyncio.sleep(poll_interval)
+
+    async def relay_pause(
+        self,
+        deliver: typing.Callable[[bool], typing.Awaitable[None]],
+        *,
+        poll_interval: float = 0.01,
+    ) -> None:
+        """Mirror pause-state changes into a running subprocess.
+
+        The outer tool handle owns the event behind ``runtime.paused``. A
+        subprocess cannot await that in-process event, so each execution
+        boundary translates state changes into process-level pause/resume
+        operations. Starting from running avoids an unnecessary resume signal;
+        an attempt created while already paused is stopped immediately.
+        """
+        delivered = False
+        while True:
+            paused = self.runtime.paused
+            if paused != delivered:
+                await deliver(paused)
+                delivered = paused
             await asyncio.sleep(poll_interval)
 
     def notify(self, payload: Dict[str, Any]) -> None:
@@ -504,9 +578,10 @@ class _Instrumenter(ast.NodeTransformer):
     * ``_around_cp`` — awaits nested inside expressions, which no
       statement-level probe can reach.
 
-    A synchronous ``def`` gets the loop and path probes but not ``_cp`` /
-    ``_int``, which are awaits it cannot make. It still contributes correct
-    position to the cache key; it just cannot suspend.
+    A synchronous ``def`` gets the loop and path probes plus a synchronous
+    interrupt probe (``_int_s``) at entry and per iteration — raising needs
+    no await, only pausing does. It still contributes correct position to
+    the cache key; it just cannot suspend.
     """
 
     def __init__(self, tool_namespaces: typing.Set[str]) -> None:
@@ -542,6 +617,19 @@ class _Instrumenter(ast.NodeTransformer):
 
     def _int_node(self, func_name: str) -> ast.Expr:
         return self._awaited_stmt(self._call(INT_FN, [ast.Constant(value=func_name)]))
+
+    def _int_sync_node(self, func_name: str) -> ast.Expr:
+        """The interrupt probe a synchronous function can afford.
+
+        Raising needs no await — only pause does — so sync code checks a
+        pending correction with a plain call. In-process it fires when a
+        correction was already pending as the sync frame was entered;
+        out-of-process the child's reader thread keeps the flag fresh, so a
+        sync loop is interruptible mid-run.
+        """
+        return ast.Expr(
+            value=self._call(INT_SYNC_FN, [ast.Constant(value=func_name)]),
+        )
 
     @staticmethod
     def _runtime_call(method: str, args: List[ast.expr]) -> ast.Expr:
@@ -595,6 +683,16 @@ class _Instrumenter(ast.NodeTransformer):
         was_async, self._in_async = self._in_async, False
         try:
             self.generic_visit(node)
+            # After the docstring, so the function keeps it.
+            offset = (
+                1
+                if node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+                else 0
+            )
+            node.body[offset:offset] = [self._int_sync_node(node.name)]
         finally:
             self._in_async = was_async
             self._function_context.pop()
@@ -691,6 +789,8 @@ class _Instrumenter(ast.NodeTransformer):
             # side effect rather than after it.
             probes.append(self._cp_node(f"Iteration of {loop_id} in {enclosing}"))
             probes.append(self._int_node(enclosing))
+        else:
+            probes.append(self._int_sync_node(enclosing))
         node.body = probes + node.body
 
         return ast.Try(
@@ -878,16 +978,20 @@ class MemoisedDispatch:
 def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
     """Whether a correction is aimed at the block running out-of-process.
 
-    In-process, ``_int(name)`` fires only inside the function a patch names.
-    The parent cannot see which function a child process is inside, so the
-    nearest sound reading is "the patch names a function this block defines":
-    firing early costs one replay-backed retry, whereas not firing would let
-    the remaining dispatches run under a correction that asked them not to.
+    A stop applies to whatever is running, whichever language it is written
+    in — that is its purpose, since it exists for exactly the source a patch
+    cannot name.
 
-    Source that is not Python — a shell script — defines nothing a patch can
-    name, so nothing fires; the patch author likewise refuses to author
-    patches for it. Shell tops out at pause and replay.
+    For patches: in-process, ``_int(name)`` fires only inside the function a
+    patch names. The parent cannot see which function a child process is
+    inside, so the nearest sound reading is "the patch names a function this
+    block defines": firing early costs one replay-backed retry, whereas not
+    firing would let the remaining dispatches run under a correction that
+    asked them not to. Source that is not Python defines nothing a patch can
+    name, so patches never fire on it.
     """
+    if request.stop:
+        return True
     if not request.patches:
         return False
     try:
@@ -900,6 +1004,17 @@ def _targets_running_block(request: InterruptionRequest, source: str) -> bool:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     return any(patch.function_name in defined for patch in request.patches)
+
+
+def interrupt_directive(request: InterruptionRequest) -> Dict[str, Any]:
+    """The control-channel message telling a child to unwind for *request*."""
+    return {
+        "type": "control",
+        "action": "interrupt",
+        "reason": request.reason or "steered",
+        "stop": request.stop,
+        "functions": sorted({patch.function_name for patch in request.patches}),
+    }
 
 
 async def dispatch_with_steering(
@@ -966,11 +1081,12 @@ def bind_session(
     rather than deleted, so a nested call restores the outer block's session
     instead of clearing it.
     """
-    names = [CP_FN, INT_FN, AROUND_CP_FN, RUNTIME_GLOBAL, SESSION_GLOBAL]
+    names = [CP_FN, INT_FN, INT_SYNC_FN, AROUND_CP_FN, RUNTIME_GLOBAL, SESSION_GLOBAL]
     previous: Dict[str, Any] = {n: global_state.get(n, _MISSING) for n in names}
 
     global_state[CP_FN] = session.cp
     global_state[INT_FN] = session.interrupt_point
+    global_state[INT_SYNC_FN] = session.interrupt_point_sync
     global_state[AROUND_CP_FN] = session.around
     global_state[RUNTIME_GLOBAL] = session.runtime
     global_state[SESSION_GLOBAL] = session
@@ -1116,14 +1232,33 @@ async def run_with_steering(
     whole mechanism. Keeping the position would look up the replayed prefix
     under keys from the run that was abandoned; clearing the cache would
     re-execute side effects that have already happened.
+
+    A stop request ends the call instead: :class:`ExecutionStopped` carries
+    the reason out to the caller, with no retry to run.
     """
     current = source
     attempt = 0
     while True:
         try:
             session.bind_source(current)
+            await session.cp("Execution start")
             return await run_source(current)
         except ControlledInterruption as interruption:
+            request = session.interruption
+            session.interruption = None
+
+            if request is not None and request.stop:
+                session.notify(
+                    {
+                        "type": "steering_stop",
+                        "message": f"Stopped by correction: {request.reason}",
+                        "progress": session.progress(),
+                    },
+                )
+                raise ExecutionStopped(
+                    request.reason or str(interruption),
+                ) from interruption
+
             attempt += 1
             if attempt > max_retries:
                 raise RuntimeError(
@@ -1131,8 +1266,6 @@ async def run_with_steering(
                     f"(last: {interruption})",
                 ) from interruption
 
-            request = session.interruption
-            session.interruption = None
             applied_any = False
             for patch in request.patches if request else ():
                 spliced = splice_patch(current, patch)

@@ -555,6 +555,12 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
         ):
             return
 
+    # Past the guards above this is a new call, so its shared surfaces start
+    # closed. Also reset on hangup, but this is the one that holds: a frontend
+    # event landing during the previous teardown re-dirties the state after
+    # that reset has already run.
+    cm.reset_meet_surfaces()
+
     boss_contact_id = SESSION_DETAILS.boss_contact_id
     boss = (
         cm.contact_index.get_contact(contact_id=int(boss_contact_id))
@@ -2305,6 +2311,7 @@ async def _(
     cm.call_manager.unify_meet_exchange_id = UNASSIGNED
     cm.call_manager.google_meet_exchange_id = UNASSIGNED
     cm.call_manager.teams_meet_exchange_id = UNASSIGNED
+    cm.reset_meet_surfaces()
 
     sender_name = _get_sender_name(contact)
     if isinstance(event, GoogleMeetEnded):
@@ -2657,6 +2664,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
     bot_id = None
     tenant_id = None
     conversation_id = None
+    mentions = None
 
     # Get contact info from ContactManager, fallback to event.contact
     # Note: event.contact may be empty dict for emails to external addresses
@@ -2848,6 +2856,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             thread_id = str(event.thread_id) if event.thread_id else None
             team_id = str(event.team_id) if event.team_id else None
             group_id = str(event.group_id) if event.group_id else None
+            mentions = event.mentions
             notif_content = f"Unify message from {sender_name}"
             role = "user"
             event_trace = getattr(cm, "_current_event_trace", None) or {}
@@ -3148,6 +3157,7 @@ async def _(event, cm: "ConversationManager", *args, **kwargs):
             bot_id=bot_id,
             tenant_id=tenant_id,
             conversation_id=conversation_id,
+            mentions=mentions,
         )
     cm.notifications_bar.push_notif("comms", notif_content, event.timestamp)
     if role == "user":

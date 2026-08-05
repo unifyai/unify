@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+
 import pytest
+from unisdk.utils.http import RequestError as UnifyRequestError
 
 from unify.common.federated_search import (
     FederatedSearchContext,
@@ -12,6 +15,7 @@ from unify.common.federated_search import (
     merge_ranked_batches,
     merge_sorted_batches,
 )
+from unify.common.tool_outcome import ToolErrorException
 
 
 def _row(name: str, score: float) -> dict:
@@ -277,6 +281,62 @@ def test_federated_filter_without_fetcher_delegates_to_server(monkeypatch):
             "annotate": True,
         },
     ]
+
+
+def test_federated_filter_translates_4xx_into_actionable_tool_error(monkeypatch):
+    """A malformed filter must raise an actionable ToolErrorException, not the
+    raw RequestError/traceback, while 5xx errors keep propagating unchanged."""
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, detail: str):
+            self.status_code = status_code
+            self.text = json.dumps({"detail": detail})
+            self._detail = detail
+
+        def json(self):
+            return {"detail": self._detail}
+
+    def fake_get_logs_federated_400(**kwargs):
+        raise UnifyRequestError(
+            "https://orchestra.example/logs/federated",
+            "POST",
+            _FakeResponse(400, "NotImplementedError: unsupported operand \"' '.join\""),
+        )
+
+    monkeypatch.setattr(
+        "unify.common.federated_search.unisdk.get_logs_federated",
+        fake_get_logs_federated_400,
+    )
+
+    with pytest.raises(ToolErrorException) as exc_info:
+        federated_filter(
+            [FederatedSearchContext("ctx", "source")],
+            filter="'primitives.' in ' '.join(depends_on)",
+        )
+
+    payload = exc_info.value.payload
+    assert payload["error_kind"] == "invalid_filter"
+    assert "join" in payload["message"]
+    assert "Supported filter grammar" in payload["message"]
+    assert "comparisons" in payload["message"]
+
+    def fake_get_logs_federated_500(**kwargs):
+        raise UnifyRequestError(
+            "https://orchestra.example/logs/federated",
+            "POST",
+            _FakeResponse(500, "internal error"),
+        )
+
+    monkeypatch.setattr(
+        "unify.common.federated_search.unisdk.get_logs_federated",
+        fake_get_logs_federated_500,
+    )
+
+    with pytest.raises(UnifyRequestError):
+        federated_filter(
+            [FederatedSearchContext("ctx", "source")],
+            filter="contact_id == 1",
+        )
 
 
 def test_federated_count_delegates_to_server_count_only_read(monkeypatch):

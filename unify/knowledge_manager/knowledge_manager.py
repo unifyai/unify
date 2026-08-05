@@ -985,20 +985,23 @@ class KnowledgeManager(BaseKnowledgeManager):
         limit: int = 100,
     ) -> List[Knowledge]:
         from_fields = list(self._BUILTIN_FIELDS)
-        rows = federated_filter(
-            [
-                FederatedSearchContext(
-                    context=context,
-                    source=context,
-                    allowed_fields=from_fields,
-                )
-                for context in self._read_knowledge_contexts()
-            ],
-            filter=self._scoped_filter(normalize_filter_expr(filter)),
-            offset=offset,
-            limit=limit,
-            annotate=False,
-        )
+        try:
+            rows = federated_filter(
+                [
+                    FederatedSearchContext(
+                        context=context,
+                        source=context,
+                        allowed_fields=from_fields,
+                    )
+                    for context in self._read_knowledge_contexts()
+                ],
+                filter=self._scoped_filter(normalize_filter_expr(filter)),
+                offset=offset,
+                limit=limit,
+                annotate=False,
+            )
+        except ToolErrorException as exc:
+            return exc.payload
         return [self._with_content_preview(Knowledge(**row)) for row in rows]
 
     @functools.wraps(BaseKnowledgeManager.get_knowledge, updated=())

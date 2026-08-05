@@ -50,6 +50,7 @@ from unify.data_manager.ops.mutation_ops import (
     update_rows_impl,
     update_by_ids_impl,
     claim_impl,
+    reclaim_impl,
     delete_rows_impl,
 )
 from unify.data_manager.ops.join_ops import (
@@ -1243,6 +1244,43 @@ class DataManager(BaseDataManager):
             resolved,
             expect=expect,
             updates=updates,
+            limit=limit,
+        )
+
+    def reclaim(
+        self,
+        context: str,
+        *,
+        claimed: Dict[str, Any],
+        updates: Dict[str, Any],
+        older_than_seconds: float,
+        timestamp_field: str = "updated_at",
+        limit: int = 100,
+        destination: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Requeue rows whose claim lease has expired.
+
+        :meth:`claim` hands a row to exactly one worker but grants no
+        lease, so a worker that dies mid-claim strands the row in the
+        claimed state forever. ``reclaim`` moves rows matching *claimed*
+        whose *timestamp_field* predates the lease window back via
+        *updates*, using a per-row compare-and-set on the stale timestamp
+        so a live worker can never lose its row. Queues built on
+        :meth:`claim` call this at poll time for crash recovery.
+        """
+        try:
+            resolved = self._resolve_context_for_write(
+                context,
+                destination=destination,
+            )
+        except ToolErrorException as exc:
+            return self._tool_error(exc)  # type: ignore[return-value]
+        return reclaim_impl(
+            resolved,
+            claimed=claimed,
+            updates=updates,
+            older_than_seconds=older_than_seconds,
+            timestamp_field=timestamp_field,
             limit=limit,
         )
 

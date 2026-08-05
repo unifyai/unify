@@ -4,12 +4,16 @@ These assert on the rclone ``--exclude`` args produced for each operation
 without needing a live SFTP link or rclone binary.
 """
 
+import asyncio
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 from unify.file_manager.sync.user_sftp import (
     EDITS_DIR,
     UserHomeSFTP,
     _build_excludes,
+    _is_credential_path,
     _NOISE_EXCLUDES,
     _SECRET_EXCLUDES,
 )
@@ -48,6 +52,29 @@ def test_secrets_adds_tier3():
         assert p in pats
 
 
+def test_secrets_include_any_depth_forms_for_nested_credential_dirs():
+    """A pull/sync of a larger subtree must still drop credentials nested
+    inside it (e.g. Desktop/proj/.ssh/id_rsa), not just ones at the home root.
+    """
+    pats = _patterns(_build_excludes(noise=True, secrets=True))
+    for p in (
+        ".ssh/**",
+        ".gnupg/**",
+        ".aws/**",
+        ".kube/**",
+        ".config/gcloud/**",
+        ".docker/**",
+        ".netrc",
+        ".git-credentials",
+        "AppData/Roaming/gcloud/**",
+        "AppData/Roaming/Microsoft/Credentials/**",
+    ):
+        assert p in pats
+    # The anchored forms stay too — self-documenting, not replaced.
+    for p in ("/.ssh/**", "/.aws/**", "/.netrc", "/.config/gcloud/**"):
+        assert p in pats
+
+
 def test_windows_patterns_in_copies_not_in_browse():
     browse = _patterns(_build_excludes(noise=False, secrets=False))
     copy = _patterns(_build_excludes(noise=True, secrets=True))
@@ -60,6 +87,31 @@ def test_windows_patterns_in_copies_not_in_browse():
     # ... and Windows credential stores never leave the machine.
     assert "/AppData/Roaming/gcloud/**" in copy
     assert "/AppData/Roaming/gcloud/**" not in browse
+
+
+def test_browse_set_excludes_no_any_depth_secret_patterns():
+    """list_dir must stay truthful: no secret pattern, anchored or any-depth,
+    should ever reach the browse (secrets=False) exclude set."""
+    pats = _patterns(_build_excludes(noise=False, secrets=False))
+    for p in (".ssh/**", ".aws/**", ".netrc", ".config/gcloud/**"):
+        assert p not in pats
+
+
+def test_is_credential_path_matches_home_root_and_nested():
+    assert _is_credential_path(PurePosixPath(".ssh"))
+    assert _is_credential_path(PurePosixPath(".ssh/id_rsa"))
+    assert _is_credential_path(PurePosixPath("Desktop/proj/.ssh/id_rsa"))
+    assert _is_credential_path(PurePosixPath("Documents/infra/.aws/credentials"))
+    assert _is_credential_path(PurePosixPath("code/repo/.netrc"))
+    assert _is_credential_path(
+        PurePosixPath("dotfiles/.config/gcloud/legacy_credentials"),
+    )
+
+
+def test_is_credential_path_no_false_positive_on_prefix_overlap():
+    assert not _is_credential_path(PurePosixPath(".sshfoo/id_rsa"))
+    assert not _is_credential_path(PurePosixPath("Desktop"))
+    assert not _is_credential_path(PurePosixPath("Documents/infra/config.yaml"))
 
 
 def test_sync_args_exclude_noise_secrets_and_carry_stats():
@@ -79,3 +131,119 @@ def test_sync_args_exclude_noise_secrets_and_carry_stats():
     assert "--stats-one-line" in args
     assert "--stats-log-level" in args
     assert "NOTICE" in args
+
+
+def _filters(args: list[str]) -> list[str]:
+    """Extract the rule operands following each ``--filter`` flag."""
+    return [args[i + 1] for i, a in enumerate(args) if a == "--filter"]
+
+
+@pytest.mark.asyncio
+async def test_pull_copies_the_parent_and_narrows_to_the_entry(monkeypatch):
+    """A single-file pull must not use ``copyto`` while filters are set.
+
+    rclone refuses ``copyto`` against one file whenever any filter is present
+    ("can't limit to single files when using filters"), so every single-file
+    pull failed with the exclude tiers attached.
+    """
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = ""
+
+    captured: list[str] = []
+
+    async def fake_run(args, *, operation, capture=None, stream=False):
+        captured.extend(args)
+        return True
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    dest = await client.pull("Desktop/shot.png")
+
+    assert dest == str(client.local_root / "Desktop" / "shot.png")
+    assert captured[0] == "copy"
+    assert captured[1] == f"{UserHomeSFTP.REMOTE_NAME}:/Desktop"
+    assert captured[2] == str(client.local_root / "Desktop")
+
+    rules = _filters(captured)
+    assert "+ /shot.png" in rules
+    assert "+ /shot.png/**" in rules  # the entry may be a directory
+    assert rules[-1] == "- *"
+    # Exclude tiers survive the move to filter form ...
+    assert "- /.ssh/**" in rules
+    assert "- node_modules/**" in rules
+    # ... and none of them ride along as --exclude/--include, whose parse order
+    # against --filter is indeterminate (rclone warns at ERROR level).
+    assert "--exclude" not in captured
+    assert "--include" not in captured
+
+
+@pytest.mark.asyncio
+async def test_pull_refuses_path_inside_credential_dir(monkeypatch):
+    """rclone anchors ``--filter`` to the copy's source root, which ``pull``
+    sets to the requested entry's own parent. When that parent *is* the
+    credential dir (e.g. requesting ``.ssh/id_rsa``), the ".ssh" segment is
+    absorbed into the root and never appears in the relative paths the
+    exclude patterns test against — so the filters silently let it through.
+    This must be refused outright instead.
+    """
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = ""
+
+    async def fake_run(*args, **kwargs):
+        raise AssertionError("rclone must not run for a credential path")
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    with pytest.raises(ValueError, match="credential"):
+        await client.pull(".ssh/id_rsa")
+
+
+@pytest.mark.asyncio
+async def test_pull_refuses_nested_credential_dir(monkeypatch):
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = ""
+
+    async def fake_run(*args, **kwargs):
+        raise AssertionError("rclone must not run for a credential path")
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    with pytest.raises(ValueError, match="credential"):
+        await client.pull("Desktop/proj/.ssh/id_rsa")
+
+
+@pytest.mark.asyncio
+async def test_sync_refuses_path_inside_credential_dir(monkeypatch):
+    """The same source-root absorption applies to ``sync``: syncing ``.ssh``
+    directly makes it the copy root, so the exclude patterns never see the
+    ".ssh" segment either."""
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = ""
+
+    async def fake_run(*args, **kwargs):
+        raise AssertionError("rclone must not run for a credential path")
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    with pytest.raises(ValueError, match="credential"):
+        await client.sync(".ssh")
+
+
+@pytest.mark.asyncio
+async def test_pull_failure_names_the_rclone_cause(monkeypatch):
+    """A bare "failed to pull" left the actor guessing at unrelated theories."""
+    client = object.__new__(UserHomeSFTP)
+    client._user_id = "u1"
+    client._op_lock = asyncio.Lock()
+    client._last_error = "CRITICAL: can't limit to single files when using filters"
+
+    async def fake_run(args, *, operation, capture=None, stream=False):
+        return False
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    with pytest.raises(RuntimeError, match="can't limit to single files"):
+        await client.pull("Desktop/shot.png")

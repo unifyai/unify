@@ -8,6 +8,7 @@ These are called by DataManager methods and should not be used directly.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import unisdk
@@ -235,6 +236,91 @@ def claim_impl(
         limit=limit,
     )
     return list(response.get("claimed") or [])
+
+
+def _equality_filter(fields: Dict[str, Any]) -> str:
+    parts = []
+    for key, value in fields.items():
+        if isinstance(value, str):
+            escaped = value.replace('"', '\\"')
+            parts.append(f'{key} == "{escaped}"')
+        elif value is None:
+            parts.append(f"{key} == None")
+        else:
+            parts.append(f"{key} == {value}")
+    return " and ".join(parts)
+
+
+def _lease_stamp() -> str:
+    """Second-precision UTC stamp, the format lease timestamps are stored in."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _lease_expired(stamp: Any, *, older_than_seconds: float) -> bool:
+    """Whether an ISO-8601 lease *stamp* predates the lease window.
+
+    A stamp that is absent or unparseable carries no lease information, so
+    the row is left alone rather than guessed at: reclaiming a row whose
+    age is unknown could steal it from a live worker.
+    """
+    if not isinstance(stamp, str) or not stamp:
+        return False
+    try:
+        claimed_at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Unparseable lease timestamp %r; not reclaiming", stamp)
+        return False
+    if claimed_at.tzinfo is None:
+        claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - claimed_at
+    return age > timedelta(seconds=older_than_seconds)
+
+
+def reclaim_impl(
+    context: str,
+    *,
+    claimed: Dict[str, Any],
+    updates: Dict[str, Any],
+    older_than_seconds: float,
+    timestamp_field: str = "updated_at",
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Requeue rows whose claim lease has expired.
+
+    A claim marks a row as owned by exactly one worker but grants no
+    lease: a worker that dies mid-claim strands its row in the claimed
+    state forever, invisible to pollers that only select unclaimed rows.
+    Reclaim moves those rows back via *updates*, using a per-row
+    compare-and-set on the stale timestamp so a live worker — which
+    refreshes the timestamp on every write — can never lose its row.
+
+    The claimed state is filtered server-side; the lease arithmetic runs
+    here because ordering comparisons are only supported on numeric and
+    datetime columns, while lease stamps are conventionally stored as
+    ISO-8601 strings. That costs nothing: rows in a claimed state are
+    bounded by worker concurrency, not by table size, which is what a
+    claim means. ``limit`` caps one sweep; repeated sweeps drain a
+    backlog.
+    """
+    rows = unisdk.get_logs(
+        context=context,
+        filter=f"{_equality_filter(claimed)} and {timestamp_field} != None",
+        limit=limit,
+    )
+    stamped_updates = {**updates, timestamp_field: _lease_stamp()}
+    reclaimed: List[Dict[str, Any]] = []
+    for lg in rows:
+        stamp = (lg.entries or {}).get(timestamp_field)
+        if not _lease_expired(stamp, older_than_seconds=older_than_seconds):
+            continue
+        response = unisdk.claim_logs(
+            context=context,
+            expect={**claimed, timestamp_field: stamp},
+            updates=stamped_updates,
+            limit=1,
+        )
+        reclaimed.extend(response.get("claimed") or [])
+    return reclaimed
 
 
 def delete_rows_impl(

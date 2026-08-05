@@ -44,9 +44,17 @@ class FileParserSettings(BaseSettings):
     MAX_PARAGRAPH_SUMMARY_CALLS: int = 250
     MAX_SECTION_SUMMARY_CALLS: int = 120
 
-    # Tabular transport + bounded profiling
+    # Tabular transport + bounded profiling.
+    #
+    # Inlining is bounded on both axes. The row limit is the length bound; the
+    # byte ceiling is the width bound, and it is the one that matters for a
+    # short-but-wide sheet: a table carried inline is materialised whole in the
+    # parsing process and then written in chunks whose payloads compete for the
+    # bandwidth the assistant is already using. A table over either bound
+    # streams from its source instead, which costs nothing but latency.
     TABULAR_SAMPLE_ROWS: int = 25
     TABULAR_INLINE_ROW_LIMIT: int = 1000
+    TABULAR_INLINE_MAX_BYTES: int = 4_000_000
     TABULAR_PROFILE_MAX_TABLES: int = 12
     TABULAR_PROFILE_MAX_SAMPLE_ROWS: int = 5
 

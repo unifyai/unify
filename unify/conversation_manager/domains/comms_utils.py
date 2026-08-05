@@ -467,11 +467,30 @@ def resolve_unify_dm_to_user_id(contact_id: int) -> tuple[str | None, str | None
 
 
 def _fetch_org_roster() -> dict | None:
-    """Fetch the Console org roster (teams + groups with member ids)."""
+    """Fetch the Console org roster (teams + groups with member ids).
+
+    Every failure is logged. Three paths used to return ``None`` in silence,
+    and the caller turns that into a string handed to the model rather than the
+    log — so an unset ``ORG_ID`` presented as the assistant being unable to post
+    in a room, with nothing on the console to say why.
+    """
     base_url = SETTINGS.ORCHESTRA_URL or ""
     unify_key = SESSION_DETAILS.unify_key or ""
     org_id = SESSION_DETAILS.org_id
     if not base_url or not unify_key or org_id is None:
+        missing = ", ".join(
+            name
+            for name, value in (
+                ("ORCHESTRA_URL", base_url),
+                ("unify_key", unify_key),
+                ("ORG_ID", org_id),
+            )
+            if not value
+        )
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} Cannot fetch org roster: missing "
+            f"{missing}. Room sends cannot resolve their members without it.",
+        )
         return None
     try:
         from unisdk.utils import http
@@ -483,7 +502,17 @@ def _fetch_org_roster() -> dict | None:
         )
         if 200 <= response.status_code < 300:
             payload = response.json()
-            return payload if isinstance(payload, dict) else None
+            if isinstance(payload, dict):
+                return payload
+            LOGGER.warning(
+                f"{ICONS['comms_outbound']} Org roster for org {org_id} was not "
+                f"a JSON object (got {type(payload).__name__}).",
+            )
+            return None
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} Org roster fetch for org {org_id} "
+            f"returned HTTP {response.status_code}.",
+        )
     except Exception as exc:
         LOGGER.warning(
             f"{ICONS['comms_outbound']} Failed to fetch org roster: {exc}",
@@ -496,7 +525,16 @@ def _map_roster_ids_to_contact_ids(
     member_user_ids: list[str],
     assistant_member_ids: list[int],
 ) -> tuple[list[int], str | None]:
-    """Map roster user/assistant ids onto this assistant's Contacts rows."""
+    """Map roster user/assistant ids onto this assistant's Contacts rows.
+
+    Members that have no Contacts row are logged and skipped rather than
+    failing the whole lookup. These ids only widen the local Transcripts
+    mirror's ``receiver_ids``; Orchestra already knows who is in the room from
+    the room id alone. Refusing to resolve any of them because one was unsynced
+    meant a single stale contact row stopped the assistant posting at all —
+    which is what a boss contact created before the session carried a user id
+    did, on every room send, silently.
+    """
     from unify.manager_registry import ManagerRegistry
 
     manager = ManagerRegistry.get_contact_manager()
@@ -539,9 +577,11 @@ def _map_roster_ids_to_contact_ids(
             resolved.add(cid)
 
     if missing:
-        return [], (
-            "Unify room members missing from Contacts (expected auto-synced "
-            f"system contacts): {', '.join(missing)}"
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} Unify room members missing from Contacts "
+            f"(expected auto-synced system contacts): {', '.join(missing)}. "
+            "Continuing with the members that resolved; their transcript "
+            "receiver ids will be incomplete.",
         )
     return sorted(resolved), None
 
@@ -551,13 +591,23 @@ def resolve_unify_room_member_contact_ids(
     team_id: int | None = None,
     group_id: int | None = None,
 ) -> tuple[list[int], str | None]:
-    """Resolve every human + assistant member of a Unify room to contact ids."""
+    """Resolve every human + assistant member of a Unify room to contact ids.
+
+    The returned error is reserved for a caller mistake — asking without a room.
+    Everything the environment can get wrong (no roster, an unlisted room, an
+    unsynced member) is logged and yields the best list available, because these
+    ids enrich the local Transcripts mirror and are not needed to deliver: the
+    room id alone tells Orchestra who the recipients are. Treating them as
+    required made an outbound send fail for a reason the recipient list could
+    not affect.
+    """
     if (team_id is None) == (group_id is None):
         return [], "resolve_unify_room_member_contact_ids needs team_id or group_id"
 
     roster = _fetch_org_roster()
     if roster is None:
-        return [], "failed to fetch organization roster for Unify room members"
+        # Already logged in detail by ``_fetch_org_roster``.
+        return [], None
 
     if team_id is not None:
         teams = roster.get("teams") or []
@@ -566,7 +616,12 @@ def resolve_unify_room_member_contact_ids(
             None,
         )
         if match is None:
-            return [], f"team_id={team_id} not found in organization roster"
+            LOGGER.warning(
+                f"{ICONS['comms_outbound']} team_id={team_id} is not in org "
+                f"{SESSION_DETAILS.org_id}'s roster; sending without member "
+                "attribution.",
+            )
+            return [], None
         return _map_roster_ids_to_contact_ids(
             member_user_ids=[str(uid) for uid in (match.get("member_user_ids") or [])],
             assistant_member_ids=[
@@ -580,7 +635,14 @@ def resolve_unify_room_member_contact_ids(
         None,
     )
     if match is None:
-        return [], f"group_id={group_id} not found in organization roster"
+        # The roster lists only groups the calling identity belongs to, so an
+        # absent group is as likely to be a visibility limit as a wrong id.
+        LOGGER.warning(
+            f"{ICONS['comms_outbound']} group_id={group_id} is not in org "
+            f"{SESSION_DETAILS.org_id}'s roster (the roster lists only groups "
+            "the caller is a member of); sending without member attribution.",
+        )
+        return [], None
     return _map_roster_ids_to_contact_ids(
         member_user_ids=[str(uid) for uid in (match.get("member_user_ids") or [])],
         assistant_member_ids=[

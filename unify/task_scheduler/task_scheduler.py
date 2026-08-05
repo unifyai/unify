@@ -2086,6 +2086,39 @@ class TaskScheduler(BaseTaskScheduler):
         enabled_provided = enabled is not _UNSET
         task = self._resolve_task_for_mutation(task_id)
 
+        # Deployment-owned tasks (custom_hash set) get their authored fields
+        # from the bundle source. A runtime mutation of those fields silently
+        # diverges from the source until a resync overwrites it — and because
+        # the sync short-circuits on its aggregate hash, a mutation that
+        # damages a derived reference (e.g. nulling the entrypoint) is never
+        # healed. Runtime state (enabled) stays mutable; authored fields
+        # change in the source and land via deployment resync.
+        if task.custom_hash:
+            authored_touched = sorted(
+                field
+                for field, provided in (
+                    ("name", name is not None),
+                    ("description", description is not None),
+                    ("start_at", start_at is not None),
+                    ("deadline", deadline is not None),
+                    ("repeat", repeat is not None),
+                    ("priority", priority is not None),
+                    ("trigger", trigger_provided),
+                    ("entrypoint", entrypoint is not _UNSET),
+                    ("offline", offline_provided),
+                    ("requires_filesystem", requires_filesystem_provided),
+                    ("requires_computer", requires_computer_provided),
+                )
+                if provided
+            )
+            if authored_touched:
+                raise ValueError(
+                    f"Task {task_id} is deployment-owned (custom_hash set); "
+                    "refusing runtime update of authored field(s) "
+                    f"{', '.join(authored_touched)}. Edit the bundle source "
+                    "and re-sync via deployment reconcile.",
+                )
+
         if (
             name is None
             and description is None

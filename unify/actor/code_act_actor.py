@@ -2615,9 +2615,20 @@ class CodeActActor(BaseCodeActActor):
                 venv_id=v,
                 session_id=s,
             ),
+            venv_exists=self._venv_exists,
             max_sessions_total=self._max_sessions_total,
             active_session_count=self._count_active_sessions_total(),
         )
+
+    def _venv_exists(self, venv_id: int) -> bool:
+        """Whether *venv_id* names a venv this actor can execute in.
+
+        Venvs are owned by the FunctionManager, so without one there is nothing
+        to check against — the venv-backed path rejects the call on its own.
+        """
+        if self.function_manager is None:
+            return True
+        return self.function_manager.get_venv(venv_id=venv_id) is not None
 
     def _resolve_session(
         self,
@@ -2884,6 +2895,7 @@ class CodeActActor(BaseCodeActActor):
         clarification_down_q: asyncio.Queue[str] | None,
         interject_q: asyncio.Queue | None = None,
         notification_q: asyncio.Queue | None = None,
+        pause_event: asyncio.Event | None = None,
     ):
         """Bind one tool call's channels onto the live sandbox.
 
@@ -2931,6 +2943,7 @@ class CodeActActor(BaseCodeActActor):
                 interject_q=interject_q,
                 notification_q=notification_q,
                 patch_author=build_patch_author() if interject_q is not None else None,
+                pause_event=pause_event,
             )
             # Carried by context rather than installed on this sandbox: only
             # one execution mode actually runs here, and the default
@@ -2969,6 +2982,7 @@ class CodeActActor(BaseCodeActActor):
             _clarification_up_q: asyncio.Queue[str] | None = None,
             _clarification_down_q: asyncio.Queue[str] | None = None,
             _interject_queue: asyncio.Queue | None = None,
+            _pause_event: asyncio.Event | None = None,
             _parent_chat_context: list[dict] | None = None,
         ) -> Any:
             """
@@ -3233,6 +3247,7 @@ class CodeActActor(BaseCodeActActor):
                         clarification_down_q=_clarification_down_q,
                         interject_q=_interject_queue,
                         notification_q=notification_q,
+                        pause_event=_pause_event,
                     ) as _steering:
                         try:
                             out = await self._session_executor.execute(
@@ -3758,6 +3773,7 @@ class CodeActActor(BaseCodeActActor):
                 _clarification_up_q: asyncio.Queue[str] | None = None,
                 _clarification_down_q: asyncio.Queue[str] | None = None,
                 _interject_queue: asyncio.Queue | None = None,
+                _pause_event: asyncio.Event | None = None,
                 _parent_chat_context: list[dict] | None = None,
             ) -> Any:
                 """
@@ -4033,6 +4049,7 @@ class CodeActActor(BaseCodeActActor):
                         clarification_down_q=_clarification_down_q,
                         interject_q=_interject_queue,
                         notification_q=notification_q,
+                        pause_event=_pause_event,
                     ) as _ef_steering:
                         if (
                             isinstance(function_data, dict)

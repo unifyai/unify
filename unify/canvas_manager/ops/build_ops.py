@@ -20,6 +20,7 @@ integrity guarantee than subresource integrity because we enforce it ourselves.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -32,10 +33,11 @@ from typing import List, Optional, Tuple
 from unify.canvas_manager.settings import CanvasSettings
 from unify.canvas_manager.types.view import BuildReport
 
-# Specifiers a canvas may import. Everything else is absent at view time: the
-# frame has no bundler and no network, so an unlisted import is a load failure
-# rather than a slow path.
-ALLOWED_IMPORTS = frozenset(
+# Specifiers every environment can rely on. The full allowlist is the
+# toolchain's canvas-externals.json — emitted from the same specifier list
+# that drives the runtime host's import map, so the authoring gate and the
+# host cannot disagree about what resolves at view time.
+CORE_IMPORTS = frozenset(
     {
         "react",
         "react-dom",
@@ -44,6 +46,46 @@ ALLOWED_IMPORTS = frozenset(
         "@unity/canvas-kit",
     },
 )
+
+
+@functools.lru_cache(maxsize=1)
+def allowed_imports() -> frozenset:
+    """Specifiers a canvas may import.
+
+    Everything else is absent at view time: the frame has no bundler and no
+    network, so an unlisted import is a load failure rather than a slow path.
+    Read from the installed toolchain because the list is owned by the runtime
+    host (branding's canvas-specifiers.mjs); a hand-mirrored copy here is how
+    the gate and the host would drift apart.
+    """
+    root = _toolchain_root()
+    if root is None:
+        return CORE_IMPORTS
+    externals = root / "canvas-externals.json"
+    if not externals.is_file():
+        # A toolchain predating the vocabulary substrate: the closed core set
+        # is exactly what it can resolve.
+        return CORE_IMPORTS
+    return frozenset(json.loads(externals.read_text(encoding="utf8")))
+
+
+@functools.lru_cache(maxsize=1)
+def class_manifest() -> Optional[frozenset]:
+    """Every class the shipped stylesheet contains, or None when unknowable.
+
+    The stylesheet is fixed at build time — Tailwind never runs per canvas —
+    so a class outside this set silently styles nothing at view time. The lint
+    checks authored class strings against it because that failure is otherwise
+    invisible in review and unattributable in production.
+    """
+    root = _toolchain_root()
+    if root is None:
+        return None
+    manifest = root / "classes.json"
+    if not manifest.is_file():
+        return None
+    return frozenset(json.loads(manifest.read_text(encoding="utf8")))
+
 
 # Colour and font patterns, mirroring console's `scripts/check-colors.ts` and
 # `scripts/check-font-classes.ts`. Kept as source-level checks because they must
@@ -93,41 +135,97 @@ def lint_source(tsx: str) -> List[str]:
 
         if _HEX_COLOUR.search(scannable):
             problems.append(
-                f"line {lineno}: hex colour is not allowed. Use a `tone` prop "
-                f"(muted/success/warning/danger) or a chart series index.",
+                f"line {lineno}: hex colour is not allowed. Use a semantic token "
+                f"utility (bg-primary, text-muted-foreground, bg-destructive, ...) "
+                f"or seriesColor(n) / var(--chart-N) for chart fills.",
             )
         if _FUNCTIONAL_COLOUR.search(scannable):
             problems.append(
-                f"line {lineno}: rgb()/hsl() colour is not allowed. Use a `tone` prop.",
+                f"line {lineno}: rgb()/hsl() colour is not allowed. Use a semantic "
+                f"token utility or seriesColor(n) for chart fills.",
             )
         if _TAILWIND_COLOUR_CLASS.search(scannable):
             problems.append(
                 f"line {lineno}: named colour utility class is not allowed and has no effect — "
-                f"the canvas stylesheet ships no colour utilities. Use a `tone` prop.",
+                f"the canvas stylesheet ships no colour palette. Use a semantic token "
+                f"utility (bg-primary, text-muted-foreground, bg-destructive, ...).",
             )
         if _ARBITRARY_COLOUR_CLASS.search(scannable):
             problems.append(
-                f"line {lineno}: arbitrary colour class is not allowed. Use a `tone` prop.",
+                f"line {lineno}: arbitrary colour class is not allowed. Use a "
+                f"semantic token utility.",
             )
         if _INLINE_FONT_FAMILY.search(scannable):
             problems.append(
-                f"line {lineno}: inline font-family is not allowed; the kit sets typography.",
+                f"line {lineno}: inline font-family is not allowed; the host "
+                f"stylesheet sets typography.",
             )
 
+    imports = allowed_imports()
     for match in list(_IMPORT_SPECIFIER.finditer(tsx)) + list(
         _BARE_IMPORT.finditer(tsx),
     ):
         specifier = match.group(1)
         if specifier.startswith("."):
             problems.append(
-                f"relative import {specifier!r} is not allowed: a canvas is a single module.",
+                f"relative import {specifier!r} is not allowed: a canvas is a "
+                f"single module — inline the component source instead.",
             )
-        elif specifier not in ALLOWED_IMPORTS:
+        elif specifier not in imports:
             problems.append(
                 f"import {specifier!r} is not available at view time. "
-                f"Only {', '.join(sorted(ALLOWED_IMPORTS))} are provided.",
+                f"Only {', '.join(sorted(imports))} are provided.",
             )
 
+    problems.extend(_lint_class_strings(tsx))
+
+    return problems
+
+
+# Class strings inside these constructs are utility classes by definition,
+# which is what makes checking them against the manifest sound: prose and
+# test-ids never appear here, so a flagged token is a real no-op class.
+_CLASS_ATTRIBUTES = re.compile(
+    r"""className\s*=\s*(?:"([^"]*)"|\{\s*`([^`]*)`\s*\})""",
+)
+_CN_ARGS = re.compile(r"""\bcn\(([^)]*)\)""", re.DOTALL)
+_QUOTED = re.compile(r"""["'`]([^"'`]*)["'`]""")
+
+
+def _lint_class_strings(tsx: str) -> List[str]:
+    """Flag utility classes the shipped stylesheet does not contain.
+
+    Tailwind never runs per canvas, so such a class silently styles nothing at
+    view time — invisible in review, unattributable in production. Template
+    interpolations are skipped (their value is unknowable statically); the
+    render review remains the backstop for what this cannot see.
+    """
+    manifest = class_manifest()
+    if manifest is None:
+        return []
+
+    candidates: set = set()
+    for match in _CLASS_ATTRIBUTES.finditer(tsx):
+        candidates.update((match.group(1) or match.group(2) or "").split())
+    for match in _CN_ARGS.finditer(tsx):
+        for quoted in _QUOTED.finditer(match.group(1)):
+            candidates.update(quoted.group(1).split())
+
+    problems: List[str] = []
+    for token in sorted(candidates):
+        if not token or "${" in token or token in manifest:
+            continue
+        # Colour classes already carry a line-anchored diagnostic with the
+        # colour-specific remedy; a second report for the same token is noise.
+        if _TAILWIND_COLOUR_CLASS.search(token) or _ARBITRARY_COLOUR_CLASS.search(
+            token,
+        ):
+            continue
+        problems.append(
+            f"class {token!r} is not in the shipped stylesheet and will "
+            f"silently style nothing. Use classes the vocabulary corpus uses, "
+            f"or a semantic-token utility the manifest lists.",
+        )
     return problems
 
 
@@ -171,18 +269,9 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
     """
     started = time.monotonic()
 
-    problems = lint_source(tsx)
-    if problems:
-        return (
-            BuildReport(
-                ok=False,
-                failed_stage="lint",
-                diagnostics=problems,
-                duration_ms=int((time.monotonic() - started) * 1000),
-            ),
-            "",
-        )
-
+    # Checked before lint: without a toolchain the allowlist and the class
+    # manifest degrade to floors, and a vocabulary import would be rejected
+    # with a misleading lint message instead of the real, actionable problem.
     root = _toolchain_root()
     if root is None:
         return (
@@ -194,6 +283,18 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
                     "Expected a node workspace with esbuild, typescript and "
                     "@unity/canvas-kit installed.",
                 ],
+                duration_ms=int((time.monotonic() - started) * 1000),
+            ),
+            "",
+        )
+
+    problems = lint_source(tsx)
+    if problems:
+        return (
+            BuildReport(
+                ok=False,
+                failed_stage="lint",
+                diagnostics=problems,
                 duration_ms=int((time.monotonic() - started) * 1000),
             ),
             "",
@@ -278,7 +379,7 @@ def build_canvas(tsx: str, *, kit_version: str = "") -> Tuple[BuildReport, str]:
             "--platform=browser",
             f"--outfile={out.name}",
         ]
-        command += [f"--external:{name}" for name in sorted(ALLOWED_IMPORTS)]
+        command += [f"--external:{name}" for name in sorted(allowed_imports())]
 
         code, output = _run(command, cwd=work)
         if code != 0:

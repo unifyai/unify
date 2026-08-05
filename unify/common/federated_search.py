@@ -15,6 +15,7 @@ from .semantic_search import (
     fetch_top_k_by_terms_with_score,
     resolve_existing_vector_for_source,
 )
+from .tool_outcome import ToolErrorException
 
 SOURCE_FIELD = "_federated_source"
 CONTEXT_FIELD = "_federated_context"
@@ -164,6 +165,51 @@ def _sorting_payload(sorting: Sequence[SortSpec]) -> list[dict]:
     ]
 
 
+FILTER_GRAMMAR_HINT = (
+    "comparisons (==, !=, <, <=, >, >=), membership tests (in / not in), and "
+    "boolean combinators (and, or, not) over field names and literal values, "
+    "plus a fixed set of helpers (len(), string methods like .lower() / "
+    ".startswith(), embed()). Arbitrary Python calls outside that set, e.g. "
+    "' '.join(x) or a list comprehension, are rejected."
+)
+
+
+def _invalid_filter_error(
+    exc: _UnifyRequestError,
+    filter: Optional[str],
+) -> ToolErrorException:
+    """Translate a 4xx from the filter/search endpoint into an actionable payload.
+
+    ``exc``'s message already carries the backend's response body, but it
+    arrives wrapped in ``"{method}:{url} failed with status code ...: "``
+    plus a JSON-encoded ``{"detail": ...}`` body — not something a caller can
+    act on without unwrapping it first.
+    """
+    response = getattr(exc, "response", None)
+    detail = None
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+        except Exception:
+            detail = None
+        if not detail:
+            detail = getattr(response, "text", None)
+    detail = detail or str(exc)
+    return ToolErrorException(
+        {
+            "error_kind": "invalid_filter",
+            "message": (
+                f"filter {filter!r} was rejected: {detail} "
+                f"Supported filter grammar: {FILTER_GRAMMAR_HINT}"
+            ),
+            "details": {
+                "filter": filter,
+                "status_code": getattr(response, "status_code", None),
+            },
+        },
+    )
+
+
 def _server_federated_read(
     contexts: Sequence[FederatedSearchContext],
     *,
@@ -180,16 +226,28 @@ def _server_federated_read(
     read pipeline (per-context field types, partition pruning) and performs
     the exact global merge, so a single round trip replaces the previous
     per-context paged fan-out. Missing contexts contribute nothing.
+
+    A 4xx here means the caller-supplied ``filter`` itself was rejected (bad
+    grammar) — raised as a :class:`ToolErrorException` carrying an actionable
+    message instead of the raw HTTP error, so it survives whatever generic
+    exception handling sits above the calling tool. 5xx/transport errors are
+    left to propagate unchanged.
     """
-    return unisdk.get_logs_federated(
-        contexts=[spec.to_request_spec() for spec in contexts],
-        filter=filter,
-        sorting=_sorting_payload(sorting),
-        offset=offset,
-        limit=limit,
-        unique_id_field=unique_id_field,
-        annotate=annotate,
-    )
+    try:
+        return unisdk.get_logs_federated(
+            contexts=[spec.to_request_spec() for spec in contexts],
+            filter=filter,
+            sorting=_sorting_payload(sorting),
+            offset=offset,
+            limit=limit,
+            unique_id_field=unique_id_field,
+            annotate=annotate,
+        )
+    except _UnifyRequestError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is not None and 400 <= status < 500:
+            raise _invalid_filter_error(exc, filter) from exc
+        raise
 
 
 def _compare_present_values(left: object, right: object) -> int:

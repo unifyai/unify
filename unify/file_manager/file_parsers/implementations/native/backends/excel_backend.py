@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 
 from unify.file_manager.file_parsers.implementations.native.spreadsheet_support import (
     finalize_spreadsheet_result,
+    measure_row_bytes,
     normalize_tabular_value,
 )
 from unify.file_manager.file_parsers.settings import FILE_PARSER_SETTINGS
@@ -169,11 +170,13 @@ def _parse_worksheet(*, worksheet, sheet_index: int) -> ExtractedTable | None:
 
     columns = _coerce_header_row(header)
     inline_limit = max(int(FILE_PARSER_SETTINGS.TABULAR_INLINE_ROW_LIMIT), 0)
+    inline_byte_ceiling = max(int(FILE_PARSER_SETTINGS.TABULAR_INLINE_MAX_BYTES), 0)
     sample_limit = max(int(FILE_PARSER_SETTINGS.TABULAR_SAMPLE_ROWS), 0)
 
     row_count = 0
     sample_rows: list[JsonObject] = []
     inline_rows: list[JsonObject] = []
+    inline_bytes = 0
     collecting = True
 
     for row in rows_iter:
@@ -185,7 +188,15 @@ def _parse_worksheet(*, worksheet, sheet_index: int) -> ExtractedTable | None:
             row_count += 1
             if len(sample_rows) < sample_limit:
                 sample_rows.append(record)
-            if row_count <= inline_limit:
+            # Both bounds, and the width one accumulates rather than projects:
+            # this backend already visits every cell, so the size carried so far
+            # is measured exactly and a wide sheet stops being collected at the
+            # row that crosses the ceiling rather than after it is all in hand.
+            inline_bytes += measure_row_bytes([record])
+            over_ceiling = (
+                bool(inline_byte_ceiling) and inline_bytes > inline_byte_ceiling
+            )
+            if row_count <= inline_limit and not over_ceiling:
                 inline_rows.append(record)
             else:
                 inline_rows = []

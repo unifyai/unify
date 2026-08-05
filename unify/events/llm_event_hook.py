@@ -8,7 +8,7 @@ The hook is installed once during unify.init() and remains active for the
 lifetime of the process.
 
 Additionally, this module logs cumulative spending to the Assistants project
-for monthly spending limit tracking. After each LLM call, the billed_cost is
+for monthly spending limit tracking. After each LLM call, its cost is
 atomically added to the cumulative_spend for the current month.
 
 Note: credit_transaction ledger rows are also written (via deduct_credits in
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _HOOK_INSTALLED = False
 
 
-async def _update_cumulative_spend(billed_cost: float) -> None:
+async def _update_cumulative_spend(cost: float) -> None:
     """Update cumulative monthly spend after each LLM call.
 
     Costs are attributed to the user(s) specified by the COST_ATTRIBUTION
@@ -45,7 +45,7 @@ async def _update_cumulative_spend(billed_cost: float) -> None:
 
     Parameters
     ----------
-    billed_cost : float
+    cost : float
         The cost of the LLM call to add to cumulative spend
     """
     from datetime import datetime
@@ -54,8 +54,8 @@ async def _update_cumulative_spend(billed_cost: float) -> None:
     from ..session_details import SESSION_DETAILS
     from .cost_attribution import COST_ATTRIBUTION
 
-    # Skip if no billed cost
-    if not billed_cost or billed_cost <= 0:
+    # Skip if the call was free
+    if not cost or cost <= 0:
         return
 
     # Get billing timezone from user's settings (fallback to UTC)
@@ -79,7 +79,7 @@ async def _update_cumulative_spend(billed_cost: float) -> None:
 
     # Resolve attribution: per-user user_ids or fall back to supervisor
     user_ids = COST_ATTRIBUTION.get() or [SESSION_DETAILS.user.id]
-    per_user_cost = billed_cost / len(user_ids)
+    per_user_cost = cost / len(user_ids)
 
     for uid in user_ids:
         try:
@@ -142,7 +142,6 @@ def _llm_event_to_eventbus(event: "LLMEvent") -> None:
             request=event.request,
             response=event.response,
             provider_cost=event.provider_cost,
-            billed_cost=event.billed_cost,
             # Attributed user for per-member usage filtering in the console.
             # _inject_private_fields sets _user_id to the supervisor; this
             # field records who actually triggered the call.
@@ -166,8 +165,8 @@ def _llm_event_to_eventbus(event: "LLMEvent") -> None:
             loop.create_task(EVENT_BUS.publish(llm_event))
 
             # Update cumulative spending for spending limit tracking
-            if event.billed_cost and event.billed_cost > 0:
-                loop.create_task(_update_cumulative_spend(event.billed_cost))
+            if event.provider_cost and event.provider_cost > 0:
+                loop.create_task(_update_cumulative_spend(event.provider_cost))
         except RuntimeError:
             # No event loop running - skip publishing
             # This can happen during synchronous test teardown

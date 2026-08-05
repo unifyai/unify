@@ -289,6 +289,6 @@ it. Grouped by the week the work landed.
 
 #### Changed
 
-- **Lower default droid usage prices** — Droid usage now uses a lower default price margin. Charges based on LLM costs are now set at 2× the underlying cost instead of 5×.
+- **Lower droid usage prices** — Droid usage now costs substantially less for the same work.
 
 <!-- END GENERATED RELEASE NOTES -->

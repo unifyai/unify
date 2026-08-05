@@ -669,3 +669,36 @@ def _trace_test(request):
     except ImportError:
         # OpenTelemetry not installed, skip tracing
         yield
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Log capture
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def unify_logs(caplog):
+    """Capture ``unify.*`` log records for assertions.
+
+    Use this instead of ``capsys``/``capfd`` for anything the unify LOGGER
+    emits. Two reasons it has to work this way:
+
+    * The logger owns its own terminal formatting and does not propagate to
+      root, so pytest's ``caplog`` handler reaches it only when attached
+      directly.
+    * The terminal handler binds ``sys.stdout`` when ``unify.logger`` is
+      first imported. Capture fixtures replace stdout per test, so whether a
+      record lands in ``capsys``/``capfd`` depends on which capture happened
+      to be active at import — an assertion that passes alone and fails in a
+      full run. Records carry no such dependency.
+
+    Yields the ``caplog`` fixture, so ``.text``, ``.records`` and
+    ``.messages`` work as usual.
+    """
+    from unify.logger import LOGGER
+
+    LOGGER.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        LOGGER.removeHandler(caplog.handler)

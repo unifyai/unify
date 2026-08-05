@@ -198,6 +198,7 @@ class CanvasManager(BaseCanvasManager):
         bundle: str,
         props: Dict[str, Any],
         rows: Optional[Dict[str, Any]] = None,
+        intent: str = "",
     ) -> ReviewReport:
         """Render the compiled canvas and look at it.
 
@@ -219,6 +220,7 @@ class CanvasManager(BaseCanvasManager):
             bundle=bundle,
             props=props,
             rows=rows,
+            intent=intent,
         )
 
     def _prepare_bindings(
@@ -347,6 +349,7 @@ class CanvasManager(BaseCanvasManager):
                 bundle=bundle,
                 props=props or {},
                 rows=samples,
+                intent=f"{title}. {description or ''}".strip(),
             )
             if review
             else None
@@ -498,6 +501,10 @@ class CanvasManager(BaseCanvasManager):
                         if props is not None
                         else json.loads(existing.get("props_json") or "{}")
                     ),
+                    intent=(
+                        f"{title or existing.get('title', '')}. "
+                        f"{description or existing.get('description') or ''}"
+                    ).strip(),
                     rows=samples,
                 )
                 if not review_report.rendered:
@@ -682,6 +689,7 @@ class CanvasManager(BaseCanvasManager):
             bundle=record.bundle_code,
             props=json.loads(record.props_json or "{}"),
             rows=self._sample_stored_bindings(row or {}),
+            intent=f"{record.title}. {record.description or ''}".strip(),
         )
 
     def run_invocation(

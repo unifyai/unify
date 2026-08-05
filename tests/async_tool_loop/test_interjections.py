@@ -28,6 +28,7 @@ from tests.async_helpers import (
     message_appears_before,
     is_user_interjection_containing,
     _is_synthetic_check_status_stub,
+    _is_synthetic_check_status_tool_msg,
 )
 
 pytestmark = pytest.mark.llm_call
@@ -89,6 +90,10 @@ def _is_internal_bookkeeping(msg: dict) -> bool:
     (e.g., visibility guidance, runtime context, semantic cache hints) that don't
     represent user-visible message ordering.
     """
+    if _is_synthetic_check_status_stub(msg) or _is_synthetic_check_status_tool_msg(
+        msg,
+    ):
+        return True
     if msg.get("role") != "system":
         return False
     # Check for known internal bookkeeping markers

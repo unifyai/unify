@@ -2761,17 +2761,40 @@ def get_primitives_canvas_live_view_example() -> str:
     return '''
 # "Build me a tracker for my open tasks"
 #
-# One TSX module renders the whole view. The binding re-runs on every view, so
-# the tracker is current without any refresh machinery.
+# One TSX module renders the whole view. The kit supplies only the protocol
+# layer (Canvas, actions, Freshness) and brand helpers; every presentational
+# piece is shadcn component source inlined into the module and compiled
+# against the vendored substrate. Search the vocabulary guidance for the
+# component source to inline. The binding re-runs on every view, so the
+# tracker is current without any refresh machinery.
 from unify.canvas_manager.types import PrimitiveBinding
 
 result = await primitives.canvas.create_view(
     tsx="""
-import {
-  Badge, Canvas, KpiRow, Section, Stack, Table, type CanvasViewProps,
-} from "@unity/canvas-kit";
+import * as React from "react";
+import { Canvas, cn, type CanvasViewProps } from "@unity/canvas-kit";
+import { cva } from "class-variance-authority";
 
 type Task = { name: string; due: string; status: string };
+
+// Inlined shadcn source (card, badge), imports rewritten the standard way:
+// cn comes from @unity/canvas-kit, siblings are inlined into this module.
+function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("rounded-xl border bg-card text-card-foreground shadow", className)} {...props} />;
+}
+
+const badgeVariants = cva(
+  "inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold",
+  {
+    variants: {
+      variant: {
+        default: "border-transparent bg-primary text-primary-foreground",
+        destructive: "border-transparent bg-destructive text-destructive-foreground",
+      },
+    },
+    defaultVariants: { variant: "default" },
+  }
+);
 
 // Type the prop and the rows. The canvas is typechecked before it can be
 // published, so an untyped `canvas` fails the build under `strict`.
@@ -2781,27 +2804,44 @@ export default function Tracker({ canvas }: CanvasViewProps) {
 
   return (
     <Canvas>
-      <Stack gap="lg">
-        <KpiRow items={[
-          { label: "Open", value: tasks.length },
-          { label: "Overdue", value: overdue.length, tone: "danger" },
-        ]} />
-        <Section title="Open tasks" description="Refreshed each time you open this.">
-          <Table
-            columns={[
-              { key: "name", header: "Task" },
-              { key: "due", header: "Due" },
-              { key: "status", header: "Status",
-                render: (row) => (
-                  <Badge tone={row.status === "overdue" ? "danger" : "default"}>
-                    {row.status}
-                  </Badge>
-                ) },
-            ]}
-            rows={tasks}
-          />
-        </Section>
-      </Stack>
+      <div className="flex flex-col gap-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Open</p>
+            <p className="text-2xl font-semibold">{tasks.length}</p>
+          </Card>
+          <Card className="p-6">
+            <p className="text-sm text-muted-foreground">Overdue</p>
+            <p className="text-2xl font-semibold text-destructive">{overdue.length}</p>
+          </Card>
+        </div>
+        <Card className="p-6">
+          <p className="mb-2 font-semibold">Open tasks</p>
+          <p className="mb-2 text-sm text-muted-foreground">Refreshed each time you open this.</p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="p-2 text-left font-medium text-muted-foreground">Task</th>
+                <th className="p-2 text-left font-medium text-muted-foreground">Due</th>
+                <th className="p-2 text-left font-medium text-muted-foreground">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.map((task) => (
+                <tr key={task.name} className="border-b">
+                  <td className="p-2">{task.name}</td>
+                  <td className="p-2 tabular-nums">{task.due}</td>
+                  <td className="p-2">
+                    <div className={badgeVariants({ variant: task.status === "overdue" ? "destructive" : "default" })}>
+                      {task.status}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
     </Canvas>
   );
 }
@@ -2880,35 +2920,52 @@ await primitives.tasks.update(
 # 4. Build the view over the stored tables.
 result = await primitives.canvas.create_view(
     tsx="""
-import {
-  BarChart, Canvas, Card, CardContent, CardHeader, CardTitle, Grid, Table,
-  type CanvasViewProps,
-} from "@unity/canvas-kit";
+import * as React from "react";
+import { Canvas, cn, seriesColor, type CanvasViewProps } from "@unity/canvas-kit";
+import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts";
 
 type Issue = { repo: string; count: number };
 type Deal = { dealname: string; amount: number };
 
+// Inlined shadcn card source; charts compose recharts directly with the
+// brand series helpers -- never a literal colour.
+function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("rounded-xl border bg-card p-6 text-card-foreground shadow", className)} {...props} />;
+}
+
 export default function Delivery({ canvas }: CanvasViewProps) {
+  const issues = (canvas.data.issues ?? []) as Issue[];
+  const deals = (canvas.data.deals ?? []) as Deal[];
+
   return (
     <Canvas>
-      <Grid columns={2}>
+      <div className="grid grid-cols-2 gap-4">
         <Card>
-          <CardHeader><CardTitle>Open issues by repo</CardTitle></CardHeader>
-          <CardContent>
-            <BarChart data={(canvas.data.issues ?? []) as Issue[]} x="repo" y="count" />
-          </CardContent>
+          <p className="mb-2 font-semibold">Open issues by repo</p>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={issues}>
+                <XAxis dataKey="repo" tickLine={false} axisLine={false} />
+                <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={24} />
+                <Bar dataKey="count" fill={seriesColor(0)} radius={4} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Pipeline</CardTitle></CardHeader>
-          <CardContent>
-            <Table
-              columns={[{ key: "dealname", header: "Deal" },
-                        { key: "amount", header: "Amount", numeric: true }]}
-              rows={(canvas.data.deals ?? []) as Deal[]}
-            />
-          </CardContent>
+          <p className="mb-2 font-semibold">Pipeline</p>
+          <table className="w-full text-sm">
+            <tbody>
+              {deals.map((deal) => (
+                <tr key={deal.dealname} className="border-b">
+                  <td className="p-2">{deal.dealname}</td>
+                  <td className="p-2 text-right tabular-nums">{deal.amount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </Card>
-      </Grid>
+      </div>
     </Canvas>
   );
 }
@@ -2938,20 +2995,26 @@ from unify.canvas_manager.types import CanvasAction
 
 result = await primitives.canvas.create_view(
     tsx="""
-import {
-  Canvas, Section, ActionForm, type CanvasViewProps,
-} from "@unity/canvas-kit";
+import * as React from "react";
+import { ActionForm, Canvas, cn, type CanvasViewProps } from "@unity/canvas-kit";
+
+function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("rounded-xl border bg-card p-6 text-card-foreground shadow", className)} {...props} />;
+}
 
 export default function BulkMail({ canvas }: CanvasViewProps) {
   return (
     <Canvas>
-      <Section title="Send an update"
-               description="Paste the recipients, write the message, send once.">
+      <Card>
+        <p className="font-semibold">Send an update</p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Paste the recipients, write the message, send once.
+        </p>
         {/* Renders the fields, blocks submit until the required ones are filled,
             and reports the outcome. Use `useCanvasAction(canvas, name)` instead
             when the interaction needs to be bespoke. */}
         <ActionForm canvas={canvas} action="bulk_send" />
-      </Section>
+      </Card>
     </Canvas>
   );
 }

@@ -303,7 +303,7 @@ class TestUpdateCumulativeSpend:
 
     @pytest.mark.asyncio
     async def test_update_spend_skips_zero_cost(self):
-        """_update_cumulative_spend should skip if billed_cost is zero."""
+        """_update_cumulative_spend should skip if the cost is zero."""
         with patch(
             "unify.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
@@ -314,7 +314,7 @@ class TestUpdateCumulativeSpend:
 
     @pytest.mark.asyncio
     async def test_update_spend_skips_negative_cost(self):
-        """_update_cumulative_spend should skip if billed_cost is negative."""
+        """_update_cumulative_spend should skip if the cost is negative."""
         with patch(
             "unify.common.log_utils.atomic_upsert",
             new_callable=AsyncMock,
@@ -558,20 +558,20 @@ class TestLLMEventHookSpendLogging:
     """Tests for spend logging in the LLM event hook."""
 
     def test_hook_does_not_fail_with_positive_cost(self):
-        """The LLM event hook should not fail if billed_cost is positive."""
+        """The LLM event hook should not fail if the cost is positive."""
         llm_event = LLMEvent(
             request={"model": "gpt-4o", "messages": []},
-            billed_cost=0.005,
+            provider_cost=0.005,
         )
 
         # This should not raise even without a running event loop
         _llm_event_to_eventbus(llm_event)
 
     def test_hook_does_not_fail_on_missing_cost(self):
-        """The LLM event hook should not fail if billed_cost is None."""
+        """The LLM event hook should not fail if the cost is None."""
         llm_event = LLMEvent(
             request={"model": "gpt-4o", "messages": []},
-            billed_cost=None,
+            provider_cost=None,
         )
 
         _llm_event_to_eventbus(llm_event)
@@ -581,7 +581,7 @@ class TestLLMEventHookSpendLogging:
         """LLM event hook should schedule spend update when loop is running."""
         llm_event = LLMEvent(
             request={"model": "gpt-4o", "messages": []},
-            billed_cost=0.005,
+            provider_cost=0.005,
         )
 
         with patch("unify.events.event_bus.EVENT_BUS") as mock_bus:
@@ -596,10 +596,10 @@ class TestLLMEventHookSpendLogging:
 
     @pytest.mark.asyncio
     async def test_hook_skips_spend_update_for_zero_cost(self):
-        """LLM event hook should skip spend update for zero billed_cost."""
+        """LLM event hook should skip spend update for zero cost."""
         llm_event = LLMEvent(
             request={"model": "gpt-4o", "messages": []},
-            billed_cost=0.0,
+            provider_cost=0.0,
         )
 
         with patch("unify.events.event_bus.EVENT_BUS") as mock_bus:
@@ -712,12 +712,12 @@ class TestCheckSpendingLimitsCallback:
         assert "exceeded" in response.reason.lower()
 
 
-class TestCreditGateState:
+class TestBillingGateState:
     """Tests for the lightweight prepaid-credit gate used by voice surfaces."""
 
     @pytest.mark.asyncio
     async def test_personal_zero_credits_blocks(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -740,7 +740,7 @@ class TestCreditGateState:
                     mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is False
         assert state.credit_balance == 0.0
@@ -750,7 +750,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_metered_zero_credits_allowed(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -773,7 +773,7 @@ class TestCreditGateState:
                     mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.credit_balance == 0.0
@@ -781,7 +781,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_org_context_checks_org_balance(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -804,7 +804,7 @@ class TestCreditGateState:
                     mock_instance.get_org_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.credit_balance == 12.0
@@ -813,7 +813,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_credit_gate_failures_fail_open(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         with patch("unify.spending_limits._get_api_key", return_value="test-key"):
             with patch("unify.session_details.SESSION_DETAILS") as mock_session:
@@ -831,7 +831,7 @@ class TestCreditGateState:
                     )
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.reason is None

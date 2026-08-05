@@ -60,7 +60,11 @@ from unify.conversation_manager.cm_types.screenshot import (
 from unify.actor.base import BaseActor
 from unify.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unify.conversation_manager.medium_scripts.common import FastBrainLogger
-from unify.spending_limits import check_credit_gate_state
+from unify.spending_limits import (
+    GATE_BLOCK_ACCOUNT_SUSPENDED,
+    GATE_BLOCK_CREDITS_DEPLETED,
+    check_billing_gate_state,
+)
 
 MAX_CONV_MANAGER_MSGS = 50
 # Upper bound a deferred hang-up waits for its explanatory line to be spoken
@@ -81,6 +85,12 @@ DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
 DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
+ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE = (
+    "This account is suspended, so I can't run setup or tasks right now. Adding "
+    "a payment method in billing usually lifts it — if that isn't it, email "
+    "support@unify.ai and we'll sort it out."
+)
+ACCOUNT_SUSPENDED_EMAIL_SUBJECT = "Account suspended"
 SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS = 600
 SLOW_BRAIN_FAILURE_RESPONSE = (
     "I hit a technical problem and couldn't respond just now. Please try "
@@ -99,6 +109,29 @@ WAIT_POLL_WINDOW_SECONDS = 600.0
 WAIT_POLL_FREE_BUDGET = 5
 WAIT_POLL_MIN_CLAMPED_DELAY_SECONDS = 60
 WAIT_POLL_MAX_CLAMPED_DELAY_SECONDS = 600
+
+# Meet-interaction surfaces, split by whose lifetime owns them. Every surface in
+# ``_MEET_STATE_FLAGS`` (the event-handler registry that applies them) belongs to
+# exactly one of the two groups below, which a test checks against that registry.
+#
+# Call-scoped surfaces exist only for the duration of one call, so a call
+# boundary closes them. Each maps to the screenshot sources it feeds, because
+# closing a surface and keeping its frames leaves the two disagreeing: the flag
+# says nobody is sharing while the buffer still offers the screen as current.
+CALL_SCOPED_MEET_SURFACES: dict[str, tuple[str, ...]] = {
+    "user_screen_share_active": ("user",),
+    "user_webcam_active": ("webcam",),
+    "meet_screen_share_active": ("google_meet", "teams_meet"),
+}
+# The assistant's own desktop is not call-scoped: the Console's Desktop tab
+# opens it with no call in sight and reports its own close on unmount. Clearing
+# these at a call boundary would tell the assistant nobody is watching while
+# that pane is still open, and would hand back control the user still holds.
+DESKTOP_SCOPED_MEET_SURFACES = (
+    "assistant_screen_share_active",
+    "user_remote_control_active",
+)
+
 COMMISSIONING_MUTATION_TOOL_NAMES = frozenset(
     {
         "act",
@@ -427,7 +460,10 @@ class ConversationManager(metaclass=SingletonABCMeta):
             None  # SnapshotState with element tracking for incremental diff computation
         )
 
-        # meet interaction state (screen share / webcam / remote control)
+        # meet interaction state (screen share / webcam / remote control).
+        # Each flag below is classified as call- or desktop-scoped by the
+        # ``*_MEET_SURFACES`` tuples above, which decide what a call boundary
+        # closes.
         self.assistant_screen_share_active: bool = False
         self.user_screen_share_active: bool = False
         # Someone in a browser meeting is sharing a screen with us. Kept apart
@@ -749,6 +785,38 @@ class ConversationManager(metaclass=SingletonABCMeta):
         ``act(persist=True)`` session when one isn't already running.
         """
         return self.assistant_screen_share_active
+
+    def reset_meet_surfaces(self) -> None:
+        """Close the call-scoped meet surfaces at a call boundary.
+
+        These flags describe surfaces shared during one call, but they live on
+        the CM, which outlives every call in the pod. Left alone they leak
+        forward: a share still marked active after hangup, or a webcam whose
+        "stopped" event never arrived because the Console unmounted first.
+
+        The frontend-ownership entries go with them, and that is the expensive
+        half. Ownership records which surfaces a frontend has spoken for, so
+        that track-inferred events stop overriding it — right within a call,
+        wrong across them. A 1:1 Console call claims both user surfaces; an org
+        call has no frontend reporting on either, so a stale claim leaves the
+        assistant capturing frames from a share it never registers as started.
+
+        Each surface's unpaired frames go too, for the reason
+        ``MeetScreenShareStopped`` already drops its own: an unpaired frame means
+        "what this source shows now", so once the source is gone it shows
+        nothing. Frames paired with an utterance stay — those are evidence for
+        something somebody said, and remain true after the screen goes.
+
+        Only ``CALL_SCOPED_MEET_SURFACES`` is touched — see
+        ``DESKTOP_SCOPED_MEET_SURFACES`` for why the assistant's own desktop
+        must survive a call boundary.
+        """
+
+        for surface, screenshot_sources in CALL_SCOPED_MEET_SURFACES.items():
+            setattr(self, surface, False)
+            self._frontend_reported_meet_surfaces.discard(surface)
+            for source in screenshot_sources:
+                self.drop_unpaired_screenshots(source)
 
     def get_active_contact(self) -> dict | None:
         """Get the contact for the current active call, or fall back to the boss contact."""
@@ -1846,17 +1914,30 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         return True
 
-    async def _send_credit_gate_reply(
+    async def _send_billing_gate_reply(
         self,
         reply_context: dict[str, Any],
+        blocked_by: str | None,
     ) -> bool:
+        """Reply with the advice that actually clears this refusal.
+
+        A suspension and an empty wallet need different actions, and neither
+        resolves by trying again — so neither may fall back to the generic
+        transient-failure copy.
+        """
+        if blocked_by == GATE_BLOCK_ACCOUNT_SUSPENDED:
+            content = ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE
+            subject = ACCOUNT_SUSPENDED_EMAIL_SUBJECT
+        else:
+            content = DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE
+            subject = DEPLETED_CREDITS_EMAIL_SUBJECT
         return await self._send_system_reply(
             reply_context,
-            content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-            email_subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+            content=content,
+            email_subject=subject,
         )
 
-    async def _maybe_handle_depleted_credit_gate(
+    async def _maybe_handle_billing_gate(
         self,
         trace_meta: dict[str, Any],
     ) -> bool:
@@ -1864,24 +1945,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not reply_context:
             return False
 
-        credit_gate_state = await check_credit_gate_state()
-        if credit_gate_state.allowed:
+        gate_state = await check_billing_gate_state()
+        if gate_state.allowed:
             return False
 
+        blocked_by = gate_state.blocked_by or GATE_BLOCK_CREDITS_DEPLETED
         if self._credit_gate_reply_is_throttled(reply_context):
             self._session_logger.info(
-                "credit_gate",
-                "Skipped repeated depleted-credit reply",
+                "billing_gate",
+                f"Skipped repeated billing-gate reply ({blocked_by})",
             )
             return True
 
-        sent = await self._send_credit_gate_reply(reply_context)
+        sent = await self._send_billing_gate_reply(reply_context, blocked_by)
         self._session_logger.info(
-            "credit_gate",
+            "billing_gate",
             (
-                "Served depleted-credit reply"
+                f"Served billing-gate reply ({blocked_by})"
                 if sent
-                else "Skipped depleted-credit reply without a deliverable channel"
+                else f"Skipped billing-gate reply ({blocked_by}) "
+                "without a deliverable channel"
             ),
         )
         return True
@@ -1996,7 +2079,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"is_user_origin={is_user_origin}"
             ),
         )
-        if await self._maybe_handle_depleted_credit_gate(selected_meta):
+        if await self._maybe_handle_billing_gate(selected_meta):
             log_startup_timing(
                 LOGGER,
                 (

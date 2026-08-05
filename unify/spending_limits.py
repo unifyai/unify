@@ -186,10 +186,9 @@ class _LimitCheckResult:
     billing_mode: Optional[str] = None
     # Account frozen server-side (admin freeze, card gate, abuse sweep).
     account_suspended: bool = False
-    # Trial daily-burn ceiling: populated by Orchestra only for accounts
-    # with no real payment history.
-    trial_daily_spend: Optional[float] = None
-    trial_daily_cap: Optional[float] = None
+    # Account has no real payment history. Set by Orchestra; false for
+    # internal accounts and admin-granted free trials.
+    never_paid: bool = False
     # The check could not be completed (Orchestra unreachable or errored).
     # Distinct from a clean 404, which legitimately means "no limit set".
     check_failed: bool = False
@@ -198,12 +197,20 @@ class _LimitCheckResult:
     api_access_allowed: bool = True
 
 
+# Why a billing gate refused. Callers pick the wording the user sees from
+# this, so a refusal never reaches them as a generic fault they are told to
+# retry — the two causes need opposite advice, and neither clears on a retry.
+GATE_BLOCK_ACCOUNT_SUSPENDED = "account_suspended"
+GATE_BLOCK_CREDITS_DEPLETED = "credits_depleted"
+
+
 @dataclass(frozen=True)
-class CreditGateState:
-    """Current prepaid-credit gate state for surfaces that stay conversational."""
+class BillingGateState:
+    """Whether billing permits work, for surfaces that stay conversational."""
 
     allowed: bool = True
     reason: Optional[str] = None
+    blocked_by: Optional[str] = None
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
 
@@ -233,8 +240,7 @@ def _parse_spend_result(
     billing_mode = data.get("billing_mode")
     gate_fields = {
         "account_suspended": bool(data.get("account_suspended", False)),
-        "trial_daily_spend": data.get("trial_daily_spend"),
-        "trial_daily_cap": data.get("trial_daily_cap"),
+        "never_paid": bool(data.get("never_paid", False)),
         # Defaults True so an Orchestra build predating the field — or an
         # endpoint that doesn't carry it — never silently locks the API.
         "api_access_allowed": bool(data.get("api_access_allowed", True)),
@@ -263,55 +269,76 @@ def _parse_spend_result(
     )
 
 
-def _credit_gate_from_spend_data(data: dict) -> CreditGateState:
+def _billing_gate_from_spend_data(data: dict) -> BillingGateState:
+    """Read every refusal the spend payload carries, not just the wallet.
+
+    Mirrors the deny order of :func:`check_spending_limits_callback`, which is
+    what actually stops the call: suspension outranks billing mode, so a
+    suspended METERED account is still refused. A cause this gate does not
+    know about surfaces to the user as an unexplained failure they are told to
+    retry, and silently drops any work that needed a model turn.
+    """
     credit_balance = data.get("credit_balance")
     billing_mode = data.get("billing_mode")
 
+    if bool(data.get("account_suspended", False)):
+        return BillingGateState(
+            allowed=False,
+            reason="Account is suspended.",
+            blocked_by=GATE_BLOCK_ACCOUNT_SUSPENDED,
+            credit_balance=credit_balance,
+            billing_mode=billing_mode,
+        )
+
     if billing_mode == "METERED":
-        return CreditGateState(
+        return BillingGateState(
             allowed=True,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
         )
 
     if credit_balance is not None and credit_balance <= 0:
-        return CreditGateState(
+        return BillingGateState(
             allowed=False,
             reason=(
                 f"Insufficient credits: balance is ${credit_balance:.2f}. "
                 "Please add credits to continue."
             ),
+            blocked_by=GATE_BLOCK_CREDITS_DEPLETED,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
         )
 
-    return CreditGateState(
+    return BillingGateState(
         allowed=True,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
     )
 
 
-async def check_credit_gate_state() -> CreditGateState:
-    """Return the active billing account's prepaid-credit gate state.
+async def check_billing_gate_state() -> BillingGateState:
+    """Return whether billing permits work for the active account.
 
-    This is intentionally narrower than ``check_spending_limits_callback``:
-    it only checks whether the active prepaid wallet is empty. Voice surfaces
-    can keep the call alive while using this state to avoid task guidance when
-    credits are depleted.
+    Narrower than ``check_spending_limits_callback``: it answers "will the
+    spend boundary refuse this account outright", not "is this particular
+    model call within every limit". Voice surfaces keep the call alive and use
+    it to stop offering work that cannot run; text surfaces use it to say why
+    before a turn is attempted.
+
+    Fails open — an unreadable account is not a refused one.
     """
     from .session_details import SESSION_DETAILS
 
     api_key = _get_api_key()
     if not api_key:
-        logger.debug("Credit gate check skipped: no API key")
-        return CreditGateState()
+        logger.debug("Billing gate check skipped: no API key")
+        return BillingGateState()
 
     user_id = SESSION_DETAILS.user_id
     org_id = SESSION_DETAILS.org_id
     if not user_id:
-        logger.debug("Credit gate check skipped: missing user context")
-        return CreditGateState()
+        logger.debug("Billing gate check skipped: missing user context")
+        return BillingGateState()
 
     timezone = "UTC"
     if SESSION_DETAILS.assistant:
@@ -324,14 +351,14 @@ async def check_credit_gate_state() -> CreditGateState:
             data = await client.get_org_spend(org_id=org_id, month=month)
         else:
             data = await client.get_user_spend(month=month)
-        return _credit_gate_from_spend_data(data)
+        return _billing_gate_from_spend_data(data)
     except SpendRequestError as e:
         if e.status != 404:
-            logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
-        return CreditGateState()
+            logger.warning(f"Failed to check billing gate: {type(e).__name__}: {e}")
+        return BillingGateState()
     except Exception as e:
-        logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
-        return CreditGateState()
+        logger.warning(f"Failed to check billing gate: {type(e).__name__}: {e}")
+        return BillingGateState()
 
 
 async def _check_assistant_limit(
@@ -583,8 +610,7 @@ async def check_spending_limits_callback(
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
     account_suspended = False
-    trial_daily_spend: Optional[float] = None
-    trial_daily_cap: Optional[float] = None
+    never_paid = False
     check_failed = False
     api_access_allowed = True
 
@@ -602,10 +628,7 @@ async def check_spending_limits_callback(
         if billing_mode is None and result.billing_mode is not None:
             billing_mode = result.billing_mode
         account_suspended = account_suspended or result.account_suspended
-        if trial_daily_spend is None and result.trial_daily_spend is not None:
-            trial_daily_spend = result.trial_daily_spend
-        if trial_daily_cap is None and result.trial_daily_cap is not None:
-            trial_daily_cap = result.trial_daily_cap
+        never_paid = never_paid or result.never_paid
 
         if result.exceeded:
             current = (
@@ -667,18 +690,17 @@ async def check_spending_limits_callback(
             ),
         )
 
-    # Paid-only providers. ``trial_daily_cap`` is Orchestra's never-paid
-    # marker: it is populated only for accounts with no real payment
-    # history, and is already NULL for internal accounts and for orgs
-    # holding an admin-granted free trial, so those keep full model access
-    # without a second exemption list here.
+    # Paid-only providers. Orchestra sets ``never_paid`` only for accounts
+    # with no real payment history, and already clears it for internal
+    # accounts and for orgs holding an admin-granted free trial, so those
+    # keep full model access without a second exemption list here.
     #
     # Unlike the Console-only gate above this applies on every surface,
     # including the runtime. An account that has never paid cannot reach
     # these providers from the Console either — that is the point, since
     # the Console is where the free grant is meant to be spent and these
     # models are what make spending it worthwhile.
-    if _payment_gated(request.model, never_paid=trial_daily_cap is not None):
+    if _payment_gated(request.model, never_paid=never_paid):
         provider = _provider_of(request.model)
         return LimitCheckResponse(
             allowed=False,
@@ -686,22 +708,6 @@ async def check_spending_limits_callback(
                 f"{provider} models require a payment method on this "
                 "account. Add one to enable them, or switch this assistant "
                 "to one of the included models."
-            ),
-        )
-
-    # Trial daily-burn ceiling (never-paid accounts only): bounds how fast
-    # trial credits can be extracted regardless of remaining balance.
-    if (
-        trial_daily_cap is not None
-        and trial_daily_spend is not None
-        and trial_daily_spend >= trial_daily_cap
-    ):
-        return LimitCheckResponse(
-            allowed=False,
-            reason=(
-                f"Daily trial spend limit reached (${trial_daily_spend:.2f} "
-                f"of ${trial_daily_cap:.2f} today). It resets at midnight "
-                "UTC; subscribe with a payment method to lift it."
             ),
         )
 
