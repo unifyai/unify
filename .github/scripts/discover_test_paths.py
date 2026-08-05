@@ -412,65 +412,132 @@ def discover_all():
     return paths
 
 
-def _declares_eval(test_file: Path) -> bool:
-    """Whether *test_file* applies the eval marker.
+def _is_eval_marker(node) -> bool:
+    """Whether *node* is the ``pytest.mark.eval`` attribute itself.
 
-    Both spellings live in the file that applies them — the module-level
-    ``pytestmark = [pytest.mark.eval, ...]`` and the ``@pytest.mark.eval``
-    decorator — so the source answers this without importing anything or
-    resolving pytest plugins.
-
-    Reading the AST rather than searching the text is what separates applying
-    the marker from naming it: a test that asserts something *about* the marker
-    quotes the same dotted path, and counting that mention would hand the
-    matrix a directory the filter then empties.
+    Reading the AST rather than searching the text separates applying the
+    marker from naming it: a test asserting something *about* the marker quotes
+    the same dotted path, and counting that mention would hand the matrix a
+    directory the filter then empties.
     """
-    try:
-        tree = ast.parse(test_file.read_text(encoding="utf-8"))
-    except SyntaxError:
-        return False
-    return any(
+    return (
         isinstance(node, ast.Attribute)
         and node.attr == "eval"
         and isinstance(node.value, ast.Attribute)
         and node.value.attr == "mark"
         and isinstance(node.value.value, ast.Name)
         and node.value.value.id == "pytest"
-        for node in ast.walk(tree)
     )
 
 
-def narrow_to_eval(entry: str) -> str:
-    """Narrow one matrix entry to the members that declare eval tests.
+def _eval_aliases(tree) -> set:
+    """Module-level names bound directly to the marker.
+
+    ``pytestmark_eval = pytest.mark.eval`` and then ``@pytestmark_eval`` is
+    common here — 32 files apply the marker that way — and a decorator matcher
+    that only recognised the dotted form would report those files as carrying
+    no eval tests at all.
+    """
+    aliases = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and _is_eval_marker(node.value):
+            aliases |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    return aliases
+
+
+def _marks_eval(nodes, aliases: set) -> bool:
+    return any(
+        _is_eval_marker(n) or (isinstance(n, ast.Name) and n.id in aliases)
+        for d in nodes
+        for n in ast.walk(d)
+    )
+
+
+def marker_content(test_file: Path) -> tuple[bool, bool]:
+    """Return ``(has_eval_tests, has_non_eval_tests)`` for *test_file*.
+
+    Both answers are needed because the two marker filters ask opposite
+    questions, and neither is the negation of the other. A module-level
+    ``pytestmark`` carrying the marker applies it to every test in the file, so
+    the file offers nothing to a "not eval" selection. Per-test decorators
+    usually leave both kinds behind — but a file whose every test is decorated
+    individually offers nothing either, which is why the tests are counted
+    rather than the file being judged as a whole.
+    """
+    try:
+        tree = ast.parse(test_file.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return (False, False)
+
+    aliases = _eval_aliases(tree)
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
+        ):
+            if _marks_eval([node], aliases):
+                return (True, False)
+
+    found = {"eval": False, "non_eval": False}
+
+    def walk(body, inherited: bool) -> None:
+        for node in body:
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ) and node.name.startswith("test"):
+                marked = inherited or _marks_eval(node.decorator_list, aliases)
+                found["eval" if marked else "non_eval"] = True
+            elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                walk(node.body, inherited or _marks_eval(node.decorator_list, aliases))
+
+    walk(tree.body, False)
+    return (found["eval"], found["non_eval"])
+
+
+def narrow_to_marker(entry: str, *, want_eval: bool) -> str:
+    """Narrow one matrix entry to the members a marker filter will still select.
 
     An entry is either a directory or a space-separated bundle of test files,
     so both shapes have to be handled: globbing a bundle as if it were a path
     matches nothing and silently drops it from the matrix.
 
     Narrowing matters because a shard whose filter selects no test at all is a
-    hard error in parallel_run.sh. Discovering every path under --eval-only
-    would fail almost every job for having nothing to run, which reads as a
-    broken suite rather than an empty one.
+    hard error in parallel_run.sh. Handing the whole suite to either filter
+    fails every job that happens to sit entirely on the other side of it, which
+    reads as a broken suite rather than an empty selection.
 
-    A conftest that applies the marker to files beside it is invisible here.
+    A conftest applying the marker to files beside it is invisible here.
     tests/flows is the only place that does that, and it is excluded from
-    discovery anyway — its per-run identifiers mean it can never replay from a
-    cache.
+    discovery anyway.
     """
+    index = 0 if want_eval else 1
     kept = []
     for token in entry.split():
         path = Path(token)
         if path.is_dir():
-            if any(_declares_eval(f) for f in path.glob("test_*.py")):
-                kept.append(token)
-        elif path.is_file() and _declares_eval(path):
+            members = path.glob("test_*.py")
+        elif path.is_file():
+            members = [path]
+        else:
+            continue
+        if any(marker_content(f)[index] for f in members):
             kept.append(token)
     return " ".join(kept)
 
 
+MARKER_FLAGS = {"--eval-only": True, "--symbolic-only": False}
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a != "--eval-only"]
-    eval_only = "--eval-only" in sys.argv[1:]
+    flags = [a for a in sys.argv[1:] if a in MARKER_FLAGS]
+    args = [a for a in sys.argv[1:] if a not in MARKER_FLAGS]
+
+    if len(flags) > 1:
+        # parallel_run.sh rejects the pair outright; narrowing for both at once
+        # would resolve to nothing and read as a suite with no tests in it.
+        print(f"Pass at most one of {sorted(MARKER_FLAGS)}", file=sys.stderr)
+        sys.exit(2)
 
     if args:
         # Explicit paths provided - expand each one
@@ -483,8 +550,13 @@ def main():
         # No arguments - discover all from tests/
         paths = discover_all()
 
-    if eval_only:
-        paths = [narrowed for p in paths if (narrowed := narrow_to_eval(p))]
+    if flags:
+        want_eval = MARKER_FLAGS[flags[0]]
+        paths = [
+            narrowed
+            for p in paths
+            if (narrowed := narrow_to_marker(p, want_eval=want_eval))
+        ]
 
     # Output unique paths, sorted
     for p in sorted(set(paths)):
