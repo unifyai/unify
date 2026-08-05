@@ -8366,7 +8366,7 @@ class _VenvSyncAdapter(CustomSyncAdapter):
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._venvs_ctx,
-            filter=managed_rows_filter(self.source_id),
+            filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._venvs_ctx),
         )
         rows: List[Dict[str, Any]] = []
@@ -8438,7 +8438,7 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
     def live_rows(self) -> List[Dict[str, Any]]:
         logs = unisdk.get_logs(
             context=self._manager._compositional_ctx,
-            filter=managed_rows_filter(self.source_id),
+            filter=managed_rows_filter(self.managed_by),
             exclude_fields=list_private_fields(self._manager._compositional_ctx),
         )
         rows: List[Dict[str, Any]] = []
@@ -8485,7 +8485,7 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
 
         Adoption updates in place via ``function_id``, so references held
         by task entrypoints stay valid; the update stamps
-        ``custom_key``/``custom_hash``/``source_id`` alongside the body.
+        ``custom_key``/``custom_hash``/``managed_by`` alongside the body.
         """
         existing = unisdk.get_logs(
             context=self._manager._compositional_ctx,

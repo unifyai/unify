@@ -17,11 +17,11 @@ from typing import Any, Callable, Dict, Mapping
 from unify.workflow_manager.types.workflow import WorkflowMode
 
 SurfaceSyncer = Callable[..., bool]
-"""A manager's ``sync_custom``, called with its source kwarg and ``source_id``."""
+"""A manager's ``sync_custom``, called with its source kwarg and ``managed_by``."""
 
 
 class UnscopedSurfaceError(RuntimeError):
-    """A surface was registered before its adapter honours ``source_id``.
+    """A surface was registered before its adapter honours ``managed_by``.
 
     Registering an unscoped surface is not a degraded mode, it is data
     loss: that manager's ``live_rows`` still selects every managed row in
@@ -34,9 +34,9 @@ class UnscopedSurfaceError(RuntimeError):
     def __init__(self, surface: str) -> None:
         self.surface = surface
         super().__init__(
-            f"Surface {surface!r} is not source-scoped; registering it "
+            f"Surface {surface!r} is not managed-scoped; registering it "
             "would let workflows and the deployment prune each other's "
-            "rows. Thread source_id through that manager's adapter first.",
+            "rows. Thread managed_by through that manager's adapter first.",
         )
 
 
@@ -53,8 +53,8 @@ class Surface:
     source_kwarg: str
     """Keyword its collected source arrives on, e.g. ``"source_guidance"``."""
 
-    def sync(self, source: Mapping[str, Dict[str, Any]], *, source_id: str) -> bool:
-        return self.syncer(**{self.source_kwarg: dict(source)}, source_id=source_id)
+    def sync(self, source: Mapping[str, Dict[str, Any]], *, managed_by: str) -> bool:
+        return self.syncer(**{self.source_kwarg: dict(source)}, managed_by=managed_by)
 
 
 @dataclass
@@ -78,7 +78,7 @@ class WorkflowBundle:
             raise ValueError("A workflow bundle needs a slug.")
         if self.slug == "deployment":
             raise ValueError(
-                "'deployment' is the reserved source_id for the assistant's "
+                "'deployment' is the reserved managed_by for the assistant's "
                 "own sources; a bundle may not claim it.",
             )
 
@@ -107,7 +107,7 @@ class SurfaceRegistry:
     """The surfaces a workflow install is allowed to fan out to.
 
     Deliberately explicit. A manager appears here only once its adapter
-    scopes ``live_rows`` and its collision probe to ``source_id``; until
+    scopes ``live_rows`` and its collision probe to ``managed_by``; until
     then :class:`UnscopedSurfaceError` keeps workflows away from it.
     """
 

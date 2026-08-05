@@ -16,7 +16,7 @@ class WorkflowMode(str, Enum):
     """How long a workflow keeps ownership of the rows it planted.
 
     The mode is policy, not provenance. Every row a workflow writes
-    carries its ``source_id`` under either mode, so "what did this
+    carries its ``managed_by`` under either mode, so "what did this
     workflow plant?" always has an answer. What the mode decides is
     whether the bundle keeps reconciling those rows.
     """
@@ -41,7 +41,7 @@ class WorkflowInstallation(AuthoredRow):
     was installed, at which version, under which mode, and which surfaces
     it wrote to. The bundle's *content* lives in the surfaces themselves
     (guidance rows, task rows, ...), each stamped with this row's
-    :attr:`slug` as its ``source_id``.
+    :attr:`slug` as its ``managed_by``.
     """
 
     SHORTHAND_MAP: ClassVar[dict[str, str]] = {
@@ -64,7 +64,7 @@ class WorkflowInstallation(AuthoredRow):
     slug: str = Field(
         description=(
             "Stable bundle identifier, e.g. 'draft_email_replies'. Doubles "
-            "as the custom-sync source_id stamped onto every row this "
+            "as the custom-sync managed_by stamped onto every row this "
             "workflow plants, so it must not change across versions."
         ),
     )
