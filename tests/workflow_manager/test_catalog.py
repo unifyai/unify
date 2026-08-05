@@ -144,3 +144,44 @@ def test_load_catalog_is_strict(tmp_path: Path):
 
     with pytest.raises(ValueError, match="'name'"):
         load_catalog(tmp_path)
+
+
+def test_actor_tools_are_gated_on_the_catalogue():
+    """WorkflowManager_* tools enter the actor's schema only when the
+    curated catalogue is configured: deployments without a shelf keep
+    their tool set — and their LLM caches — byte-identical."""
+
+    def tool():
+        pass
+
+    from unify.actor.prompt_builders import build_code_act_prompt
+
+    with_shelf = build_code_act_prompt(
+        environments={},
+        tools={"execute_code": tool, "WorkflowManager_install_workflow": tool},
+    )
+    assert "Installable workflows" in with_shelf
+
+    without_shelf = build_code_act_prompt(
+        environments={},
+        tools={"execute_code": tool},
+    )
+    assert "Installable workflows" not in without_shelf
+
+
+def test_workflow_manager_tools_carry_the_llm_contract():
+    """The tool docstrings are the LLM-facing contract, attached from
+    base.py via functools.wraps — an implementation method without its
+    base docstring ships an undocumented tool."""
+    from unify.workflow_manager.workflow_manager import WorkflowManager
+
+    for method in (
+        "list_workflows",
+        "get_workflow",
+        "install_workflow",
+        "uninstall_workflow",
+        "reconcile_installed",
+        "get_installation_params",
+    ):
+        doc = getattr(WorkflowManager, method).__doc__ or ""
+        assert len(doc) > 100, f"{method} lost its base docstring"

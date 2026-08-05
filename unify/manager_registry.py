@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from .task_scheduler.base import BaseTaskScheduler
     from .transcript_manager.base import BaseTranscriptManager
     from .web_searcher.base import BaseWebSearcher
+    from .workflow_manager.base import BaseWorkflowManager
     from .function_manager.primitives.scope import PrimitiveScope
 
 __all__ = [
@@ -577,6 +578,24 @@ class ManagerRegistry:
         )
 
     @classmethod
+    def get_workflow_manager(
+        cls,
+        *,
+        description: str | None = None,
+        simulation_guidance: str | None = None,
+        _force_new: bool = False,
+        **kwargs: Any,
+    ) -> "BaseWorkflowManager":
+        """Get the WorkflowManager singleton (respects IMPL settings)."""
+        return cls.get(
+            "workflows",
+            description=description,
+            simulation_guidance=simulation_guidance,
+            _force_new=_force_new,
+            **kwargs,
+        )
+
+    @classmethod
     def get_image_manager(
         cls,
         *,
@@ -760,6 +779,7 @@ def _populate_registry() -> None:
     ManagerRegistry.register_settings("images", lambda: SETTINGS.image)
     ManagerRegistry.register_settings("ingestion", lambda: SETTINGS.ingestion)
     ManagerRegistry.register_settings("memory", lambda: SETTINGS.memory)
+    ManagerRegistry.register_settings("workflows", lambda: SETTINGS.workflow)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Actor implementations
@@ -840,6 +860,13 @@ def _populate_registry() -> None:
 
     ManagerRegistry.register_class("guidance", "real", GuidanceManager)
     ManagerRegistry.register_class("guidance", "simulated", SimulatedGuidanceManager)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # WorkflowManager implementations
+    # ─────────────────────────────────────────────────────────────────────────
+    from .workflow_manager.workflow_manager import WorkflowManager
+
+    ManagerRegistry.register_class("workflows", "real", WorkflowManager)
 
     # ─────────────────────────────────────────────────────────────────────────
     # SecretManager implementations

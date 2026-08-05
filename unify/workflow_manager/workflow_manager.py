@@ -15,6 +15,7 @@ which is what makes update and uninstall possible at all.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import threading
@@ -457,6 +458,7 @@ class WorkflowManager(BaseWorkflowManager):
     # ------------------------------------------------------------------ #
     # Public API                                                         #
     # ------------------------------------------------------------------ #
+    @functools.wraps(BaseWorkflowManager.list_workflows, updated=())
     def list_workflows(
         self,
         *,
@@ -524,6 +526,7 @@ class WorkflowManager(BaseWorkflowManager):
             "total": len(entries),
         }
 
+    @functools.wraps(BaseWorkflowManager.install_workflow, updated=())
     def install_workflow(
         self,
         *,
@@ -542,12 +545,18 @@ class WorkflowManager(BaseWorkflowManager):
                 },
             )
 
-        resolved_params = self._validate_params(bundle, params or {})
         context = self._workflow_context_for_destination(destination)
         meta_context = self._meta_context_for_destination(destination)
 
         with exclusive_sync_lease(f"{meta_context}:workflow_install"):
             existing = self._read_installation(slug, context=context)
+
+            # Reinstalling without params keeps the recorded settings, so
+            # retry / upgrade / arm-on-connect never silently reset a
+            # configured mailbox; passing params is the settings change.
+            if params is None and existing is not None:
+                params = json.loads(existing.get("params") or "{}")
+            resolved_params = self._validate_params(bundle, params or {})
 
             # Every install reconciles to the current bundle — a repeat
             # install is retry, upgrade and arm-on-connect all at once.
@@ -612,24 +621,16 @@ class WorkflowManager(BaseWorkflowManager):
             )
         return result
 
+    @functools.wraps(BaseWorkflowManager.reconcile_installed, updated=())
     def reconcile_installed(
         self,
         *,
         slugs: Optional[List[str]] = None,
         destination: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Bring every installed workflow back in line with its bundle.
-
-        The single upkeep entrypoint: version upgrades, retry of partial
-        installs, and re-checking requirements to arm or hold jobs all go
-        through here — it is ``install_workflow`` re-run with the recorded
-        settings, per slug. Unchanged bundles short-circuit on their
-        aggregate hashes, so a no-op pass costs one meta read per surface.
-
-        Installations whose bundle has left the catalogue cannot be
-        reconciled (there is nothing to reconcile against) and are
-        reported as orphaned rather than touched.
-        """
+        # install_workflow re-run with the recorded settings, per slug.
+        # Unchanged bundles short-circuit on their aggregate hashes, so a
+        # no-op pass costs one meta read per surface.
         context = self._workflow_context_for_destination(destination)
         rows = self._installations_in(context)
         if slugs is not None:
@@ -663,19 +664,13 @@ class WorkflowManager(BaseWorkflowManager):
         )
         return [dict(lg.entries or {}) for lg in logs]
 
+    @functools.wraps(BaseWorkflowManager.get_installation_params, updated=())
     def get_installation_params(
         self,
         *,
         slug: str,
         destination: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Read one installation's settings, for the workflow's own tasks.
-
-        This is the runtime half of the params contract: settings are
-        recorded on the installation and read here when a planted task or
-        function needs them — never baked into the planted rows, which
-        must stay byte-identical across installs.
-        """
         context = self._workflow_context_for_destination(destination)
         existing = self._read_installation(slug, context=context)
         if existing is None:
@@ -688,6 +683,7 @@ class WorkflowManager(BaseWorkflowManager):
             )
         return json.loads(existing.get("params") or "{}")
 
+    @functools.wraps(BaseWorkflowManager.uninstall_workflow, updated=())
     def uninstall_workflow(
         self,
         *,
@@ -752,6 +748,7 @@ class WorkflowManager(BaseWorkflowManager):
             )
         return result
 
+    @functools.wraps(BaseWorkflowManager.get_workflow, updated=())
     def get_workflow(self, *, slug: str) -> Dict[str, Any]:
         bundle = self._catalogue.get(slug)
         row = next(

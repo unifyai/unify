@@ -132,7 +132,9 @@ class BaseWorkflowManager(BaseStateManager, metaclass=SingletonABCMeta):
         params:
             Install-time settings declared by the bundle, e.g. which
             mailbox to work from. Ask the user for any the bundle requires
-            rather than guessing.
+            rather than guessing. On a reinstall, omitting this keeps the
+            settings already recorded; passing it replaces them, which is
+            also how an installed workflow's settings are changed.
         destination:
             ``None`` for personal, or ``team:<id>`` to install for a whole
             team. A team install plants content for every member.

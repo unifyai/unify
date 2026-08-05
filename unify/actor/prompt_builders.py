@@ -142,6 +142,41 @@ _FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY = textwrap.dedent("""
     | **read_only** | `await func.read_only(...)` | Sees current state, changes discarded |
 """).strip()
 
+_WORKFLOW_SHELF = textwrap.dedent("""
+    ### Installable workflows
+
+    The `WorkflowManager_*` tools manage a shelf of curated, versioned
+    packages — each one sets an assistant up for a recurring job (its
+    procedures, functions, recurring tasks, typed claims) in one install.
+
+    **Install vs. build.** When the user asks for a capability shaped like
+    a packaged job ("set me up to draft email replies each morning"),
+    check the shelf first with `WorkflowManager_list_workflows`. Install
+    when a workflow matches; build with tasks/guidance/functions only for
+    genuinely bespoke requests. Do not hand-assemble what a workflow
+    already packages, and do not install a workflow to get just one of
+    its pieces.
+
+    **Installing is consequential.** It plants content and creates
+    recurring jobs that will act on their own later. Confirm with the
+    user before installing anything they did not explicitly ask for, and
+    afterwards report exactly what was set up — every recurring job and
+    its schedule in plain language, and any settings recorded.
+
+    **A missing connection is not an error.** When the result carries
+    `connect_required`, the workflow is installed but held: tell the user
+    which app to connect and that nothing fires in the meantime.
+    Reinstalling after they connect arms the jobs.
+
+    **After install, everything is ordinary.** Planted procedures are
+    found by the same guidance search as any other; planted tasks are
+    ordinary tasks, run and steered through the usual task tools. There
+    is no workflow-level "run": running means triggering the workflow's
+    own task. Uninstalling removes what the workflow planted and stops
+    its jobs — name them before confirming.
+""")
+
+
 _DISCOVERY_FIRST_POLICY = textwrap.dedent("""
     ### Discovery-First Policy (Active) — HARD REQUIREMENT
 
@@ -1232,6 +1267,9 @@ def build_code_act_prompt(
     has_km_tools = bool(
         tools and any(str(k).startswith("KnowledgeManager_") for k in tools.keys()),
     )
+    has_wm_tools = bool(
+        tools and any(str(k).startswith("WorkflowManager_") for k in tools.keys()),
+    )
 
     additional_tools_block = _build_additional_tools_block(
         tools=tools,
@@ -1299,6 +1337,9 @@ def build_code_act_prompt(
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
 
+        if has_wm_tools:
+            parts.append(_WORKFLOW_SHELF)
+
         if can_store:
             parts.append(_STORAGE_DEFERRED_NOTICE)
 
@@ -1326,6 +1367,9 @@ def build_code_act_prompt(
             parts.append(_FUNCTION_GUIDANCE_AND_KNOWLEDGE_LIBRARY)
             if discovery_first_policy:
                 parts.append(_DISCOVERY_FIRST_POLICY)
+
+        if has_wm_tools:
+            parts.append(_WORKFLOW_SHELF)
 
         workflow = (
             "### Workflow\n\n"
