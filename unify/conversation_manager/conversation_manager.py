@@ -1454,7 +1454,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
     def _is_transient_llm_error(exc: BaseException) -> bool:
         """True if ``exc`` is a provider-side transient error after unillm retries.
 
-        unillm (``retry_transient_400_async``) already retries these internally
+        unillm (``retry_transient_llm_async``) already retries these internally
         with exponential backoff. If one escapes, it means the provider stayed
         unhealthy for the whole retry budget — e.g. Anthropic HTTP 529
         ``overloaded_error`` surfaces as ``litellm.InternalServerError``.

@@ -8,7 +8,7 @@ Background
 ----------
 When the ConversationManager's slow-brain turn raises a transient provider
 error (e.g. Anthropic HTTP 529 ``overloaded_error`` → ``litellm.InternalServerError``),
-unillm's ``retry_transient_400_async`` retries with exponential backoff. If
+unillm's ``retry_transient_llm_async`` retries with exponential backoff. If
 the provider remains unhealthy for the whole retry budget the exception
 escapes ``_run_llm``. Before this fix the only visible outcome was a
 ``Slow-brain task failed: ...`` log line — the user's utterance was
