@@ -678,6 +678,22 @@ class TestEvalOnlyDiscoveryAgreement:
 
     SCRIPT = ".github/scripts/discover_test_paths.py"
 
+    def _root(self):
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[2]
+
+    def _script_module(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_discover",
+            self._root() / self.SCRIPT,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def _discover(self, *args: str) -> list[str]:
         import subprocess
         import sys
@@ -785,3 +801,37 @@ class TestEvalOnlyDiscoveryAgreement:
         )
         assert done.returncode != 0
         assert not done.stdout.strip()
+
+    def test_deterministic_only_narrows_the_matrix(self):
+        assert 0 < len(self._discover("--deterministic-only")) < len(self._discover())
+
+    def test_every_deterministic_entry_has_a_model_free_test(self):
+        """A shard of purely model-backed tests is the failure case.
+
+        "not eval" still admits every llm_call test, and those answer to
+        whatever the shared cache holds — under read-only a request with no
+        recorded entry raises, so a sweep for broken tests reports cache gaps
+        instead. This selection has to leave only shards that can answer for
+        themselves.
+        """
+        mod = self._script_module()
+        root = self._root()
+        for entry in self._discover("--deterministic-only"):
+            members = []
+            for token in entry.split():
+                target = root / token
+                members.extend(
+                    target.glob("test_*.py") if target.is_dir() else [target],
+                )
+            assert any(
+                mod.marker_content(m).has_deterministic for m in members
+            ), f"discovery offered {entry!r}, which --deterministic-only empties"
+
+    def test_llm_call_alone_is_not_deterministic(self):
+        """An llm_call test without the eval marker still is not model-free."""
+        mod = self._script_module()
+        content = mod.marker_content(
+            self._root() / "tests/event_bus/test_spending.py",
+        )
+        assert content.has_non_eval, "no eval marker, so a 'not eval' run keeps it"
+        assert content.has_deterministic, "and it does hold model-free tests too"

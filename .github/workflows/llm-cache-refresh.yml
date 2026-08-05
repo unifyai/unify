@@ -139,13 +139,15 @@ jobs:
           exit 0
         fi
 
-        # Recording the eval corpus means dispatching this with --eval-only, so
-        # discovery has to narrow to the paths that carry those tests: a shard
-        # whose filter selects nothing is a hard error in parallel_run.sh.
+        # Recording a marker's corpus means dispatching this with that marker's
+        # flag, so discovery has to narrow to the paths carrying those tests: a
+        # shard whose filter selects nothing is a hard error in parallel_run.sh.
         DISCOVERY_FLAGS=()
-        if [[ " $EXTRA_ARGS " == *" --eval-only "* ]]; then
-          DISCOVERY_FLAGS+=(--eval-only)
-        fi
+        for marker_flag in --eval-only --symbolic-only --deterministic-only; do
+          if [[ " $EXTRA_ARGS " == *" $marker_flag "* ]]; then
+            DISCOVERY_FLAGS+=("$marker_flag")
+          fi
+        done
 
         if [[ "$TEST_PATH" == "." ]]; then
           while IFS= read -r path; do
