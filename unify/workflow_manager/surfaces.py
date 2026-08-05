@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .bundle import SurfaceRegistry
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ..function_manager.function_manager import FunctionManager
     from ..guidance_manager.guidance_manager import GuidanceManager
     from ..knowledge_manager.knowledge_manager import KnowledgeManager
     from ..task_scheduler.task_scheduler import TaskScheduler
@@ -38,11 +39,19 @@ class SurfaceSpec:
     source_kwarg: str
     """Keyword its collected source arrives on."""
 
+    shared: bool = False
+    """Identity is a global natural key: synced as one union source under
+    ``WORKFLOW_LIBRARY``, never per slug. See ``Surface.shared``."""
+
 
 SCOPED_SURFACES: Mapping[str, SurfaceSpec] = {
     "guidance": SurfaceSpec("sync_custom_guidance", "source_guidance"),
     "knowledge": SurfaceSpec("sync_custom_knowledge", "source_claims"),
     "tasks": SurfaceSpec("sync_custom_tasks", "source_tasks"),
+    # FunctionManager.sync_custom is destination-explicit (unlike the
+    # grouping wrappers on the managers above) and orders venvs before
+    # functions so venv_name resolution holds.
+    "functions": SurfaceSpec("sync_custom", "source_functions", shared=True),
 }
 """Surface name -> the manager method a workflow install drives.
 
@@ -54,11 +63,14 @@ mechanism.
 PENDING_SCOPING: tuple[str, ...] = (
     "data",
     "canvas",
-    "functions",
     "venvs",
 )
 """Surfaces workflows will reach once their adapters are scoped, listed so
 the gap is visible rather than merely absent.
+
+``venvs`` is pending only as its own bundle key: the adapter is scoped,
+but the functions surface drives ``FunctionManager.sync_custom`` with no
+venv source, so bundles cannot ship venv definitions yet.
 
 Deliberately absent rather than pending: contacts, transcripts and
 blacklist are populated at runtime by a workflow's own functions, never
@@ -74,6 +86,7 @@ def register_default_surfaces(
     guidance_manager: "GuidanceManager | None" = None,
     knowledge_manager: "KnowledgeManager | None" = None,
     task_scheduler: "TaskScheduler | None" = None,
+    function_manager: "FunctionManager | None" = None,
 ) -> SurfaceRegistry:
     """Wire every managed-scoped manager that was supplied.
 
@@ -85,6 +98,7 @@ def register_default_surfaces(
         "guidance": guidance_manager,
         "knowledge": knowledge_manager,
         "tasks": task_scheduler,
+        "functions": function_manager,
     }
     for name, manager in managers.items():
         if manager is None:
@@ -95,5 +109,6 @@ def register_default_surfaces(
             getattr(manager, spec.method),
             source_kwarg=spec.source_kwarg,
             source_scoped=True,
+            shared=spec.shared,
         )
     return registry

@@ -14,7 +14,18 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping
 
+from unify.common.custom_sync import MANAGED_BY_DEPLOYMENT
 from unify.workflow_manager.types.workflow import WorkflowMode
+
+WORKFLOW_LIBRARY = "workflow_library"
+"""The ``managed_by`` for rows on shared-identity surfaces.
+
+Functions and venvs key on their name — the call-site contract — so a
+name means one row no matter how many workflows reference it. All
+installed bundles' entries on such a surface reconcile together as one
+union source under this id; per-slug ownership would make one name two
+rows. Which workflows reference a row is recorded on the row itself, in
+its ``workflows`` field."""
 
 SurfaceSyncer = Callable[..., bool]
 """A manager's per-destination custom sync (``sync_custom_guidance``,
@@ -62,6 +73,19 @@ class Surface:
     source_kwarg: str
     """Keyword its collected source arrives on, e.g. ``"source_guidance"``."""
 
+    shared: bool = False
+    """Whether this surface's identity is a global natural key shared by
+    every workflow (functions, venvs: ``custom_key == name``, the call-site
+    contract).
+
+    A shared surface is never synced per slug. Two workflows planting the
+    same function under their own ``managed_by`` would be two rows with one
+    name — an ambiguous call-site — and any per-slug adoption probe would
+    steal the row back and forth between them. Instead every install and
+    uninstall re-syncs the **union** of all installed bundles' entries
+    under the single :data:`WORKFLOW_LIBRARY` source, so a shared atom is
+    one row for as long as any installed workflow references it."""
+
     def sync(
         self,
         source: Mapping[str, Dict[str, Any]],
@@ -102,10 +126,10 @@ class WorkflowBundle:
     def __post_init__(self) -> None:
         if not self.slug:
             raise ValueError("A workflow bundle needs a slug.")
-        if self.slug == "deployment":
+        if self.slug in (MANAGED_BY_DEPLOYMENT, WORKFLOW_LIBRARY):
             raise ValueError(
-                "'deployment' is the reserved managed_by for the assistant's "
-                "own sources; a bundle may not claim it.",
+                f"{self.slug!r} is a reserved managed_by value; a bundle "
+                "may not claim it.",
             )
 
     def content_hash(self) -> str:
@@ -147,6 +171,7 @@ class SurfaceRegistry:
         *,
         source_kwarg: str,
         source_scoped: bool,
+        shared: bool = False,
     ) -> None:
         if not source_scoped:
             raise UnscopedSurfaceError(name)
@@ -154,6 +179,7 @@ class SurfaceRegistry:
             name=name,
             syncer=syncer,
             source_kwarg=source_kwarg,
+            shared=shared,
         )
 
     def get(self, name: str) -> Surface:
