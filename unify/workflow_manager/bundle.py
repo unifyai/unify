@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping
 
 from unify.common.custom_sync import MANAGED_BY_DEPLOYMENT
-from unify.workflow_manager.types.workflow import WorkflowMode
 
 WORKFLOW_LIBRARY = "workflow_library"
 """The ``managed_by`` for rows on shared-identity surfaces.
@@ -168,7 +167,6 @@ class WorkflowBundle:
     icon_id: str = ""
     """Key into the console's workflow tile icon set."""
 
-    mode: WorkflowMode = WorkflowMode.seed
     surfaces: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     """Surface name -> collected source, keyed by ``custom_key``."""
 

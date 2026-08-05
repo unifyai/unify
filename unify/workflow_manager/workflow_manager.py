@@ -34,7 +34,7 @@ from ..integration_status import _read_local_secret_keyset
 from .base import BaseWorkflowManager
 from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
 from .types.meta import WorkflowMeta
-from .types.workflow import UNASSIGNED, WorkflowInstallation, WorkflowMode
+from .types.workflow import UNASSIGNED, WorkflowInstallation
 
 logger = logging.getLogger(__name__)
 
@@ -490,7 +490,6 @@ class WorkflowManager(BaseWorkflowManager):
                 entry.update(
                     {
                         "installed_version": row.get("version", ""),
-                        "mode": row.get("mode"),
                         "status": self._derived_status(
                             row.get("status"),
                             self._unmet_requirements(bundle),
@@ -515,7 +514,6 @@ class WorkflowManager(BaseWorkflowManager):
                     "installed": True,
                     "orphaned": True,
                     "installed_version": row.get("version", ""),
-                    "mode": row.get("mode"),
                     "surfaces": json.loads(row.get("surfaces") or "[]"),
                 },
             )
@@ -530,7 +528,6 @@ class WorkflowManager(BaseWorkflowManager):
         self,
         *,
         slug: str,
-        mode: str = "seed",
         params: Optional[Dict[str, Any]] = None,
         destination: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -545,17 +542,6 @@ class WorkflowManager(BaseWorkflowManager):
                 },
             )
 
-        try:
-            resolved_mode = WorkflowMode(mode)
-        except ValueError:
-            raise ToolErrorException(
-                {
-                    "error": "invalid_mode",
-                    "mode": mode,
-                    "expected": [m.value for m in WorkflowMode],
-                },
-            )
-
         resolved_params = self._validate_params(bundle, params or {})
         context = self._workflow_context_for_destination(destination)
         meta_context = self._meta_context_for_destination(destination)
@@ -563,25 +549,15 @@ class WorkflowManager(BaseWorkflowManager):
         with exclusive_sync_lease(f"{meta_context}:workflow_install"):
             existing = self._read_installation(slug, context=context)
 
-            # Seed plants once. A repeat install refreshes the settings and
-            # leaves the content alone, because the whole point of seed mode
-            # is that what the user did to those rows since is theirs.
-            already_seeded = (
-                existing is not None
-                and existing.get("mode") == WorkflowMode.seed.value
-                and resolved_mode is WorkflowMode.seed
-                and existing.get("status") == "active"
+            # Every install reconciles to the current bundle — a repeat
+            # install is retry, upgrade and arm-on-connect all at once.
+            # Unchanged content short-circuits on the aggregate hash, so
+            # the idempotent case costs a meta read per surface.
+            planted, failures = self._plant(
+                bundle,
+                destination=destination,
+                installed=self._installed_bundles(context),
             )
-
-            if already_seeded:
-                planted: Dict[str, Any] = {}
-                failures: Dict[str, BaseException] = {}
-            else:
-                planted, failures = self._plant(
-                    bundle,
-                    destination=destination,
-                    installed=self._installed_bundles(context),
-                )
 
             # Requirements gate arming, never planting. Content lands
             # either way; the workflow's tasks — born disarmed by the
@@ -604,7 +580,6 @@ class WorkflowManager(BaseWorkflowManager):
                 name=bundle.name,
                 version=bundle.version,
                 description=bundle.description,
-                mode=resolved_mode,
                 status="partial" if failures else "active",
                 params=json.dumps(resolved_params, sort_keys=True),
                 surfaces=json.dumps(bundle.surface_names()),
@@ -615,7 +590,6 @@ class WorkflowManager(BaseWorkflowManager):
         result: Dict[str, Any] = {
             "installed": record.model_dump(mode="json"),
             "planted": planted,
-            "content_unchanged": already_seeded,
         }
         if unmet:
             result["tasks_held"] = armed
@@ -637,6 +611,82 @@ class WorkflowManager(BaseWorkflowManager):
                 sorted(failures),
             )
         return result
+
+    def reconcile_installed(
+        self,
+        *,
+        slugs: Optional[List[str]] = None,
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Bring every installed workflow back in line with its bundle.
+
+        The single upkeep entrypoint: version upgrades, retry of partial
+        installs, and re-checking requirements to arm or hold jobs all go
+        through here — it is ``install_workflow`` re-run with the recorded
+        settings, per slug. Unchanged bundles short-circuit on their
+        aggregate hashes, so a no-op pass costs one meta read per surface.
+
+        Installations whose bundle has left the catalogue cannot be
+        reconciled (there is nothing to reconcile against) and are
+        reported as orphaned rather than touched.
+        """
+        context = self._workflow_context_for_destination(destination)
+        rows = self._installations_in(context)
+        if slugs is not None:
+            wanted = set(slugs)
+            rows = [row for row in rows if row.get("slug") in wanted]
+
+        reconciled: Dict[str, Any] = {}
+        orphaned: List[str] = []
+        for row in sorted(rows, key=lambda r: str(r.get("slug"))):
+            slug = str(row.get("slug"))
+            with self._lock:
+                bundle = self._catalogue.get(slug)
+            if bundle is None:
+                orphaned.append(slug)
+                continue
+            reconciled[slug] = self.install_workflow(
+                slug=slug,
+                params=json.loads(row.get("params") or "{}"),
+                destination=destination,
+            )
+
+        result: Dict[str, Any] = {"reconciled": reconciled}
+        if orphaned:
+            result["orphaned"] = orphaned
+        return result
+
+    def _installations_in(self, context: str) -> List[Dict[str, Any]]:
+        logs = unisdk.get_logs(
+            context=context,
+            exclude_fields=list_private_fields(context),
+        )
+        return [dict(lg.entries or {}) for lg in logs]
+
+    def get_installation_params(
+        self,
+        *,
+        slug: str,
+        destination: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read one installation's settings, for the workflow's own tasks.
+
+        This is the runtime half of the params contract: settings are
+        recorded on the installation and read here when a planted task or
+        function needs them — never baked into the planted rows, which
+        must stay byte-identical across installs.
+        """
+        context = self._workflow_context_for_destination(destination)
+        existing = self._read_installation(slug, context=context)
+        if existing is None:
+            raise ToolErrorException(
+                {
+                    "error": "not_installed",
+                    "slug": slug,
+                    "destination": destination or "personal",
+                },
+            )
+        return json.loads(existing.get("params") or "{}")
 
     def uninstall_workflow(
         self,
@@ -734,7 +784,6 @@ class WorkflowManager(BaseWorkflowManager):
             entry.update(
                 {
                     "installed_version": row.get("version", ""),
-                    "mode": row.get("mode"),
                     "status": self._derived_status(
                         row.get("status"),
                         self._unmet_requirements(bundle) if bundle else [],
