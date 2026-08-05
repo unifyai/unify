@@ -1006,3 +1006,69 @@ class TestTheOpeningConfigWireFormatIsEnforced:
         config = _normalize_call_opening_config({"mode": "speak", "someOtherThing": 1})
 
         assert config["mode"] == "speak"
+
+
+class TestAnUnusableOpeningDoesNotKillTheCall:
+    """A rejected opening used to raise out of the job entrypoint.
+
+    That killed the voice agent before it made a sound, so the caller sat in
+    silence over a config problem they could neither see nor act on. A generated
+    greeting is a worse opening than the one asked for and a far better one than
+    none.
+    """
+
+    def test_a_rejected_config_degrades_to_a_spoken_greeting(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        config = _call_opening_or_spoken(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recordingAsset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config == {"mode": "speak"}
+
+    def test_a_usable_config_is_returned_intact(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        config = _call_opening_or_spoken(
+            json.dumps(
+                {
+                    "mode": "recorded",
+                    "recording_asset": "coordinator_onboarding_intro",
+                },
+            ),
+        )
+
+        assert config["mode"] == "recorded"
+        assert config["recording_asset"] == "coordinator_onboarding_intro"
+
+    def test_an_absent_config_still_speaks(self):
+        from unify.conversation_manager.medium_scripts.call import (
+            _call_opening_or_spoken,
+        )
+
+        assert _call_opening_or_spoken(None) == {"mode": "speak"}
+
+    def test_the_rejection_is_logged_with_the_shape_that_caused_it(self):
+        from unify.conversation_manager.medium_scripts import call as call_mod
+
+        seen = []
+        original = call_mod._log.error
+        call_mod._log.error = lambda msg, *a, **k: seen.append(str(msg))
+        try:
+            call_mod._call_opening_or_spoken(
+                {"mode": "recorded", "recordingAsset": "x"},
+            )
+        finally:
+            call_mod._log.error = original
+
+        assert seen, "a rejected opening must be logged, not swallowed"
+        assert "recordingAsset" in seen[0]

@@ -1236,6 +1236,27 @@ def _reject_camel_cased_opening_fields(raw: dict) -> None:
         )
 
 
+def _call_opening_or_spoken(raw: object) -> dict:
+    """Normalise the opening, falling back to a spoken greeting if unusable.
+
+    A rejected opening raised straight out of the job entrypoint, killing the
+    voice agent before it made a sound: the caller sat in silence over a config
+    problem they could neither see nor do anything about, and the only trace was
+    a traceback in a subprocess. A generated greeting is a worse opening than the
+    one that was asked for and a far better one than none, so the call proceeds
+    and the rejection is logged loudly against the shape that caused it.
+    """
+    try:
+        return _normalize_call_opening_config(raw)
+    except ValueError as exc:
+        _log.error(
+            f"Opening config rejected ({exc}); opening with a generated greeting "
+            f"instead of failing the call. Arrived as: "
+            f"{_describe_call_opening_config(raw)}",
+        )
+        return {"mode": "speak"}
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
     # Logged before validation: a rejected config raises out of here, and the
     # shape it arrived in is the only way to tell a caller sending the wrong
@@ -1350,7 +1371,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = meta.get("assistant_bio", "")
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
-        opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        opening_config = _call_opening_or_spoken(meta.get("opening_config"))
         pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
@@ -1385,7 +1406,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = SESSION_DETAILS.assistant.about
         contact = json.loads(SESSION_DETAILS.voice_call.contact_json or "{}")
         boss = json.loads(SESSION_DETAILS.voice_call.boss_json or "{}")
-        opening_config = _normalize_call_opening_config(
+        opening_config = _call_opening_or_spoken(
             os.environ.get("OPENING_CONFIG"),
         )
         pre_armed_hang_up_gate = os.environ.get("HANG_UP_GATE_REASON", "").strip()
