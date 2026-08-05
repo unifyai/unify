@@ -30,6 +30,7 @@ from ..common.log_utils import create_logs as unity_create_logs
 from ..common.model_to_fields import model_to_fields
 from ..common.sync_lease import exclusive_sync_lease
 from ..common.tool_outcome import ToolErrorException
+from ..integration_status import _read_local_secret_keyset
 from .base import BaseWorkflowManager
 from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
 from .types.meta import WorkflowMeta
@@ -342,6 +343,92 @@ class WorkflowManager(BaseWorkflowManager):
 
         return planted, failures
 
+    # ------------------------------------------------------------------ #
+    # Requirements                                                       #
+    # ------------------------------------------------------------------ #
+    def _unmet_requirements(self, bundle: WorkflowBundle) -> List[Dict[str, Any]]:
+        """Declared integrations not currently connected, as report dicts.
+
+        Connection is read from the assistant's secret keyset: a
+        requirement is met when every secret it names is present. Values
+        never travel through here — only names and presence.
+        """
+        if not bundle.requirements:
+            return []
+        keyset = frozenset(_read_local_secret_keyset())
+        return [
+            {
+                "slug": requirement.slug,
+                "name": requirement.name or requirement.slug,
+                "missing_secrets": requirement.missing_secrets(keyset),
+            }
+            for requirement in bundle.requirements
+            if not requirement.connected(keyset)
+        ]
+
+    def _requirements_report(self, bundle: WorkflowBundle) -> List[Dict[str, Any]]:
+        """Every declared requirement with its current connection state."""
+        keyset = frozenset(_read_local_secret_keyset())
+        return [
+            {
+                "slug": requirement.slug,
+                "name": requirement.name or requirement.slug,
+                "connected": requirement.connected(keyset),
+            }
+            for requirement in bundle.requirements
+        ]
+
+    def _arm_workflow_tasks(
+        self,
+        bundle: WorkflowBundle,
+        *,
+        destination: Optional[str],
+        enabled: bool,
+    ) -> List[int]:
+        """Arm or hold the task definitions this workflow planted.
+
+        Best-effort by design: a failed arm leaves the tasks in the safe
+        state (disarmed), and the next install or reconcile retries. It
+        must not fail the install that planted the content.
+        """
+        if "tasks" not in bundle.surfaces or "tasks" not in self._surfaces:
+            return []
+        try:
+            return list(
+                self._surfaces.get("tasks").arm(
+                    managed_by=bundle.slug,
+                    enabled=enabled,
+                    destination=destination,
+                )
+                or [],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to %s tasks for workflow %r",
+                "arm" if enabled else "hold",
+                bundle.slug,
+            )
+            return []
+
+    @staticmethod
+    def _derived_status(
+        stored_status: Optional[str],
+        unmet: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Fold requirement state into the read-side status.
+
+        ``partial`` (something failed to plant) outranks everything;
+        otherwise an unmet requirement reads as ``needs_connection``. The
+        stored status never records ``needs_connection`` — connections
+        change without the installation row being touched, so it must be
+        derived at read time.
+        """
+        if stored_status == "partial":
+            return "partial"
+        if stored_status is None:
+            return None
+        return "needs_connection" if unmet else stored_status
+
     @staticmethod
     def _validate_params(
         bundle: WorkflowBundle,
@@ -392,6 +479,10 @@ class WorkflowManager(BaseWorkflowManager):
                 "name": bundle.name,
                 "description": bundle.description,
                 "version": bundle.version,
+                "category": bundle.category,
+                "icon_id": bundle.icon_id,
+                "capabilities": list(bundle.capabilities),
+                "requirements": self._requirements_report(bundle),
                 "surfaces": bundle.surface_names(),
                 "installed": is_installed,
             }
@@ -400,7 +491,10 @@ class WorkflowManager(BaseWorkflowManager):
                     {
                         "installed_version": row.get("version", ""),
                         "mode": row.get("mode"),
-                        "status": row.get("status"),
+                        "status": self._derived_status(
+                            row.get("status"),
+                            self._unmet_requirements(bundle),
+                        ),
                         "params": json.loads(row.get("params") or "{}"),
                     },
                 )
@@ -476,7 +570,7 @@ class WorkflowManager(BaseWorkflowManager):
                 existing is not None
                 and existing.get("mode") == WorkflowMode.seed.value
                 and resolved_mode is WorkflowMode.seed
-                and existing.get("status") == "installed"
+                and existing.get("status") == "active"
             )
 
             if already_seeded:
@@ -489,6 +583,19 @@ class WorkflowManager(BaseWorkflowManager):
                     installed=self._installed_bundles(context),
                 )
 
+            # Requirements gate arming, never planting. Content lands
+            # either way; the workflow's tasks — born disarmed by the
+            # custom sync — are armed only once every declared integration
+            # is connected, and held (still planted, still visible)
+            # otherwise. A repeat install after connecting is therefore
+            # also the arm-on-connect path.
+            unmet = self._unmet_requirements(bundle)
+            armed = self._arm_workflow_tasks(
+                bundle,
+                destination=destination,
+                enabled=not unmet,
+            )
+
             record = WorkflowInstallation(
                 workflow_id=(
                     existing.get("workflow_id", UNASSIGNED) if existing else UNASSIGNED
@@ -498,7 +605,7 @@ class WorkflowManager(BaseWorkflowManager):
                 version=bundle.version,
                 description=bundle.description,
                 mode=resolved_mode,
-                status="partial" if failures else "installed",
+                status="partial" if failures else "active",
                 params=json.dumps(resolved_params, sort_keys=True),
                 surfaces=json.dumps(bundle.surface_names()),
                 destination=destination or "personal",
@@ -510,6 +617,18 @@ class WorkflowManager(BaseWorkflowManager):
             "planted": planted,
             "content_unchanged": already_seeded,
         }
+        if unmet:
+            result["tasks_held"] = armed
+            result["connect_required"] = {
+                "requirements": unmet,
+                "message": (
+                    f"Workflow {slug!r} is installed but held: connect "
+                    f"{[r['slug'] for r in unmet]} to arm its jobs. "
+                    "Nothing fires in the meantime."
+                ),
+            }
+        else:
+            result["tasks_armed"] = armed
         if failures:
             result["failures"] = {n: str(e) for n, e in failures.items()}
             logger.warning(
@@ -599,6 +718,10 @@ class WorkflowManager(BaseWorkflowManager):
                     "name": bundle.name,
                     "description": bundle.description,
                     "version": bundle.version,
+                    "category": bundle.category,
+                    "icon_id": bundle.icon_id,
+                    "capabilities": list(bundle.capabilities),
+                    "requirements": self._requirements_report(bundle),
                     "surfaces": bundle.surface_names(),
                     "params_schema": bundle.params_schema,
                     "entries_per_surface": {
@@ -612,7 +735,10 @@ class WorkflowManager(BaseWorkflowManager):
                 {
                     "installed_version": row.get("version", ""),
                     "mode": row.get("mode"),
-                    "status": row.get("status"),
+                    "status": self._derived_status(
+                        row.get("status"),
+                        self._unmet_requirements(bundle) if bundle else [],
+                    ),
                     "params": json.loads(row.get("params") or "{}"),
                     "installed_surfaces": json.loads(row.get("surfaces") or "[]"),
                     "destination": row.get("destination", "personal"),

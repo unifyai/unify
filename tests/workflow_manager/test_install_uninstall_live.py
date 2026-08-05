@@ -209,3 +209,63 @@ async def test_uninstall_is_idempotent_and_reinstall_replants(
     wm.uninstall_workflow(slug=SLUG)
     assert _rows(gm._ctx, SLUG) == []
     assert _rows(ts._ctx, SLUG) == []
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_install_arms_tasks_and_holds_them_while_disconnected(
+    live_managers,
+    bundle,
+    monkeypatch,
+):
+    """The full requirements cycle against real managers.
+
+    Custom-synced task definitions are born disarmed, so install must arm
+    them when requirements are met — otherwise nothing a workflow sets up
+    ever fires. With a requirement unmet the same install plants
+    everything, reports connect_required, and leaves the definitions
+    held; a repeat install after the connection lands is the
+    arm-on-connect path.
+    """
+    from unify.workflow_manager import workflow_manager as wm_module
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    gm, ts, wm = live_managers
+    held_bundle = WorkflowBundle(
+        slug=bundle.slug,
+        name=bundle.name,
+        version=bundle.version,
+        surfaces=bundle.surfaces,
+        requirements=(
+            WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",)),
+        ),
+    )
+    wm.register_bundle(held_bundle)
+
+    # No token yet: plants, holds, and says so.
+    monkeypatch.setattr(wm_module, "_read_local_secret_keyset", lambda: set())
+    result = wm.install_workflow(slug=SLUG)
+
+    assert "tasks_armed" not in result
+    assert len(result["tasks_held"]) == 1
+    assert result["connect_required"]["requirements"][0]["slug"] == "gmail"
+    (task_row,) = _rows(ts._ctx, SLUG)
+    assert task_row["enabled"] is False
+    assert wm.get_workflow(slug=SLUG)["status"] == "needs_connection"
+
+    # Token lands: the repeat install is the arm-on-connect path.
+    monkeypatch.setattr(
+        wm_module,
+        "_read_local_secret_keyset",
+        lambda: {"GMAIL_TOKEN"},
+    )
+    result = wm.install_workflow(slug=SLUG)
+
+    assert "connect_required" not in result
+    assert len(result["tasks_armed"]) == 1
+    (task_row,) = _rows(ts._ctx, SLUG)
+    assert task_row["enabled"] is True
+    assert wm.get_workflow(slug=SLUG)["status"] == "active"
+
+    wm.uninstall_workflow(slug=SLUG)
+    assert _rows(ts._ctx, SLUG) == []

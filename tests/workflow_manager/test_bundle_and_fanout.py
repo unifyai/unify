@@ -415,3 +415,100 @@ def test_conflicting_shared_content_refuses_before_anything_syncs():
 def test_bundle_cannot_claim_the_library_source():
     with pytest.raises(ValueError, match="reserved"):
         WorkflowBundle(slug="workflow_library", name="Impostor")
+
+
+# --------------------------------------------------------------------- #
+# Requirements                                                          #
+# --------------------------------------------------------------------- #
+def test_requirement_connection_is_presence_of_its_secrets():
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    gmail = WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",))
+    assert not gmail.connected(frozenset())
+    assert gmail.connected(frozenset({"GMAIL_TOKEN"}))
+    assert gmail.missing_secrets(frozenset()) == ["GMAIL_TOKEN"]
+
+
+def test_requirement_with_nothing_to_gate_on_reads_as_met():
+    """A requirement declaring no secrets has no checkable signal yet, so
+    it must not hold the workflow's jobs hostage to an uncheckable state."""
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    web = WorkflowRequirement(slug="web")
+    assert web.connected(frozenset())
+
+
+def test_unmet_requirements_read_the_keyset(monkeypatch):
+    from unify.workflow_manager import workflow_manager as wm_module
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    manager = _manager(_registry(guidance=RecordingSurface()))
+    bundle = _bundle(
+        requirements=(
+            WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",)),
+            WorkflowRequirement(slug="slack", required_secrets=("SLACK_TOKEN",)),
+        ),
+    )
+
+    monkeypatch.setattr(
+        wm_module,
+        "_read_local_secret_keyset",
+        lambda: {"SLACK_TOKEN"},
+    )
+    unmet = manager._unmet_requirements(bundle)
+    assert [r["slug"] for r in unmet] == ["gmail"]
+    assert unmet[0]["missing_secrets"] == ["GMAIL_TOKEN"]
+
+    report = manager._requirements_report(bundle)
+    assert {r["slug"]: r["connected"] for r in report} == {
+        "gmail": False,
+        "slack": True,
+    }
+
+
+def test_derived_status_folds_requirements_at_read_time():
+    """needs_connection is never stored: connections change without the
+    installation row being touched. partial outranks it — something that
+    failed to plant must not be masked by a missing connection."""
+    derived = WorkflowManager._derived_status
+    unmet = [{"slug": "gmail"}]
+
+    assert derived("active", []) == "active"
+    assert derived("active", unmet) == "needs_connection"
+    assert derived("partial", unmet) == "partial"
+    assert derived(None, unmet) is None
+
+
+def test_arming_uses_the_tasks_surface_armer():
+    """Install arms through the registered armer with the slug and the
+    install destination — planted definitions are born disarmed, so a
+    missing arm call means nothing a workflow sets up ever fires."""
+    calls = []
+
+    def armer(*, managed_by, enabled, destination):
+        calls.append((managed_by, enabled, destination))
+        return [41, 42]
+
+    registry = SurfaceRegistry()
+    tasks = RecordingSurface()
+    registry.register(
+        "tasks",
+        tasks,
+        source_kwarg="source_tasks",
+        source_scoped=True,
+        armer=armer,
+    )
+    manager = _manager(registry)
+
+    armed = manager._arm_workflow_tasks(
+        _bundle(),
+        destination="team:7",
+        enabled=True,
+    )
+    assert armed == [41, 42]
+    assert calls == [(WORKFLOW, True, "team:7")]
+
+
+def test_arming_a_surface_without_an_armer_is_a_no_op():
+    manager = _manager(_registry(tasks=RecordingSurface()))
+    assert manager._arm_workflow_tasks(_bundle(), destination=None, enabled=True) == []
