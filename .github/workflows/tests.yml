@@ -367,12 +367,14 @@ jobs:
 
         # A marker-filtered run has to discover only the paths carrying those
         # tests. parallel_run.sh treats a shard whose filter selects nothing as
-        # a hard error, so discovering everything under --eval-only would fail
-        # almost every job for having nothing to run.
+        # a hard error, so handing the whole suite to any of these filters fails
+        # every job sitting entirely on the other side of it.
         DISCOVERY_FLAGS=()
-        if [[ " ${FLAGS[*]-} $INPUT_ARGS " == *" --eval-only "* ]]; then
-          DISCOVERY_FLAGS+=(--eval-only)
-        fi
+        for marker_flag in --eval-only --symbolic-only --deterministic-only; do
+          if [[ " ${FLAGS[*]-} $INPUT_ARGS " == *" $marker_flag "* ]]; then
+            DISCOVERY_FLAGS+=("$marker_flag")
+          fi
+        done
 
         # Expand paths to leaf directories using discover_test_paths.py
         # - If RAW_PATHS is empty, discover all test paths from tests/

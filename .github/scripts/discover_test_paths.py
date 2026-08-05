@@ -23,6 +23,7 @@ import ast
 import os
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 EXCLUDE_DIRS = {
     "__pycache__",
@@ -412,90 +413,124 @@ def discover_all():
     return paths
 
 
-def _is_eval_marker(node) -> bool:
-    """Whether *node* is the ``pytest.mark.eval`` attribute itself.
+# Markers whose presence decides which shard a test belongs to. eval is the
+# judgement tier; llm_call is anything that reaches a model at all, cached or
+# not, and so answers to the shared cache rather than to this repository.
+TRACKED_MARKERS = ("eval", "llm_call")
 
-    Reading the AST rather than searching the text separates applying the
-    marker from naming it: a test asserting something *about* the marker quotes
-    the same dotted path, and counting that mention would hand the matrix a
-    directory the filter then empties.
+
+class MarkerContent(NamedTuple):
+    """What kinds of test a file holds, per the filters that can select them."""
+
+    has_eval: bool
+    has_non_eval: bool
+    has_deterministic: bool
+
+
+def _marker_name(node):
+    """The tracked marker *node* applies, or None.
+
+    Reading the AST rather than searching the text separates applying a marker
+    from naming it: a test asserting something *about* a marker quotes the same
+    dotted path, and counting that mention would hand the matrix a directory
+    the filter then empties.
     """
-    return (
+    if (
         isinstance(node, ast.Attribute)
-        and node.attr == "eval"
+        and node.attr in TRACKED_MARKERS
         and isinstance(node.value, ast.Attribute)
         and node.value.attr == "mark"
         and isinstance(node.value.value, ast.Name)
         and node.value.value.id == "pytest"
-    )
+    ):
+        return node.attr
+    return None
 
 
-def _eval_aliases(tree) -> set:
-    """Module-level names bound directly to the marker.
+def _marker_aliases(tree) -> dict:
+    """Module-level names bound to a tracked marker, mapped to that marker.
 
     ``pytestmark_eval = pytest.mark.eval`` and then ``@pytestmark_eval`` is
     common here — 32 files apply the marker that way — and a decorator matcher
     that only recognised the dotted form would report those files as carrying
-    no eval tests at all.
+    no such tests at all.
     """
-    aliases = set()
+    aliases = {}
     for node in tree.body:
-        if isinstance(node, ast.Assign) and _is_eval_marker(node.value):
-            aliases |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        if isinstance(node, ast.Assign):
+            for sub in ast.walk(node.value):
+                name = _marker_name(sub)
+                if name:
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            aliases[target.id] = name
     return aliases
 
 
-def _marks_eval(nodes, aliases: set) -> bool:
-    return any(
-        _is_eval_marker(n) or (isinstance(n, ast.Name) and n.id in aliases)
-        for d in nodes
-        for n in ast.walk(d)
-    )
+def _markers_of(nodes, aliases: dict) -> set:
+    found = set()
+    for node in nodes:
+        for sub in ast.walk(node):
+            name = _marker_name(sub)
+            if name:
+                found.add(name)
+            if isinstance(sub, ast.Name) and sub.id in aliases:
+                found.add(aliases[sub.id])
+    return found
 
 
-def marker_content(test_file: Path) -> tuple[bool, bool]:
-    """Return ``(has_eval_tests, has_non_eval_tests)`` for *test_file*.
+def marker_content(test_file: Path) -> MarkerContent:
+    """Which selections *test_file* can still satisfy once a filter applies.
 
-    Both answers are needed because the two marker filters ask opposite
-    questions, and neither is the negation of the other. A module-level
-    ``pytestmark`` carrying the marker applies it to every test in the file, so
-    the file offers nothing to a "not eval" selection. Per-test decorators
-    usually leave both kinds behind — but a file whose every test is decorated
-    individually offers nothing either, which is why the tests are counted
-    rather than the file being judged as a whole.
+    All three answers are needed because the filters ask different questions
+    and none is another's negation. A module-level ``pytestmark`` applies its
+    markers to every test in the file, so such a file offers nothing to a
+    selection that excludes them. Per-test decorators usually leave several
+    kinds behind — but a file whose every test is decorated offers nothing
+    either, which is why the tests are counted rather than the file being
+    judged as a whole.
     """
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8"))
     except SyntaxError:
-        return (False, False)
+        return MarkerContent(False, False, False)
 
-    aliases = _eval_aliases(tree)
+    aliases = _marker_aliases(tree)
 
+    module_markers = set()
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
         ):
-            if _marks_eval([node], aliases):
-                return (True, False)
+            module_markers |= _markers_of([node], aliases)
 
-    found = {"eval": False, "non_eval": False}
+    found = {"eval": False, "non_eval": False, "deterministic": False}
 
-    def walk(body, inherited: bool) -> None:
+    def walk(body, inherited: set) -> None:
         for node in body:
             if isinstance(
                 node,
                 (ast.FunctionDef, ast.AsyncFunctionDef),
             ) and node.name.startswith("test"):
-                marked = inherited or _marks_eval(node.decorator_list, aliases)
-                found["eval" if marked else "non_eval"] = True
+                markers = inherited | _markers_of(node.decorator_list, aliases)
+                if "eval" in markers:
+                    found["eval"] = True
+                else:
+                    found["non_eval"] = True
+                if not markers:
+                    found["deterministic"] = True
             elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-                walk(node.body, inherited or _marks_eval(node.decorator_list, aliases))
+                walk(node.body, inherited | _markers_of(node.decorator_list, aliases))
 
-    walk(tree.body, False)
-    return (found["eval"], found["non_eval"])
+    walk(tree.body, module_markers)
+    return MarkerContent(
+        found["eval"],
+        found["non_eval"],
+        found["deterministic"],
+    )
 
 
-def narrow_to_marker(entry: str, *, want_eval: bool) -> str:
+def narrow_to_marker(entry: str, *, want: str) -> str:
     """Narrow one matrix entry to the members a marker filter will still select.
 
     An entry is either a directory or a space-separated bundle of test files,
@@ -511,7 +546,6 @@ def narrow_to_marker(entry: str, *, want_eval: bool) -> str:
     tests/flows is the only place that does that, and it is excluded from
     discovery anyway.
     """
-    index = 0 if want_eval else 1
     kept = []
     for token in entry.split():
         path = Path(token)
@@ -521,12 +555,16 @@ def narrow_to_marker(entry: str, *, want_eval: bool) -> str:
             members = [path]
         else:
             continue
-        if any(marker_content(f)[index] for f in members):
+        if any(getattr(marker_content(f), want) for f in members):
             kept.append(token)
     return " ".join(kept)
 
 
-MARKER_FLAGS = {"--eval-only": True, "--symbolic-only": False}
+MARKER_FLAGS = {
+    "--eval-only": "has_eval",
+    "--symbolic-only": "has_non_eval",
+    "--deterministic-only": "has_deterministic",
+}
 
 
 def main():
@@ -551,11 +589,9 @@ def main():
         paths = discover_all()
 
     if flags:
-        want_eval = MARKER_FLAGS[flags[0]]
+        want = MARKER_FLAGS[flags[0]]
         paths = [
-            narrowed
-            for p in paths
-            if (narrowed := narrow_to_marker(p, want_eval=want_eval))
+            narrowed for p in paths if (narrowed := narrow_to_marker(p, want=want))
         ]
 
     # Output unique paths, sorted
