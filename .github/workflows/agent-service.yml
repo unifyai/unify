@@ -17,6 +17,12 @@ on:
     - "agent-service/**"
     - ".github/workflows/agent-service.yml"
 
+# Reading the checkout is all this job does; the default token grants write
+# scopes it never uses, which a compromised dependency in the install step
+# would inherit.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: agent-service tests
