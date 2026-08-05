@@ -190,28 +190,28 @@ async def _normalize_elevenlabs_twin_pronunciation_stream(
         yield pending
 
 
-class FastBrainCreditGateMonitor:
-    """Polls credit state off the voice response path."""
+class FastBrainBillingGateMonitor:
+    """Polls billing state off the voice response path."""
 
     def __init__(self, refresh_interval_s: float = 5.0) -> None:
-        from unify.spending_limits import CreditGateState
+        from unify.spending_limits import BillingGateState
 
         self._refresh_interval_s = refresh_interval_s
-        self._state = CreditGateState()
+        self._state = BillingGateState()
 
     @property
     def state(self):
         return self._state
 
     async def refresh_once(self) -> None:
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
-        next_state = await check_credit_gate_state()
+        next_state = await check_billing_gate_state()
         if next_state.allowed != self._state.allowed:
             if next_state.allowed:
-                _log.info("Credit gate cleared")
+                _log.info("Billing gate cleared")
             else:
-                _log.warning(next_state.reason or "Credit gate active")
+                _log.warning(next_state.reason or "Billing gate active")
         self._state = next_state
 
     async def run(self) -> None:
@@ -2946,7 +2946,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant._chat_ctx.add_message(role="system", content=[briefing_note])
         session.history.add_message(role="system", content=[briefing_note])
         _log.info("Injected call briefing into voice context")
-    credit_gate_monitor = FastBrainCreditGateMonitor()
+    credit_gate_monitor = FastBrainBillingGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
     # in _say_meta_queue until their playout commits them to history. Set as a
