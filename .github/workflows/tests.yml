@@ -46,32 +46,6 @@ on:
         type: number
         default: 120
 
-  # Callable so a scheduled workflow can drive this matrix without copying its
-  # provisioning (local Orchestra, uv sync, cache hydration) or its cost policy.
-  # A caller inherits UNILLM_CACHE=read-only, so it cannot buy LLM calls.
-  workflow_call:
-    inputs:
-      test_path:
-        description: "Paths to test"
-        required: false
-        type: string
-        default: "."
-      confirm_full_matrix:
-        description: "FULL_MATRIX_OK to allow test_path='.'"
-        required: false
-        type: string
-        default: ""
-      parallel_run_args:
-        description: "Extra parallel_run.sh arguments"
-        required: false
-        type: string
-        default: ""
-      timeout_minutes:
-        description: "Session timeout"
-        required: false
-        type: number
-        default: 120
-
   # Push events - tests only run if commit message contains [run-tests]
   push:
     branches:
@@ -173,14 +147,12 @@ jobs:
           fi
         }
 
-        # An explicitly requested run always runs tests, but the discover job
-        # enforces cost-policy guardrails before any matrix jobs are created.
-        # A workflow_call run reports its caller's event, so a scheduled caller
-        # arrives as "schedule" rather than "workflow_call".
-        if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "schedule" ]]; then
+        # workflow_dispatch always runs tests, but the discover job enforces
+        # cost-policy guardrails before any matrix jobs are created.
+        if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
           echo "run_tests=true" >> "$GITHUB_OUTPUT"
           echo "parallel_run_cmd=" >> "$GITHUB_OUTPUT"
-          echo "Tests triggered by $EVENT_NAME"
+          echo "Tests triggered by workflow_dispatch"
           exit 0
         fi
 
@@ -401,8 +373,7 @@ jobs:
         }
 
         full_matrix_confirmed=false
-        if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "schedule" ]] \
-          && [[ "$CONFIRM_FULL_MATRIX" == "FULL_MATRIX_OK" ]]; then
+        if [[ "$EVENT_NAME" == "workflow_dispatch" && "$CONFIRM_FULL_MATRIX" == "FULL_MATRIX_OK" ]]; then
           full_matrix_confirmed=true
         fi
 
