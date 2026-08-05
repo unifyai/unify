@@ -9,7 +9,7 @@ Phase 4: Integration testing across all managers with FK relationships
 ✓ Image deletion cascade to transcripts and guidance
 ✓ Function-Guidance bidirectional FK consistency
 ✓ Function deletion cascade to tasks and guidance
-✓ Complex multi-manager workflows
+✓ Complex multi-manager sequences
 ✓ Circular reference handling (Functions ↔ Guidance)
 ✓ Bulk operations with FK constraints
 """
@@ -477,15 +477,15 @@ def test_delete_function_cascades_tasks_guidance():
 
 
 # --------------------------------------------------------------------------- #
-#  Integration: Complex Multi-Manager Workflow                                #
+#  Integration: Complex Multi-Manager Sequence                                #
 # --------------------------------------------------------------------------- #
 
 
 @_handle_project
 @pytest.mark.integration
-def test_complex_fk_workflow():
+def test_complex_fk_sequence():
     """
-    Test complex workflow involving all managers with FK relationships:
+    Test complex sequence involving all managers with FK relationships:
     - Contacts, Images, Functions, Guidance, Tasks, Transcripts
 
     FK Policies:

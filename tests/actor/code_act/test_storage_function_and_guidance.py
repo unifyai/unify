@@ -4,7 +4,7 @@ Tests the storage check loop's discrimination between the two stores:
 
 * ``test_storage_loop_stores_both_function_and_guidance`` — a multi-step
   pipeline with reusable utilities AND a non-trivial composition.
-  Expected: function(s) stored in FM, workflow guidance stored in GM.
+  Expected: function(s) stored in FM, procedural guidance stored in GM.
 
 * ``test_storage_loop_stores_function_without_guidance`` — a single
   well-parameterized utility with no multi-step composition.
@@ -52,7 +52,7 @@ class _TrackingGuidanceManager:
         raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
 
     def add_guidance(self, *, title, content, function_ids=None):
-        """Add a guidance entry describing a compositional workflow or playbook."""
+        """Add a guidance entry describing a compositional procedure or playbook."""
         self.add_calls.append(
             {"title": title, "content": content, "function_ids": function_ids},
         )
@@ -89,15 +89,15 @@ async def test_storage_loop_stores_both_function_and_guidance():
     """The storage check stores both functions (FM) and guidance (GM).
 
     The task produces a single reusable utility function AND demonstrates
-    a multi-phase workflow with conditional branching that can only be
+    a multi-phase procedure with conditional branching that can only be
     captured as a guidance playbook.
 
-    The scenario is deliberately kept small (one function + one workflow)
+    The scenario is deliberately kept small (one function + one procedure)
     so the 30-step storage loop has budget for both FM and GM operations.
 
     The storage-check librarian should recognise:
     - The utility function as genuinely reusable → store via FM.
-    - The adaptive workflow with quality gates and conditional strategy
+    - The adaptive procedure with quality gates and conditional strategy
       selection as a non-trivial orchestration recipe → store via GM.
     """
     fm = FunctionManager(include_primitives=False)
@@ -165,7 +165,7 @@ async def test_storage_loop_stores_both_function_and_guidance():
         )
 
         # The storage check should have stored guidance about the
-        # adaptive cleaning workflow.
+        # adaptive cleaning procedure.
         assert gm.add_calls, (
             f"Expected GuidanceManager.add_guidance to be called for the "
             f"adaptive data-cleaning workflow. "
@@ -191,7 +191,7 @@ async def test_storage_loop_stores_function_without_guidance():
 
     The task produces a single, well-parameterized utility function
     (phone-number normalization) that is clearly reusable but involves no
-    multi-step compositional workflow.  The storage-check librarian should:
+    multi-step compositional procedure.  The storage-check librarian should:
 
     - Recognise the utility as genuinely reusable → store via FM.
     - NOT create a guidance entry, because there is no non-obvious
@@ -246,7 +246,7 @@ async def test_storage_loop_stores_function_without_guidance():
         )
 
         # The storage check should NOT have created guidance — this is a
-        # single utility with no multi-step compositional workflow.
+        # single utility with no multi-step compositional procedure.
         assert not gm.add_calls, (
             f"Expected NO GuidanceManager.add_guidance calls for a single "
             f"utility function, but {len(gm.add_calls)} guidance entries "

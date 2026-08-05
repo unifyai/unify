@@ -16,7 +16,7 @@ For long-running test suites, you can run in the background and analyze failures
 3. Analyze failures immediately
 4. Check back later for final results
 
-## Workflow (Background Mode)
+## Steps (Background Mode)
 
 ```bash
 # 1. Start tests in background (use block_until_ms: 0 in Shell tool call)

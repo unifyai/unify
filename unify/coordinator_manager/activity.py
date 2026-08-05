@@ -287,14 +287,14 @@ def _fallback_title(
     if phase == "failed":
         return "Setup step needs attention"
     return {
-        "discovery": "Learning about the workflow",
+        "discovery": "Learning about the process",
         "requirements": "Updating the setup plan",
         "proposal": "Drafting the setup proposal",
         "confirmation": "Waiting for setup confirmation",
         "implementation": "Updating the workspace setup",
         "integration_setup": "Waiting on integration setup",
         "validation": "Validating the setup",
-        "handoff": "Handing off the workflow",
+        "handoff": "Handing off the process",
     }[stage]
 
 

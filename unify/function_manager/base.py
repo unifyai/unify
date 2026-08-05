@@ -168,7 +168,7 @@ class BaseFunctionManager(BaseStateManager):
 
         Each record conforms to the ``Function`` schema and includes a
         ``guidance_ids`` field — a list of identifiers for related guidance
-        entries that describe compositional workflows using these functions.
+        entries that describe compositional procedures using these functions.
 
         Parameters
         ----------
@@ -306,7 +306,7 @@ class BaseFunctionManager(BaseStateManager):
 
         Each result conforms to the ``Function`` schema and includes a
         ``guidance_ids`` field — a list of identifiers for related guidance
-        entries that describe compositional workflows using these functions.
+        entries that describe compositional procedures using these functions.
 
         Parameters
         ----------
@@ -389,7 +389,7 @@ class BaseFunctionManager(BaseStateManager):
 
         Each result conforms to the ``Function`` schema and includes a
         ``guidance_ids`` field — a list of identifiers for related guidance
-        entries that describe compositional workflows using these functions.
+        entries that describe compositional procedures using these functions.
 
         Parameters
         ----------

@@ -1217,7 +1217,7 @@ class _InProcessFunctionProxy:
     **stateful** (default via ``__call__``, or explicit via ``.stateful()``):
         Executes in a persistent in-process session. Variables defined in previous
         calls persist across executions within the same session_id. Use this for
-        iterative workflows where you want to build up state incrementally.
+        iterative sessions where you want to build up state incrementally.
 
     **stateless** (via ``.stateless()``):
         Executes in a fresh globals dict with no inherited state. Each call starts
@@ -1326,7 +1326,7 @@ class _InProcessFunctionProxy:
 
         State persists across calls within the shared namespace. Variables
         defined in previous executions remain accessible. This is the default
-        behavior, suitable for iterative/interactive workflows.
+        behavior, suitable for iterative/interactive sessions.
 
         Equivalent to calling ``.stateful()`` explicitly.
 
@@ -1406,7 +1406,7 @@ class _VenvFunctionProxy:
     **stateful** (default via ``__call__``, or explicit via ``.stateful()``):
         Executes in a persistent subprocess connection via VenvPool. Variables
         defined in previous calls persist across executions. Use this for
-        iterative workflows where you want to build up state incrementally
+        iterative sessions where you want to build up state incrementally
         (e.g., loading data once, then running multiple analyses).
 
     **stateless** (via ``.stateless()``):
@@ -1445,7 +1445,7 @@ class _VenvFunctionProxy:
     When to Use Each Mode
     ---------------------
     - **stateful**: Default for most use cases. Enables Jupyter-notebook-style
-      workflows where you iteratively build up state.
+      sessions where you iteratively build up state.
     - **stateless**: When you need guaranteed isolation - the function's behavior
       depends only on its explicit arguments, never on hidden global state.
     - **read_only**: When you want to "peek" at what a transformation would do
@@ -1646,7 +1646,7 @@ class _VenvFunctionProxy:
 
         State persists across calls within the same VenvPool session. Variables
         defined in previous executions remain accessible. This is the default
-        behavior, suitable for iterative/interactive workflows.
+        behavior, suitable for iterative/interactive sessions.
 
         Equivalent to calling ``.stateful()`` explicitly.
 
@@ -8545,7 +8545,7 @@ class _FunctionSyncAdapter(CustomSyncAdapter):
         live_row: Dict[str, Any],
         fields: Dict[str, Any],
     ) -> bool:
-        """Refresh workflow membership when it moved without the content.
+        """Refresh the workflows membership field when it moved without the content.
 
         ``workflows`` records which installed workflows reference a shared
         function. It is deliberately outside the content hash — two

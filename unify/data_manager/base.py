@@ -121,7 +121,7 @@ class BaseDataManager(BaseStateManager):
         prefer the higher-level :meth:`ingest` method which handles chunking,
         parallelism, and retry automatically.  Use ``create_table`` for:
 
-        - Schema-first workflows where the table must exist before rows arrive
+        - Schema-first setups where the table must exist before rows arrive
         - Empty table provisioning
         - Cases where you need fine-grained control over table creation
           separately from row insertion
@@ -955,7 +955,7 @@ class BaseDataManager(BaseStateManager):
 
         Values are hydrated lazily on read via ``filter(..., hydrate=...)``.
         The remote API is the source of truth for the bound field; keep local
-        columns for join keys and workflow state only — do **not** full-mirror
+        columns for join keys and process state only — do **not** full-mirror
         a remote database into Orchestra.
 
         ``binding["auth_secret_ref"]`` is the *name* of a secret in the tenant
@@ -2727,7 +2727,7 @@ class BaseDataManager(BaseStateManager):
             - ``"after"``  -- embed all rows in a single pass after every
               chunk has been inserted (simpler but no overlap).
             - ``"off"``    -- skip embedding even if *embed_columns* is
-              set (useful for deferred embedding workflows).
+              set (useful for deferred embedding passes).
 
         chunk_size : int, default ``1000``
             Maximum rows per insertion chunk.  The pipeline splits *rows*
@@ -2928,7 +2928,7 @@ class BaseDataManager(BaseStateManager):
 
             When ``False`` (the default), embedding computation blocks until
             vectors are fully materialised.  This is the correct choice for
-            interactive / on-demand workflows where the caller needs to
+            interactive / on-demand reads where the caller needs to
             query the embeddings immediately after creation.
 
             Bulk ingestion pipelines (``DataManager.ingest``,

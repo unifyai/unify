@@ -974,7 +974,7 @@ def make_send_notification_tool(
             A concise, user-facing progress update.
         completed : bool
             Set to True to mark the notification as a completion
-            announcement within a multi-step workflow. Leave False
+            announcement within a multi-step procedure. Leave False
             (default) for in-progress updates, intermediate steps, or
             blockers awaiting user action. At the top level, prefer
             ending with a tool-less text response rather than calling

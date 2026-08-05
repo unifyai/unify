@@ -370,11 +370,11 @@ async def gather_and_verify_role_openings(query: str) -> str:
 """
 
 
-def get_notify_multistep_workflow_example() -> str:
-    """Example: using notify() between meaningful workflow milestones."""
+def get_notify_multistep_procedure_example() -> str:
+    """Example: using notify() between meaningful milestones."""
 
     return """
-# Example: Multi-step workflow (genuinely compositional → execute_code is correct)
+# Example: Multi-step procedure (genuinely compositional → execute_code is correct)
 # NOTE: If this were a single primitive call, use execute_function instead.
 async def build_contact_insights(city: str) -> str:
     notify({
@@ -495,7 +495,7 @@ def get_library_function_composition_example() -> str:
     """
 
     return """
-# Example: Composing library functions for a complex workflow
+# Example: Composing library functions for a complex procedure
 async def main_plan():
     '''User goal: Find all contacts in New York and send them a meeting invite.
 
@@ -590,10 +590,10 @@ async def fetch_product_price(product_url: str) -> float:
 
 
 def get_computer_multistep_example() -> str:
-    """Example: multi-step computer workflow with verification."""
+    """Example: multi-step computer procedure with verification."""
 
     return '''
-# Example: Multi-step computer workflow
+# Example: Multi-step computer procedure
 async def complete_checkout(cart_items: list) -> str:
     """Complete e-commerce checkout flow."""
     session = await primitives.computer.web.new_session()
@@ -720,7 +720,7 @@ async def continue_existing_browser() -> str:
 """
 
 
-def get_computer_stateful_workflow_example() -> str:
+def get_computer_stateful_procedure_example() -> str:
     """Example: stateful computation with helper functions persisting across turns."""
 
     return """
@@ -773,8 +773,8 @@ def get_computer_stateful_workflow_example() -> str:
 """
 
 
-def get_computer_interactive_workflow_example() -> str:
-    """Example: multi-step web form workflow with handle-based state manager interaction."""
+def get_computer_interactive_procedure_example() -> str:
+    """Example: multi-step web form procedure with handle-based state manager interaction."""
 
     return """
 **Example: Web Research and State Manager Persistence**
@@ -908,10 +908,10 @@ def get_knowledge_manager_search_example() -> str:
 
 
 def get_primitives_cross_manager_example() -> str:
-    """Example: cross-manager workflow (ContactManager + KnowledgeManager)."""
+    """Example: cross-manager procedure (ContactManager + KnowledgeManager)."""
 
     return '''
-# Example: Cross-manager workflow
+# Example: Cross-manager procedure
 async def find_employee_count_for_contact(contact_name: str) -> int:
     """Find how many employees work at a contact's company.
 
@@ -1019,7 +1019,7 @@ def get_primitives_task_recurring_creation_example() -> str:
     """Example: creating durable scheduled and triggered tasks."""
 
     return """
-# Example: durable recurring and triggered workflow creation
+# Example: durable recurring and triggered task creation
 async def create_description_driven_recurring_tasks() -> str:
     # User: "Every Monday at 12:00 UTC, research AI/agentic AI work from
     # the last week and email me a summary document."
@@ -1126,7 +1126,7 @@ def get_primitives_files_render_extract_example() -> str:
 
     return '''
 # Example: Extract structured data from Excel and PDF documents
-# The render-first workflow is the most robust approach for document
+# The render-first approach is the most robust for document
 # extraction — it handles scanned PDFs, complex layouts, merged cells,
 # and formatting cues that text-based parsing misses.
 import openpyxl
@@ -1806,7 +1806,7 @@ def get_mixed_browse_persist_example() -> str:
     """Example: browse for data and persist via state managers."""
 
     return '''
-# Example: Browse and persist workflow
+# Example: Browse and persist procedure
 async def scrape_and_save_contact(linkedin_url: str) -> str:
     """Scrape contact info from LinkedIn and save to ContactManager."""
     session = await primitives.computer.web.new_session()
@@ -1948,7 +1948,7 @@ def get_interjection_routing_only_examples() -> str:
 }
 ```
 
-#### Example E — Upstream scope correction BEFORE downstream steps consume the result (staged workflow)
+#### Example E — Upstream scope correction BEFORE downstream steps consume the result (staged procedure)
 - **Context**: There is an in-flight `primitives.contacts.ask(...)` producing a contact set. The plan has *not yet awaited* that handle’s `.result()`,
   and downstream steps (e.g., transcripts/knowledge) will be spawned *based on* the returned contacts.
 - **User**: “Actually, for this quarterly sync, let’s focus only on the Berlin office. When you list the active contacts, include only Berlin contacts.”
@@ -2475,7 +2475,7 @@ def get_code_act_session_examples() -> str:
     return r"""
 ### Multi-Language + Multi-Session Execution (CodeActActor)
 
-**Key idea:** Use `execute_code` for multi-step Python + shell workflows, and use
+**Key idea:** Use `execute_code` for multi-step Python + shell procedures, and use
 sessions to preserve state across multiple tool calls.
 
 > **Note**: FunctionManager-discovered functions are also available inside
@@ -2583,7 +2583,7 @@ def get_core_pattern_examples() -> str:
         get_handle_steering_example().strip(),
         get_clarification_example().strip(),
         get_notify_web_search_example().strip(),
-        get_notify_multistep_workflow_example().strip(),
+        get_notify_multistep_procedure_example().strip(),
         get_notify_long_running_example().strip(),
     ]
     return "\n\n".join(examples)
@@ -2592,7 +2592,7 @@ def get_core_pattern_examples() -> str:
 def get_code_act_pattern_examples() -> str:
     """Get core pattern examples relevant to CodeActActor.
 
-    Includes error handling, clarification patterns, and discovery-first workflow
+    Includes error handling, clarification patterns, and discovery-first procedure
     that complement the primitives examples.
     """
 
@@ -2602,7 +2602,7 @@ def get_code_act_pattern_examples() -> str:
         get_reasoning_helper_examples().strip(),
         get_clarification_example().strip(),
         get_notify_web_search_example().strip(),
-        get_notify_multistep_workflow_example().strip(),
+        get_notify_multistep_procedure_example().strip(),
         get_notify_long_running_example().strip(),
     ]
     return "\n\n".join(examples)
@@ -2643,8 +2643,8 @@ def get_computer_examples() -> str:
         get_computer_screenshot_driven_example().strip(),
         get_computer_session_execution_example().strip(),
         get_computer_session_reattachment_example().strip(),
-        get_computer_stateful_workflow_example().strip(),
-        get_computer_interactive_workflow_example().strip(),
+        get_computer_stateful_procedure_example().strip(),
+        get_computer_interactive_procedure_example().strip(),
         get_user_desktop_files_example().strip(),
     ]
     return "\n\n".join(examples)

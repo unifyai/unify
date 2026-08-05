@@ -1514,7 +1514,7 @@ class ConversationManagerBrainActionTools:
                 not self-complete.  The actor stays alive after each response and
                 waits for the next ``interject`` before continuing.  Use this for
                 long-running interactive sessions (e.g. guided onboarding, live
-                screen-sharing walkthroughs, multi-step workflows with a tight
+                screen-sharing walkthroughs, multi-step procedures with a tight
                 feedback loop between conversation and action).
 
                 **Key differences from the default (persist=False):**
@@ -2016,7 +2016,7 @@ class ConversationManagerBrainActionTools:
                 f"If this result looks wrong or incomplete — especially if "
                 f"the task falls within your loaded guidance or requires "
                 f"capabilities the fast path lacks (credentials, secrets, "
-                f"multi-step workflows) — escalate by calling "
+                f"multi-step procedures) — escalate by calling "
                 f'notify({{"type": "escalation", "message": "<what you can '
                 f'do better>"}}).  Otherwise, no action needed.',
             )

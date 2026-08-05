@@ -53,7 +53,7 @@ class _TrackingGuidanceManager:
         raise ValueError(f"No guidance found with guidance_id {guidance_id}.")
 
     def add_guidance(self, *, title, content, function_ids=None):
-        """Add a guidance entry describing a compositional workflow or playbook."""
+        """Add a guidance entry describing a compositional procedure or playbook."""
         self.add_calls.append(
             {"title": title, "content": content, "function_ids": function_ids},
         )

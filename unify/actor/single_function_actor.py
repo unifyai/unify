@@ -3,7 +3,7 @@ A minimal actor that executes a single function or primitive.
 
 This actor is useful for:
 - Testing that stored functions work correctly
-- Deploying rigid, pre-defined workflows with no interactive elements
+- Deploying rigid, pre-defined procedures with no interactive elements
 - Integration testing of the function/computer_primitives pipeline
 - Executing action primitives (state manager methods) directly
 
@@ -375,7 +375,7 @@ class SingleFunctionActor(BaseActor):
 
     This actor is designed for:
     - Testing stored functions
-    - Deploying rigid, pre-defined workflows
+    - Deploying rigid, pre-defined procedures
     - Cases where interactive steering is not needed
     - Executing action primitives (state manager methods) directly
 

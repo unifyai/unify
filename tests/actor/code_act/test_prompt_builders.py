@@ -123,7 +123,7 @@ def test_code_act_prompt_includes_diverse_examples_sessions_computer_primitives_
 
 
 @pytest.mark.timeout(30)
-def test_code_act_prompt_includes_task_workflow_guidance_only_with_task_primitives():
+def test_code_act_prompt_includes_task_guidance_only_with_task_primitives():
     prompt_with_tasks = build_code_act_prompt(
         environments={
             "primitives": _DummyToolEnv(
@@ -143,10 +143,10 @@ def test_code_act_prompt_includes_task_workflow_guidance_only_with_task_primitiv
         tools={},
     )
 
-    assert "Durable Scheduled And Triggered Workflows" in prompt_with_tasks
+    assert "Durable Scheduled And Triggered Tasks" in prompt_with_tasks
     assert "`entrypoint=None`" in prompt_with_tasks
     assert "primitives.tasks.execute(task_id=...)" in prompt_with_tasks
-    assert "Durable Scheduled And Triggered Workflows" not in prompt_without_tasks
+    assert "Durable Scheduled And Triggered Tasks" not in prompt_without_tasks
 
 
 @pytest.mark.timeout(30)
