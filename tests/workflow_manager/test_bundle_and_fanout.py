@@ -23,17 +23,36 @@ WORKFLOW = "draft_email_replies"
 
 
 class RecordingSurface:
-    """Stands in for a manager's ``sync_custom``."""
+    """Stands in for a manager's per-destination custom sync.
+
+    Shape-only: it pins what the fan-out sends, not what a real manager
+    does with it. Receiver semantics (an empty source genuinely pruning,
+    the destination genuinely landing content there) are covered by the
+    live install/uninstall tests, which drive the real ``sync_custom_*``
+    methods — a recording double is structurally blind to them.
+    """
 
     def __init__(self, fail: bool = False) -> None:
         self.calls: List[Dict[str, Any]] = []
         self.fail = fail
 
-    def __call__(self, *, managed_by: str, **kwargs: Any) -> bool:
+    def __call__(
+        self,
+        *,
+        managed_by: str,
+        destination: str | None,
+        **kwargs: Any,
+    ) -> bool:
         if self.fail:
             raise RuntimeError("surface exploded")
         (source,) = kwargs.values()
-        self.calls.append({"managed_by": managed_by, "source": source})
+        self.calls.append(
+            {
+                "managed_by": managed_by,
+                "destination": destination,
+                "source": source,
+            },
+        )
         return bool(source)
 
 
@@ -138,7 +157,7 @@ def test_install_stamps_every_surface_with_the_slug():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle())
+    planted, failures = manager._plant(_bundle(), destination=None)
 
     assert not failures
     assert planted["guidance"]["entries"] == 1
@@ -148,13 +167,25 @@ def test_install_stamps_every_surface_with_the_slug():
     assert "triage" in guidance.calls[0]["source"]
 
 
+def test_the_install_destination_reaches_every_surface():
+    """A team install plants team content: the installation's destination
+    is passed to each surface, never derived from per-entry fields."""
+    guidance, tasks = RecordingSurface(), RecordingSurface()
+    manager = _manager(_registry(guidance=guidance, tasks=tasks))
+
+    manager._plant(_bundle(), destination="team:7")
+
+    assert [c["destination"] for c in guidance.calls] == ["team:7"]
+    assert [c["destination"] for c in tasks.calls] == ["team:7"]
+
+
 def test_uninstall_sends_an_empty_source_per_recorded_surface():
     """Pruning is the engine's, scoped to the slug: an empty source removes
     this bundle's rows and cannot reach anyone else's."""
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    removed, failures = manager._plant(_bundle(), empty=True)
+    removed, failures = manager._plant(_bundle(), destination=None, empty=True)
 
     assert not failures
     assert guidance.calls[0]["source"] == {}
@@ -168,7 +199,12 @@ def test_uninstall_uses_recorded_surfaces_not_the_current_bundle():
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
     shrunk = _bundle(surfaces={"guidance": {}})
-    manager._plant(shrunk, surface_names=["guidance", "tasks"], empty=True)
+    manager._plant(
+        shrunk,
+        destination=None,
+        surface_names=["guidance", "tasks"],
+        empty=True,
+    )
 
     assert len(guidance.calls) == 1
     assert len(tasks.calls) == 1
@@ -179,7 +215,7 @@ def test_one_failing_surface_does_not_stop_the_others():
     tasks = RecordingSurface(fail=True)
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle())
+    planted, failures = manager._plant(_bundle(), destination=None)
 
     assert sorted(failures) == ["tasks"]
     assert guidance.calls, "a failing surface must not skip the rest"
@@ -211,13 +247,18 @@ def test_mode_default_is_seed():
 # --------------------------------------------------------------------- #
 # Surface wiring                                                        #
 # --------------------------------------------------------------------- #
-def test_registered_kwargs_match_the_real_sync_signatures():
-    """The fan-out calls sync_custom by keyword, so a wrong name is a
-    TypeError at install time rather than anything the type checker sees.
+def test_registered_specs_match_the_real_sync_signatures():
+    """The fan-out calls the per-destination syncs by keyword, so a wrong
+    name is a TypeError at install time rather than anything the type
+    checker sees.
 
-    KnowledgeManager takes ``source_claims`` while the others take
-    ``source_<surface>``; this pins that asymmetry so the mapping cannot
-    drift back to a guessed name.
+    Pins three things per surface: the method exists, it takes the
+    declared source kwarg (KnowledgeManager's ``source_claims`` is the
+    asymmetry that motivated this), and it takes ``managed_by`` and
+    ``destination`` — the two arguments that make an empty-source
+    uninstall prune the right rows in the right place. The
+    destination-grouping ``sync_custom`` wrappers must never be
+    registered: they drop an empty source before the engine.
     """
     import inspect
 
@@ -231,10 +272,19 @@ def test_registered_kwargs_match_the_real_sync_signatures():
         "knowledge": KnowledgeManager,
         "tasks": TaskScheduler,
     }
-    for surface, kwarg in SCOPED_SURFACES.items():
-        params = inspect.signature(managers[surface].sync_custom).parameters
-        assert kwarg in params, f"{surface}: sync_custom has no {kwarg!r}"
-        assert "managed_by" in params, f"{surface}: sync_custom is not managed-scoped"
+    for surface, spec in SCOPED_SURFACES.items():
+        assert spec.method != "sync_custom", (
+            f"{surface}: the destination-grouping wrapper discards empty "
+            "sources; register the per-destination method instead"
+        )
+        method = getattr(managers[surface], spec.method)
+        params = inspect.signature(method).parameters
+        kwarg = spec.source_kwarg
+        assert kwarg in params, f"{surface}: {spec.method} has no {kwarg!r}"
+        assert "managed_by" in params, f"{surface}: {spec.method} is not managed-scoped"
+        assert (
+            "destination" in params
+        ), f"{surface}: {spec.method} cannot take the install destination"
 
 
 def test_pending_surfaces_are_not_registered():

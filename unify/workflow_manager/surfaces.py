@@ -6,10 +6,18 @@ custom-sync adapter scopes ``live_rows`` and its collision probe to
 source's rows from another's, and the first workflow to sync would delete
 the deployment's content. :data:`SCOPED_SURFACES` is the record of which
 managers have crossed that line.
+
+Workflows register the **per-destination** sync methods, never the
+destination-grouping ``sync_custom`` wrappers. The wrappers derive the
+destinations to touch from the entries themselves, so an empty source
+resolves to zero destinations and never reaches the engine — uninstall
+would prune nothing. The per-destination methods run one engine pass
+unconditionally against the destination the installation chose.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .bundle import SurfaceRegistry
@@ -20,12 +28,23 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..task_scheduler.task_scheduler import TaskScheduler
 
 
-SCOPED_SURFACES: Mapping[str, str] = {
-    "guidance": "source_guidance",
-    "knowledge": "source_claims",
-    "tasks": "source_tasks",
+@dataclass(frozen=True)
+class SurfaceSpec:
+    """How one manager's per-destination sync is reached."""
+
+    method: str
+    """Attribute name of the per-destination sync on the manager."""
+
+    source_kwarg: str
+    """Keyword its collected source arrives on."""
+
+
+SCOPED_SURFACES: Mapping[str, SurfaceSpec] = {
+    "guidance": SurfaceSpec("sync_custom_guidance", "source_guidance"),
+    "knowledge": SurfaceSpec("sync_custom_knowledge", "source_claims"),
+    "tasks": SurfaceSpec("sync_custom_tasks", "source_tasks"),
 }
-"""Surface name -> the kwarg its manager's ``sync_custom`` takes.
+"""Surface name -> the manager method a workflow install drives.
 
 Adding an entry here is a claim that the manager's adapter is scoped.
 Make the adapter change first; this mapping is the consequence, not the
@@ -33,17 +52,20 @@ mechanism.
 """
 
 PENDING_SCOPING: tuple[str, ...] = (
-    "contacts",
-    "secrets",
-    "blacklist",
     "data",
-    "dashboards",
+    "canvas",
     "functions",
     "venvs",
-    "integration_registry",
 )
-"""Surfaces workflows cannot reach yet, listed so the gap is visible
-rather than merely absent."""
+"""Surfaces workflows will reach once their adapters are scoped, listed so
+the gap is visible rather than merely absent.
+
+Deliberately absent rather than pending: contacts, transcripts and
+blacklist are populated at runtime by a workflow's own functions, never
+pre-seeded from a bundle; secrets and integrations enter a bundle as
+declared requirements, never as content; dashboards are deprecated in
+favour of canvas.
+"""
 
 
 def register_default_surfaces(
@@ -67,10 +89,11 @@ def register_default_surfaces(
     for name, manager in managers.items():
         if manager is None:
             continue
+        spec = SCOPED_SURFACES[name]
         registry.register(
             name,
-            manager.sync_custom,
-            source_kwarg=SCOPED_SURFACES[name],
+            getattr(manager, spec.method),
+            source_kwarg=spec.source_kwarg,
             source_scoped=True,
         )
     return registry
