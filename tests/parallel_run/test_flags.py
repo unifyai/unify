@@ -726,3 +726,62 @@ class TestEvalOnlyDiscoveryAgreement:
         eval tests.
         """
         assert self._discover("--eval-only", "tests/parallel_run") == []
+
+    def test_symbolic_only_narrows_the_matrix(self):
+        """The inverse filter needs the same narrowing, for the same reason."""
+        assert 0 < len(self._discover("--symbolic-only")) < len(self._discover())
+
+    def test_every_symbolic_entry_has_a_non_eval_test(self):
+        """An all-eval directory handed to --symbolic-only is the failure case.
+
+        This is what a full-matrix sweep tripped over: ten pure-eval
+        directories reported as failures for having nothing left to run.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_d", root / self.SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        for entry in self._discover("--symbolic-only"):
+            members = []
+            for token in entry.split():
+                target = root / token
+                members.extend(
+                    target.glob("test_*.py") if target.is_dir() else [target],
+                )
+            assert any(
+                mod.marker_content(m)[1] for m in members
+            ), f"discovery offered {entry!r}, which --symbolic-only would empty"
+
+    def test_marker_applied_through_an_alias_is_recognised(self):
+        """`x = pytest.mark.eval` then `@x` marks tests just as the dotted form does."""
+        import importlib.util
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_d", root / self.SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        aliased = root / "tests/function_manager/core/test_simulated.py"
+        assert mod.marker_content(aliased)[
+            0
+        ], "alias-applied eval markers must count, or an eval sweep skips them"
+
+    def test_the_two_marker_flags_are_mutually_exclusive(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        done = subprocess.run(
+            [sys.executable, self.SCRIPT, "--eval-only", "--symbolic-only"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        assert done.returncode != 0
+        assert not done.stdout.strip()
