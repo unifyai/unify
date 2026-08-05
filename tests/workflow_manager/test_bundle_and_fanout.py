@@ -2,7 +2,7 @@
 
 Symbolic tests over in-memory surfaces. No backend and no LLM: these pin
 the invariants that make a bundle installable — that it can only reach
-source-scoped surfaces, that its content hash does not move with the
+managed-scoped surfaces, that its content hash does not move with the
 settings someone installs it under, and that uninstall clears exactly the
 rows the bundle planted.
 """
@@ -29,11 +29,11 @@ class RecordingSurface:
         self.calls: List[Dict[str, Any]] = []
         self.fail = fail
 
-    def __call__(self, *, source_id: str, **kwargs: Any) -> bool:
+    def __call__(self, *, managed_by: str, **kwargs: Any) -> bool:
         if self.fail:
             raise RuntimeError("surface exploded")
         (source,) = kwargs.values()
-        self.calls.append({"source_id": source_id, "source": source})
+        self.calls.append({"managed_by": managed_by, "source": source})
         return bool(source)
 
 
@@ -79,7 +79,7 @@ def _bundle(**kwargs: Any) -> WorkflowBundle:
 # Registry                                                              #
 # --------------------------------------------------------------------- #
 def test_unscoped_surface_is_refused():
-    """An adapter that ignores source_id would prune its siblings' rows."""
+    """An adapter that ignores managed_by would prune its siblings' rows."""
     registry = SurfaceRegistry()
     with pytest.raises(UnscopedSurfaceError) as excinfo:
         registry.register(
@@ -92,7 +92,7 @@ def test_unscoped_surface_is_refused():
     assert "contacts" not in registry
 
 
-def test_bundle_cannot_claim_the_deployment_source_id():
+def test_bundle_cannot_claim_the_deployment_managed_by():
     with pytest.raises(ValueError, match="reserved"):
         WorkflowBundle(slug="deployment", name="Impostor")
 
@@ -143,8 +143,8 @@ def test_install_stamps_every_surface_with_the_slug():
     assert not failures
     assert planted["guidance"]["entries"] == 1
     assert planted["tasks"]["entries"] == 1
-    assert [c["source_id"] for c in guidance.calls] == [WORKFLOW]
-    assert [c["source_id"] for c in tasks.calls] == [WORKFLOW]
+    assert [c["managed_by"] for c in guidance.calls] == [WORKFLOW]
+    assert [c["managed_by"] for c in tasks.calls] == [WORKFLOW]
     assert "triage" in guidance.calls[0]["source"]
 
 
@@ -224,22 +224,22 @@ def test_registered_kwargs_match_the_real_sync_signatures():
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
     from unify.task_scheduler.task_scheduler import TaskScheduler
-    from unify.workflow_manager.surfaces import SOURCE_SCOPED
+    from unify.workflow_manager.surfaces import SCOPED_SURFACES
 
     managers = {
         "guidance": GuidanceManager,
         "knowledge": KnowledgeManager,
         "tasks": TaskScheduler,
     }
-    for surface, kwarg in SOURCE_SCOPED.items():
+    for surface, kwarg in SCOPED_SURFACES.items():
         params = inspect.signature(managers[surface].sync_custom).parameters
         assert kwarg in params, f"{surface}: sync_custom has no {kwarg!r}"
-        assert "source_id" in params, f"{surface}: sync_custom is not source-scoped"
+        assert "managed_by" in params, f"{surface}: sync_custom is not managed-scoped"
 
 
 def test_pending_surfaces_are_not_registered():
     """The unscoped managers must stay unreachable until their adapters
     are scoped; listing one in both places would be the bug."""
-    from unify.workflow_manager.surfaces import PENDING_SCOPING, SOURCE_SCOPED
+    from unify.workflow_manager.surfaces import PENDING_SCOPING, SCOPED_SURFACES
 
-    assert not set(PENDING_SCOPING) & set(SOURCE_SCOPED)
+    assert not set(PENDING_SCOPING) & set(SCOPED_SURFACES)

@@ -2,9 +2,9 @@
 
 The list is short on purpose. A surface belongs here only once its
 custom-sync adapter scopes ``live_rows`` and its collision probe to
-``source_id``; until then the reconcile loop's prune step cannot tell one
+``managed_by``; until then the reconcile loop's prune step cannot tell one
 source's rows from another's, and the first workflow to sync would delete
-the deployment's content. :data:`SOURCE_SCOPED` is the record of which
+the deployment's content. :data:`SCOPED_SURFACES` is the record of which
 managers have crossed that line.
 """
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..task_scheduler.task_scheduler import TaskScheduler
 
 
-SOURCE_SCOPED: Mapping[str, str] = {
+SCOPED_SURFACES: Mapping[str, str] = {
     "guidance": "source_guidance",
     "knowledge": "source_claims",
     "tasks": "source_tasks",
@@ -53,7 +53,7 @@ def register_default_surfaces(
     knowledge_manager: "KnowledgeManager | None" = None,
     task_scheduler: "TaskScheduler | None" = None,
 ) -> SurfaceRegistry:
-    """Wire every source-scoped manager that was supplied.
+    """Wire every managed-scoped manager that was supplied.
 
     Managers passed as ``None`` are skipped, so a caller holding only some
     of them gets a registry covering exactly those.
@@ -70,7 +70,7 @@ def register_default_surfaces(
         registry.register(
             name,
             manager.sync_custom,
-            source_kwarg=SOURCE_SCOPED[name],
+            source_kwarg=SCOPED_SURFACES[name],
             source_scoped=True,
         )
     return registry

@@ -2,7 +2,7 @@
 
 Installing a workflow is a fan-out of ordinary custom syncs, one per
 surface the bundle covers, each stamped with the bundle's slug as its
-``source_id``. That is the whole mechanism: there is no second reconcile
+``managed_by``. That is the whole mechanism: there is no second reconcile
 loop, no parallel store for workflow content, and no lookup path that
 knows about workflows. What the slug buys is provenance — the ability to
 ask a surface "which rows did this bundle plant?" and get an exact
@@ -213,7 +213,7 @@ class WorkflowManager(BaseWorkflowManager):
             source = {} if empty else bundle.surfaces.get(name, {})
             try:
                 surface = self._surfaces.get(name)
-                changed = surface.sync(source, source_id=bundle.slug)
+                changed = surface.sync(source, managed_by=bundle.slug)
                 planted[name] = {"entries": len(source), "changed": bool(changed)}
             except CustomSyncPartialFailure as exc:
                 failures[name] = exc

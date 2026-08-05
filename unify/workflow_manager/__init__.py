@@ -5,13 +5,13 @@ from .bundle import (
     UnscopedSurfaceError,
     WorkflowBundle,
 )
-from .surfaces import PENDING_SCOPING, SOURCE_SCOPED, register_default_surfaces
+from .surfaces import PENDING_SCOPING, SCOPED_SURFACES, register_default_surfaces
 from .types.workflow import WorkflowInstallation, WorkflowMode
 from .workflow_manager import WorkflowManager
 
 __all__ = [
     "PENDING_SCOPING",
-    "SOURCE_SCOPED",
+    "SCOPED_SURFACES",
     "BaseWorkflowManager",
     "Surface",
     "SurfaceRegistry",
