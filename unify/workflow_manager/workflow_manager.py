@@ -16,6 +16,7 @@ which is what makes update and uninstall possible at all.
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import logging
 import threading
@@ -34,6 +35,7 @@ from ..common.tool_outcome import ToolErrorException
 from .base import BaseWorkflowManager
 from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
 from .requirements import RequirementResolver
+from .types.catalog_entry import WorkflowCatalogEntry
 from .types.meta import WorkflowMeta
 from .types.workflow import UNASSIGNED, WorkflowInstallation
 
@@ -41,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 WORKFLOW_TABLE = "Workflows"
 WORKFLOW_META_TABLE = "Workflows/Meta"
+WORKFLOW_CATALOG_TABLE = "Workflows/Catalog"
 
 
 class WorkflowManager(BaseWorkflowManager):
@@ -61,12 +64,22 @@ class WorkflowManager(BaseWorkflowManager):
                 fields=model_to_fields(WorkflowMeta),
                 unique_keys={"meta_id": "int"},
             ),
+            TableContext(
+                name=WORKFLOW_CATALOG_TABLE,
+                description=(
+                    "Installable workflows published for reading surfaces. "
+                    "Derived from the bundles on disk; never authored here."
+                ),
+                fields=model_to_fields(WorkflowCatalogEntry),
+                unique_keys={"slug": "str"},
+            ),
         ]
 
     def __init__(self) -> None:
         super().__init__()
         self._ctx = ContextRegistry.get_context(self, WORKFLOW_TABLE)
         self._meta_ctx = ContextRegistry.get_context(self, WORKFLOW_META_TABLE)
+        self._catalog_ctx = ContextRegistry.get_context(self, WORKFLOW_CATALOG_TABLE)
         self._surfaces = SurfaceRegistry()
         self._catalogue: Dict[str, WorkflowBundle] = {}
         self._lock = threading.RLock()
@@ -732,6 +745,233 @@ class WorkflowManager(BaseWorkflowManager):
                 sorted(failures),
             )
         return result
+
+    # ------------------------------------------------------------------ #
+    # Publishing the catalogue for reading surfaces                      #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _human_schedule(entry: Mapping[str, Any]) -> str:
+        """A plain-language cadence for one task entry, or "" if it has none.
+
+        Reading surfaces show a workflow's recurring jobs before it is
+        installed, and "every weekday at 08:30" is the part a user actually
+        weighs. Derived here rather than in the reader so every surface
+        says it the same way.
+        """
+        repeat = entry.get("repeat") or []
+        if isinstance(repeat, str):
+            try:
+                repeat = json.loads(repeat)
+            except ValueError:
+                return ""
+        if not repeat:
+            return "Once, at install" if not entry.get("trigger") else "On a trigger"
+
+        first = repeat[0] if isinstance(repeat[0], Mapping) else {}
+        frequency = str(first.get("frequency") or "").lower()
+        weekdays = [str(d).upper() for d in (first.get("weekdays") or [])]
+        at = str(first.get("time_of_day") or "")[:5]
+
+        if frequency == "weekly" and weekdays:
+            weekday_set = {"MO", "TU", "WE", "TH", "FR"}
+            if set(weekdays) == weekday_set:
+                cadence = "Every weekday"
+            else:
+                order = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+                names = {
+                    "MO": "Mon",
+                    "TU": "Tue",
+                    "WE": "Wed",
+                    "TH": "Thu",
+                    "FR": "Fri",
+                    "SA": "Sat",
+                    "SU": "Sun",
+                }
+                ordered = [names[d] for d in order if d in weekdays]
+                cadence = "Every " + ", ".join(ordered)
+        elif frequency:
+            cadence = {
+                "minutely": "Every minute",
+                "hourly": "Every hour",
+                "daily": "Every day",
+                "weekly": "Every week",
+                "monthly": "Every month",
+                "yearly": "Every year",
+            }.get(frequency, f"Every {frequency}")
+        else:
+            return ""
+
+        return f"{cadence} at {at}" if at else cadence
+
+    @classmethod
+    def _bundle_sets(cls, bundle: WorkflowBundle) -> Dict[str, Any]:
+        """What a bundle sets up, per surface, for a reader to show."""
+        sets: Dict[str, Any] = {}
+        for surface, source in bundle.surfaces.items():
+            items = []
+            for key, entry in sorted(source.items()):
+                fields = entry if isinstance(entry, Mapping) else {}
+                item: Dict[str, Any] = {
+                    "name": str(fields.get("name") or fields.get("title") or key),
+                }
+                if surface == "tasks":
+                    schedule = cls._human_schedule(fields)
+                    if schedule:
+                        item["schedule"] = schedule
+                items.append(item)
+            sets[surface] = items
+        return sets
+
+    def _catalog_entry(self, bundle: WorkflowBundle) -> Dict[str, Any]:
+        """One catalogue row's fields, derived wholly from the bundle."""
+        entry = WorkflowCatalogEntry(
+            slug=bundle.slug,
+            name=bundle.name,
+            version=bundle.version,
+            category=bundle.category,
+            icon_id=bundle.icon_id,
+            description=bundle.description,
+            requirements=json.dumps(
+                [
+                    {
+                        "slug": requirement.slug,
+                        "name": requirement.name or requirement.slug,
+                    }
+                    for requirement in bundle.requirements
+                ],
+            ),
+            capabilities=json.dumps(list(bundle.capabilities)),
+            params_schema=json.dumps(bundle.params_schema, sort_keys=True),
+            surfaces=json.dumps(bundle.surface_names()),
+            sets=json.dumps(self._bundle_sets(bundle), sort_keys=True),
+        )
+        return strip_authoring_assistant_id(entry.model_dump(mode="json"))
+
+    def _get_stored_catalog_hash(self) -> str:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                return str((logs[0].entries or {}).get("custom_workflow_hash", ""))
+        except Exception:
+            logger.debug("Could not read the workflow catalogue hash", exc_info=True)
+        return ""
+
+    def _store_catalog_hash(self, hash_value: str) -> None:
+        try:
+            logs = unisdk.get_logs(
+                context=self._meta_ctx,
+                filter="meta_id == 1",
+                limit=1,
+            )
+            if logs:
+                unisdk.update_logs(
+                    context=self._meta_ctx,
+                    logs=[logs[0].id],
+                    entries={"custom_workflow_hash": hash_value},
+                    overwrite=True,
+                )
+            else:
+                unity_create_logs(
+                    context=self._meta_ctx,
+                    entries=[{"meta_id": 1, "custom_workflow_hash": hash_value}],
+                    stamp_authoring=True,
+                )
+        except Exception:
+            logger.debug("Could not store the workflow catalogue hash", exc_info=True)
+
+    def publish_catalog(self) -> Dict[str, Any]:
+        """Mirror the in-memory catalogue into ``Workflows/Catalog``.
+
+        Reading surfaces then see the shelf without waking the assistant,
+        which matters because a hosted assistant is usually asleep when
+        someone opens Console.
+
+        Cheap by construction, in three steps:
+
+        1. **Hash short-circuit.** The published shape is fingerprinted and
+           compared with the stored aggregate. A boot whose catalogue has
+           not changed costs one meta read and nothing else — which is
+           every boot between deploys, i.e. almost all of them.
+        2. **One batched insert** for rows that are new, rather than a call
+           per bundle.
+        3. **Per-row updates only for rows that actually changed**, since
+           Orchestra applies one entries payload to every id in a call and
+           each row's content differs. Deletes batch into one call.
+
+        Nothing is authored in that context, so there is no user edit to
+        preserve and no merge to get wrong.
+
+        Best-effort by design: a publish failure must not stop an assistant
+        booting or block installs, because the in-memory catalogue is the
+        authority either way. Failures are logged and the next boot retries
+        (the hash is stored only on success, so a failed pass does not pin
+        itself as up to date).
+        """
+        bundles = self.available_bundles()
+        entries = {bundle.slug: self._catalog_entry(bundle) for bundle in bundles}
+        expected_hash = hashlib.sha256(
+            json.dumps(entries, sort_keys=True).encode(),
+        ).hexdigest()
+
+        if entries and self._get_stored_catalog_hash() == expected_hash:
+            logger.debug("Workflow catalogue unchanged; skipping publish")
+            return {"unchanged": True, "published": [], "removed": []}
+
+        published: List[str] = []
+        removed: List[str] = []
+        try:
+            live_logs = unisdk.get_logs(
+                context=self._catalog_ctx,
+                exclude_fields=list_private_fields(self._catalog_ctx),
+            )
+            live = {
+                str((lg.entries or {}).get("slug")): lg
+                for lg in live_logs
+                if (lg.entries or {}).get("slug")
+            }
+
+            inserts = [payload for slug, payload in entries.items() if slug not in live]
+            if inserts:
+                unity_create_logs(
+                    context=self._catalog_ctx,
+                    entries=inserts,
+                    stamp_authoring=True,
+                    batched=True,
+                )
+                published.extend(payload["slug"] for payload in inserts)
+
+            for slug, payload in entries.items():
+                existing = live.get(slug)
+                if existing is None:
+                    continue
+                current = {key: (existing.entries or {}).get(key) for key in payload}
+                if current == payload:
+                    continue
+                unisdk.update_logs(
+                    context=self._catalog_ctx,
+                    logs=[existing.id],
+                    entries=payload,
+                    overwrite=True,
+                )
+                published.append(slug)
+
+            stale = [lg.id for slug, lg in live.items() if slug not in entries]
+            if stale:
+                unisdk.delete_logs(context=self._catalog_ctx, logs=stale)
+                removed.extend(slug for slug in live if slug not in entries)
+        except Exception:
+            logger.exception(
+                "Could not publish the workflow catalogue; the shelf may read "
+                "stale until the next boot",
+            )
+            return {"published": sorted(published), "removed": sorted(removed)}
+
+        self._store_catalog_hash(expected_hash)
+        return {"published": sorted(published), "removed": sorted(removed)}
 
     @functools.wraps(BaseWorkflowManager.get_workflow, updated=())
     def get_workflow(self, *, slug: str) -> Dict[str, Any]:

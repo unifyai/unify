@@ -18,6 +18,7 @@ __all__ = [
     "SurfaceRegistry",
     "UnscopedSurfaceError",
     "WorkflowBundle",
+    "WorkflowCatalogEntry",
     "WorkflowInstallation",
     "WorkflowManager",
     "WorkflowRequirement",
@@ -43,6 +44,7 @@ _lazy_map = {
     "PENDING_SCOPING": "unify.workflow_manager.surfaces",
     "SCOPED_SURFACES": "unify.workflow_manager.surfaces",
     "register_default_surfaces": "unify.workflow_manager.surfaces",
+    "WorkflowCatalogEntry": "unify.workflow_manager.types.catalog_entry",
     "WorkflowInstallation": "unify.workflow_manager.types.workflow",
     "WorkflowManager": "unify.workflow_manager.workflow_manager",
 }
@@ -80,5 +82,6 @@ if TYPE_CHECKING:
         SCOPED_SURFACES,
         register_default_surfaces,
     )
+    from .types.catalog_entry import WorkflowCatalogEntry
     from .types.workflow import WorkflowInstallation
     from .workflow_manager import WorkflowManager

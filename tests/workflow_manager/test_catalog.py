@@ -185,3 +185,58 @@ def test_workflow_manager_tools_carry_the_llm_contract():
     ):
         doc = getattr(WorkflowManager, method).__doc__ or ""
         assert len(doc) > 100, f"{method} lost its base docstring"
+
+
+# --------------------------------------------------------------------- #
+# Human-readable cadence                                                #
+# --------------------------------------------------------------------- #
+def test_human_schedule_reads_as_plain_language():
+    """Reading surfaces show a workflow's cadence before it is installed,
+    and that phrasing is the part a user actually weighs. Derived once
+    here so every surface says it identically."""
+    from unify.workflow_manager.workflow_manager import WorkflowManager
+
+    schedule = WorkflowManager._human_schedule
+    weekdays = {
+        "repeat": [
+            {
+                "frequency": "weekly",
+                "weekdays": ["MO", "TU", "WE", "TH", "FR"],
+                "time_of_day": "08:30:00",
+            },
+        ],
+    }
+    assert schedule(weekdays) == "Every weekday at 08:30"
+    assert (
+        schedule({"repeat": [{"frequency": "daily", "time_of_day": "09:00:00"}]})
+        == "Every day at 09:00"
+    )
+    assert (
+        schedule(
+            {
+                "repeat": [
+                    {
+                        "frequency": "weekly",
+                        "weekdays": ["FR"],
+                        "time_of_day": "17:00:00",
+                    },
+                ],
+            },
+        )
+        == "Every Fri at 17:00"
+    )
+    # A task with no recurrence is the provisioning one-shot; a triggered
+    # task fires on an event. Both need saying, neither is a cadence.
+    assert schedule({}) == "Once, at install"
+    assert schedule({"trigger": {"medium": "email"}}) == "On a trigger"
+
+
+def test_bundle_sets_names_what_each_surface_receives(tmp_path: Path):
+    """The 'what this installs' list a reader shows before installing."""
+    from unify.workflow_manager.workflow_manager import WorkflowManager
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    sets = WorkflowManager._bundle_sets(bundle)
+
+    assert sets["guidance"] == [{"name": "Triage"}]
+    assert sets["tasks"] == [{"name": "Morning run", "schedule": "Every day"}]
