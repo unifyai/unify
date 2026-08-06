@@ -277,6 +277,11 @@ class Assistant(Agent):
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
+        # Live names of everyone else on this call (group-call etiquette). Also a
+        # closure rather than a snapshot: a call that starts 1:1 and becomes a
+        # group when someone joins has to pick the etiquette up mid-call, and one
+        # that empties back out has to drop it again.
+        self._other_participants_provider: Callable[[], list[str]] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -560,6 +565,7 @@ class Assistant(Agent):
                 history_provider() if history_provider is not None else []
             )
             peers_provider = self._peer_assistants_provider
+            others_provider = self._other_participants_provider
             resolved = await select_fast_brain_turn(
                 user_text=user_text,
                 system_prompt=self._fast_brain_system_prompt,
@@ -574,6 +580,10 @@ class Assistant(Agent):
                 peer_assistants=(
                     peers_provider() if peers_provider is not None else ()
                 ),
+                other_participants=(
+                    others_provider() if others_provider is not None else ()
+                ),
+                own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
 
             if (
@@ -2855,6 +2865,31 @@ async def entrypoint(ctx: agents.JobContext):
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
         speaker_tracker=speaker_tracker,
     )
+
+    # --- Group-call etiquette (multi-party channels only) ---
+    # Telephony carries exactly one other person, so every turn there is
+    # necessarily addressed to the assistant and no provider is wired: the 1:1
+    # path keeps replying to everything, as it should.
+    if channel in MULTI_PARTY_CHANNELS:
+
+        def _other_participant_names() -> list[str]:
+            if channel == "unify_meet":
+                return [
+                    name
+                    for name in (
+                        (member.get("display_name") or "").strip()
+                        for member in unify_meet_roster
+                        if member.get("kind") == "human"
+                    )
+                    if name
+                ]
+            # Browser meets: the platform reports one roster and does not mark
+            # which entries are bots, so every other participant counts. A stray
+            # notetaker inflating the count is harmless — it only means the
+            # assistant reads the room before speaking.
+            return _get_meet_participant_names()
+
+        assistant._other_participants_provider = _other_participant_names
 
     # --- Multi-assistant speaking floor (org meets only) ---
     # Assistants in a shared org room coordinate playout over the data channel
