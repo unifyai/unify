@@ -608,9 +608,11 @@ def _build_ms_teams_bot_guidelines(assistant_has_ms_teams_bot: bool) -> str:
         "name as a routing token when starting a thread; replies inside that "
         "thread automatically reach the same assistant. To reply in a shared "
         "conversation, call `send_ms_teams_bot_channel_message` with the "
-        "inbound message's `tenant_id` and `conversation_id`. 1:1 DMs are "
-        "simpler: reply with `send_ms_teams_bot_message` using the inbound "
-        "`tenant_id` and `conversation_id`. This is the org-installed Unify "
+        "inbound message's `tenant_id` and `conversation_id` — a shared thread "
+        "is identified by the thread, so those are required. 1:1 DMs are "
+        "simpler: `send_ms_teams_bot_message` takes the inbound `tenant_id` "
+        "and `conversation_id`, or resolves the contact's last Teams "
+        "conversation when I omit them. This is the org-installed Unify "
         "Teams app (Bot Framework), distinct from `send_teams_message` (a "
         "delegated Microsoft account)."
     )
@@ -778,12 +780,14 @@ def _build_comms_tool_listing(
             )
         if assistant_has_ms_teams_bot:
             lines.append(
-                "- `send_ms_teams_bot_message`: Reply to my boss only through "
-                "the org-installed Unify Microsoft Teams app. Only usable to "
-                "answer an inbound Teams message from my boss — pass the "
-                "`tenant_id` and `conversation_id` shown on that inbound "
-                "message. This is the Unify Teams app (Bot Framework), distinct "
-                "from `send_teams_message` (my boss's own Microsoft account).",
+                "- `send_ms_teams_bot_message`: Message my boss only through "
+                "the org-installed Unify Microsoft Teams app. Pass the "
+                "`tenant_id` and `conversation_id` shown on an inbound Teams "
+                "message to answer it, or omit both to reuse our last Teams "
+                "conversation. The app cannot open a new conversation, so this "
+                "fails if my boss has never messaged it. This is the Unify "
+                "Teams app (Bot Framework), distinct from `send_teams_message` "
+                "(my boss's own Microsoft account).",
             )
         if assistant_has_teams:
             lines.append(
@@ -867,9 +871,10 @@ def _build_comms_tool_listing(
             "Unify Microsoft Teams app. Use when the inbound thread is "
             "`ms_teams_bot_message` (a 1:1 DM): pass the `tenant_id` and "
             "`conversation_id` shown on the inbound message so the reply routes "
-            "back into that same Teams conversation. This is the Unify Teams "
-            "app (Bot Framework), distinct from `send_teams_message` (a user's "
-            "delegated Microsoft account).",
+            "back into that same Teams conversation, or omit both to reuse the "
+            "last known Teams conversation with that contact. This is the Unify "
+            "Teams app (Bot Framework), distinct from `send_teams_message` (a "
+            "user's delegated Microsoft account).",
         )
         lines.append(
             "- `send_ms_teams_bot_channel_message`: Reply into a group chat or "
