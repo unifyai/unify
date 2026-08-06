@@ -122,16 +122,34 @@ After editing anything under `.agents/`, regenerate the aggregate:
 ## Console (`unifyai/console`) mapping
 
 Console is the user-facing surface and does not have to mirror internal
-names, but the mapping must be **deliberate and consistent** — the same
-rows must not carry two different labels in two places.
+names, but the mapping must be **deliberate**. It already is, in
+`src/components/Workflows/workflowCategories.ts`, which distinguishes the
+*content kind* from the *section it lives in*:
 
-| unify | Console user-facing |
-|---|---|
-| `guidance` rows / procedures | **Procedures** |
-| `knowledge` claims | **Knowledge** |
-| `functions` | **Functions** |
-| `tasks` | **Tasks** |
-| workflow bundle | **Workflow** |
+| unify surface | Console kind label | Section it lives in |
+|---|---|---|
+| `guidance` | Procedures | Guidance |
+| `knowledge` | Knowledge claims | Knowledge |
+| `functions` | Functions | Functions |
+| `tasks` | Recurring tasks | Tasks |
 
-When adding a Console surface that renders manager content, check the
-label against this table rather than the unify context name.
+That split is correct and matches this rule's nouns: a section is a
+library ("Guidance", "Knowledge"), and what it holds is a procedure or a
+claim. When adding a Console surface that renders manager content, extend
+that map rather than inventing a label at the call site.
+
+**`skill` is an umbrella, not a synonym.** unify uses "skills" for
+*anything worth storing across the three stores* — the `store_skills`
+tool, the `"Storing reusable skills"` review label. That is a legitimate
+superset covering functions, procedures and claims together. It is wrong
+only when used for one specific member: Console's `FunctionSkill` type
+names a function with the umbrella word.
+
+**Do not couple to display labels across repos.** Console's LiveActions
+view string-matches unify's `display_label` prose
+(`dl === 'storing reusable skills'`) to choose icons and categories.
+Those labels are human-facing copy that this rule actively encourages
+rewording, and nothing on either side fails when they drift — the view
+just silently falls through to generic rendering. Match on the stable
+tool name instead. Until that lands, a `display_label` change in unify is
+a cross-repo change.
