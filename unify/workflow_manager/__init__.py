@@ -23,6 +23,7 @@ __all__ = [
     "WorkflowManager",
     "WorkflowRequirement",
     "bootstrap_workflow_catalog",
+    "seed_builtin_workflows",
     "load_bundle",
     "load_catalog",
     "register_default_surfaces",
@@ -38,6 +39,7 @@ _lazy_map = {
     "WorkflowBundle": "unify.workflow_manager.bundle",
     "WorkflowRequirement": "unify.workflow_manager.bundle",
     "bootstrap_workflow_catalog": "unify.workflow_manager.catalog",
+    "seed_builtin_workflows": "unify.workflow_manager.builtins_catalog",
     "load_bundle": "unify.workflow_manager.catalog",
     "load_catalog": "unify.workflow_manager.catalog",
     "schedule_bootstrap_workflow_catalog": "unify.workflow_manager.catalog",
@@ -71,6 +73,7 @@ if TYPE_CHECKING:
         WorkflowBundle,
         WorkflowRequirement,
     )
+    from .builtins_catalog import seed_builtin_workflows
     from .catalog import (
         bootstrap_workflow_catalog,
         load_bundle,
