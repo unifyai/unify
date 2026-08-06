@@ -90,7 +90,8 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         domain="Assistant-Owned Communication",
         description=(
             "Send assistant-owned outbound messages and calls across SMS, email, "
-            "WhatsApp, Discord, Unify, and API-response channels"
+            "WhatsApp, Slack, Microsoft Teams, Discord, Unify, and API-response "
+            "channels"
         ),
         use_when=(
             "The assistant needs to proactively contact people or post into "
@@ -98,7 +99,8 @@ _MANAGER_SPECS: tuple[ManagerSpec, ...] = (
         ),
         examples=(
             "'Text Alice that the meeting moved', 'Email all shortlisted leads', "
-            "'Reply in the Discord channel', 'Send a Unify update to the team lead'"
+            "'Reply in the Discord channel', 'Message Bob on Teams', "
+            "'Send a Unify update to the team lead'"
         ),
     ),
     ManagerSpec(
