@@ -233,8 +233,12 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
         self,
         key: str,
         value: str,
-    ) -> int | None:
-        """Return the exchange whose ``metadata[key]`` equals ``value``, if any."""
+    ) -> tuple[int, Optional[str]] | None:
+        """Return the exchange whose ``metadata[key]`` equals ``value``, if any.
+
+        Yields ``(exchange_id, destination)``: ids are root-local, so a caller
+        that writes back has to name the root the match came from.
+        """
         raise NotImplementedError
 
     def update_exchange_metadata(
@@ -249,6 +253,8 @@ class BaseTranscriptManager(BaseStateManager, metaclass=SingletonABCMeta):
 
         Keys absent from ``metadata`` retain their stored values; the exchange
         accumulates metadata from independent writers across a session.
+        ``destination`` must name the root the exchange was authored in; a
+        write that cannot find its exchange there raises.
         """
         raise NotImplementedError
 

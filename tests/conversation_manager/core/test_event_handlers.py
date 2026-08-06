@@ -4268,11 +4268,15 @@ class TestLogMessageResponseHandler:
         event = LogMessageResponse(
             medium="unify_meet",
             exchange_id=99,
+            destination="team:11",
         )
 
         await EventHandler.handle_event(event, mock_cm)
 
         assert mock_cm.call_manager.unify_meet_exchange_id == 99
+        # Cached with the id, because ids are root-local: the hangup and
+        # recording writes address the exchange by (id, destination).
+        assert mock_cm.call_manager.call_exchange_destination == "team:11"
 
 
 # =============================================================================

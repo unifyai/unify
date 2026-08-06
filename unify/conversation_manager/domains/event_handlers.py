@@ -1441,6 +1441,7 @@ async def _(
     cm.call_manager.unify_meet_exchange_id = UNASSIGNED
     cm.call_manager.google_meet_exchange_id = UNASSIGNED
     cm.call_manager.teams_meet_exchange_id = UNASSIGNED
+    cm.call_manager.call_exchange_destination = None
 
     # Build display content
     reason_display = _call_not_answered_reason_text(reason)
@@ -1501,6 +1502,7 @@ async def _(
     cm.call_manager.unify_meet_start_timestamp = None
     cm.call_manager.call_exchange_id = UNASSIGNED
     cm.call_manager.unify_meet_exchange_id = UNASSIGNED
+    cm.call_manager.call_exchange_destination = None
 
     reason_display = _call_not_answered_reason_text(reason)
 
@@ -2202,8 +2204,12 @@ async def _(
             )
             return
 
-    # Persist session identifiers in exchange metadata and stash the
-    # exchange_id so the async RecordingReady handler can find it.
+    # Persist session identifiers in exchange metadata and stash the exchange's
+    # (id, destination) so the async RecordingReady handler can find it. The
+    # destination is part of the address: a shared assistant authors its
+    # transcript into a team root, and an id resolved there means nothing in the
+    # manager's home root.
+    destination = cm.call_manager.call_exchange_destination
     if isinstance(event, (PhoneCallEnded, WhatsAppCallEnded)):
         exchange_id = cm.call_manager.call_exchange_id
         if exchange_id != UNASSIGNED:
@@ -2220,6 +2226,7 @@ async def _(
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
                 metadata,
+                destination=destination,
             )
             for key in (
                 cm.call_manager.call_session_id,
@@ -2228,23 +2235,31 @@ async def _(
                 cm.call_manager.conference_name,
             ):
                 if key:
-                    cm._recording_exchange_ids[key] = exchange_id
+                    cm._recording_exchange_ids[key] = (exchange_id, destination)
     elif isinstance(event, GoogleMeetEnded):
         exchange_id = cm.call_manager.google_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
                 {"room_name": cm.call_manager.room_name},
+                destination=destination,
             )
-            cm._recording_exchange_ids[cm.call_manager.room_name] = exchange_id
+            cm._recording_exchange_ids[cm.call_manager.room_name] = (
+                exchange_id,
+                destination,
+            )
     elif isinstance(event, TeamsMeetEnded):
         exchange_id = cm.call_manager.teams_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
                 {"room_name": cm.call_manager.room_name},
+                destination=destination,
             )
-            cm._recording_exchange_ids[cm.call_manager.room_name] = exchange_id
+            cm._recording_exchange_ids[cm.call_manager.room_name] = (
+                exchange_id,
+                destination,
+            )
     else:
         exchange_id = cm.call_manager.unify_meet_exchange_id
         if exchange_id != UNASSIGNED and cm.call_manager.room_name:
@@ -2260,8 +2275,12 @@ async def _(
             cm.transcript_manager.update_exchange_metadata(
                 exchange_id,
                 metadata,
+                destination=destination,
             )
-            cm._recording_exchange_ids[cm.call_manager.room_name] = exchange_id
+            cm._recording_exchange_ids[cm.call_manager.room_name] = (
+                exchange_id,
+                destination,
+            )
 
     cm.mode = Mode.TEXT
     cm.call_manager.call_contact = None
@@ -2311,6 +2330,7 @@ async def _(
     cm.call_manager.unify_meet_exchange_id = UNASSIGNED
     cm.call_manager.google_meet_exchange_id = UNASSIGNED
     cm.call_manager.teams_meet_exchange_id = UNASSIGNED
+    cm.call_manager.call_exchange_destination = None
     cm.reset_meet_surfaces()
 
     sender_name = _get_sender_name(contact)
@@ -2369,13 +2389,15 @@ async def _(
     ]
     keys = [value for _, value in lookups]
     name = next((key for key in keys if key), event.conference_name)
-    exchange_id = None
+    # Both lookup paths yield (exchange_id, destination): the id alone does not
+    # address a row, since the same id in another root is another exchange.
+    located = None
     for key in keys:
         if key:
-            exchange_id = cm._recording_exchange_ids.pop(key, None)
-            if exchange_id is not None:
+            located = cm._recording_exchange_ids.pop(key, None)
+            if located is not None:
                 break
-    if exchange_id is None:
+    if located is None:
         # The in-process map only covers a recording that arrives while the
         # container that ran the call is still up. Egress finalises minutes
         # after the room closes, by which time the pod has often been recycled,
@@ -2383,19 +2405,21 @@ async def _(
         for metadata_key, value in lookups:
             if not value:
                 continue
-            exchange_id = await asyncio.to_thread(
+            located = await asyncio.to_thread(
                 cm.transcript_manager.resolve_exchange_id_by_metadata,
                 metadata_key,
                 value,
             )
-            if exchange_id is not None:
+            if located is not None:
                 cm._session_logger.debug(
                     "recording",
                     f"{DEFAULT_ICON} [RecordingReady] Recovered exchange "
-                    f"{exchange_id} from stored {metadata_key} for {name}",
+                    f"{located[0]} in {located[1] or 'personal'} from stored "
+                    f"{metadata_key} for {name}",
                 )
                 break
-    if exchange_id is not None:
+    if located is not None:
+        exchange_id, destination = located
         cm.transcript_manager.update_exchange_metadata(
             exchange_id,
             {
@@ -2409,11 +2433,12 @@ async def _(
                 }.items()
                 if value
             },
+            destination=destination,
         )
         cm._session_logger.debug(
             "recording",
             f"{DEFAULT_ICON} [RecordingReady] Stored recording_url on exchange "
-            f"{exchange_id} for {name}",
+            f"{exchange_id} in {destination or 'personal'} for {name}",
         )
     else:
         cm._session_logger.debug(
@@ -4341,21 +4366,25 @@ async def _(event: LogMessageResponse, cm: "ConversationManager", *args, **kwarg
         and cm.call_manager.call_exchange_id == UNASSIGNED
     ):
         cm.call_manager.call_exchange_id = event.exchange_id
+        cm.call_manager.call_exchange_destination = event.destination
     if (
         event.medium == Medium.UNIFY_MEET
         and cm.call_manager.unify_meet_exchange_id == UNASSIGNED
     ):
         cm.call_manager.unify_meet_exchange_id = event.exchange_id
+        cm.call_manager.call_exchange_destination = event.destination
     if (
         event.medium == Medium.GOOGLE_MEET
         and cm.call_manager.google_meet_exchange_id == UNASSIGNED
     ):
         cm.call_manager.google_meet_exchange_id = event.exchange_id
+        cm.call_manager.call_exchange_destination = event.destination
     if (
         event.medium == Medium.TEAMS_MEET
         and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
     ):
         cm.call_manager.teams_meet_exchange_id = event.exchange_id
+        cm.call_manager.call_exchange_destination = event.destination
 
 
 @EventHandler.register(PreHireMessage)

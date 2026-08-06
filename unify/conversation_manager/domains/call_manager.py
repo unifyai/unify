@@ -122,6 +122,10 @@ class LivekitCallManager:
         self.set_config(config=config)
         self.call_exchange_id = UNASSIGNED
         self.unify_meet_exchange_id = UNASSIGNED
+        # Destination the active call's exchange was authored under. Exchange
+        # ids are root-local, so hangup and recording writes need the root the
+        # transcript chose, not the manager's home root.
+        self.call_exchange_destination: str | None = None
         self.call_start_timestamp = None
         self.unify_meet_start_timestamp = None
         self.call_contact = None
@@ -1519,9 +1523,11 @@ class LivekitCallManager:
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED
+            self.call_exchange_destination = None
         elif channel == "teams_meet":
             self.teams_meet_start_timestamp = None
             self.teams_meet_exchange_id = UNASSIGNED
+            self.call_exchange_destination = None
 
         if session_id:
             await self.meet_provider.leave(channel=channel, session_id=session_id)
