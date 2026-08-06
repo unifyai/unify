@@ -89,6 +89,7 @@ def _stub_offline_tracking(monkeypatch, *, operation_key: str):
         "ManagerRegistry",
         SimpleNamespace(
             get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=lambda key, value: None,
                 log_first_message_in_new_exchange=lambda message, *, exchange_initial_metadata=None: (
                     transcript_calls.append((message, exchange_initial_metadata or {}))
                     or (77, 88)
@@ -185,6 +186,7 @@ def test_finalize_outbound_operation_success_logs_history_and_updates_ledger(
     fake_transcript_manager.log_first_message_in_new_exchange = (
         _log_first_message_in_new_exchange
     )
+    fake_transcript_manager.resolve_exchange_id_by_metadata = lambda key, value: None
     monkeypatch.setattr(
         offline_support,
         "ManagerRegistry",
@@ -256,6 +258,7 @@ def test_finalize_outbound_operation_failure_logs_history_and_updates_ledger(
     fake_transcript_manager.log_first_message_in_new_exchange = (
         _log_first_message_in_new_exchange
     )
+    fake_transcript_manager.resolve_exchange_id_by_metadata = lambda key, value: None
     monkeypatch.setattr(
         offline_support,
         "ManagerRegistry",
@@ -341,6 +344,7 @@ async def test_send_sms_offline_success_reserves_and_finalizes(monkeypatch):
         "ManagerRegistry",
         SimpleNamespace(
             get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=lambda key, value: None,
                 log_first_message_in_new_exchange=lambda message, *, exchange_initial_metadata=None: (
                     transcript_calls.append((message, exchange_initial_metadata or {}))
                     or (33, 44)
@@ -421,6 +425,7 @@ async def test_send_sms_offline_reservation_uses_normalized_phone_number(monkeyp
         "ManagerRegistry",
         SimpleNamespace(
             get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=lambda key, value: None,
                 log_first_message_in_new_exchange=lambda message, *, exchange_initial_metadata=None: (
                     transcript_calls.append((message, exchange_initial_metadata or {}))
                     or (33, 44)
@@ -994,3 +999,126 @@ async def test_make_whatsapp_call_returns_retry_later_if_voice_session_stays_act
 
     assert result["status"] == "retry_later_active_voice_session"
     assert called is False
+
+
+def test_offline_history_joins_the_conversation_exchange(monkeypatch):
+    """A headless send belongs to the same conversation as everything the
+    live session logged — and to the exchange a later run reads routing
+    identifiers back off. Minting a fresh one per send strands both."""
+    _seed_offline_env(monkeypatch)
+
+    lookups: list[tuple[str, str]] = []
+    appended: list[dict] = []
+
+    def _resolve(key, value):
+        lookups.append((key, value))
+        return 404
+
+    def _log_messages(message, *, synchronous=False, **kwargs):
+        appended.append(message)
+        return [SimpleNamespace(message_id=99)]
+
+    monkeypatch.setattr(
+        offline_support,
+        "ManagerRegistry",
+        SimpleNamespace(
+            get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=_resolve,
+                log_messages=_log_messages,
+                log_first_message_in_new_exchange=lambda *a, **k: (
+                    pytest.fail("minted a new exchange despite an existing one")
+                ),
+            ),
+        ),
+    )
+
+    exchange_id, message_id = offline_support._log_outbound_history(
+        medium=Medium.MS_TEAMS_BOT_MESSAGE,
+        content="the report is ready",
+        receiver_ids=[1],
+        metadata={
+            "target_metadata": {
+                "contact_id": 1,
+                "tenant_id": "tenant-a",
+                "conversation_id": "conv-a",
+            },
+        },
+    )
+
+    assert lookups == [("conversation_key", "ms_teams_bot_message:dm:1")]
+    assert exchange_id == 404
+    assert message_id == 99
+    assert appended[0]["exchange_id"] == 404
+
+
+def test_offline_history_seeds_conversation_key_on_first_send(monkeypatch):
+    """When the headless run speaks first, it has to write the same key and
+    routing identity the live path would, or the next message forks."""
+    _seed_offline_env(monkeypatch)
+
+    created: list[tuple[dict, dict]] = []
+    monkeypatch.setattr(
+        offline_support,
+        "ManagerRegistry",
+        SimpleNamespace(
+            get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=lambda key, value: None,
+                log_first_message_in_new_exchange=lambda message, *, exchange_initial_metadata=None: (
+                    created.append((message, exchange_initial_metadata or {}))
+                    or (11, 22)
+                ),
+            ),
+        ),
+    )
+
+    offline_support._log_outbound_history(
+        medium=Medium.MS_TEAMS_BOT_MESSAGE,
+        content="first contact",
+        receiver_ids=[1],
+        metadata={
+            "target_metadata": {
+                "contact_id": 1,
+                "tenant_id": "tenant-a",
+                "conversation_id": "conv-a",
+            },
+        },
+    )
+
+    _, exchange_metadata = created[0]
+    assert exchange_metadata["conversation_key"] == "ms_teams_bot_message:dm:1"
+    assert exchange_metadata["medium"] == Medium.MS_TEAMS_BOT_MESSAGE.value
+    assert exchange_metadata["tenant_id"] == "tenant-a"
+    assert exchange_metadata["conversation_id"] == "conv-a"
+    assert exchange_metadata["offline_outbound"] is True
+
+
+def test_offline_history_without_a_conversation_target_is_standalone(monkeypatch):
+    """Sends with no groupable target (an API response) keep their own
+    exchange rather than being forced under a blank key."""
+    _seed_offline_env(monkeypatch)
+
+    created: list[tuple[dict, dict]] = []
+    monkeypatch.setattr(
+        offline_support,
+        "ManagerRegistry",
+        SimpleNamespace(
+            get_transcript_manager=lambda: SimpleNamespace(
+                resolve_exchange_id_by_metadata=lambda key, value: None,
+                log_first_message_in_new_exchange=lambda message, *, exchange_initial_metadata=None: (
+                    created.append((message, exchange_initial_metadata or {}))
+                    or (11, 22)
+                ),
+            ),
+        ),
+    )
+
+    offline_support._log_outbound_history(
+        medium=Medium.API_MESSAGE,
+        content="done",
+        receiver_ids=[1],
+        metadata={"target_metadata": {"contact_id": 1}},
+    )
+
+    _, exchange_metadata = created[0]
+    assert "conversation_key" not in exchange_metadata
+    assert exchange_metadata["offline_outbound"] is True

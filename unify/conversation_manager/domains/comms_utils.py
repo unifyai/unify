@@ -1411,6 +1411,51 @@ async def send_slack_message(
             return result
 
 
+async def find_ms_teams_bot_conversation_route(
+    *,
+    conversation_type: str = "personal",
+    sender_email: str | None = None,
+    owner_only: bool = False,
+) -> dict | None:
+    """Find a live Teams conversation this assistant can reply into.
+
+    The Teams bot cannot open a conversation, so an outbound-only caller
+    (a scheduled task, with no inbound activity to read ids off) has to ask
+    where an existing one is. Returns the route — including ``tenant_id``
+    and ``conversation_id`` — or ``None`` when none is live, which is a real
+    answer rather than a transport failure.
+    """
+    agent_id = SESSION_DETAILS.assistant.agent_id
+    if agent_id is None:
+        return None
+
+    params: dict = {
+        "assistant_id": agent_id,
+        "conversation_type": conversation_type,
+    }
+    if sender_email:
+        params["sender_email"] = sender_email
+    if owner_only:
+        params["owner_only"] = "true"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{SETTINGS.conversation.COMMS_URL}/ms-teams-bot/conversation-route",
+            headers=_assistant_headers(),
+            params=params,
+        ) as response:
+            if response.status == 404:
+                return None
+            try:
+                response.raise_for_status()
+            except Exception as e:
+                LOGGER.error(
+                    f"{ICONS['comms_outbound']} Teams route lookup failed: {e}",
+                )
+                return None
+            return await response.json()
+
+
 async def send_ms_teams_bot_message(
     *,
     tenant_id: str,
