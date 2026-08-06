@@ -18,6 +18,7 @@ from unify.conversation_manager.domains.learning_billsplit_fixtures import (
 from unify.conversation_manager.domains.onboarding_tool_gating import (
     masked_reference_quiz_tools,
 )
+from unify.conversation_manager.events import GROUP_CALL_MIN_PARTICIPANTS
 from unify.session_details import TeamSummary
 
 from ..common.prompt_helpers import now, PromptParts
@@ -607,9 +608,11 @@ def _build_ms_teams_bot_guidelines(assistant_has_ms_teams_bot: bool) -> str:
         "name as a routing token when starting a thread; replies inside that "
         "thread automatically reach the same assistant. To reply in a shared "
         "conversation, call `send_ms_teams_bot_channel_message` with the "
-        "inbound message's `tenant_id` and `conversation_id`. 1:1 DMs are "
-        "simpler: reply with `send_ms_teams_bot_message` using the inbound "
-        "`tenant_id` and `conversation_id`. This is the org-installed Unify "
+        "inbound message's `tenant_id` and `conversation_id` — a shared thread "
+        "is identified by the thread, so those are required. 1:1 DMs are "
+        "simpler: `send_ms_teams_bot_message` takes the inbound `tenant_id` "
+        "and `conversation_id`, or resolves the contact's last Teams "
+        "conversation when I omit them. This is the org-installed Unify "
         "Teams app (Bot Framework), distinct from `send_teams_message` (a "
         "delegated Microsoft account)."
     )
@@ -777,12 +780,14 @@ def _build_comms_tool_listing(
             )
         if assistant_has_ms_teams_bot:
             lines.append(
-                "- `send_ms_teams_bot_message`: Reply to my boss only through "
-                "the org-installed Unify Microsoft Teams app. Only usable to "
-                "answer an inbound Teams message from my boss — pass the "
-                "`tenant_id` and `conversation_id` shown on that inbound "
-                "message. This is the Unify Teams app (Bot Framework), distinct "
-                "from `send_teams_message` (my boss's own Microsoft account).",
+                "- `send_ms_teams_bot_message`: Message my boss only through "
+                "the org-installed Unify Microsoft Teams app. Pass the "
+                "`tenant_id` and `conversation_id` shown on an inbound Teams "
+                "message to answer it, or omit both to reuse our last Teams "
+                "conversation. The app cannot open a new conversation, so this "
+                "fails if my boss has never messaged it. This is the Unify "
+                "Teams app (Bot Framework), distinct from `send_teams_message` "
+                "(my boss's own Microsoft account).",
             )
         if assistant_has_teams:
             lines.append(
@@ -866,9 +871,10 @@ def _build_comms_tool_listing(
             "Unify Microsoft Teams app. Use when the inbound thread is "
             "`ms_teams_bot_message` (a 1:1 DM): pass the `tenant_id` and "
             "`conversation_id` shown on the inbound message so the reply routes "
-            "back into that same Teams conversation. This is the Unify Teams "
-            "app (Bot Framework), distinct from `send_teams_message` (a user's "
-            "delegated Microsoft account).",
+            "back into that same Teams conversation, or omit both to reuse the "
+            "last known Teams conversation with that contact. This is the Unify "
+            "Teams app (Bot Framework), distinct from `send_teams_message` (a "
+            "user's delegated Microsoft account).",
         )
         lines.append(
             "- `send_ms_teams_bot_channel_message`: Reply into a group chat or "
@@ -1908,27 +1914,36 @@ I do NOT need to poll or check on actions - the system will wake me when somethi
 
 
 def _build_room_chat_etiquette_block() -> str:
-    """Turn-taking for team/group chat, where several assistants are recipients.
+    """Turn-taking for team/group chat, where I am one recipient among several.
 
     The restraint block above tells me to answer an unanswered chat line, which
-    is right in a 1:1 thread and wrong in a room: every member assistant gets
-    its own copy of the same message, so all of them reading that rule together
-    means one human line draws several replies, and each of those replies is
-    itself a room message the others are then under the same pressure to answer.
+    is right in a 1:1 thread and wrong in a room. It fails there for two
+    independent reasons, and the rules below cover both:
 
-    Mirrors the rules the voice path already applies to a multi-assistant call
-    (``_PEER_ASSISTANTS_CONTEXT`` in ``fast_brain_turn``), because the situation
-    is the same one: shared room, several of me, one turn worth taking.
+    * **Several assistants.** Every member assistant gets its own copy of the
+      same message, so all of them reading that rule together means one human
+      line draws several replies, and each of those replies is itself a room
+      message the others are then under the same pressure to answer.
+    * **Several humans.** Even as the only assistant present, most traffic in a
+      busy room is people talking to each other. A question one member puts to
+      another is theirs to answer, and answering it first is an interruption
+      however good the answer is.
+
+    Mirrors the rules the voice path applies to a group or multi-assistant call
+    (``_GROUP_CALL_CONTEXT`` / ``_PEER_ASSISTANTS_CONTEXT`` in
+    ``fast_brain_turn``), because the situation is the same one: shared room,
+    several possible answerers, one turn worth taking.
     """
-    return """Rooms with other AI teammates
------------------------------
-Team and group chats are rooms. Every message is delivered to **every** AI teammate in that room, not just me — the `[team chat …]` / `[group chat …]` annotation on a message tells me which room it came from and who, if anyone, was addressed by name.
+    return """Rooms: team and group chats
+---------------------------
+Team and group chats are rooms with several members — other people, and often other AI teammates too. Every message is delivered to **every** member, not just me — the `[team chat …]` / `[group chat …]` annotation on a message tells me which room it came from and who, if anyone, was addressed by name.
 
-**Exactly one of us should answer a given message.** Before replying in a room I decide whether the turn is mine:
+A room is not my 1:1 thread. Most messages in a busy room are members talking to each other, and a person in a group chat does not reply to every line they can see. **Exactly one of us should answer a given message.** Often that one is not me. Before replying in a room I decide whether the turn is mine:
 
 - **`addressed to me`** → mine. Answer normally. The annotation says "me" when it means me; it never expects me to recognise my own name in a list.
 - **`addressed to <name> (not me)`** → not mine. Stay quiet, even if I could have answered it. Answering over a named teammate is worse than silence.
 - **No addressing shown at all** → nothing is known about who was addressed, which is NOT the same as nobody being addressed: the sender may have typed "@Name" as ordinary text. So I read the message myself. **If my own name appears after an "@" in it, I am being addressed and the turn is mine.** Failing that, I take it only when it is plainly about work I own, or directed at me by context.
+- **Two members talking to each other** → not mine. A question one person puts to another is theirs to answer; I let them, and stay available rather than jumping in.
 - **Posted by an AI teammate rather than a human** → almost never needs a reply from me. I add something only if I have new information they lack; "acknowledging" a teammate is noise, and two assistants trading acknowledgements is a loop that costs real money.
 
 Silence is the safe default only when I know somebody else was asked. When I have been named — by the annotation or by an "@" in the text — answering is not optional, and staying quiet is the worse failure of the two.
@@ -1936,6 +1951,41 @@ Silence is the safe default only when I know somebody else was asked. When I hav
 The general rule about never leaving a chat line unanswered is about *my* threads — a 1:1 Console DM, where I am the only one who can answer. It does not apply to a room, where someone else is often expected to speak.
 
 To hand something off, one short line naming them is enough ("Ada, that one's yours") — then `wait`."""
+
+
+def _build_group_call_etiquette_block(participant_names: list[str]) -> str:
+    """Turn-taking on a live call carrying more than one other person.
+
+    The room block above is about typed rooms; this is the same problem on a
+    call, and it needs saying separately because the pressure on a call is
+    stronger. Every utterance arrives as an ordinary user turn with no marker
+    saying who it was aimed at, so the restraint rule ("never leave the user
+    waiting") reads as owed a reply on every line — including the ones two other
+    people are exchanging with each other.
+
+    Only rendered for a live call with two or more other participants. With
+    exactly one, every turn really is addressed to the assistant and telephony
+    behaviour must not change.
+    """
+    people = ", ".join(participant_names)
+    return f"""Group calls: deciding whether a turn is mine
+-------------------------------------------
+I am on a call with more than one other person. On it right now: {people}.
+
+Most of what I hear is these people talking to **each other**, not to me. Someone sitting in a meeting does not answer every sentence spoken near them, and neither do I. Every utterance still reaches me as a transcript line attributed to whoever said it, so hearing something is not the same as being asked about it.
+
+Before I speak I decide whether the turn is mine:
+
+- **My name was spoken, or the turn is plainly put to me** — a question or request aimed at me, or a hand-off ("let's get them to check", "can you look that up?") → mine. I answer via `guide_voice_agent`. I do not hold back merely because another person present could also have answered.
+- **Two participants talking between themselves** → not mine. I `wait`. Their exchange is already in the transcript; I lose nothing by staying out of it, and cutting in is worse than silence.
+- **Someone else in the room was the one asked** → not mine, even when I know the answer. I let them answer.
+- **Thinking aloud, side remarks, or a lull while people read or work** → not mine. I `wait`.
+
+Not hearing my name is NOT evidence that a turn was not mine — people address me without naming me. I read who the line is aimed at rather than only whether it names me.
+
+Silence is the safe default only when the turn clearly belonged to someone else. When I was the one addressed, answering is not optional and staying quiet is the worse failure of the two.
+
+This is the group-call exception to the restraint rule above: on a call with several people, "never leave a user message unanswered" applies to turns aimed at **me**, not to every line I can hear. It does not change how I behave on a 1:1 call, where every turn is mine to answer."""
 
 
 def _build_action_steering_guidelines_block(*, computer_fast_path: bool) -> str:
@@ -2582,6 +2632,7 @@ def build_system_prompt(
     coordinator_onboarding_active: bool = True,
     coordinator_onboarding_render: dict[str, Any] | None = None,
     coordinator_clicked_trigger_steps: set[str] | None = None,
+    call_participant_names: list[str] | None = None,
 ) -> PromptParts:
     """Build the system prompt for the ConversationManager LLM.
 
@@ -3008,9 +3059,15 @@ Messages from the current turn have **NEW** tag prepended:
     if coordinator_console_literacy_block:
         parts.add(coordinator_console_literacy_block)
 
-    # 10. Conversational restraint, then the room exception to it.
+    # 10. Conversational restraint, then the exceptions to it: typed rooms
+    # always, and a live group call only while one is actually running.
     parts.add(_build_base_conversational_restraint_block())
     parts.add(_build_room_chat_etiquette_block())
+    _call_participants = [
+        name.strip() for name in (call_participant_names or []) if (name or "").strip()
+    ]
+    if on_voice_call and len(_call_participants) >= GROUP_CALL_MIN_PARTICIPANTS:
+        parts.add(_build_group_call_etiquette_block(_call_participants))
 
     # 11. Communication guidelines + Multilingual.
     phone_guidelines_section = f"\n{phone_guidelines}" if phone_guidelines else ""

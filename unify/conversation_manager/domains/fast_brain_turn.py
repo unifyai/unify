@@ -21,6 +21,7 @@ from unify.conversation_manager.events import (
     FAST_BRAIN_TURN_HANG_UP,
     FAST_BRAIN_TURN_SILENCE,
     FAST_BRAIN_TURN_SMALLTALK,
+    GROUP_CALL_MIN_PARTICIPANTS,
 )
 from unify.logger import LOGGER
 from unify.settings import SETTINGS
@@ -106,21 +107,52 @@ continuation is the strong default for greetings ("Hello?"), "go on", agreeing,
 partial overlap, or asking why you are calling — lean hard toward continuation."""
 
 _PEER_ASSISTANTS_CONTEXT = """\
-[system] Multi-assistant call. Other AI teammates are on this call with you:
-{peers}. Exactly one assistant should respond to each human turn. Decide
-whether THIS turn is yours before speaking:
+[system] Multi-assistant call. You are {own_name}. Other AI teammates are on
+this call with you: {peers}. Exactly one assistant should respond to each human
+turn. Decide whether THIS turn is yours before speaking:
 
 - If the speaker addressed a teammate by name, or a teammate was clearly asked
   to handle it, choose classification silence — even for substantive turns.
-- If the speaker addressed YOU by name, or a teammate handed the turn to you
-  ("{{your name}}, can you take this?"), it is yours: respond normally.
+- If the speaker said "{own_name}", or a teammate handed the turn to you, it is
+  yours: respond normally.
 - If nobody was addressed by name, take the turn only when it is plainly about
   work you own or directed at you by context; otherwise choose silence and let
   the better-placed teammate answer.
 - Never answer on a teammate's behalf and never speak over them. If you have
   nothing of your own to add, silence is the correct choice.
 - To pass a turn that suits a teammate better, use smalltalk with ONE short
-  hand-off line naming them (e.g. "{{teammate}}, that one's yours.")."""
+  hand-off line naming them (e.g. "Ada, that one's yours.").
+
+Silence is the safe default only when you know a teammate was asked. If you were
+the one addressed, answering is not optional and staying quiet is the worse
+failure of the two."""
+
+_GROUP_CALL_CONTEXT = """\
+[system] Group call. You are {own_name}. The other people on this call are:
+{participants}.
+
+Most turns on a call like this are those people talking to EACH OTHER, not to
+you. Someone sitting in a meeting does not answer every sentence they hear, and
+neither do you. Decide whether THIS turn is yours before speaking:
+
+- Participants talking between themselves, thinking aloud, or working something
+  out together → choose classification silence, even for substantive turns you
+  could have answered well. Their line is still transcribed and attributed to
+  them, so staying out of it loses nothing.
+- Someone said "{own_name}", or the turn is plainly put to you — a question or
+  request aimed at you, or a hand-off like "let's ask {own_name}" → it is yours.
+  Respond normally, and do NOT stand down merely because another person present
+  could also have answered.
+- Not hearing your name is NOT evidence the turn was not yours. People address
+  you without naming you ("can you pull that up?", "what do we know about this
+  account?"). Read who the line is aimed at rather than only whether it names
+  you.
+- Never answer on a participant's behalf and never speak over one. When someone
+  else in the room was the one asked, silence is correct.
+
+Silence is the safe default only when the turn clearly belonged to someone else.
+When you were the one addressed, answering is not optional and staying quiet is
+the worse failure of the two."""
 
 _CALL_BRIEFING_CONTEXT = """\
 [system] Active call briefing — context, not script. You are on this call for
@@ -336,18 +368,39 @@ def build_fast_brain_turn_messages(
     hang_up_gate_reason: str | None = None,
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
+    other_participants: Sequence[str] = (),
+    own_name: str = "Assistant",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
     ]
     messages.extend(dict(message) for message in history_messages)
     messages.append({"role": "system", "content": FAST_BRAIN_TURN_PROMPT})
+    own = (own_name or "").strip() or "Assistant"
+    # A group call is the frame; peer assistants refine it, so the broader block
+    # lands first. Both can apply at once on an org meet carrying several humans
+    # and another assistant, and they do not contradict: one is about who among
+    # the people was addressed, the other about which assistant takes the turn.
+    participants = [name.strip() for name in other_participants if (name or "").strip()]
+    if len(participants) >= GROUP_CALL_MIN_PARTICIPANTS:
+        messages.append(
+            {
+                "role": "system",
+                "content": _GROUP_CALL_CONTEXT.format(
+                    own_name=own,
+                    participants=", ".join(participants),
+                ),
+            },
+        )
     peers = [name.strip() for name in peer_assistants if (name or "").strip()]
     if peers:
         messages.append(
             {
                 "role": "system",
-                "content": _PEER_ASSISTANTS_CONTEXT.format(peers=", ".join(peers)),
+                "content": _PEER_ASSISTANTS_CONTEXT.format(
+                    own_name=own,
+                    peers=", ".join(peers),
+                ),
             },
         )
     briefing = (briefing or "").strip()
@@ -528,6 +581,8 @@ async def select_fast_brain_turn(
     hang_up_gate_reason: str | None = None,
     briefing: str = "",
     peer_assistants: Sequence[str] = (),
+    other_participants: Sequence[str] = (),
+    own_name: str = "Assistant",
 ) -> ResolvedFastBrainTurn:
     """Select classification and spoken content for one fast-brain user turn."""
     if not (user_text or "").strip():
@@ -554,6 +609,8 @@ async def select_fast_brain_turn(
         hang_up_gate_reason=hang_up_gate_reason,
         briefing=briefing,
         peer_assistants=peer_assistants,
+        other_participants=other_participants,
+        own_name=own_name,
     )
 
     try:

@@ -512,8 +512,8 @@ class ConversationManagerBrainActionTools:
         *,
         contact_id: int | str,
         content: str,
-        tenant_id: str,
-        conversation_id: str,
+        tenant_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> dict[str, Any]:
         return await self._comms.send_ms_teams_bot_message(
             contact_id=contact_id,

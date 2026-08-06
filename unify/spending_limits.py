@@ -197,12 +197,20 @@ class _LimitCheckResult:
     api_access_allowed: bool = True
 
 
+# Why a billing gate refused. Callers pick the wording the user sees from
+# this, so a refusal never reaches them as a generic fault they are told to
+# retry — the two causes need opposite advice, and neither clears on a retry.
+GATE_BLOCK_ACCOUNT_SUSPENDED = "account_suspended"
+GATE_BLOCK_CREDITS_DEPLETED = "credits_depleted"
+
+
 @dataclass(frozen=True)
-class CreditGateState:
-    """Current prepaid-credit gate state for surfaces that stay conversational."""
+class BillingGateState:
+    """Whether billing permits work, for surfaces that stay conversational."""
 
     allowed: bool = True
     reason: Optional[str] = None
+    blocked_by: Optional[str] = None
     credit_balance: Optional[float] = None
     billing_mode: Optional[str] = None
 
@@ -261,55 +269,76 @@ def _parse_spend_result(
     )
 
 
-def _credit_gate_from_spend_data(data: dict) -> CreditGateState:
+def _billing_gate_from_spend_data(data: dict) -> BillingGateState:
+    """Read every refusal the spend payload carries, not just the wallet.
+
+    Mirrors the deny order of :func:`check_spending_limits_callback`, which is
+    what actually stops the call: suspension outranks billing mode, so a
+    suspended METERED account is still refused. A cause this gate does not
+    know about surfaces to the user as an unexplained failure they are told to
+    retry, and silently drops any work that needed a model turn.
+    """
     credit_balance = data.get("credit_balance")
     billing_mode = data.get("billing_mode")
 
+    if bool(data.get("account_suspended", False)):
+        return BillingGateState(
+            allowed=False,
+            reason="Account is suspended.",
+            blocked_by=GATE_BLOCK_ACCOUNT_SUSPENDED,
+            credit_balance=credit_balance,
+            billing_mode=billing_mode,
+        )
+
     if billing_mode == "METERED":
-        return CreditGateState(
+        return BillingGateState(
             allowed=True,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
         )
 
     if credit_balance is not None and credit_balance <= 0:
-        return CreditGateState(
+        return BillingGateState(
             allowed=False,
             reason=(
                 f"Insufficient credits: balance is ${credit_balance:.2f}. "
                 "Please add credits to continue."
             ),
+            blocked_by=GATE_BLOCK_CREDITS_DEPLETED,
             credit_balance=credit_balance,
             billing_mode=billing_mode,
         )
 
-    return CreditGateState(
+    return BillingGateState(
         allowed=True,
         credit_balance=credit_balance,
         billing_mode=billing_mode,
     )
 
 
-async def check_credit_gate_state() -> CreditGateState:
-    """Return the active billing account's prepaid-credit gate state.
+async def check_billing_gate_state() -> BillingGateState:
+    """Return whether billing permits work for the active account.
 
-    This is intentionally narrower than ``check_spending_limits_callback``:
-    it only checks whether the active prepaid wallet is empty. Voice surfaces
-    can keep the call alive while using this state to avoid task guidance when
-    credits are depleted.
+    Narrower than ``check_spending_limits_callback``: it answers "will the
+    spend boundary refuse this account outright", not "is this particular
+    model call within every limit". Voice surfaces keep the call alive and use
+    it to stop offering work that cannot run; text surfaces use it to say why
+    before a turn is attempted.
+
+    Fails open — an unreadable account is not a refused one.
     """
     from .session_details import SESSION_DETAILS
 
     api_key = _get_api_key()
     if not api_key:
-        logger.debug("Credit gate check skipped: no API key")
-        return CreditGateState()
+        logger.debug("Billing gate check skipped: no API key")
+        return BillingGateState()
 
     user_id = SESSION_DETAILS.user_id
     org_id = SESSION_DETAILS.org_id
     if not user_id:
-        logger.debug("Credit gate check skipped: missing user context")
-        return CreditGateState()
+        logger.debug("Billing gate check skipped: missing user context")
+        return BillingGateState()
 
     timezone = "UTC"
     if SESSION_DETAILS.assistant:
@@ -322,14 +351,14 @@ async def check_credit_gate_state() -> CreditGateState:
             data = await client.get_org_spend(org_id=org_id, month=month)
         else:
             data = await client.get_user_spend(month=month)
-        return _credit_gate_from_spend_data(data)
+        return _billing_gate_from_spend_data(data)
     except SpendRequestError as e:
         if e.status != 404:
-            logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
-        return CreditGateState()
+            logger.warning(f"Failed to check billing gate: {type(e).__name__}: {e}")
+        return BillingGateState()
     except Exception as e:
-        logger.warning(f"Failed to check credit gate: {type(e).__name__}: {e}")
-        return CreditGateState()
+        logger.warning(f"Failed to check billing gate: {type(e).__name__}: {e}")
+        return BillingGateState()
 
 
 async def _check_assistant_limit(

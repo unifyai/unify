@@ -712,12 +712,12 @@ class TestCheckSpendingLimitsCallback:
         assert "exceeded" in response.reason.lower()
 
 
-class TestCreditGateState:
+class TestBillingGateState:
     """Tests for the lightweight prepaid-credit gate used by voice surfaces."""
 
     @pytest.mark.asyncio
     async def test_personal_zero_credits_blocks(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -740,7 +740,7 @@ class TestCreditGateState:
                     mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is False
         assert state.credit_balance == 0.0
@@ -750,7 +750,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_metered_zero_credits_allowed(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -773,7 +773,7 @@ class TestCreditGateState:
                     mock_instance.get_user_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.credit_balance == 0.0
@@ -781,7 +781,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_org_context_checks_org_balance(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         spend_data = {
             "cumulative_spend": 0.0,
@@ -804,7 +804,7 @@ class TestCreditGateState:
                     mock_instance.get_org_spend = AsyncMock(return_value=spend_data)
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.credit_balance == 12.0
@@ -813,7 +813,7 @@ class TestCreditGateState:
 
     @pytest.mark.asyncio
     async def test_credit_gate_failures_fail_open(self):
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
         with patch("unify.spending_limits._get_api_key", return_value="test-key"):
             with patch("unify.session_details.SESSION_DETAILS") as mock_session:
@@ -831,7 +831,7 @@ class TestCreditGateState:
                     )
                     mock_get_client.return_value = mock_instance
 
-                    state = await check_credit_gate_state()
+                    state = await check_billing_gate_state()
 
         assert state.allowed is True
         assert state.reason is None

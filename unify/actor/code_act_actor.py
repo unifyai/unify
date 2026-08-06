@@ -372,7 +372,6 @@ class _ResolvedSession(NamedTuple):
     language: str
     venv_id: Optional[int]
     session_id: Optional[int]
-    error: Optional[Dict[str, Any]]  # validation error dict, or None
 
 
 # ---------------------------------------------------------------------------
@@ -2692,8 +2691,8 @@ class CodeActActor(BaseCodeActActor):
                     session_id=int(session_id),
                 )
 
-        # Validate.
-        err = self._validate_execution_params(
+        # Refuses by raising if the parameters cannot be executed as given.
+        self._validate_execution_params(
             state_mode=state_mode,
             session_id=session_id,
             session_name=session_name,
@@ -2705,7 +2704,6 @@ class CodeActActor(BaseCodeActActor):
             language=str(language),
             venv_id=venv_id,
             session_id=session_id,
-            error=err,
         )
 
     async def _execute_on_surface(
@@ -3222,10 +3220,6 @@ class CodeActActor(BaseCodeActActor):
                     _rs.venv_id,
                     _rs.session_id,
                 )
-                if _rs.error is not None:
-                    out = _rs.error
-                    return out
-
                 # Inject per-tool notification queue into bound sandbox so notify() works.
                 try:
                     sb_for_notifs = _CURRENT_SANDBOX.get()
@@ -4054,10 +4048,6 @@ class CodeActActor(BaseCodeActActor):
                         _rs.venv_id,
                         _rs.session_id,
                     )
-                    if _rs.error is not None:
-                        out = _rs.error
-                        return out
-
                     # Inject per-tool notification queue into bound sandbox.
                     try:
                         sb_for_notifs = _CURRENT_SANDBOX.get()

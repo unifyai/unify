@@ -1246,7 +1246,7 @@ async def test_recorded_opening_uses_interruptible_audio_say(monkeypatch):
     monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
     monkeypatch.setattr(
         call_script,
-        "FastBrainCreditGateMonitor",
+        "FastBrainBillingGateMonitor",
         _FakeCreditGateMonitor,
     )
     monkeypatch.setattr(
@@ -1504,7 +1504,7 @@ async def test_walkie_opener_arms_bridge_only_on_early_interruption(
     monkeypatch.setattr(call_script, "delete_livekit_room", _noop_async)
     monkeypatch.setattr(
         call_script,
-        "FastBrainCreditGateMonitor",
+        "FastBrainBillingGateMonitor",
         _FakeCreditGateMonitor,
     )
     monkeypatch.setattr(

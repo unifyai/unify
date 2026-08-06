@@ -279,6 +279,7 @@ class AssistantDetails:
     slack_bot_user_id: str = ""
     slack_team_id: str = ""
     has_ms_teams_bot: bool = False
+    ms_teams_tenant_id: str = ""
     is_coordinator: bool = False
     # Coordinator multiplayer mode: hire-like comms surface and open audience
     # instead of the private boss-only surface. Meaningful only when
@@ -573,6 +574,7 @@ class SessionDetails:
         assistant_slack_bot_user_id: str = "",
         assistant_slack_team_id: str = "",
         assistant_has_ms_teams_bot: bool = False,
+        assistant_ms_teams_tenant_id: str = "",
         assistant_contact_id: int = 0,
         assistant_self_contact_id: int = DEFAULT_SELF_CONTACT_ID,
         user_id: str = "",
@@ -620,6 +622,7 @@ class SessionDetails:
         self.assistant.slack_bot_user_id = _runtime_str(assistant_slack_bot_user_id)
         self.assistant.slack_team_id = _runtime_str(assistant_slack_team_id)
         self.assistant.has_ms_teams_bot = bool(assistant_has_ms_teams_bot)
+        self.assistant.ms_teams_tenant_id = _runtime_str(assistant_ms_teams_tenant_id)
         self.assistant.is_coordinator = is_coordinator
         self.assistant.is_multiplayer = is_multiplayer
         self.assistant.contact_id = assistant_contact_id
@@ -702,6 +705,9 @@ class SessionDetails:
         )
         os.environ["ASSISTANT_HAS_MS_TEAMS_BOT"] = str(
             self.assistant.has_ms_teams_bot,
+        )
+        os.environ["ASSISTANT_MS_TEAMS_TENANT_ID"] = _runtime_str(
+            self.assistant.ms_teams_tenant_id,
         )
         os.environ["ASSISTANT_DESKTOP_MODE"] = _runtime_str(
             self.assistant.desktop_mode,
@@ -812,6 +818,8 @@ class SessionDetails:
             self.assistant.slack_team_id = val
         if val := os.environ.get("ASSISTANT_HAS_MS_TEAMS_BOT"):
             self.assistant.has_ms_teams_bot = val.strip().lower() == "true"
+        if val := os.environ.get("ASSISTANT_MS_TEAMS_TENANT_ID"):
+            self.assistant.ms_teams_tenant_id = val
         if val := os.environ.get("ASSISTANT_CONTACT_ID"):
             try:
                 self.assistant.contact_id = int(val)

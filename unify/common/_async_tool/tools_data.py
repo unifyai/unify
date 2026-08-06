@@ -26,6 +26,9 @@ from ..llm_helpers import method_to_schema
 from .formatting import serialize_tool_content, sanitize_tool_msg_for_logging
 from contextlib import suppress
 from .propagation_mode import ChatContextPropagation
+from ..tool_errors import ToolInputError
+
+
 from .context_tracker import LoopContextState
 
 if TYPE_CHECKING:  # TODO: remove once dependencies are fixed
@@ -36,6 +39,46 @@ if TYPE_CHECKING:  # TODO: remove once dependencies are fixed
 
 # Sentinel for bare top-level handles (no label needed).
 _HANDLE_SENTINEL = "<steerable handle — now in-flight>"
+
+
+def _failure_text(exc: BaseException) -> str:
+    """The text a caller reads for *exc*.
+
+    A refusal already says which argument to change, so the traceback would only
+    bury it. Anything else is unexpected, and there the frames are the point.
+    """
+    if isinstance(exc, ToolInputError):
+        return exc.as_tool_result()
+    return traceback.format_exc()
+
+
+def _record_failure(
+    tracker: Any,
+    *,
+    exc: BaseException,
+    tool_name: str,
+    args: Any,
+) -> None:
+    """Tally a failed call. Never raises — the caller decides when to stop.
+
+    Refusals and unexpected exceptions are counted differently on purpose: a
+    refusal is how a caller converges on an argspec, so only repetition ends the
+    loop, while consecutive unexpected exceptions mean something is broken and a
+    few is already too many.
+
+    Stopping is left to ``tracker.stop_reason()`` at the end of the call, so the
+    failure still reaches the transcript first — a loop that aborts before
+    recording why is one nobody can diagnose.
+    """
+    if isinstance(exc, ToolInputError):
+        tracker.note_refusal(
+            tool_name=tool_name,
+            args=args,
+            message=exc.message,
+        )
+        return
+
+    tracker.increment_failures()
 
 
 def _handle_label_sentinel(label: str) -> str:
@@ -863,12 +906,12 @@ class ToolsData:
                 result = self._time_ctx.wrap_result(result, info.scheduled_time)
 
             consecutive_failures.reset_failures()
-        except Exception:
+        except Exception as exc:
             # Multi-handle child error: update shared placeholder and return early
             mh_state = getattr(info, "_multi_handle_state", None)
             if mh_state is not None:
                 label = info._multi_handle_label
-                error_tb = traceback.format_exc()
+                error_tb = _failure_text(exc)
                 mh_state.results[label] = f"[{label}: error]\n{error_tb}"
                 mh_state.update_placeholder()
                 await msg_dispatcher.publish_to_event_bus(
@@ -876,20 +919,29 @@ class ToolsData:
                 )
                 self.completed_results[call_id] = error_tb
                 self._completed_tool_names[call_id] = name
-                consecutive_failures.increment_failures()
                 if self._logger.log_steps:
                     self._logger.error(
                         f"{name} [{label}] - {call_id}\n{error_tb}",
                         prefix="❌  MultiHandle Child Failed",
                     )
-                if consecutive_failures.has_exceeded_failures():
-                    raise RuntimeError(
-                        "Aborted after too many consecutive tool failures.",
-                    )
+                _record_failure(
+                    consecutive_failures,
+                    exc=exc,
+                    tool_name=name,
+                    args=info.llm_arguments,
+                )
+                mh_stop = consecutive_failures.stop_reason()
+                if mh_stop:
+                    raise RuntimeError(mh_stop)
                 return True
 
-            consecutive_failures.increment_failures()
-            result = traceback.format_exc()
+            result = _failure_text(exc)
+            _record_failure(
+                consecutive_failures,
+                exc=exc,
+                tool_name=name,
+                args=info.llm_arguments,
+            )
             if self._logger.log_steps:
                 self._logger.error(
                     f"Error: {name} failed "
@@ -978,12 +1030,11 @@ class ToolsData:
                 pass
 
         # 5️⃣  failure guard -------------------------------------------------
-        if consecutive_failures.has_exceeded_failures():
+        stop_reason = consecutive_failures.stop_reason()
+        if stop_reason:
             if self._logger.log_steps:
-                self._logger.error(f"Aborting: too many tool failures.", prefix="🚨")
-            raise RuntimeError(
-                "Aborted after too many consecutive tool failures.",
-            )
+                self._logger.error(f"Aborting: {stop_reason}", prefix="🚨")
+            raise RuntimeError(stop_reason)
 
         # successful (or failed) *final* result → LLM may need to react
         return True

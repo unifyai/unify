@@ -262,6 +262,9 @@ def build_brain_spec(
         coordinator_onboarding_active=cm.coordinator_onboarding_active,
         coordinator_onboarding_render=cm.coordinator_onboarding_render,
         coordinator_clicked_trigger_steps=cm.onboarding_clicked_trigger_steps,
+        # Empty off-call and on telephony; two or more names means the assistant
+        # is in a room where a turn may belong to someone else.
+        call_participant_names=cm.call_manager.other_call_participant_names,
     )
     _system_prompt_ms = _mark_step()
 

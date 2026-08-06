@@ -8,6 +8,7 @@ from unify.actor.execution import (
     _validate_execution_params,
     parts_to_text,
 )
+from unify.common.tool_errors import ToolInputError
 from unify.function_manager.function_manager import VenvPool
 from unify.function_manager.shell_pool import ShellPool
 
@@ -114,23 +115,43 @@ class _FakeFunctionManager:
     ],
 )
 def test_validate_execution_params_matrix(kwargs, expect_error_substr: str):
-    err = _validate_execution_params(**kwargs)
-    assert isinstance(err, dict)
-    assert err.get("error_type") == "validation"
-    assert expect_error_substr.lower() in str(err.get("error", "")).lower()
+    with pytest.raises(ToolInputError) as excinfo:
+        _validate_execution_params(**kwargs)
+    assert expect_error_substr.lower() in excinfo.value.message.lower()
+
+
+def test_a_refusal_reads_as_itself_not_as_a_traceback():
+    """The rendered refusal carries what the caller needs to fix the call.
+
+    The loop surfaces this text in place of a traceback, so everything the
+    caller acts on has to survive the raise: what is wrong, what to change, and
+    which arguments the complaint is about.
+    """
+    with pytest.raises(ToolInputError) as excinfo:
+        _validate_execution_params(
+            state_mode="stateless",
+            session_id=5,
+            session_name="contact_lookup",
+            language="python",
+        )
+    rendered = excinfo.value.as_tool_result()
+    assert "Cannot use state_mode='stateless' with a session" in rendered
+    assert "Suggestion: Remove session_id/session_name" in rendered
+    assert "session_name='contact_lookup'" in rendered
 
 
 def test_missing_venv_suggestion_offers_a_way_out():
     """The error has to say what to do, or the model can only guess another id."""
-    err = _validate_execution_params(
-        state_mode="stateful",
-        session_id=0,
-        session_name=None,
-        language="python",
-        venv_id=7,
-        venv_exists=lambda _v: False,
-    )
-    suggestion = err["suggestion"]
+    with pytest.raises(ToolInputError) as excinfo:
+        _validate_execution_params(
+            state_mode="stateful",
+            session_id=0,
+            session_name=None,
+            language="python",
+            venv_id=7,
+            venv_exists=lambda _v: False,
+        )
+    suggestion = excinfo.value.suggestion
     assert "Omit venv_id" in suggestion
     assert "FunctionManager_list_venvs" in suggestion
     assert "FunctionManager_add_venv" in suggestion

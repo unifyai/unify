@@ -149,6 +149,12 @@ class TestSharedSpendClient:
         mock_client = MagicMock()
         mock_client.closed = False
         sl._spend_client = mock_client
+        # A cached client is only reused while it was cached under the key in
+        # force; seeding the client alone leaves the key mismatched, and the
+        # first call replaces the mock with a real one whose session has not
+        # opened yet — and an unopened session reads as closed, so every
+        # subsequent call rebuilds too.
+        sl._spend_client_key = "test-key"  # pragma: allowlist secret
 
         with patch("unify.spending_limits._get_api_key", return_value="test-key"):
             client1 = sl._get_spend_client()
@@ -160,6 +166,7 @@ class TestSharedSpendClient:
         assert client1 is mock_client
 
         sl._spend_client = None
+        sl._spend_client_key = None
 
     @pytest.mark.asyncio
     async def test_get_spend_client_recreates_if_closed(self):

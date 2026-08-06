@@ -129,6 +129,7 @@ jobs:
       shell: bash
       run: |
         TEST_PATH="${{ inputs.test_path }}"
+        EXTRA_ARGS="${{ inputs.parallel_run_args }}"
         declare -a RAW_PATHS=()
         declare -a PATHS=()
 
@@ -138,15 +139,25 @@ jobs:
           exit 0
         fi
 
+        # Recording a marker's corpus means dispatching this with that marker's
+        # flag, so discovery has to narrow to the paths carrying those tests: a
+        # shard whose filter selects nothing is a hard error in parallel_run.sh.
+        DISCOVERY_FLAGS=()
+        for marker_flag in --eval-only --symbolic-only --deterministic-only; do
+          if [[ " $EXTRA_ARGS " == *" $marker_flag "* ]]; then
+            DISCOVERY_FLAGS+=("$marker_flag")
+          fi
+        done
+
         if [[ "$TEST_PATH" == "." ]]; then
           while IFS= read -r path; do
             PATHS+=("$path")
-          done < <(python3 .github/scripts/discover_test_paths.py)
+          done < <(python3 .github/scripts/discover_test_paths.py ${DISCOVERY_FLAGS[@]+"${DISCOVERY_FLAGS[@]}"})
         else
           read -ra RAW_PATHS <<< "$TEST_PATH"
           while IFS= read -r path; do
             PATHS+=("$path")
-          done < <(python3 .github/scripts/discover_test_paths.py "${RAW_PATHS[@]}")
+          done < <(python3 .github/scripts/discover_test_paths.py ${DISCOVERY_FLAGS[@]+"${DISCOVERY_FLAGS[@]}"} "${RAW_PATHS[@]}")
         fi
 
         # Flows fill the shared cache from their own workflow: flow-smoke.yml

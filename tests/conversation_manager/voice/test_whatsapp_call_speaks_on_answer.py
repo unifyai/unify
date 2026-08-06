@@ -403,10 +403,10 @@ def _hang_up_events(sequence) -> list:
 
 
 @pytest.mark.asyncio
-async def test_pre_armed_gate_never_closes_before_answer(monkeypatch):
-    """A pre-armed hang-up gate must not fire while the call is still ringing
-    (the pipeline is quiescent pre-answer), and the sanctioned-silence close
-    only runs once the call is live and the opener has been dispatched."""
+async def test_pre_armed_gate_never_auto_closes_on_silence(monkeypatch):
+    """An armed hang-up gate must never end the call on dead air alone —
+    hang-ups are explicit only (the caller hangs up, or the agent classifies
+    a ``hang_up`` turn). Silence before or after answer closes nothing."""
     sequence: list = []
     call_script, broker, make_ctx, holders = _install_entrypoint_fakes(
         monkeypatch,
@@ -415,8 +415,6 @@ async def test_pre_armed_gate_never_closes_before_answer(monkeypatch):
             "hang_up_gate_reason": "Deliver the message, then wrap up.",
         },
     )
-    # Tiny close/grace windows so the watcher (1s tick) fires fast once live.
-    monkeypatch.setattr(call_script, "HANG_UP_SILENCE_CLOSE_S", 0.5)
     monkeypatch.setattr(call_script, "HANG_UP_GRACE_S", 0.01)
 
     task = asyncio.create_task(call_script.entrypoint(make_ctx()))
@@ -429,26 +427,20 @@ async def test_pre_armed_gate_never_closes_before_answer(monkeypatch):
             raise AssertionError("agent never reached the answered gate")
 
         # Phase 1: still ringing (no call_answered). The gate is armed, the
-        # pipeline is quiescent — the watcher must NOT close the call.
+        # pipeline is quiescent — nothing may close the call.
         await asyncio.sleep(2.5)
         assert not _hang_up_events(
             sequence,
         ), "gated hang-up fired while the call was still ringing"
 
         # Phase 2: answer the call; opener flows; the line then goes silent.
-        # The sanctioned-silence close now fires and ends the call.
+        # With no silence auto-close, the gate stays armed and the call stays
+        # up until an explicit hang-up.
         broker.callbacks["app:call:status"]({"type": "call_answered"})
-        await asyncio.wait_for(task, timeout=5.0)
-
-        for _ in range(600):
-            if _hang_up_events(sequence):
-                break
-            await asyncio.sleep(0.01)
-        hang_ups = _hang_up_events(sequence)
-        assert hang_ups, "sanctioned-silence close never fired after answer"
-        payload = hang_ups[0][2]
-        assert '"silence"' in payload
-        assert "Deliver the message, then wrap up." in payload
+        await asyncio.sleep(2.5)
+        assert not _hang_up_events(
+            sequence,
+        ), "gated hang-up fired on silence alone after answer"
     finally:
         if not task.done():
             task.cancel()

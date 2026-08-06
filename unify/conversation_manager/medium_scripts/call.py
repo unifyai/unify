@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from importlib import resources
@@ -190,28 +191,28 @@ async def _normalize_elevenlabs_twin_pronunciation_stream(
         yield pending
 
 
-class FastBrainCreditGateMonitor:
-    """Polls credit state off the voice response path."""
+class FastBrainBillingGateMonitor:
+    """Polls billing state off the voice response path."""
 
     def __init__(self, refresh_interval_s: float = 5.0) -> None:
-        from unify.spending_limits import CreditGateState
+        from unify.spending_limits import BillingGateState
 
         self._refresh_interval_s = refresh_interval_s
-        self._state = CreditGateState()
+        self._state = BillingGateState()
 
     @property
     def state(self):
         return self._state
 
     async def refresh_once(self) -> None:
-        from unify.spending_limits import check_credit_gate_state
+        from unify.spending_limits import check_billing_gate_state
 
-        next_state = await check_credit_gate_state()
+        next_state = await check_billing_gate_state()
         if next_state.allowed != self._state.allowed:
             if next_state.allowed:
-                _log.info("Credit gate cleared")
+                _log.info("Billing gate cleared")
             else:
-                _log.warning(next_state.reason or "Credit gate active")
+                _log.warning(next_state.reason or "Billing gate active")
         self._state = next_state
 
     async def run(self) -> None:
@@ -276,6 +277,11 @@ class Assistant(Agent):
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
+        # Live names of everyone else on this call (group-call etiquette). Also a
+        # closure rather than a snapshot: a call that starts 1:1 and becomes a
+        # group when someone joins has to pick the etiquette up mid-call, and one
+        # that empties back out has to drop it again.
+        self._other_participants_provider: Callable[[], list[str]] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -559,6 +565,7 @@ class Assistant(Agent):
                 history_provider() if history_provider is not None else []
             )
             peers_provider = self._peer_assistants_provider
+            others_provider = self._other_participants_provider
             resolved = await select_fast_brain_turn(
                 user_text=user_text,
                 system_prompt=self._fast_brain_system_prompt,
@@ -573,6 +580,10 @@ class Assistant(Agent):
                 peer_assistants=(
                     peers_provider() if peers_provider is not None else ()
                 ),
+                other_participants=(
+                    others_provider() if others_provider is not None else ()
+                ),
+                own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
 
             if (
@@ -831,16 +842,6 @@ _CALL_BRIEFING_SYSTEM_NOTE = (
 # this window ("oh wait, one more thing") aborts the cut entirely — the
 # farewell becomes an ordinary turn and the conversation continues.
 HANG_UP_GRACE_S = 1.0
-
-# With the hang-up gate armed, this much sustained dead air (no speech either
-# way, nothing queued) is treated as the conversation having ended without a
-# classifiable goodbye — the agent speaks a brief courtesy close and hangs up.
-HANG_UP_SILENCE_CLOSE_S = 12.0
-
-# Deterministic courtesy line for the sanctioned-silence close (no LLM call —
-# by this point the substance of the call is over by the slow brain's own
-# judgement, and the line only needs to be polite).
-HANG_UP_SILENCE_FAREWELL = "Alright — I'll let you go. Bye for now!"
 
 
 # Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
@@ -1193,6 +1194,69 @@ def _describe_call_opening_config(raw: object) -> str:
     )
 
 
+#: Splits ``recordingAsset`` into ``recording_Asset`` so a camelCase spelling
+#: can be matched against the snake_case field names below.
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+
+_CALL_OPENING_FIELDS = frozenset(
+    {
+        "mode",
+        "opener_text",
+        "briefing",
+        "simulated_utterance",
+        "source",
+        "transcript",
+        "recording_asset",
+        "recording_path",
+        "recording_url",
+    },
+)
+
+
+def _reject_camel_cased_opening_fields(raw: dict) -> None:
+    """Refuse a config whose fields were never converted to snake_case.
+
+    Every field is read by its snake_case name, so a camelCase spelling is
+    simply invisible: the mode still says ``recorded`` while the asset naming
+    what to play is silently absent, and the failure surfaces as a missing
+    transcript several frames away from the sender that caused it. Name the
+    offending keys instead. Fields this function does not recognise at all are
+    left alone — an unrelated extra key is not a casing bug.
+    """
+    unconverted = sorted(
+        key
+        for key in raw
+        if key not in _CALL_OPENING_FIELDS
+        and _CAMEL_BOUNDARY.sub(r"\1_\2", key).lower() in _CALL_OPENING_FIELDS
+    )
+    if unconverted:
+        raise ValueError(
+            "opening_config fields must be snake_case; received "
+            f"{unconverted} — the sender did not convert the nested object",
+        )
+
+
+def _call_opening_or_spoken(raw: object) -> dict:
+    """Normalise the opening, falling back to a spoken greeting if unusable.
+
+    A rejected opening raised straight out of the job entrypoint, killing the
+    voice agent before it made a sound: the caller sat in silence over a config
+    problem they could neither see nor do anything about, and the only trace was
+    a traceback in a subprocess. A generated greeting is a worse opening than the
+    one that was asked for and a far better one than none, so the call proceeds
+    and the rejection is logged loudly against the shape that caused it.
+    """
+    try:
+        return _normalize_call_opening_config(raw)
+    except ValueError as exc:
+        _log.error(
+            f"Opening config rejected ({exc}); opening with a generated greeting "
+            f"instead of failing the call. Arrived as: "
+            f"{_describe_call_opening_config(raw)}",
+        )
+        return {"mode": "speak"}
+
+
 def _normalize_call_opening_config(raw: object) -> dict:
     # Logged before validation: a rejected config raises out of here, and the
     # shape it arrived in is the only way to tell a caller sending the wrong
@@ -1204,6 +1268,8 @@ def _normalize_call_opening_config(raw: object) -> dict:
         raw = json.loads(raw)
     if not isinstance(raw, dict):
         raise ValueError("opening_config must be an object")
+
+    _reject_camel_cased_opening_fields(raw)
 
     mode = str(raw.get("mode", "speak")).strip()
     if mode not in _CALL_OPENING_MODES:
@@ -1305,7 +1371,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = meta.get("assistant_bio", "")
         contact = meta.get("contact", {})
         boss = meta.get("boss", {})
-        opening_config = _normalize_call_opening_config(meta.get("opening_config"))
+        opening_config = _call_opening_or_spoken(meta.get("opening_config"))
         pre_armed_hang_up_gate = str(meta.get("hang_up_gate_reason") or "").strip()
         _hydrate_session_details_from_metadata(meta)
     else:
@@ -1340,7 +1406,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant_bio = SESSION_DETAILS.assistant.about
         contact = json.loads(SESSION_DETAILS.voice_call.contact_json or "{}")
         boss = json.loads(SESSION_DETAILS.voice_call.boss_json or "{}")
-        opening_config = _normalize_call_opening_config(
+        opening_config = _call_opening_or_spoken(
             os.environ.get("OPENING_CONFIG"),
         )
         pre_armed_hang_up_gate = os.environ.get("HANG_UP_GATE_REASON", "").strip()
@@ -2270,7 +2336,6 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     credit_gate_task: asyncio.Task | None = None
-    hang_up_gate_watcher_task: asyncio.Task | None = None
     explicit_stop_requested = False
     shutdown_completed = False
 
@@ -2293,8 +2358,6 @@ async def entrypoint(ctx: agents.JobContext):
                 )
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
-        if hang_up_gate_watcher_task is not None:
-            await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
         if _meet_screenshare_task is not None:
             await utils.aio.cancel_and_wait(_meet_screenshare_task)
         await screen_capture.close()
@@ -2790,6 +2853,31 @@ async def entrypoint(ctx: agents.JobContext):
         speaker_tracker=speaker_tracker,
     )
 
+    # --- Group-call etiquette (multi-party channels only) ---
+    # Telephony carries exactly one other person, so every turn there is
+    # necessarily addressed to the assistant and no provider is wired: the 1:1
+    # path keeps replying to everything, as it should.
+    if channel in MULTI_PARTY_CHANNELS:
+
+        def _other_participant_names() -> list[str]:
+            if channel == "unify_meet":
+                return [
+                    name
+                    for name in (
+                        (member.get("display_name") or "").strip()
+                        for member in unify_meet_roster
+                        if member.get("kind") == "human"
+                    )
+                    if name
+                ]
+            # Browser meets: the platform reports one roster and does not mark
+            # which entries are bots, so every other participant counts. A stray
+            # notetaker inflating the count is harmless — it only means the
+            # assistant reads the room before speaking.
+            return _get_meet_participant_names()
+
+        assistant._other_participants_provider = _other_participant_names
+
     # --- Multi-assistant speaking floor (org meets only) ---
     # Assistants in a shared org room coordinate playout over the data channel
     # so they never talk over each other. Solo calls skip the claim window via
@@ -2946,7 +3034,7 @@ async def entrypoint(ctx: agents.JobContext):
         assistant._chat_ctx.add_message(role="system", content=[briefing_note])
         session.history.add_message(role="system", content=[briefing_note])
         _log.info("Injected call briefing into voice context")
-    credit_gate_monitor = FastBrainCreditGateMonitor()
+    credit_gate_monitor = FastBrainBillingGateMonitor()
     assistant.set_credit_gate_state_provider(lambda: credit_gate_monitor.state)
     # In-flight says (proactive/guidance still playing, not yet committed) live
     # in _say_meta_queue until their playout commits them to history. Set as a
@@ -3304,59 +3392,9 @@ async def entrypoint(ctx: agents.JobContext):
             ).to_json(),
         )
 
-    async def _hang_up_gate_silence_watcher() -> None:
-        """Close the call after sanctioned dead air (gate armed, line quiet).
-
-        Covers conversations that end without a classifiable goodbye — the
-        caller goes silent (or already left) after the substance is done. The
-        idle counter resets whenever the gate is disarmed or any speech
-        activity occurs, and never runs before the call is actually live: a
-        pre-armed gate must not "close" a call that is still ringing or whose
-        opener has not been delivered yet (the pipeline is quiescent in both
-        states).
-        """
-        idle_s = 0.0
-        while True:
-            await asyncio.sleep(1.0)
-            if assistant._hang_up_gate_reason is None:
-                idle_s = 0.0
-                continue
-            if not assistant.call_received or assistant._opening_pending:
-                idle_s = 0.0
-                continue
-            if not _is_pipeline_quiescent():
-                idle_s = 0.0
-                continue
-            idle_s += 1.0
-            if idle_s < HANG_UP_SILENCE_CLOSE_S:
-                continue
-            idle_s = 0.0
-            _log.info(
-                "Hang-up gate: line quiet for "
-                f"{HANG_UP_SILENCE_CLOSE_S:.0f}s — closing the call",
-            )
-            _say_meta_queue.append(
-                {
-                    "source": "gated_hang_up",
-                    "text": HANG_UP_SILENCE_FAREWELL,
-                    "llm_log_path": "",
-                },
-            )
-            handle = session.say(
-                HANG_UP_SILENCE_FAREWELL,
-                allow_interruptions=True,
-                add_to_chat_ctx=True,
-            )
-            await _finalize_gated_hang_up(
-                handle,
-                HANG_UP_SILENCE_FAREWELL,
-                trigger="silence",
-            )
-
-    hang_up_gate_watcher_task = asyncio.create_task(
-        _hang_up_gate_silence_watcher(),
-        name="fast_brain_hang_up_gate_watcher",
-    )
+    # NOTE: there is intentionally no silence-based auto-close for an armed
+    # hang-up gate. A call ends only explicitly: the caller hangs up, or the
+    # agent classifies a ``hang_up`` turn (whose farewell is finalized above).
 
     @session.on("speech_created")
     def _on_speech_created(ev) -> None:

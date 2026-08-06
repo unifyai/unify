@@ -60,7 +60,11 @@ from unify.conversation_manager.cm_types.screenshot import (
 from unify.actor.base import BaseActor
 from unify.conversation_manager.domains.proactive_speech import ProactiveSpeech
 from unify.conversation_manager.medium_scripts.common import FastBrainLogger
-from unify.spending_limits import check_credit_gate_state
+from unify.spending_limits import (
+    GATE_BLOCK_ACCOUNT_SUSPENDED,
+    GATE_BLOCK_CREDITS_DEPLETED,
+    check_billing_gate_state,
+)
 
 MAX_CONV_MANAGER_MSGS = 50
 # Upper bound a deferred hang-up waits for its explanatory line to be spoken
@@ -81,6 +85,12 @@ DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE = (
     "until you top up. Please add credits in billing, then I'll pick this back up."
 )
 DEPLETED_CREDITS_EMAIL_SUBJECT = "Credits depleted"
+ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE = (
+    "This account is suspended, so I can't run setup or tasks right now. Adding "
+    "a payment method in billing usually lifts it — if that isn't it, email "
+    "support@unify.ai and we'll sort it out."
+)
+ACCOUNT_SUSPENDED_EMAIL_SUBJECT = "Account suspended"
 SLOW_BRAIN_FAILURE_REPLY_THROTTLE_SECONDS = 600
 SLOW_BRAIN_FAILURE_RESPONSE = (
     "I hit a technical problem and couldn't respond just now. Please try "
@@ -482,10 +492,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Primary destination used when one id is needed for compatibility paths.
         self._local_message_destinations: dict[int, str | None] = {}
 
-        # mapping from conference_name/room_name to exchange_id, populated
-        # at call/meet end so the async RecordingReady handler can resolve
-        # the exchange without a database filter query.
-        self._recording_exchange_ids: dict[str, int] = {}
+        # mapping from conference_name/room_name to the exchange's
+        # (id, destination), populated at call/meet end so the async
+        # RecordingReady handler can resolve the exchange without a database
+        # filter query. The destination travels with the id because exchange
+        # ids are root-local.
+        self._recording_exchange_ids: dict[str, tuple[int, str | None]] = {}
 
         # Detached recording-start requests. Recording must never gate call
         # setup, so the call-started handler fires the request without awaiting
@@ -1904,17 +1916,30 @@ class ConversationManager(metaclass=SingletonABCMeta):
 
         return True
 
-    async def _send_credit_gate_reply(
+    async def _send_billing_gate_reply(
         self,
         reply_context: dict[str, Any],
+        blocked_by: str | None,
     ) -> bool:
+        """Reply with the advice that actually clears this refusal.
+
+        A suspension and an empty wallet need different actions, and neither
+        resolves by trying again — so neither may fall back to the generic
+        transient-failure copy.
+        """
+        if blocked_by == GATE_BLOCK_ACCOUNT_SUSPENDED:
+            content = ACCOUNT_SUSPENDED_SLOW_BRAIN_RESPONSE
+            subject = ACCOUNT_SUSPENDED_EMAIL_SUBJECT
+        else:
+            content = DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE
+            subject = DEPLETED_CREDITS_EMAIL_SUBJECT
         return await self._send_system_reply(
             reply_context,
-            content=DEPLETED_CREDITS_SLOW_BRAIN_RESPONSE,
-            email_subject=DEPLETED_CREDITS_EMAIL_SUBJECT,
+            content=content,
+            email_subject=subject,
         )
 
-    async def _maybe_handle_depleted_credit_gate(
+    async def _maybe_handle_billing_gate(
         self,
         trace_meta: dict[str, Any],
     ) -> bool:
@@ -1922,24 +1947,26 @@ class ConversationManager(metaclass=SingletonABCMeta):
         if not reply_context:
             return False
 
-        credit_gate_state = await check_credit_gate_state()
-        if credit_gate_state.allowed:
+        gate_state = await check_billing_gate_state()
+        if gate_state.allowed:
             return False
 
+        blocked_by = gate_state.blocked_by or GATE_BLOCK_CREDITS_DEPLETED
         if self._credit_gate_reply_is_throttled(reply_context):
             self._session_logger.info(
-                "credit_gate",
-                "Skipped repeated depleted-credit reply",
+                "billing_gate",
+                f"Skipped repeated billing-gate reply ({blocked_by})",
             )
             return True
 
-        sent = await self._send_credit_gate_reply(reply_context)
+        sent = await self._send_billing_gate_reply(reply_context, blocked_by)
         self._session_logger.info(
-            "credit_gate",
+            "billing_gate",
             (
-                "Served depleted-credit reply"
+                f"Served billing-gate reply ({blocked_by})"
                 if sent
-                else "Skipped depleted-credit reply without a deliverable channel"
+                else f"Skipped billing-gate reply ({blocked_by}) "
+                "without a deliverable channel"
             ),
         )
         return True
@@ -2054,7 +2081,7 @@ class ConversationManager(metaclass=SingletonABCMeta):
                 f"is_user_origin={is_user_origin}"
             ),
         )
-        if await self._maybe_handle_depleted_credit_gate(selected_meta):
+        if await self._maybe_handle_billing_gate(selected_meta):
             log_startup_timing(
                 LOGGER,
                 (

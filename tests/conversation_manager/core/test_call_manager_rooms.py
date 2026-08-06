@@ -131,17 +131,27 @@ def test_local_call_scoped_sip_uri_uses_unique_target_and_headers():
 
 
 @pytest.mark.parametrize(
-    ("recording_keys", "expected_exchange_id"),
+    ("recording_keys", "expected_exchange"),
     [
-        ({"CA111": 10, "unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 10),
-        ({"unity_wa_room_123_CA111": 20, "legacy_conf": 30}, 20),
-        ({"legacy_conf": 30}, 30),
+        (
+            {
+                "CA111": (10, "team:11"),
+                "unity_wa_room_123_CA111": (20, None),
+                "legacy_conf": (30, None),
+            },
+            (10, "team:11"),
+        ),
+        (
+            {"unity_wa_room_123_CA111": (20, "team:11"), "legacy_conf": (30, None)},
+            (20, "team:11"),
+        ),
+        ({"legacy_conf": (30, None)}, (30, None)),
     ],
 )
 @pytest.mark.asyncio
 async def test_recording_ready_prefers_call_session_then_room_then_conference(
     recording_keys,
-    expected_exchange_id,
+    expected_exchange,
 ):
     transcript_manager = MagicMock()
     cm = MagicMock()
@@ -161,8 +171,13 @@ async def test_recording_ready_prefers_call_session_then_room_then_conference(
     )
 
     transcript_manager.update_exchange_metadata.assert_called_once()
-    exchange_id, metadata = transcript_manager.update_exchange_metadata.call_args.args
-    assert exchange_id == expected_exchange_id
+    call = transcript_manager.update_exchange_metadata.call_args
+    exchange_id, metadata = call.args
+    expected_id, expected_destination = expected_exchange
+    assert exchange_id == expected_id
+    # The root travels with the id: a shared assistant's exchange lives in a
+    # team root, where the id means nothing to the personal root.
+    assert call.kwargs["destination"] == expected_destination
     assert metadata["recording_url"].endswith("/call.mp3")
     assert metadata["recording_call_session_id"] == "CA111"
     assert metadata["recording_room_name"] == "unity_wa_room_123_CA111"
@@ -174,11 +189,15 @@ async def test_recording_ready_recovers_exchange_from_stored_metadata():
 
     Egress finalises minutes after the room closes, by which time the pod that
     ran the call is usually gone. Without this the file exists in GCS but is
-    never linked to its transcript.
+    never linked to its transcript. The lookup reports the root it matched in,
+    so the write lands on the exchange it found rather than in whichever root
+    the manager calls home.
     """
     transcript_manager = MagicMock()
     transcript_manager.resolve_exchange_id_by_metadata = MagicMock(
-        side_effect=lambda key, value: 77 if key == "provider_call_sid" else None,
+        side_effect=lambda key, value: (
+            (77, "team:11") if key == "provider_call_sid" else None
+        ),
     )
     cm = MagicMock()
     cm._recording_exchange_ids = {}
@@ -197,9 +216,56 @@ async def test_recording_ready_recovers_exchange_from_stored_metadata():
     )
 
     transcript_manager.update_exchange_metadata.assert_called_once()
-    exchange_id, metadata = transcript_manager.update_exchange_metadata.call_args.args
+    call = transcript_manager.update_exchange_metadata.call_args
+    exchange_id, metadata = call.args
     assert exchange_id == 77
+    assert call.kwargs["destination"] == "team:11"
     assert metadata["recording_url"].endswith("/call.mp3")
+
+
+@pytest.mark.asyncio
+async def test_call_end_writes_identifiers_to_the_transcript_root():
+    """Hangup metadata must land in the root the transcript was authored in.
+
+    A shared assistant fans its transcript out over team roots, so a write that
+    falls back to the manager's home root addresses an exchange id that root
+    does not have. The identifiers -- and the recording URL that joins them
+    minutes later -- then sit on an exchange no transcript view reads, which is
+    why a shared assistant's calls render without a player.
+    """
+    from unify.conversation_manager.events import PhoneCallEnded
+
+    transcript_manager = MagicMock()
+    cm = MagicMock()
+    cm.transcript_manager = transcript_manager
+    cm._recording_exchange_ids = {}
+    cm._session_logger = MagicMock()
+    cm.call_manager.call_exchange_id = 55
+    cm.call_manager.call_exchange_destination = "team:11"
+    cm.call_manager.conference_name = "Unity_conf_1"
+    cm.call_manager.room_name = "unity_42_phone"
+    cm.call_manager.call_session_id = ""
+    cm.call_manager.provider_call_sid = "CA111"
+    cm.call_manager.set_hang_up_gate = AsyncMock()
+    cm.call_manager.cleanup_call_proc = AsyncMock()
+    cm.cancel_proactive_speech = AsyncMock()
+    cm.request_llm_run = AsyncMock()
+    cm.contact_index.get_contact.return_value = {"contact_id": 2, "first_name": "Ada"}
+
+    await EventHandler.handle_event(
+        PhoneCallEnded(contact={"contact_id": 2, "phone_number": "+15550000001"}),
+        cm,
+    )
+
+    call = transcript_manager.update_exchange_metadata.call_args
+    exchange_id, metadata = call.args
+    assert exchange_id == 55
+    assert call.kwargs["destination"] == "team:11"
+    assert metadata["provider_call_sid"] == "CA111"
+    assert metadata["room_name"] == "unity_42_phone"
+    # The stash the recording handler reads later carries the root too.
+    assert cm._recording_exchange_ids["CA111"] == (55, "team:11")
+    assert cm._recording_exchange_ids["unity_42_phone"] == (55, "team:11")
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ from unify.common.plain_text import (
     normalize_outbound_plain_text,
 )
 from unify.common.prompt_helpers import now as prompt_now
+from unify.comms import conversation_keys
 from unify.conversation_manager.cm_types import Medium
 from unify.conversation_manager.domains import comms_utils
 from unify.conversation_manager.event_broker import get_event_broker
@@ -713,6 +714,106 @@ class CommsPrimitives:
             )
         await self._event_broker.publish(topic, Error(error_msg).to_json())
         return {"status": "error", "error": error_msg}
+
+    def _live_ms_teams_bot_route(self, contact_id: int) -> tuple[str, str] | None:
+        """Teams routing visible in the current session, if there is one."""
+        if self._cm is None:
+            return None
+        reply_context = getattr(self._cm, "_last_inbound_reply_context", None) or {}
+        if (
+            reply_context.get("medium") == Medium.MS_TEAMS_BOT_MESSAGE.value
+            and reply_context.get("contact_id") == contact_id
+            and reply_context.get("tenant_id")
+            and reply_context.get("conversation_id")
+        ):
+            return (
+                str(reply_context["tenant_id"]),
+                str(reply_context["conversation_id"]),
+            )
+        messages = self._cm.contact_index.get_messages_for_contact(
+            contact_id,
+            medium=Medium.MS_TEAMS_BOT_MESSAGE,
+        )
+        for message in reversed(messages or []):
+            tenant_id = getattr(message, "tenant_id", "") or ""
+            conversation_id = getattr(message, "conversation_id", "") or ""
+            if tenant_id and conversation_id:
+                return tenant_id, conversation_id
+        return None
+
+    def _stored_ms_teams_bot_route(self, contact_id: int) -> tuple[str, str] | None:
+        """Teams routing recovered from the durable conversation exchange.
+
+        The live renderer surfaces these ids on an inbound message, which is
+        the only way they normally reach a reply. A headless run has no
+        rendered thread, so it reads them back off the Transcripts exchange
+        the conversation is grouped under instead.
+        """
+        key = conversation_keys.conversation_key(
+            Medium.MS_TEAMS_BOT_MESSAGE,
+            contact_id=contact_id,
+        )
+        if not key:
+            return None
+        transcript_manager = ManagerRegistry.get_transcript_manager()
+        exchange_id = transcript_manager.resolve_exchange_id_by_metadata(
+            conversation_keys.CONVERSATION_KEY_FIELD,
+            key,
+        )
+        if exchange_id is None:
+            return None
+        metadata = transcript_manager.get_exchange_metadata(exchange_id).metadata or {}
+        tenant_id = str(metadata.get("tenant_id") or "")
+        conversation_id = str(metadata.get("conversation_id") or "")
+        if tenant_id and conversation_id:
+            return tenant_id, conversation_id
+        return None
+
+    async def _routed_ms_teams_bot_conversation(
+        self,
+        contact: dict | None,
+    ) -> tuple[str, str] | None:
+        """Teams routing from the server-side conversation-route table.
+
+        Authoritative on liveness: routes carry a retention window, so a
+        conversation this table has dropped is no longer a valid target even
+        if an old exchange still names it.
+        """
+        email = (contact or {}).get("email_address") or None
+        is_boss = bool(contact) and contact.get("contact_id") == (
+            SESSION_DETAILS.boss_contact_id
+        )
+        route = await comms_utils.find_ms_teams_bot_conversation_route(
+            conversation_type="personal",
+            sender_email=None if is_boss else email,
+            owner_only=is_boss,
+        )
+        if not route:
+            return None
+        tenant_id = str(route.get("tenant_id") or "")
+        conversation_id = str(route.get("conversation_id") or "")
+        if tenant_id and conversation_id:
+            return tenant_id, conversation_id
+        return None
+
+    async def _resolve_ms_teams_bot_route(
+        self,
+        contact_id: int,
+        contact: dict | None = None,
+    ) -> tuple[str, str] | None:
+        """Find the Teams conversation to reply into for one contact.
+
+        Session state first (it reflects the conversation actually in
+        progress), then the durable exchange, then the server-side route
+        table. Returns ``None`` when no Teams conversation with this person
+        is on record — the Teams bot cannot open one, so that is a genuine
+        refusal rather than a lookup miss.
+        """
+        return (
+            self._live_ms_teams_bot_route(contact_id)
+            or self._stored_ms_teams_bot_route(contact_id)
+            or await self._routed_ms_teams_bot_conversation(contact)
+        )
 
     def _reserve_offline_operation(
         self,
@@ -1873,8 +1974,8 @@ class CommsPrimitives:
         *,
         contact_id: int | str,
         content: str,
-        tenant_id: str,
-        conversation_id: str,
+        tenant_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> dict[str, Any]:
         """Reply through the org-installed Unify Microsoft Teams bot app.
 
@@ -1884,21 +1985,23 @@ class CommsPrimitives:
         or channel thread). It is distinct from ``send_teams_message``, which
         sends through an individual user's own delegated Microsoft account.
 
-        Reply into the conversation the inbound Teams activity arrived on by
-        passing the ``tenant_id`` and ``conversation_id`` surfaced on that
-        inbound message. The tenant's Bot Connector endpoint and the shared
-        bot token are resolved server-side — the assistant never handles bot
-        credentials. The send pins the conversation to this assistant so later
-        replies route back to it.
+        When replying to an inbound Teams message, pass the ``tenant_id`` and
+        ``conversation_id`` surfaced on it. Omit both to reuse the last known
+        Teams conversation with this contact, which is what a scheduled or
+        otherwise headless run should do — it has no inbound message in front
+        of it to read the ids off. The tenant's Bot Connector endpoint and the
+        shared bot token are resolved server-side; the assistant never handles
+        bot credentials. The send pins the conversation to this assistant so
+        later replies route back to it.
 
-        Reply-only: the Teams bot **cannot open a conversation**. It can only
-        answer inside a chat/thread the user has already messaged it in, so a
-        ``conversation_id`` only exists once an inbound Teams activity has
-        arrived. If you have not received an inbound Teams message from this
-        person yet, you have no ``conversation_id`` and this tool cannot be
-        used — do not invent one, do not fall back to another channel while
-        claiming it was Teams, and never state or imply you messaged them on
-        Teams first. Wait for their first Teams message, then reply here.
+        The Teams bot **cannot open a conversation** — it can only speak
+        inside a chat or thread the person has already messaged it in. So if
+        no Teams conversation with this contact is on record, this call fails
+        and says so. When it does: do not invent a ``conversation_id``, do not
+        fall back to another channel while calling it Teams, and never state
+        or imply you messaged them on Teams. Say you could not reach them
+        there, or use a channel that can open a conversation
+        (``send_teams_message`` on a connected Microsoft account, email).
 
         Parameters
         ----------
@@ -1907,11 +2010,13 @@ class CommsPrimitives:
             transcript ownership and response-policy checks.
         content : str
             Message body to send.
-        tenant_id : str
-            Microsoft AAD tenant id of the install, from the inbound activity.
-        conversation_id : str
+        tenant_id : str | None, optional
+            Microsoft AAD tenant id of the install, from the inbound
+            activity. Resolved from the contact's last Teams conversation
+            when omitted.
+        conversation_id : str | None, optional
             Bot Framework conversation id to reply into, from the inbound
-            activity.
+            activity. Resolved alongside ``tenant_id`` when omitted.
 
         Returns
         -------
@@ -1926,10 +2031,15 @@ class CommsPrimitives:
         contact = self._get_contact(contact_id=contact_id)
         topic = "app:comms:ms_teams_bot_message_sent"
 
+        if not tenant_id or not conversation_id:
+            resolved = await self._resolve_ms_teams_bot_route(contact_id, contact)
+            if resolved is not None:
+                tenant_id, conversation_id = resolved
+
         target_metadata = {
             "contact_id": contact_id,
-            "tenant_id": tenant_id,
-            "conversation_id": conversation_id,
+            "tenant_id": tenant_id or "",
+            "conversation_id": conversation_id or "",
         }
         history_metadata = {
             "contact_display_name": _get_contact_display_name(contact),
@@ -1950,8 +2060,12 @@ class CommsPrimitives:
 
         if not tenant_id or not conversation_id:
             return await self._surface_comms_error(
-                "A tenant_id and conversation_id are required to reply "
-                "through the Microsoft Teams bot.",
+                "No Microsoft Teams conversation is on record with "
+                f"{_get_contact_display_name(contact)}, so there is nowhere "
+                "for the Teams bot to reply. The bot cannot start a "
+                "conversation — it can only answer in a chat or thread they "
+                "have messaged it in, and any earlier one has passed its "
+                "retention window. Do not claim you messaged them on Teams.",
                 topic,
                 contact_id=contact_id,
                 medium=Medium.MS_TEAMS_BOT_MESSAGE,
@@ -2025,6 +2139,11 @@ class CommsPrimitives:
         tenant's Bot Connector endpoint and shared bot token are resolved
         server-side — the assistant never handles bot credentials.
 
+        Both ids are required here, unlike the 1:1 ``send_ms_teams_bot_message``
+        which can reuse a contact's last known conversation. A shared thread is
+        identified by the thread itself rather than by a person, so there is
+        nothing to resolve it from without an inbound activity in hand.
+
         Parameters
         ----------
         contact_id : int | str
@@ -2075,8 +2194,10 @@ class CommsPrimitives:
 
         if not tenant_id or not conversation_id:
             return await self._surface_comms_error(
-                "A tenant_id and conversation_id are required to reply "
-                "through the Microsoft Teams bot.",
+                "A tenant_id and conversation_id from the inbound activity "
+                "are required to post into a Teams group chat or channel. A "
+                "shared thread cannot be resolved from a contact — use "
+                "send_ms_teams_bot_message for a 1:1 reply.",
                 topic,
                 contact_id=contact_id,
                 medium=Medium.MS_TEAMS_BOT_CHANNEL_MESSAGE,
