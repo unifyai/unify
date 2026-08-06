@@ -185,6 +185,26 @@ class ContextRegistry:
         return [f"{TEAM_DESTINATION_PREFIX}{team_id}" for team_id in sorted(team_ids)]
 
     @classmethod
+    def destination_for_root(cls, root_context: str) -> str | None:
+        """Return the public destination whose writes land in ``root_context``.
+
+        Inverse of :meth:`_parse_destination` for shared roots, letting a read
+        that fanned out over every root report *where* it found a row in terms
+        a subsequent write can target. A shared assistant authors its
+        conversation into team roots, none of which is the home root a
+        destination-less write resolves to, so an id recovered by fan-out is
+        only addressable together with this.
+        """
+        parts = root_context.strip("/").split("/")
+        if (
+            len(parts) == 2
+            and parts[0] == TEAM_CONTEXT_PREFIX.rstrip("/")
+            and parts[1].isdigit()
+        ):
+            return f"{TEAM_DESTINATION_PREFIX}{parts[1]}"
+        return None
+
+    @classmethod
     def _parse_destination(
         cls,
         manager_name: str,

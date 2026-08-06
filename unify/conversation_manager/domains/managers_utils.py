@@ -1580,11 +1580,12 @@ async def log_message(
         spoken_at,
     )
 
+    implicit_destinations = ContextRegistry.implicit_shared_destinations()
+    primary_destination = implicit_destinations[0]
+
     # publish transcript on a separate thread
     def _publish_transcript() -> int:
         global _pre_hire_exchange_id
-        implicit_destinations = ContextRegistry.implicit_shared_destinations()
-        primary_destination = implicit_destinations[0]
         message_ids_by_destination: dict[str | None, int] = {}
         try:
             nonlocal exchange_id
@@ -1814,26 +1815,33 @@ async def log_message(
     # have already started the next log_message call and created a
     # duplicate exchange.
     if exchange_id is not None and exchange_id != UNASSIGNED:
+        # The destination is cached with the id: the exchange lives in whichever
+        # root the transcript was authored under, and hangup/recording writes
+        # address it by (id, destination).
         if (
             medium in (Medium.PHONE_CALL, Medium.WHATSAPP_CALL)
             and cm.call_manager.call_exchange_id == UNASSIGNED
         ):
             cm.call_manager.call_exchange_id = exchange_id
+            cm.call_manager.call_exchange_destination = primary_destination
         elif (
             medium == Medium.UNIFY_MEET
             and cm.call_manager.unify_meet_exchange_id == UNASSIGNED
         ):
             cm.call_manager.unify_meet_exchange_id = exchange_id
+            cm.call_manager.call_exchange_destination = primary_destination
         elif (
             medium == Medium.GOOGLE_MEET
             and cm.call_manager.google_meet_exchange_id == UNASSIGNED
         ):
             cm.call_manager.google_meet_exchange_id = exchange_id
+            cm.call_manager.call_exchange_destination = primary_destination
         elif (
             medium == Medium.TEAMS_MEET
             and cm.call_manager.teams_meet_exchange_id == UNASSIGNED
         ):
             cm.call_manager.teams_meet_exchange_id = exchange_id
+            cm.call_manager.call_exchange_destination = primary_destination
         elif conversation_key is not None:
             # Record the exchange so the next message in this conversation reuses it.
             cm._conversation_exchange_ids[conversation_key] = exchange_id
@@ -1844,6 +1852,7 @@ async def log_message(
         LogMessageResponse(
             medium=medium,
             exchange_id=exchange_id,
+            destination=primary_destination,
         ).to_json(),
     )
     LOGGER.debug(

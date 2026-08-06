@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, UTC
+import pytest
 import unisdk
 
 from unify.transcript_manager.transcript_manager import TranscriptManager
@@ -91,18 +92,17 @@ def test_update_metadata_updates_row():
 
 
 @_handle_project
-def test_update_metadata_upserts():
+def test_update_metadata_refuses_to_invent_a_missing_exchange():
+    """An id that is absent from the addressed root is a misrouted write.
+
+    Exchange ids are root-local. Creating the row instead of failing is how a
+    call's identifiers and recording URL used to end up stranded on a phantom
+    exchange in a root that held no part of the conversation.
+    """
     tm = TranscriptManager()
 
-    exid = 987654321
-    meta = {"seed": "manual"}
-    upserted = tm.update_exchange_metadata(exid, meta)
-
-    assert isinstance(upserted, Exchange)
-    assert upserted.exchange_id == exid
-    assert upserted.metadata == meta
-    # Upsert path sets blank medium
-    assert upserted.medium == ""
+    with pytest.raises(ValueError):
+        tm.update_exchange_metadata(987654321, {"seed": "manual"})
 
 
 @_handle_project

@@ -1609,6 +1609,9 @@ class Error(Event):
 class LogMessageResponse(Event):
     medium: str
     exchange_id: int
+    # Root the exchange was authored under. Exchange ids are root-local, so a
+    # consumer that caches the id for a later write needs this alongside it.
+    destination: str | None = None
 
 
 @dataclass
