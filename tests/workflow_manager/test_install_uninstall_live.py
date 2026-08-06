@@ -401,3 +401,61 @@ async def test_bootstrap_fills_the_shelf_and_reconciles_installed(
 
     manager.uninstall_workflow(slug="shelf_demo")
     assert _rows(gm._ctx, "shelf_demo") == []
+
+
+@_handle_project
+@pytest.mark.asyncio
+async def test_catalog_publishes_for_reading_surfaces_and_short_circuits(
+    live_managers,
+    bundle,
+):
+    """The shelf a reading surface renders without waking the assistant.
+
+    A hosted assistant is usually asleep when someone opens Console, so
+    the catalogue is mirrored into rows rather than served from the
+    assistant's memory. The publish must also be cheap on every boot
+    between deploys, which is almost all of them: an unchanged catalogue
+    costs one meta read and writes nothing.
+    """
+    import json as _json
+
+    gm, ts, wm = live_managers
+    wm.register_bundle(bundle)
+
+    first = wm.publish_catalog()
+    assert first["published"] == [SLUG]
+    assert first["removed"] == []
+
+    rows = unisdk.get_logs(context=wm._catalog_ctx)
+    (row,) = [dict(lg.entries or {}) for lg in rows]
+    assert row["slug"] == SLUG
+    assert row["name"] == "Live demo workflow"
+    assert _json.loads(row["surfaces"]) == ["guidance", "tasks"]
+
+    # "What this installs", derived so a reader can show it pre-install.
+    sets = _json.loads(row["sets"])
+    assert sets["guidance"] == [{"name": "Workflow triage procedure"}] or (
+        {"name": "Workflow tone procedure"} in sets["guidance"]
+    )
+    assert sets["tasks"] == [
+        {"name": "Workflow morning run", "schedule": "Every day"},
+    ]
+
+    # Unchanged catalogue: no writes at all.
+    again = wm.publish_catalog()
+    assert again == {"unchanged": True, "published": [], "removed": []}
+
+    # A bundle leaving the catalogue leaves the shelf too.
+    wm._catalogue.clear()
+    wm.register_bundle(
+        WorkflowBundle(slug="other_demo", name="Other demo", surfaces={}),
+    )
+    third = wm.publish_catalog()
+    assert third["published"] == ["other_demo"]
+    assert third["removed"] == [SLUG]
+
+    slugs = {
+        str((lg.entries or {}).get("slug"))
+        for lg in unisdk.get_logs(context=wm._catalog_ctx)
+    }
+    assert slugs == {"other_demo"}

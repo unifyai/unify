@@ -181,6 +181,10 @@ def bootstrap_workflow_catalog(
         except Exception:
             logger.exception("Skipping malformed workflow bundle at %s", entry)
 
+    # Publish before reconciling: the shelf is what a reading surface needs
+    # first, and it must not wait on installs that may be slow or partial.
+    manager.publish_catalog()
+
     try:
         report = manager.reconcile_installed()
         if report.get("reconciled") or report.get("orphaned"):
