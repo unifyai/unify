@@ -54,6 +54,7 @@ from unify.actor.environments import (
 )
 from unify.common.context_registry import ContextRegistry
 from unify.common.task_execution_context import current_task_execution_delegate
+from unify.comms.capabilities import offline_comms_guidance
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.logger import LOGGER
 from unify.session_details import SESSION_DETAILS
@@ -616,6 +617,7 @@ class _OfflineTaskExecutionDelegate:
                     [
                         task_guidelines,
                         "This is a headless offline task run. Do not ask the user for live clarification.",
+                        offline_comms_guidance(),
                     ],
                 ),
             ),

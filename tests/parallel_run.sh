@@ -584,6 +584,13 @@ if (( EVAL_ONLY )); then
   MARKER_FILTER="-m eval"
 elif (( SYMBOLIC_ONLY )); then
   MARKER_FILTER="-m 'not eval'"
+elif (( DETERMINISTIC_ONLY )); then
+  # "not eval" still leaves every llm_call test in, and those answer to
+  # whatever the shared cache happens to hold: under UNILLM_CACHE=read-only a
+  # request with no recorded entry raises, so a sweep meant to find broken
+  # tests reports cache gaps instead. Excluding both markers leaves only the
+  # tests whose outcome depends on this repository alone.
+  MARKER_FILTER="-m 'not eval and not llm_call'"
 fi
 
 # ---------------------------------------------------------------------------

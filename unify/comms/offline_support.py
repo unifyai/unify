@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 import os
 from typing import Any, Mapping
 
+from unify.comms import conversation_keys
 from unify.conversation_manager.cm_types import Medium
 from unify.logger import LOGGER
 from unify.manager_registry import ManagerRegistry
@@ -155,6 +156,25 @@ def _build_history_content(
     return f"[Send Failed] {normalized_error}"
 
 
+def _conversation_key_for_operation(
+    medium: Medium,
+    target_metadata: Mapping[str, Any],
+) -> str | None:
+    """Conversation key for an offline send, from its routing target."""
+    contact_id = target_metadata.get("contact_id")
+    return conversation_keys.conversation_key(
+        medium,
+        contact_id=int(contact_id) if contact_id is not None else None,
+        guild_id=str(target_metadata.get("guild_id") or ""),
+        channel_id=str(target_metadata.get("channel_id") or ""),
+        tenant_id=str(target_metadata.get("tenant_id") or ""),
+        conversation_id=str(target_metadata.get("conversation_id") or ""),
+        team_id=str(target_metadata.get("team_id") or ""),
+        thread_ts=str(target_metadata.get("thread_ts") or ""),
+        thread_id=str(target_metadata.get("thread_id") or ""),
+    )
+
+
 def _log_outbound_history(
     *,
     medium: Medium,
@@ -163,26 +183,61 @@ def _log_outbound_history(
     metadata: Mapping[str, Any],
     attachments: list[dict] | None = None,
 ) -> tuple[int | None, int | None]:
-    """Persist one offline outbound message into assistant history."""
+    """Persist one offline outbound message into assistant history.
+
+    Joins the conversation's existing exchange when the send has a routing
+    target that identifies one. A headless send is still part of the same
+    conversation as everything the live session logged, and it is the same
+    exchange a later run reads routing identifiers back off — minting a
+    fresh exchange per send would fragment the thread and strand those ids.
+    """
 
     transcript_manager = ManagerRegistry.get_transcript_manager()
+    target_metadata = metadata.get("target_metadata") or {}
+    conversation_key = _conversation_key_for_operation(medium, target_metadata)
+    exchange_id = None
+    if conversation_key is not None:
+        exchange_id = transcript_manager.resolve_exchange_id_by_metadata(
+            conversation_keys.CONVERSATION_KEY_FIELD,
+            conversation_key,
+        )
+
+    message = {
+        "medium": medium,
+        "sender_id": SESSION_DETAILS.self_contact_id,
+        "receiver_ids": receiver_ids or [SESSION_DETAILS.self_contact_id],
+        "timestamp": datetime.now(timezone.utc),
+        "content": content,
+        "attachments": list(attachments or []),
+        "metadata": dict(metadata),
+    }
+    if exchange_id is not None:
+        logged = transcript_manager.log_messages(
+            {**message, "exchange_id": exchange_id},
+            synchronous=True,
+        )
+        message_id = logged[0].message_id if logged else None
+        return exchange_id, message_id
+
     exchange_metadata = {
         "offline_outbound": True,
         "task_run_key": metadata.get("task_run_key"),
         "operation_key": metadata.get("operation_key"),
         "target_kind": metadata.get("target_kind"),
-        "target_metadata": metadata.get("target_metadata") or {},
+        "target_metadata": dict(target_metadata),
     }
+    if conversation_key is not None:
+        # First contact on this conversation from a headless run: seed the
+        # same key and routing identity the live path writes, so subsequent
+        # traffic in either direction groups here rather than forking.
+        exchange_metadata[conversation_keys.CONVERSATION_KEY_FIELD] = conversation_key
+        exchange_metadata["medium"] = medium.value
+        for field in ("tenant_id", "conversation_id", "team_id", "channel_id"):
+            if value := target_metadata.get(field):
+                exchange_metadata[field] = value
+
     exchange_id, message_id = transcript_manager.log_first_message_in_new_exchange(
-        {
-            "medium": medium,
-            "sender_id": SESSION_DETAILS.self_contact_id,
-            "receiver_ids": receiver_ids or [SESSION_DETAILS.self_contact_id],
-            "timestamp": datetime.now(timezone.utc),
-            "content": content,
-            "attachments": list(attachments or []),
-            "metadata": dict(metadata),
-        },
+        message,
         exchange_initial_metadata=exchange_metadata,
     )
     return exchange_id, message_id

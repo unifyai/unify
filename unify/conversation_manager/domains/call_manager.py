@@ -122,6 +122,10 @@ class LivekitCallManager:
         self.set_config(config=config)
         self.call_exchange_id = UNASSIGNED
         self.unify_meet_exchange_id = UNASSIGNED
+        # Destination the active call's exchange was authored under. Exchange
+        # ids are root-local, so hangup and recording writes need the root the
+        # transcript chose, not the manager's home root.
+        self.call_exchange_destination: str | None = None
         self.call_start_timestamp = None
         self.unify_meet_start_timestamp = None
         self.call_contact = None
@@ -133,6 +137,14 @@ class LivekitCallManager:
         self.call_session_id = ""
         self.unify_meet_call_session_id = ""
         self.unify_meet_participants: list[dict] = []
+        # Browser-meet roster, mirrored here as it is forwarded to the fast
+        # brain. The slow brain needs the same list to know whether it is in a
+        # group, and it holds no Recall credentials of its own to fetch it.
+        self.meet_participants: list[dict] = []
+        # The display name the bot joined the meeting under, so the roster above
+        # can subtract the assistant from it. Resolved at join, where it may
+        # come from the caller or a literal fallback rather than the session.
+        self.meet_display_name: str = ""
         self.provider_call_sid = ""
         self._event_broker = event_broker
         self._socket_server: CallEventSocketServer | None = None
@@ -1070,6 +1082,49 @@ class LivekitCallManager:
         return self.has_active_meet("teams_meet")
 
     @property
+    def other_call_participant_names(self) -> list[str]:
+        """Everyone on the live call besides the assistant, by display name.
+
+        Drives the group-call etiquette: with two or more of these the assistant
+        is in a room where a turn may belong to someone else. Telephony reports
+        nobody here, which is correct rather than missing — a phone or WhatsApp
+        call carries exactly one other person, so every turn on it is addressed
+        to the assistant and the 1:1 behaviour must not change.
+
+        Browser meets do not mark which roster entries are bots, so this counts
+        every other participant. Over-counting only makes the assistant read the
+        room before speaking; under-counting would make it talk over people.
+        """
+        # Keyed on the live channel rather than ``has_active_meet``, which only
+        # tracks browser meets: a Unify Meet sets no meet session id, so routing
+        # through it would leave the org-call roster permanently unread.
+        channel = self._call_channel or ""
+        if channel == "unify_meet":
+            return [
+                name
+                for name in (
+                    (member.get("display_name") or "").strip()
+                    for member in self.unify_meet_participants
+                    if member.get("kind") == "human"
+                )
+                if name
+            ]
+        if channel in ("google_meet", "teams_meet"):
+            # The name the bot actually joined under, which the fast brain
+            # subtracts by too. Falling back to the session name here would
+            # miscount whenever the two differ.
+            own = (self.meet_display_name or SESSION_DETAILS.assistant.name).strip()
+            return [
+                name
+                for name in (
+                    (member.get("name") or "").strip()
+                    for member in self.meet_participants
+                )
+                if name and name != own
+            ]
+        return []
+
+    @property
     def meet_lobby_waiting(self) -> bool:
         """Whether the browser meet is admitted-pending in the waiting room.
 
@@ -1123,6 +1178,12 @@ class LivekitCallManager:
         meet_outbound = meet_opening_config is not None
 
         display_name = display_name or self.assistant_name or "Unity Assistant"
+        # Kept so the roster can subtract the assistant from its own meeting.
+        # It is not always ``SESSION_DETAILS.assistant.name``: a caller may pass
+        # a name outright, and an unnamed assistant falls back to a literal --
+        # either of which would leave the bot counted as one of the other
+        # participants, turning a 1:1 meet into an apparent group of two.
+        self.meet_display_name = display_name
 
         room_name = make_room_name(self.assistant_id, room_suffix)
         self.room_name = room_name
@@ -1404,24 +1465,24 @@ class LivekitCallManager:
         It runs in another process and has no Recall credentials, so the roster
         can only reach it from here. Same transport as the org-call roster.
         """
+        roster = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "email": p.email,
+                "is_host": p.is_host,
+            }
+            for p in participants
+        ]
+        # Mirrored before the socket check: the slow brain's own prompt reads
+        # this, so a poll that cannot reach the fast brain must still leave the
+        # roster current rather than frozen at whoever was present at join.
+        self.meet_participants = roster
         if not self._socket_server:
             return
         await self._socket_server.queue_for_clients(
             "app:call:status",
-            json.dumps(
-                {
-                    "type": "meet_roster",
-                    "participants": [
-                        {
-                            "id": p.id,
-                            "name": p.name,
-                            "email": p.email,
-                            "is_host": p.is_host,
-                        }
-                        for p in participants
-                    ],
-                },
-            ),
+            json.dumps({"type": "meet_roster", "participants": roster}),
         )
 
     async def _publish_meet_ended(self, channel: str) -> None:
@@ -1462,9 +1523,11 @@ class LivekitCallManager:
         if channel == "google_meet":
             self.google_meet_start_timestamp = None
             self.google_meet_exchange_id = UNASSIGNED
+            self.call_exchange_destination = None
         elif channel == "teams_meet":
             self.teams_meet_start_timestamp = None
             self.teams_meet_exchange_id = UNASSIGNED
+            self.call_exchange_destination = None
 
         if session_id:
             await self.meet_provider.leave(channel=channel, session_id=session_id)
@@ -1725,6 +1788,8 @@ class LivekitCallManager:
         self._disconnect_contact = None
         self.unify_meet_call_session_id = ""
         self.unify_meet_participants = []
+        self.meet_participants = []
+        self.meet_display_name = ""
 
         if self._boss_notification_task and not self._boss_notification_task.done():
             self._boss_notification_task.cancel()

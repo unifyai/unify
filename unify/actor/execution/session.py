@@ -23,6 +23,7 @@ from typing import (
     Callable,
     Dict,
     Literal,
+    NoReturn,
     Optional,
     Tuple,
     TYPE_CHECKING,
@@ -30,6 +31,7 @@ from typing import (
 
 from unify.function_manager.primitives import ComputerPrimitives
 from unify.common.hierarchical_logger import DEFAULT_ICON
+from unify.common.tool_errors import ToolInputError
 
 from .capture import _stdout_parts, capture_sandbox_output
 from unify.function_manager.steering import (
@@ -180,7 +182,7 @@ _CURRENT_ENVIRONMENTS: contextvars.ContextVar[dict] = contextvars.ContextVar(
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
-def _validation_error(
+def _refuse(
     *,
     message: str,
     suggestion: str,
@@ -189,19 +191,24 @@ def _validation_error(
     session_name: str | None,
     language: str,
     venv_id: int | None = None,
-) -> dict:
-    return {
-        "error": message,
-        "error_type": "validation",
-        "suggestion": suggestion,
-        "received": {
+) -> NoReturn:
+    """Refuse the call, naming the change that would make it work.
+
+    Raising rather than returning is what lets the tool loop see the refusal.
+    A returned description is indistinguishable from a successful call, so the
+    same rejected request could arrive forever without anything noticing.
+    """
+    raise ToolInputError(
+        message,
+        suggestion=suggestion,
+        received={
             "state_mode": state_mode,
             "session_id": session_id,
             "session_name": session_name,
             "language": language,
             "venv_id": venv_id,
         },
-    }
+    )
 
 
 def _validate_execution_params(
@@ -227,19 +234,23 @@ def _validate_execution_params(
     venv_exists: Optional[Callable[[int], bool]] = None,
     max_sessions_total: Optional[int] = None,
     active_session_count: Optional[int] = None,
-) -> dict | None:
+) -> None:
     """
     Validate state_mode + session selection rules for execute_code.
 
-    Returns:
-        None if valid, otherwise a structured validation error dict.
+    Raises:
+        ToolInputError: if the parameters cannot be executed as given, carrying
+            the change that would make them valid.
 
     Notes:
-        This function intentionally returns structured errors (not exceptions)
-        so the LLM can self-correct deterministically.
+        Refusals are raised rather than returned so the tool loop can see them.
+        The caller still reads the message verbatim — the loop surfaces a
+        refusal as its own text, not as a traceback — so self-correction is
+        unaffected, while a request that keeps arriving unchanged is now
+        something the loop can notice and stop.
     """
     if language not in supported_languages:
-        return _validation_error(
+        _refuse(
             message=f"Unsupported language: {language!r}",
             suggestion=f"Use one of: {sorted(supported_languages)}",
             state_mode=state_mode,
@@ -250,7 +261,7 @@ def _validate_execution_params(
         )
 
     if state_mode not in ("stateful", "read_only", "stateless"):
-        return _validation_error(
+        _refuse(
             message=f"Unsupported state_mode: {state_mode!r}",
             suggestion="Use one of: 'stateful', 'read_only', 'stateless'",
             state_mode=state_mode,
@@ -268,7 +279,7 @@ def _validate_execution_params(
         and venv_exists is not None
         and not venv_exists(int(venv_id))
     ):
-        return _validation_error(
+        _refuse(
             message=f"VirtualEnv {venv_id} does not exist.",
             suggestion=(
                 "Omit venv_id to run in the default environment, list the "
@@ -286,7 +297,7 @@ def _validate_execution_params(
     if state_mode == "stateless" and (
         session_id is not None or session_name is not None
     ):
-        return _validation_error(
+        _refuse(
             message="Cannot use state_mode='stateless' with a session.",
             suggestion="Remove session_id/session_name or switch to state_mode='stateful' or 'read_only'.",
             state_mode=state_mode,
@@ -298,7 +309,7 @@ def _validate_execution_params(
 
     # Read-only requires an existing session.
     if state_mode == "read_only" and (session_id is None and session_name is None):
-        return _validation_error(
+        _refuse(
             message="Cannot use state_mode='read_only' without specifying a session.",
             suggestion="Provide session_id or session_name (must refer to an existing session), or use state_mode='stateless'.",
             state_mode=state_mode,
@@ -311,7 +322,7 @@ def _validate_execution_params(
     # If both are present, ensure they match.
     if session_id is not None and session_name is not None:
         if resolve_session_name is None:
-            return _validation_error(
+            _refuse(
                 message="Cannot validate session_name against session_id (no resolver configured).",
                 suggestion="Specify only one of session_id or session_name.",
                 state_mode=state_mode,
@@ -324,7 +335,7 @@ def _validate_execution_params(
         if key is None:
             # For stateful, the caller may choose to create+bind; for read_only it must exist.
             if state_mode == "read_only":
-                return _validation_error(
+                _refuse(
                     message=f"Session name {session_name!r} not found for read_only execution.",
                     suggestion="Use an existing session_name (see list_sessions) or specify an existing session_id.",
                     state_mode=state_mode,
@@ -340,7 +351,7 @@ def _validate_execution_params(
                 or resolved_venv_id != venv_id
                 or resolved_session_id != session_id
             ):
-                return _validation_error(
+                _refuse(
                     message=(
                         f"session_id and session_name refer to different sessions. "
                         f"{session_name!r} resolves to {(resolved_language, resolved_venv_id, resolved_session_id)} "
@@ -357,7 +368,7 @@ def _validate_execution_params(
     # If session_name is provided alone:
     if session_name is not None and session_id is None:
         if resolve_session_name is None:
-            return _validation_error(
+            _refuse(
                 message="Cannot resolve session_name (no resolver configured).",
                 suggestion="Specify session_id instead, or configure a session registry.",
                 state_mode=state_mode,
@@ -368,7 +379,7 @@ def _validate_execution_params(
             )
         key = resolve_session_name(session_name)
         if key is None and state_mode == "read_only":
-            return _validation_error(
+            _refuse(
                 message=f"Session name {session_name!r} not found for read_only execution.",
                 suggestion="Use an existing session_name (see list_sessions) or specify an existing session_id.",
                 state_mode=state_mode,
@@ -394,7 +405,7 @@ def _validate_execution_params(
         and resolve_session_name(session_name) is None
         and active_session_count >= max_sessions_total
     ):
-        return _validation_error(
+        _refuse(
             message=f"Session limit exceeded: {active_session_count} active sessions (max {max_sessions_total}).",
             suggestion="Close an existing session (close_session) or reuse an existing session_id/session_name.",
             state_mode=state_mode,
@@ -419,7 +430,7 @@ def _validate_execution_params(
         except Exception:
             exists = False
         if not exists:
-            return _validation_error(
+            _refuse(
                 message=f"Session limit exceeded: {active_session_count} active sessions (max {max_sessions_total}).",
                 suggestion="Close an existing session (close_session) or reuse an existing session_id/session_name.",
                 state_mode=state_mode,
@@ -440,7 +451,7 @@ def _validate_execution_params(
             if get_session_name_for_id is not None:
                 name_hint = get_session_name_for_id(language, venv_id, session_id)
             hint = f" (known name: {name_hint!r})" if name_hint else ""
-            return _validation_error(
+            _refuse(
                 message=f"Session {(language, venv_id, session_id)} does not exist for read_only execution{hint}.",
                 suggestion="Use list_sessions to find an existing session, or switch to state_mode='stateful' to create a new session.",
                 state_mode=state_mode,
