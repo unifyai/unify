@@ -515,6 +515,26 @@ CallInitEvents = Union[
 ]
 
 
+def _apply_stashed_whatsapp_call_context(
+    cm: "ConversationManager",
+    stashed: dict | str | None,
+) -> None:
+    """Apply a stashed WhatsApp call context to the call manager.
+
+    The per-contact stash (``_pending_whatsapp_call_openers``) holds a dict
+    with ``opener`` / ``briefing`` / ``hang_up_gate`` keys; the server-side
+    pending-intent fallback yields a plain opener string. The call manager's
+    pending fields are plain strings — assigning the dict wholesale crashes
+    ``start_call`` when it strips the opener.
+    """
+    if isinstance(stashed, dict):
+        cm.call_manager.pending_opener = stashed.get("opener") or ""
+        cm.call_manager.pending_briefing = stashed.get("briefing") or ""
+        cm.call_manager.pending_hang_up_gate = stashed.get("hang_up_gate") or ""
+    elif isinstance(stashed, str):
+        cm.call_manager.pending_opener = stashed
+
+
 @EventHandler.register(
     (
         PhoneCallReceived,
@@ -592,13 +612,13 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
     if isinstance(event, WhatsAppCallReceived) and contact_id is not None:
         stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
         if stashed_opener:
-            cm.call_manager.pending_opener = stashed_opener
+            _apply_stashed_whatsapp_call_context(cm, stashed_opener)
 
     if isinstance(event, WhatsAppCallSent) and contact_id is not None:
         if not cm.call_manager.pending_opener:
             stashed_opener = cm._pending_whatsapp_call_openers.pop(contact_id, None)
             if stashed_opener:
-                cm.call_manager.pending_opener = stashed_opener
+                _apply_stashed_whatsapp_call_context(cm, stashed_opener)
             else:
                 from unify.conversation_manager.domains import comms_utils
 
@@ -621,7 +641,7 @@ async def _(event: CallInitEvents, cm: "ConversationManager", *args, **kwargs):
                         intent = None
                     opener = (intent or {}).get("context")
                     if opener:
-                        cm.call_manager.pending_opener = opener
+                        _apply_stashed_whatsapp_call_context(cm, opener)
                         try:
                             await comms_utils.clear_pending_whatsapp_call_intent(
                                 pool_number=pool_number,
@@ -1616,7 +1636,7 @@ async def _(
             )
             return
 
-        cm.call_manager.pending_opener = opener
+        _apply_stashed_whatsapp_call_context(cm, opener)
 
         assistant_id = str(SESSION_DETAILS.assistant.agent_id)
         agent_name = SESSION_DETAILS.assistant.name or ""
@@ -1648,6 +1668,8 @@ async def _(
 
         cm.call_manager._whatsapp_call_joining = False
         cm.call_manager.pending_opener = ""
+        cm.call_manager.pending_briefing = ""
+        cm.call_manager.pending_hang_up_gate = ""
         cm.contact_index.push_message(
             contact_id=contact_id,
             sender_name=sender_name,
