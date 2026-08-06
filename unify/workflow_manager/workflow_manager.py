@@ -749,6 +749,7 @@ class WorkflowManager(BaseWorkflowManager):
                 {
                     "name": bundle.name,
                     "description": bundle.description,
+                    "about": bundle.about,
                     "version": bundle.version,
                     "category": bundle.category,
                     "icon_id": bundle.icon_id,

@@ -40,6 +40,7 @@ class WorkflowCatalogEntry(AuthoredRow):
         "category": "c",
         "icon_id": "i",
         "description": "d",
+        "about": "a",
         "requirements": "rq",
         "capabilities": "cp",
         "params_schema": "ps",
@@ -65,6 +66,14 @@ class WorkflowCatalogEntry(AuthoredRow):
     description: str = Field(
         default="",
         description="One line describing what the workflow does.",
+    )
+    about: str = Field(
+        default="",
+        description=(
+            "Long-form markdown for a reader deciding whether to install: "
+            "what the workflow does, when it runs, what arrives, and how "
+            "its settings shape it."
+        ),
     )
     requirements: str = Field(
         default="[]",

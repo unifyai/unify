@@ -32,9 +32,12 @@ def _bundle_dir() -> Path:
     configured = (os.environ.get("UNITY_WORKFLOWS_DIR") or "").strip()
     if configured:
         return Path(configured) / SLUG
-    return (
-        Path.home() / "unify-deploy/unify_deploy/assistant_deployments/workflows" / SLUG
-    )
+    # Resolve the sibling checkout from this repo's location, never from
+    # Path.home(): the test harness points HOME at a scratch dir, so a
+    # home-relative probe skips this test on every machine that uses the
+    # runner — silently, forever.
+    siblings = Path(__file__).resolve().parents[2].parent
+    return siblings / "unify-deploy/unify_deploy/assistant_deployments/workflows" / SLUG
 
 
 pytestmark = pytest.mark.skipif(

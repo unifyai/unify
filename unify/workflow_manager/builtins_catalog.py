@@ -7,9 +7,13 @@ reading surface (Console's gallery) renders it without waking an
 assistant — a hosted assistant is an on-demand job and is usually asleep
 when someone opens Console.
 
-Everything per-assistant stays in each assistant's own contexts: the
-installation rows, params, requirement/connection state, and the planted
-content itself. Only the listing is global.
+Two contexts are published: ``Workflows/Catalog`` (one listing row per
+bundle) and ``Workflows/Content`` (one row per artifact a bundle would
+plant, substance included, so a reader can open a procedure or a task
+brief before anything is installed). Everything per-assistant stays in
+each assistant's own contexts: the installation rows, params,
+requirement/connection state, and the planted content itself — the
+global rows are the shelf, never the live copies.
 
 Seeding runs in bootstrap/admin processes (the deploy seed script, the
 self-host install, the test harness) whose key owns the Builtins project;
@@ -39,13 +43,16 @@ from ..common.log_utils import create_logs as unity_create_logs
 from ..function_manager.hash_utils import stable_hash_for_rows
 from .bundle import WorkflowBundle
 from .types.catalog_entry import WorkflowCatalogEntry
+from .types.content_entry import WorkflowContentEntry
 
 logger = logging.getLogger(__name__)
 
 BUILTINS_WORKFLOWS_CONTEXT = "Workflows/Catalog"
+BUILTINS_WORKFLOWS_CONTENT_CONTEXT = "Workflows/Content"
 BUILTINS_WORKFLOWS_META_CONTEXT = "Workflows/Meta"
 _HASH_MAP_KEY = "workflows_catalog_hash_by_unit"
-_UNIT = "workflows"
+_CATALOG_UNIT = "workflows"
+_CONTENT_UNIT = "workflows_content"
 
 
 def _ensure_catalog_storage(project: str) -> None:
@@ -54,6 +61,12 @@ def _ensure_catalog_storage(project: str) -> None:
         BUILTINS_WORKFLOWS_CONTEXT,
         description="Public catalogue of installable workflows.",
         unique_keys={"slug": "str"},
+        project=project,
+    )
+    unisdk.create_context(
+        BUILTINS_WORKFLOWS_CONTENT_CONTEXT,
+        description="The artifacts each catalogued workflow would plant.",
+        unique_keys={"content_key": "str"},
         project=project,
     )
     unisdk.create_context(
@@ -145,6 +158,7 @@ def catalog_row(bundle: WorkflowBundle) -> Dict[str, Any]:
         category=bundle.category,
         icon_id=bundle.icon_id,
         description=bundle.description,
+        about=bundle.about,
         requirements=json.dumps(
             [
                 {
@@ -160,6 +174,90 @@ def catalog_row(bundle: WorkflowBundle) -> Dict[str, Any]:
         sets=json.dumps(bundle_sets(bundle), sort_keys=True),
     )
     return strip_authoring_assistant_id(entry.model_dump(mode="json"))
+
+
+_CONTENT_BODY_FIELD = {
+    "tasks": "description",
+    "functions": "docstring",
+}
+_CONTENT_META_FIELDS = {
+    "knowledge": ("kind", "topics"),
+    "tasks": ("tags",),
+    "functions": ("argspec",),
+}
+
+
+def content_rows(bundle: WorkflowBundle) -> List[Dict[str, Any]]:
+    """One row per artifact the bundle would plant, readable substance
+    included, so a reading surface can open any of them pre-install."""
+    rows: List[Dict[str, Any]] = []
+    for surface, source in sorted(bundle.surfaces.items()):
+        body_field = _CONTENT_BODY_FIELD.get(surface, "content")
+        meta_fields = _CONTENT_META_FIELDS.get(surface, ())
+        for key, entry in sorted(source.items()):
+            fields = entry if isinstance(entry, Mapping) else {}
+            meta = {
+                name: fields[name]
+                for name in meta_fields
+                if fields.get(name) not in (None, "", [])
+            }
+            row = WorkflowContentEntry(
+                content_key=f"{bundle.slug}/{surface}/{key}",
+                slug=bundle.slug,
+                surface=surface,
+                key=key,
+                name=str(fields.get("name") or fields.get("title") or key),
+                body=str(fields.get(body_field) or ""),
+                schedule=human_schedule(fields) if surface == "tasks" else "",
+                meta=json.dumps(meta, sort_keys=True, default=str),
+            )
+            rows.append(strip_authoring_assistant_id(row.model_dump(mode="json")))
+    return rows
+
+
+def _reconcile_rows(
+    *,
+    project: str,
+    context: str,
+    rows: Dict[str, Dict[str, Any]],
+    key_field: str,
+) -> None:
+    """Converge one context onto *rows*.
+
+    Changed rows are replaced (delete + insert), the same shape the sibling
+    builtins seeders use: the Builtins writer routes deletes and inserts by
+    project, and rows here carry no state beyond what the seed derives, so
+    replacement loses nothing.
+    """
+    live_logs = unisdk.get_logs(project=project, context=context, limit=1000)
+    live = {
+        str((lg.entries or {}).get(key_field)): lg
+        for lg in live_logs
+        if (lg.entries or {}).get(key_field)
+    }
+
+    def unchanged(key: str) -> bool:
+        existing = live.get(key)
+        if existing is None:
+            return False
+        payload = rows[key]
+        return {name: (existing.entries or {}).get(name) for name in payload} == payload
+
+    doomed = [
+        lg.id for key, lg in live.items() if key not in rows or not unchanged(key)
+    ]
+    if doomed:
+        unisdk.delete_logs(project=project, context=context, logs=doomed)
+
+    inserts = [payload for key, payload in rows.items() if not unchanged(key)]
+    if inserts:
+        unity_create_logs(
+            context=context,
+            project=project,
+            entries=inserts,
+            stamp_authoring=True,
+            batched=True,
+        )
 
 
 def _default_bundles() -> Optional[List[WorkflowBundle]]:
@@ -219,75 +317,63 @@ def seed_builtin_workflows(
             _ensure_catalog_storage(project)
         return False
 
-    rows = {bundle.slug: catalog_row(bundle) for bundle in bundles}
-    hash_fields = sorted(WorkflowCatalogEntry.model_fields)
-    expected_hash = stable_hash_for_rows(
-        list(rows.values()),
-        fields=hash_fields,
-        sort_field="slug",
-    )
-    if storage_ready and current_hashes.get(_UNIT) == expected_hash:
+    catalog = {bundle.slug: catalog_row(bundle) for bundle in bundles}
+    content = {
+        row["content_key"]: row for bundle in bundles for row in content_rows(bundle)
+    }
+    units = {
+        _CATALOG_UNIT: (
+            BUILTINS_WORKFLOWS_CONTEXT,
+            "slug",
+            catalog,
+            sorted(WorkflowCatalogEntry.model_fields),
+        ),
+        _CONTENT_UNIT: (
+            BUILTINS_WORKFLOWS_CONTENT_CONTEXT,
+            "content_key",
+            content,
+            sorted(WorkflowContentEntry.model_fields),
+        ),
+    }
+
+    expected_hashes = {
+        unit: stable_hash_for_rows(
+            list(rows.values()),
+            fields=hash_fields,
+            sort_field=key_field,
+        )
+        for unit, (_, key_field, rows, hash_fields) in units.items()
+    }
+    stale_units = {
+        unit
+        for unit, expected in expected_hashes.items()
+        if current_hashes.get(unit) != expected
+    }
+    if storage_ready and not stale_units:
         logger.debug("Workflow catalogue unchanged; skipping seed")
         return False
 
     _ensure_catalog_storage(project)
 
-    live_logs = unisdk.get_logs(
-        project=project,
-        context=BUILTINS_WORKFLOWS_CONTEXT,
-        limit=1000,
-    )
-    live = {
-        str((lg.entries or {}).get("slug")): lg
-        for lg in live_logs
-        if (lg.entries or {}).get("slug")
-    }
-
-    inserts = [payload for slug, payload in rows.items() if slug not in live]
-    if inserts:
-        unity_create_logs(
-            context=BUILTINS_WORKFLOWS_CONTEXT,
+    for unit in sorted(stale_units):
+        context, key_field, rows, _ = units[unit]
+        _reconcile_rows(
             project=project,
-            entries=inserts,
-            stamp_authoring=True,
-            batched=True,
+            context=context,
+            rows=rows,
+            key_field=key_field,
         )
 
-    for slug, payload in rows.items():
-        existing = live.get(slug)
-        if existing is None:
-            continue
-        current = {key: (existing.entries or {}).get(key) for key in payload}
-        if current == payload:
-            continue
-        unisdk.update_logs(
-            project=project,
-            context=BUILTINS_WORKFLOWS_CONTEXT,
-            logs=[existing.id],
-            entries=payload,
-            overwrite=True,
-        )
-
-    stale = [lg.id for slug, lg in live.items() if slug not in rows]
-    if stale:
-        unisdk.delete_logs(
-            project=project,
-            context=BUILTINS_WORKFLOWS_CONTEXT,
-            logs=stale,
-        )
-
-    hashes = dict(current_hashes)
-    hashes[_UNIT] = expected_hash
     write_seed_hashes(
         project,
-        hashes,
+        {**current_hashes, **expected_hashes},
         meta_context=BUILTINS_WORKFLOWS_META_CONTEXT,
         key=_HASH_MAP_KEY,
     )
     logger.info(
-        "Seeded workflow catalogue project=%s rows=%d removed=%d",
+        "Seeded workflow catalogue project=%s workflows=%d artifacts=%d",
         project,
-        len(rows),
-        len(stale),
+        len(catalog),
+        len(content),
     )
     return True
