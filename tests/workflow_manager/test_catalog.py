@@ -24,6 +24,10 @@ version: "1.2.0"
 category: comms
 icon_id: briefing
 description: Your calendar and the unread that matters, before stand-up.
+about: |
+  Every weekday morning the briefing reads your calendar and inbox.
+
+  It arrives as one chat message before stand-up.
 requirements:
   - slug: gmail
     name: Gmail
@@ -78,6 +82,8 @@ def test_load_bundle_reads_identity_and_content(tmp_path: Path):
     assert bundle.version == "1.2.0"
     assert bundle.category == "comms"
     assert bundle.icon_id == "briefing"
+    assert bundle.about.startswith("Every weekday morning")
+    assert "\n\n" in bundle.about
     assert bundle.capabilities == ("filesystem",)
     assert bundle.params_schema["mailbox"]["required"] is True
 
@@ -239,3 +245,31 @@ def test_bundle_sets_names_what_each_surface_receives(tmp_path: Path):
 
     assert sets["guidance"] == [{"name": "Triage"}]
     assert sets["tasks"] == [{"name": "Morning run", "schedule": "Every day"}]
+
+
+def test_content_rows_carry_each_artifact_whole(tmp_path: Path):
+    """The listing names what a workflow sets up; the content rows beside
+    it carry the artifacts' substance, so a reader can open any of them
+    before anything is installed."""
+    from unify.workflow_manager.builtins_catalog import content_rows
+
+    bundle = load_bundle(_write_bundle(tmp_path))
+    rows = {row["content_key"]: row for row in content_rows(bundle)}
+
+    assert set(rows) == {
+        "daily_briefing/guidance/wf/triage",
+        "daily_briefing/tasks/wf/morning",
+    }
+
+    triage = rows["daily_briefing/guidance/wf/triage"]
+    assert triage["slug"] == "daily_briefing"
+    assert triage["surface"] == "guidance"
+    assert triage["key"] == "wf/triage"
+    assert triage["name"] == "Triage"
+    assert triage["body"] == "Oldest first."
+    assert triage["schedule"] == ""
+
+    morning = rows["daily_briefing/tasks/wf/morning"]
+    assert morning["name"] == "Morning run"
+    assert morning["body"] == "The recurring job."
+    assert morning["schedule"] == "Every day"
