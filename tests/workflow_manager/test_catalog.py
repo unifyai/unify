@@ -88,16 +88,16 @@ def test_load_bundle_reads_identity_and_content(tmp_path: Path):
 
 
 def test_load_bundle_parses_requirements_in_both_shapes(tmp_path: Path):
-    """A bare string is shorthand for a requirement with nothing to gate
-    on yet; the mapping shape carries the secrets that mark it met."""
+    """A bare string is shorthand for naming an app and letting the
+    resolver decide what connecting means; the mapping shape additionally
+    declares secrets, for apps no other authority can answer for."""
     bundle = load_bundle(_write_bundle(tmp_path))
 
     gmail, web = bundle.requirements
     assert gmail.slug == "gmail"
     assert gmail.required_secrets == ("GMAIL_TOKEN",)
-    assert not gmail.connected(frozenset())
     assert web.slug == "web"
-    assert web.connected(frozenset())
+    assert web.required_secrets == ()
 
 
 def test_slug_must_match_the_directory_name(tmp_path: Path):

@@ -851,6 +851,36 @@ superset covering functions, procedures and claims together. It is wrong
 only when used for one specific member: Console's `FunctionSkill` type
 names a function with the umbrella word.
 
+## Integration slugs: one id space, three connection routes
+
+An integration is named by its **provider app slug** — lowercase, the id
+space shared by Console's integrations gallery (`canonicalSlug`),
+`app_slug` in the integrations primitives, and native package manifests.
+`gmail`, `hubspot`, `notion`.
+
+Two other spaces exist and are **not** interchangeable with it:
+
+- **OAuth provider aliases** (`runtime_oauth.py`): `google` with aliases
+  `gmail` / `google_workspace` / `drive`. Fine for resolving a token,
+  invisible to the gallery — a workflow requirement naming
+  `google_workspace` renders a chip with no logo and no connect action.
+- **Integration package directory names** (unify-deploy). These *are*
+  provider app slugs, but only a subset: most gallery apps have no
+  package, and Workspace has none at all.
+
+Whether an app is native or third-party is **not** a caller's concern,
+because an app can offer more than one route and the route can change
+without the caller changing. Anything asking "is this connected?" asks
+`RequirementResolver`, which consults each authority in turn: a live
+gallery connection row, then the app's own native package manifest for
+the secrets that make it usable, then a caller-declared secret for BYOD
+OAuth. It reports which authority answered (`via`), so a UI can say
+whether the user needs the connect flow or a pasted key.
+
+Never gate on the secret keyset alone. That was the first version of this
+check and it silently held every gallery-connected app, because a
+provider-backed connection is a connection row and never a secret.
+
 **Do not couple to display labels across repos.** Console's LiveActions
 view string-matches unify's `display_label` prose
 (`dl === 'storing reusable skills'`) to choose icons and categories.

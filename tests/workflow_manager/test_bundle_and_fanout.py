@@ -414,44 +414,156 @@ def test_bundle_cannot_claim_the_library_source():
 # --------------------------------------------------------------------- #
 # Requirements                                                          #
 # --------------------------------------------------------------------- #
-def test_requirement_connection_is_presence_of_its_secrets():
+def _resolver(**kwargs):
+    from unify.workflow_manager.requirements import RequirementResolver
+
+    kwargs.setdefault("keyset", set())
+    kwargs.setdefault("connected_apps", set())
+    kwargs.setdefault("native_manifests", {})
+    return RequirementResolver(**kwargs)
+
+
+def _requirement(slug: str, **kwargs):
     from unify.workflow_manager.bundle import WorkflowRequirement
 
-    gmail = WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",))
-    assert not gmail.connected(frozenset())
-    assert gmail.connected(frozenset({"GMAIL_TOKEN"}))
-    assert gmail.missing_secrets(frozenset()) == ["GMAIL_TOKEN"]
+    return WorkflowRequirement(slug=slug, **kwargs)
 
 
-def test_requirement_with_nothing_to_gate_on_reads_as_met():
-    """A requirement declaring no secrets has no checkable signal yet, so
-    it must not hold the workflow's jobs hostage to an uncheckable state."""
-    from unify.workflow_manager.bundle import WorkflowRequirement
+def test_a_gallery_connection_settles_a_requirement():
+    """A third-party app connected through the gallery is connected, and
+    no secret is involved — its credentials live with the provider."""
+    resolver = _resolver(connected_apps={"notion"})
 
-    web = WorkflowRequirement(slug="web")
-    assert web.connected(frozenset())
+    assert resolver.resolve(_requirement("notion")) == {
+        "slug": "notion",
+        "name": "notion",
+        "connected": True,
+        "via": "connection",
+    }
 
 
-def test_unmet_requirements_read_the_keyset(monkeypatch):
-    from unify.workflow_manager import workflow_manager as wm_module
-    from unify.workflow_manager.bundle import WorkflowRequirement
+def test_a_native_package_answers_for_its_own_secrets():
+    """A bundle naming a native app does not restate the package's
+    secrets: the package manifest is the authority, so the two cannot
+    drift."""
+    resolver = _resolver(
+        native_manifests={
+            "hubspot": {
+                "slug": "hubspot",
+                "required_secrets_json": '["HUBSPOT_TOKEN"]',
+            },
+        },
+    )
+
+    unmet = resolver.resolve(_requirement("hubspot"))
+    assert unmet["connected"] is False
+    assert unmet["via"] == "native_package"
+    assert unmet["missing_secrets"] == ["HUBSPOT_TOKEN"]
+
+    connected = _resolver(
+        keyset={"HUBSPOT_TOKEN"},
+        native_manifests={
+            "hubspot": {
+                "slug": "hubspot",
+                "required_secrets_json": '["HUBSPOT_TOKEN"]',
+            },
+        },
+    ).resolve(_requirement("hubspot"))
+    assert connected["connected"] is True
+
+
+def test_a_native_package_gating_on_optional_secrets_needs_any_one():
+    """Mirrors _package_is_enabled: with no required secrets, any one
+    optional secret makes the package usable."""
+    manifests = {
+        "github": {
+            "slug": "github",
+            "optional_secrets_json": '["GITHUB_TOKEN"]',
+        },
+    }
+    assert not _resolver(native_manifests=manifests).resolve(
+        _requirement("github"),
+    )["connected"]
+    assert _resolver(
+        keyset={"GITHUB_TOKEN"},
+        native_manifests=manifests,
+    ).resolve(
+        _requirement("github"),
+    )["connected"]
+
+
+def test_byod_oauth_falls_back_to_the_bundles_own_declaration():
+    """Workspace has no package and no gallery row, so the refresh-token
+    secret the bundle names is the only available signal."""
+    requirement = _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",))
+
+    unmet = _resolver().resolve(requirement)
+    assert unmet["connected"] is False
+    assert unmet["via"] == "secret"
+    assert unmet["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
+
+    met = _resolver(keyset={"GOOGLE_REFRESH_TOKEN"}).resolve(requirement)
+    assert met["connected"] is True
+
+
+def test_a_gallery_connection_outranks_a_missing_secret():
+    """An app reachable both ways needs only one route. Checking the
+    secret first would hold jobs on an app the user has genuinely
+    connected."""
+    resolver = _resolver(connected_apps={"gmail"})
+    resolved = resolver.resolve(
+        _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",)),
+    )
+    assert resolved["connected"] is True
+    assert resolved["via"] == "connection"
+
+
+def test_a_requirement_nothing_can_answer_for_reads_as_met():
+    """No package, no connection, no declared secret: there is nothing to
+    check, and a bundle must not hold its jobs hostage to an uncheckable
+    signal."""
+    resolved = _resolver().resolve(_requirement("web"))
+    assert resolved["connected"] is True
+    assert resolved["via"] == "undeclared"
+
+
+def test_slugs_resolve_case_and_separator_insensitively():
+    """Gallery slugs arrive in more than one shape; a bundle should not
+    have to guess which."""
+    resolver = _resolver(connected_apps={"google_calendar"})
+    assert resolver.resolve(_requirement("Google-Calendar"))["connected"]
+
+
+def test_unmet_requirements_reports_only_the_unconnected(monkeypatch):
+    from unify.workflow_manager import requirements as req_module
 
     manager = _manager(_registry(guidance=RecordingSurface()))
     bundle = _bundle(
         requirements=(
-            WorkflowRequirement(slug="gmail", required_secrets=("GMAIL_TOKEN",)),
-            WorkflowRequirement(slug="slack", required_secrets=("SLACK_TOKEN",)),
+            _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",)),
+            _requirement("slack", required_secrets=("SLACK_TOKEN",)),
         ),
     )
 
     monkeypatch.setattr(
-        wm_module,
-        "_read_local_secret_keyset",
-        lambda: {"SLACK_TOKEN"},
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: frozenset({"SLACK_TOKEN"}),
     )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "connected_apps",
+        lambda self: frozenset(),
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "native_manifest",
+        lambda self, slug: None,
+    )
+
     unmet = manager._unmet_requirements(bundle)
     assert [r["slug"] for r in unmet] == ["gmail"]
-    assert unmet[0]["missing_secrets"] == ["GMAIL_TOKEN"]
+    assert unmet[0]["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
 
     report = manager._requirements_report(bundle)
     assert {r["slug"]: r["connected"] for r in report} == {
