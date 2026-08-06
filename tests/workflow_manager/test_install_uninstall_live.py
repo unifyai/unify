@@ -405,57 +405,55 @@ async def test_bootstrap_fills_the_shelf_and_reconciles_installed(
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_catalog_publishes_for_reading_surfaces_and_short_circuits(
+async def test_catalog_seeds_the_builtins_shelf_and_short_circuits(
     live_managers,
     bundle,
 ):
-    """The shelf a reading surface renders without waking the assistant.
-
-    A hosted assistant is usually asleep when someone opens Console, so
-    the catalogue is mirrored into rows rather than served from the
-    assistant's memory. The publish must also be cheap on every boot
-    between deploys, which is almost all of them: an unchanged catalogue
-    costs one meta read and writes nothing.
+    """The shelf a reading surface renders lives in the public-read
+    Builtins project — platform data, one copy for everyone, exactly like
+    the integrations app catalogue — while everything per-assistant stays
+    in the assistant's own contexts. The seed must also be cheap on every
+    run between deploys: an unchanged catalogue reads one meta row and
+    writes nothing.
     """
     import json as _json
 
-    gm, ts, wm = live_managers
-    wm.register_bundle(bundle)
-
-    first = wm.publish_catalog()
-    assert first["published"] == [SLUG]
-    assert first["removed"] == []
-
-    rows = unisdk.get_logs(context=wm._catalog_ctx)
-    (row,) = [dict(lg.entries or {}) for lg in rows]
-    assert row["slug"] == SLUG
-    assert row["name"] == "Live demo workflow"
-    assert _json.loads(row["surfaces"]) == ["guidance", "tasks"]
-
-    # "What this installs", derived so a reader can show it pre-install.
-    sets = _json.loads(row["sets"])
-    assert sets["guidance"] == [{"name": "Workflow triage procedure"}] or (
-        {"name": "Workflow tone procedure"} in sets["guidance"]
+    from unify.common.builtins import builtins_project, builtins_seed_key_override
+    from unify.workflow_manager.builtins_catalog import (
+        BUILTINS_WORKFLOWS_CONTEXT,
+        seed_builtin_workflows,
     )
-    assert sets["tasks"] == [
-        {"name": "Workflow morning run", "schedule": "Every day"},
-    ]
 
-    # Unchanged catalogue: no writes at all.
-    again = wm.publish_catalog()
-    assert again == {"unchanged": True, "published": [], "removed": []}
+    project = builtins_project()
 
-    # A bundle leaving the catalogue leaves the shelf too.
-    wm._catalogue.clear()
-    wm.register_bundle(
-        WorkflowBundle(slug="other_demo", name="Other demo", surfaces={}),
-    )
-    third = wm.publish_catalog()
-    assert third["published"] == ["other_demo"]
-    assert third["removed"] == [SLUG]
+    def shelf():
+        logs = unisdk.get_logs(
+            project=project,
+            context=BUILTINS_WORKFLOWS_CONTEXT,
+            limit=100,
+        )
+        return {
+            str((lg.entries or {}).get("slug")): dict(lg.entries or {}) for lg in logs
+        }
 
-    slugs = {
-        str((lg.entries or {}).get("slug"))
-        for lg in unisdk.get_logs(context=wm._catalog_ctx)
-    }
-    assert slugs == {"other_demo"}
+    with builtins_seed_key_override():
+        assert seed_builtin_workflows(bundles=[bundle]) is True
+
+        row = shelf()[SLUG]
+        assert row["name"] == "Live demo workflow"
+        assert _json.loads(row["surfaces"]) == ["guidance", "tasks"]
+        sets = _json.loads(row["sets"])
+        assert sets["tasks"] == [
+            {"name": "Workflow morning run", "schedule": "Every day"},
+        ]
+
+        # Unchanged catalogue: the hash short-circuits, nothing is written.
+        assert seed_builtin_workflows(bundles=[bundle]) is False
+
+        # A bundle leaving the curated tree leaves the shelf.
+        other = WorkflowBundle(slug="other_demo", name="Other demo", surfaces={})
+        assert seed_builtin_workflows(bundles=[other]) is True
+        assert set(shelf()) == {"other_demo"}
+
+        # The harness re-seeds an empty catalogue for the next session.
+        seed_builtin_workflows(bundles=[])
