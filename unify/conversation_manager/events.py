@@ -334,6 +334,15 @@ FAST_BRAIN_TURN_SILENCE = "silence"
 FAST_BRAIN_TURN_CONTINUATION = "continuation"
 FAST_BRAIN_TURN_HANG_UP = "hang_up"
 
+# How many other participants make a call a *group* call, where a turn may
+# belong to someone other than the assistant. Two, because with exactly one
+# other person every turn is necessarily addressed to the assistant: a phone
+# call, a WhatsApp call, or a meet the boss is alone in must keep answering
+# everything. Lives here because the fast brain gates its own turn on it and
+# the slow brain gates a prompt section on it, and one policy number drifting
+# between the two would put the two brains on different rules mid-call.
+GROUP_CALL_MIN_PARTICIPANTS = 2
+
 
 @dataclass
 class FastBrainHangUp(Event):
