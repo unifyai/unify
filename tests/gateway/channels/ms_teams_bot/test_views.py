@@ -92,3 +92,83 @@ def test_send_labels_reply_as_ai_generated(client: TestClient) -> None:
         and e.get("type") == "https://schema.org/Message"
         for e in entities
     )
+
+
+def _lookup_client(status_code: int, payload: dict | None = None) -> MagicMock:
+    resp = MagicMock(status_code=status_code)
+    resp.json.return_value = payload or {}
+    resp.text = ""
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = resp
+    return client
+
+
+def test_conversation_route_lookup_returns_full_routing_pair(
+    client: TestClient,
+) -> None:
+    """An outbound-only caller needs tenant and conversation together; a
+    second round trip for the tenant is what this endpoint exists to avoid."""
+    orchestra = _lookup_client(
+        200,
+        {
+            "conversation_id": "conv-1",
+            "tenant_id": "tenant-1",
+            "sender_is_owner": True,
+        },
+    )
+    with (
+        patch.object(
+            bot_views,
+            "require_assistant_ownership",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(bot_views.httpx, "AsyncClient", return_value=orchestra),
+    ):
+        resp = client.get(
+            "/ms-teams-bot/conversation-route",
+            params={"assistant_id": "42", "owner_only": "true"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["tenant_id"] == "tenant-1"
+    assert resp.json()["conversation_id"] == "conv-1"
+    forwarded = orchestra.get.await_args.kwargs["params"]
+    assert forwarded["assistant_id"] == "42"
+    assert forwarded["conversation_type"] == "personal"
+    assert forwarded["owner_only"] == "true"
+
+
+def test_conversation_route_lookup_propagates_not_found(client: TestClient) -> None:
+    """No live conversation is an answer, not an error to retry."""
+    orchestra = _lookup_client(404)
+    with (
+        patch.object(
+            bot_views,
+            "require_assistant_ownership",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(bot_views.httpx, "AsyncClient", return_value=orchestra),
+    ):
+        resp = client.get(
+            "/ms-teams-bot/conversation-route",
+            params={"assistant_id": "42"},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_conversation_route_lookup_requires_ownership(client: TestClient) -> None:
+    """The route table is admin-scoped; an assistant may only read its own."""
+    orchestra = _lookup_client(200, {"conversation_id": "conv-1"})
+    ownership = AsyncMock(return_value=None)
+    with (
+        patch.object(bot_views, "require_assistant_ownership", new=ownership),
+        patch.object(bot_views.httpx, "AsyncClient", return_value=orchestra),
+    ):
+        client.get(
+            "/ms-teams-bot/conversation-route",
+            params={"assistant_id": "42"},
+        )
+
+    assert ownership.await_args.args[1] == "42"

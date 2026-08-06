@@ -413,7 +413,7 @@ class SimulatedFileManager(BaseFileManager):
         """
         Run the complete file processing pipeline: parse, ingest, and embed (simulated).
 
-        This method simulates the full file processing workflow for testing.
+        This method simulates the full file processing pipeline for testing.
         Returns IngestPipelineResult consistent with the real FileManager.
         """
         from unify.file_manager.types.ingest import (

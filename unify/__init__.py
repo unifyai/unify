@@ -142,6 +142,23 @@ def init(
                 "integrations may not be available this session",
             )
 
+    # The workflow catalogue loads beside the integrations for the same
+    # reason: filling the shelf (and reconciling installed workflows to
+    # it) must not hold up the fast brain. No-op unless
+    # UNITY_WORKFLOWS_DIR is configured.
+    with startup_timing(LOGGER, "unify.init.schedule_workflow_catalog"):
+        try:
+            from .workflow_manager.catalog import (
+                schedule_bootstrap_workflow_catalog,
+            )
+
+            schedule_bootstrap_workflow_catalog()
+        except Exception:
+            LOGGER.exception(
+                "[workflows] failed to schedule catalogue bootstrap; "
+                "workflows may not be installable this session",
+            )
+
     from .events import event_bus as _event_bus_mod
 
     with startup_timing(LOGGER, "unify.init.event_bus_init"):

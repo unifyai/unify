@@ -243,15 +243,28 @@ class TranscriptManager(BaseTranscriptManager):
             ),
         )
 
-    def _read_exchange_contexts(self) -> list[str]:
-        """Return ordered concrete Exchanges contexts visible to this assistant."""
+    def _read_exchange_roots(self) -> list[tuple[str, str | None]]:
+        """Return ordered ``(Exchanges context, write destination)`` pairs.
+
+        A read fans out over every visible root, and exchange ids are
+        root-local, so a caller that resolves an exchange by metadata needs the
+        destination that addresses the root it was found in -- not just the id.
+        """
 
         return list(
             dict.fromkeys(
-                self._context_for_root(root, EXCHANGES_TABLE)
+                (
+                    self._context_for_root(root, EXCHANGES_TABLE),
+                    ContextRegistry.destination_for_root(root),
+                )
                 for root in ContextRegistry.read_roots(self, EXCHANGES_TABLE)
             ),
         )
+
+    def _read_exchange_contexts(self) -> list[str]:
+        """Return ordered concrete Exchanges contexts visible to this assistant."""
+
+        return [context for context, _ in self._read_exchange_roots()]
 
     def _root_context_for_move(self, table_name: str, from_root: str) -> str:
         """Resolve a move source root label into a concrete root context."""
@@ -1533,19 +1546,24 @@ class TranscriptManager(BaseTranscriptManager):
         self,
         key: str,
         value: str,
-    ) -> int | None:
+    ) -> tuple[int, str | None] | None:
         """Look up an exchange by one of its metadata identifiers.
 
         Server-side match on ``metadata.{key}`` across every readable Exchanges
         root. Recovers the exchange for an asynchronous session artifact (e.g. a
         recording that lands after the process that ran the call has gone) where
         no in-process mapping survives.
+
+        Returns the exchange id **and the destination of the root it lives in**.
+        The id alone is not addressable: the same id in another root is another
+        exchange, so a caller that writes the artifact back has to name the root
+        this read matched in.
         """
         needle = str(value or "").strip()
         if not needle:
             return None
         escaped = needle.replace("\\", "\\\\").replace('"', '\\"')
-        for context in self._read_exchange_contexts():
+        for context, destination in self._read_exchange_roots():
             rows = unisdk.get_logs(
                 context=context,
                 filter=f'metadata.{key} == "{escaped}"',
@@ -1555,7 +1573,7 @@ class TranscriptManager(BaseTranscriptManager):
                 continue
             entries = getattr(rows[0], "entries", {}) or {}
             try:
-                return int(entries.get("exchange_id"))
+                return int(entries.get("exchange_id")), destination
             except (TypeError, ValueError):
                 return None
         return None
@@ -1575,37 +1593,34 @@ class TranscriptManager(BaseTranscriptManager):
         a separate event, so a replacing write would drop whichever keys it did
         not carry -- including the identifiers needed to resolve the exchange in
         the first place. Keys present in ``metadata`` win over stored values.
+
+        ``destination`` must name the root the exchange was authored in, which
+        for a shared assistant is a team root rather than the manager's home.
+        A miss raises: the id is root-local, so a write that cannot find its
+        exchange has been pointed at the wrong root, and inventing a row there
+        would silently strand the metadata on an exchange nothing reads.
         """
         try:
             context = self._exchanges_context_for_destination(destination)
         except ToolErrorException as exc:
             return exc.payload  # type: ignore[return-value]
-        # Try update first
         rows = unisdk.get_logs(
             context=context,
             filter=f"exchange_id == {int(exchange_id)}",
             limit=1,
         )
-        if rows:
-            merged = dict(rows[0].entries.get("metadata") or {})
-            merged.update(dict(metadata or {}))
-            unisdk.update_logs(
-                logs=rows[0].id,
-                context=context,
-                entries={"metadata": merged},
-                overwrite=True,
+        if not rows:
+            raise ValueError(
+                f"No exchange found for exchange_id={exchange_id} in {context}.",
             )
-        else:
-            # Upsert behaviour – create a new row with empty medium if missing
-            unity_log(
-                context=context,
-                exchange_id=int(exchange_id),
-                metadata=dict(metadata or {}),
-                medium="",
-                new=True,
-                mutable=True,
-                stamp_authoring=True,
-            )
+        merged = dict(rows[0].entries.get("metadata") or {})
+        merged.update(dict(metadata or {}))
+        unisdk.update_logs(
+            logs=rows[0].id,
+            context=context,
+            entries={"metadata": merged},
+            overwrite=True,
+        )
 
         # Read back and return canonical shape
         return self.get_exchange_metadata(exchange_id, destination=destination)

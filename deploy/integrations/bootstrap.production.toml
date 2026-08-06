@@ -24,7 +24,7 @@ create_auth_configs = false
 force = false
 
 [providers.pipedream]
-status = "disabled"
+status = "enabled"
 display_name = "Pipedream"
 default_priority = 20
 

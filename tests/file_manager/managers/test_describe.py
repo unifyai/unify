@@ -385,12 +385,12 @@ def test_describe_document_has_description_field(file_manager, tmp_path: Path) -
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Workflow Integration Tests
+# Composed-Call Integration Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_describe_then_filter_workflow(file_manager, tmp_path: Path) -> None:
-    """describe() → filter() workflow using context_path."""
+def test_describe_then_filter_flow(file_manager, tmp_path: Path) -> None:
+    """describe() → filter() sequence using context_path."""
     test_file = tmp_path / "workflow_filter.csv"
     test_file.write_text("name,amount\nAlice,100\nBob,200\nCharlie,150\n")
 
@@ -409,8 +409,8 @@ def test_describe_then_filter_workflow(file_manager, tmp_path: Path) -> None:
     assert len(results) >= 1
 
 
-def test_describe_then_reduce_workflow(file_manager, tmp_path: Path) -> None:
-    """describe() → reduce() workflow using context_path."""
+def test_describe_then_reduce_flow(file_manager, tmp_path: Path) -> None:
+    """describe() → reduce() sequence using context_path."""
     test_file = tmp_path / "workflow_reduce.csv"
     test_file.write_text("category,value\nA,10\nA,20\nB,30\n")
 

@@ -11,7 +11,7 @@ custom/
 ├── __init__.py         # This file (decorator + exports)
 ├── functions/          # Custom compositional functions
 │   ├── example.py
-│   └── client_workflows.py
+│   └── client_procedures.py
 └── venvs/              # Custom virtual environments
     ├── ml_env.toml
     └── data_science.toml

@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -252,6 +253,52 @@ async def upsert_install(request: Request):
 # ---------------------------------------------------------------------------
 # POST /send
 # ---------------------------------------------------------------------------
+
+
+@auth_router.get("/conversation-route")
+async def find_ms_teams_bot_conversation_route(request: Request):
+    """Find the Teams conversation an assistant can reply into.
+
+    Query params: ``assistant_id`` (required), ``conversation_type``
+    (default ``personal``), ``sender_email``, ``owner_only``.
+
+    The assistant-side counterpart of ``/send``: it answers "where can I
+    reach this person on Teams?" for a caller holding no inbound activity.
+    Proxied to Orchestra because the route table is behind the admin API,
+    and scoped by ownership so an assistant can only look up its own
+    conversations. A 404 means no live conversation is on record.
+    """
+    params = request.query_params
+    assistant_id = params.get("assistant_id")
+    if not assistant_id:
+        raise HTTPException(status_code=400, detail="'assistant_id' is required")
+    await require_assistant_ownership(request, assistant_id)
+
+    query: dict[str, Any] = {
+        "assistant_id": assistant_id,
+        "conversation_type": params.get("conversation_type") or "personal",
+    }
+    if params.get("sender_email"):
+        query["sender_email"] = params["sender_email"]
+    if params.get("owner_only"):
+        query["owner_only"] = params["owner_only"]
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{SETTINGS.ORCHESTRA_URL}"
+            "/admin/ms-teams-bot/conversation-routes/for-assistant",
+            params=query,
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail="No live Teams conversation route for this assistant.",
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
 
 
 @auth_router.post("/send")

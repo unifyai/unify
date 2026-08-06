@@ -14,14 +14,33 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping
 
-from unify.workflow_manager.types.workflow import WorkflowMode
+from unify.common.custom_sync import MANAGED_BY_DEPLOYMENT
+
+WORKFLOW_LIBRARY = "workflow_library"
+"""The ``managed_by`` for rows on shared-identity surfaces.
+
+Functions and venvs key on their name — the call-site contract — so a
+name means one row no matter how many workflows reference it. All
+installed bundles' entries on such a surface reconcile together as one
+union source under this id; per-slug ownership would make one name two
+rows. Which workflows reference a row is recorded on the row itself, in
+its ``workflows`` field."""
 
 SurfaceSyncer = Callable[..., bool]
-"""A manager's ``sync_custom``, called with its source kwarg and ``source_id``."""
+"""A manager's per-destination custom sync (``sync_custom_guidance``,
+``sync_custom_tasks``, ...), called with its source kwarg, ``managed_by``
+and ``destination``.
+
+The destination-grouping wrappers (``sync_custom``) are deliberately not
+accepted here: they derive destinations from the entries themselves, so an
+empty source never reaches the reconcile engine and an uninstall would
+prune nothing while reporting success. The per-destination methods run the
+engine unconditionally, which is what makes an empty source a genuine
+"remove everything this workflow planted here"."""
 
 
 class UnscopedSurfaceError(RuntimeError):
-    """A surface was registered before its adapter honours ``source_id``.
+    """A surface was registered before its adapter honours ``managed_by``.
 
     Registering an unscoped surface is not a degraded mode, it is data
     loss: that manager's ``live_rows`` still selects every managed row in
@@ -34,9 +53,9 @@ class UnscopedSurfaceError(RuntimeError):
     def __init__(self, surface: str) -> None:
         self.surface = surface
         super().__init__(
-            f"Surface {surface!r} is not source-scoped; registering it "
+            f"Surface {surface!r} is not managed-scoped; registering it "
             "would let workflows and the deployment prune each other's "
-            "rows. Thread source_id through that manager's adapter first.",
+            "rows. Thread managed_by through that manager's adapter first.",
         )
 
 
@@ -48,13 +67,99 @@ class Surface:
     """Bundle key, e.g. ``"guidance"``."""
 
     syncer: SurfaceSyncer
-    """The manager's ``sync_custom``."""
+    """The manager's per-destination custom sync (see :data:`SurfaceSyncer`)."""
 
     source_kwarg: str
     """Keyword its collected source arrives on, e.g. ``"source_guidance"``."""
 
-    def sync(self, source: Mapping[str, Dict[str, Any]], *, source_id: str) -> bool:
-        return self.syncer(**{self.source_kwarg: dict(source)}, source_id=source_id)
+    shared: bool = False
+    """Whether this surface's identity is a global natural key shared by
+    every workflow (functions, venvs: ``custom_key == name``, the call-site
+    contract).
+
+    A shared surface is never synced per slug. Two workflows planting the
+    same function under their own ``managed_by`` would be two rows with one
+    name — an ambiguous call-site — and any per-slug adoption probe would
+    steal the row back and forth between them. Instead every install and
+    uninstall re-syncs the **union** of all installed bundles' entries
+    under the single :data:`WORKFLOW_LIBRARY` source, so a shared atom is
+    one row for as long as any installed workflow references it."""
+
+    armer: Callable[..., Any] | None = None
+    """Arms or disarms one source's planted rows, where the surface has
+    such a notion — tasks, whose definitions are born disarmed by the
+    custom sync and only fire once armed. Called with ``managed_by``,
+    ``enabled`` and ``destination`` keywords. ``None`` for surfaces whose
+    content is inert until read (guidance, knowledge, functions)."""
+
+    def arm(self, *, managed_by: str, enabled: bool, destination: str | None) -> Any:
+        if self.armer is None:
+            return None
+        return self.armer(
+            managed_by=managed_by,
+            enabled=enabled,
+            destination=destination,
+        )
+
+    def sync(
+        self,
+        source: Mapping[str, Dict[str, Any]],
+        *,
+        managed_by: str,
+        destination: str | None,
+    ) -> bool:
+        """Run one reconcile pass for *managed_by* at *destination*.
+
+        The installation's destination governs where every entry lands; a
+        per-entry ``destination`` field in the source is ignored (the
+        adapters drop it in ``transform``). An empty *source* prunes all
+        of *managed_by*'s rows at that destination and nothing else.
+        """
+        return self.syncer(
+            **{self.source_kwarg: dict(source)},
+            managed_by=managed_by,
+            destination=destination,
+        )
+
+
+@dataclass(frozen=True)
+class WorkflowRequirement:
+    """One integration a workflow needs connected before its jobs may run.
+
+    Requirements are declared and checked, never carried: a bundle ships
+    no OAuth connection and no secret value. An unmet requirement does
+    not refuse the install — content plants and the workflow's tasks stay
+    disarmed until the connection lands.
+
+    A requirement names the app and stops there. Whether that app is a
+    third-party provider-backed connection from the gallery's catalogue,
+    a native integration package declared in unify-deploy, or a BYOD
+    OAuth provider is not the bundle's business: it differs per app, it
+    can change without the workflow changing, and an app may offer more
+    than one route at once. Resolution is
+    :class:`unify.workflow_manager.requirements.RequirementResolver`.
+    """
+
+    slug: str
+    """Provider app slug — the id space shared by Console's integrations
+    gallery, ``app_slug`` in the integrations primitives, and native
+    package manifests (e.g. ``"gmail"``, ``"hubspot"``). Not the OAuth
+    provider alias space in ``runtime_oauth`` (where Gmail's connection is
+    ``"google"``), because that space is invisible to the gallery."""
+
+    name: str = ""
+    """Display name; falls back to the slug."""
+
+    required_secrets: tuple[str, ...] = ()
+    """Secret names whose presence marks this requirement connected, for
+    apps no other authority can answer for — a BYOD OAuth provider with
+    no package and no gallery connection row.
+
+    Leave empty for native packages and gallery apps: the package's own
+    manifest already declares its secrets, and restating them here means
+    two places to update when the package changes. Empty with no other
+    authority reads as met, so a bundle cannot hold its jobs hostage to a
+    signal nothing can check."""
 
 
 @dataclass
@@ -65,7 +170,13 @@ class WorkflowBundle:
     name: str
     version: str = ""
     description: str = ""
-    mode: WorkflowMode = WorkflowMode.seed
+    category: str = ""
+    """Catalogue grouping, e.g. ``"comms"`` / ``"growth"`` / ``"ops"`` /
+    ``"build"``."""
+
+    icon_id: str = ""
+    """Key into the console's workflow tile icon set."""
+
     surfaces: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     """Surface name -> collected source, keyed by ``custom_key``."""
 
@@ -73,13 +184,22 @@ class WorkflowBundle:
     """Declared install-time settings. Values are supplied per install and
     read at run time; they never enter the collected sources above."""
 
+    requirements: tuple[WorkflowRequirement, ...] = ()
+    """Integrations that must be connected before this workflow's jobs
+    are armed. Checked at install and on every reconcile."""
+
+    capabilities: tuple[str, ...] = ()
+    """Assistant capabilities the workflow needs beyond connected apps,
+    e.g. ``"computer"`` or ``"filesystem"``. Declared for the catalogue;
+    not gated at install."""
+
     def __post_init__(self) -> None:
         if not self.slug:
             raise ValueError("A workflow bundle needs a slug.")
-        if self.slug == "deployment":
+        if self.slug in (MANAGED_BY_DEPLOYMENT, WORKFLOW_LIBRARY):
             raise ValueError(
-                "'deployment' is the reserved source_id for the assistant's "
-                "own sources; a bundle may not claim it.",
+                f"{self.slug!r} is a reserved managed_by value; a bundle "
+                "may not claim it.",
             )
 
     def content_hash(self) -> str:
@@ -107,7 +227,7 @@ class SurfaceRegistry:
     """The surfaces a workflow install is allowed to fan out to.
 
     Deliberately explicit. A manager appears here only once its adapter
-    scopes ``live_rows`` and its collision probe to ``source_id``; until
+    scopes ``live_rows`` and its collision probe to ``managed_by``; until
     then :class:`UnscopedSurfaceError` keeps workflows away from it.
     """
 
@@ -121,6 +241,8 @@ class SurfaceRegistry:
         *,
         source_kwarg: str,
         source_scoped: bool,
+        shared: bool = False,
+        armer: Callable[..., Any] | None = None,
     ) -> None:
         if not source_scoped:
             raise UnscopedSurfaceError(name)
@@ -128,6 +250,8 @@ class SurfaceRegistry:
             name=name,
             syncer=syncer,
             source_kwarg=source_kwarg,
+            shared=shared,
+            armer=armer,
         )
 
     def get(self, name: str) -> Surface:

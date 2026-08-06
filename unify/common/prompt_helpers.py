@@ -776,9 +776,9 @@ def images_extras_for_transcripts(
 
 
 def images_first_ask_for_tasks(*, ask_image_name: Optional[str]) -> str:
-    """Images‑first workflow guidance for TaskScheduler.ask."""
+    """Images‑first procedure guidance for TaskScheduler.ask."""
     lines: List[str] = [
-        "Images-first workflow for ask()",
+        "Images-first procedure for ask()",
         "--------------------------------",
         "• When images are present, first interpret the visuals before mapping them to tasks.",
     ]
