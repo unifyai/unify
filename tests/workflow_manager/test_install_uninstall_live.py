@@ -412,14 +412,17 @@ async def test_catalog_seeds_the_builtins_shelf_and_short_circuits(
     """The shelf a reading surface renders lives in the public-read
     Builtins project — platform data, one copy for everyone, exactly like
     the integrations app catalogue — while everything per-assistant stays
-    in the assistant's own contexts. The seed must also be cheap on every
-    run between deploys: an unchanged catalogue reads one meta row and
-    writes nothing.
+    in the assistant's own contexts. The listing rows carry names; the
+    content rows beside them carry the artifacts' substance, so a reader
+    can open a procedure or a task brief before anything is installed.
+    The seed must also be cheap on every run between deploys: an
+    unchanged catalogue reads one meta row and writes nothing.
     """
     import json as _json
 
     from unify.common.builtins import builtins_project, builtins_seed_key_override
     from unify.workflow_manager.builtins_catalog import (
+        BUILTINS_WORKFLOWS_CONTENT_CONTEXT,
         BUILTINS_WORKFLOWS_CONTEXT,
         seed_builtin_workflows,
     )
@@ -436,6 +439,17 @@ async def test_catalog_seeds_the_builtins_shelf_and_short_circuits(
             str((lg.entries or {}).get("slug")): dict(lg.entries or {}) for lg in logs
         }
 
+    def artifacts():
+        logs = unisdk.get_logs(
+            project=project,
+            context=BUILTINS_WORKFLOWS_CONTENT_CONTEXT,
+            limit=100,
+        )
+        return {
+            str((lg.entries or {}).get("content_key")): dict(lg.entries or {})
+            for lg in logs
+        }
+
     with builtins_seed_key_override():
         assert seed_builtin_workflows(bundles=[bundle]) is True
 
@@ -447,13 +461,28 @@ async def test_catalog_seeds_the_builtins_shelf_and_short_circuits(
             {"name": "Workflow morning run", "schedule": "Every day"},
         ]
 
+        content = artifacts()
+        assert set(content) == {
+            f"{SLUG}/guidance/wf/triage",
+            f"{SLUG}/guidance/wf/tone",
+            f"{SLUG}/tasks/wf/morning",
+        }
+        triage = content[f"{SLUG}/guidance/wf/triage"]
+        assert triage["name"] == "Workflow triage procedure"
+        assert triage["body"] == "Read the inbox oldest-first."
+        morning = content[f"{SLUG}/tasks/wf/morning"]
+        assert morning["body"] == "The recurring job this workflow exists for."
+        assert morning["schedule"] == "Every day"
+
         # Unchanged catalogue: the hash short-circuits, nothing is written.
         assert seed_builtin_workflows(bundles=[bundle]) is False
 
-        # A bundle leaving the curated tree leaves the shelf.
+        # A bundle leaving the curated tree leaves the shelf whole —
+        # listing and artifacts both.
         other = WorkflowBundle(slug="other_demo", name="Other demo", surfaces={})
         assert seed_builtin_workflows(bundles=[other]) is True
         assert set(shelf()) == {"other_demo"}
+        assert artifacts() == {}
 
         # The harness re-seeds an empty catalogue for the next session.
         seed_builtin_workflows(bundles=[])
