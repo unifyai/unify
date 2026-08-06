@@ -105,6 +105,7 @@ def load_bundle(path: Path) -> WorkflowBundle:
         name=name,
         version=str(manifest.get("version", "")),
         description=str(manifest.get("description", "")),
+        about=str(manifest.get("about", "")),
         category=str(manifest.get("category", "")),
         icon_id=str(manifest.get("icon_id", "")),
         surfaces=_collect_surfaces(path),
