@@ -22,7 +22,7 @@ def test_delete_function_marks_guidance_before_fk_cascade():
     fm.add_functions(implementations="def helper():\n    return 1\n")
     function_id = fm.list_functions()["helper"]["function_id"]
     outcome = gm.add_guidance(
-        title="Helper workflow",
+        title="Helper procedure",
         content="Call helper.",
         function_ids=[function_id],
     )
@@ -42,24 +42,24 @@ def test_delete_without_dependents_keeps_and_marks_dependant():
     fm.add_functions(
         implementations=[
             "def helper():\n    return 1\n",
-            "def workflow():\n    return helper()\n",
+            "def composed():\n    return helper()\n",
         ],
     )
     helper_id = fm.list_functions()["helper"]["function_id"]
 
     fm.delete_function(function_id=helper_id, delete_dependents=False)
 
-    workflow = fm._get_function_data_by_name(name="workflow")
-    assert workflow is not None
-    assert workflow["depends_on"] == ["helper"]
-    assert workflow["stale_reasons"][0]["dep_kind"] == "depends_on"
-    assert workflow["stale_reasons"][0]["name"] == "helper"
+    composed = fm._get_function_data_by_name(name="composed")
+    assert composed is not None
+    assert composed["depends_on"] == ["helper"]
+    assert composed["stale_reasons"][0]["dep_kind"] == "depends_on"
+    assert composed["stale_reasons"][0]["name"] == "helper"
 
     fm.add_functions(implementations="def helper():\n    return 2\n")
     result = fm.reconcile_dependencies(
-        function_ids=[workflow["function_id"]],
+        function_ids=[composed["function_id"]],
     )
-    refreshed = fm._get_function_data_by_name(name="workflow")
+    refreshed = fm._get_function_data_by_name(name="composed")
     assert result["details"]["stale_count"] == 0
     assert refreshed is not None and refreshed["stale_reasons"] == []
 
@@ -186,7 +186,7 @@ def test_guidance_reconcile_clears_resolved_function_reason():
     fm.add_functions(implementations="def helper():\n    return 1\n")
     function_id = fm.list_functions()["helper"]["function_id"]
     outcome = gm.add_guidance(
-        title="Helper workflow",
+        title="Helper procedure",
         content="Call helper.",
         function_ids=[function_id],
     )

@@ -415,7 +415,7 @@ async def _upsert_outbound_phone_call_session(
 async def send_call(request: Request):
     """Initiate an outbound Twilio call bridged into a LiveKit room.
 
-    Workflow:
+    Steps:
     1. Build the SIP URI for the assistant's Twilio number.
     2. Ensure a LiveKit dispatch rule routes inbound SIP into the
        caller-supplied room.

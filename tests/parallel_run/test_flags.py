@@ -678,6 +678,22 @@ class TestEvalOnlyDiscoveryAgreement:
 
     SCRIPT = ".github/scripts/discover_test_paths.py"
 
+    def _root(self):
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[2]
+
+    def _script_module(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_discover",
+            self._root() / self.SCRIPT,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
     def _discover(self, *args: str) -> list[str]:
         import subprocess
         import sys
@@ -726,3 +742,96 @@ class TestEvalOnlyDiscoveryAgreement:
         eval tests.
         """
         assert self._discover("--eval-only", "tests/parallel_run") == []
+
+    def test_symbolic_only_narrows_the_matrix(self):
+        """The inverse filter needs the same narrowing, for the same reason."""
+        assert 0 < len(self._discover("--symbolic-only")) < len(self._discover())
+
+    def test_every_symbolic_entry_has_a_non_eval_test(self):
+        """An all-eval directory handed to --symbolic-only is the failure case.
+
+        This is what a full-matrix sweep tripped over: ten pure-eval
+        directories reported as failures for having nothing left to run.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_d", root / self.SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        for entry in self._discover("--symbolic-only"):
+            members = []
+            for token in entry.split():
+                target = root / token
+                members.extend(
+                    target.glob("test_*.py") if target.is_dir() else [target],
+                )
+            assert any(
+                mod.marker_content(m)[1] for m in members
+            ), f"discovery offered {entry!r}, which --symbolic-only would empty"
+
+    def test_marker_applied_through_an_alias_is_recognised(self):
+        """`x = pytest.mark.eval` then `@x` marks tests just as the dotted form does."""
+        import importlib.util
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("_d", root / self.SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        aliased = root / "tests/function_manager/core/test_simulated.py"
+        assert mod.marker_content(aliased)[
+            0
+        ], "alias-applied eval markers must count, or an eval sweep skips them"
+
+    def test_the_two_marker_flags_are_mutually_exclusive(self):
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        done = subprocess.run(
+            [sys.executable, self.SCRIPT, "--eval-only", "--symbolic-only"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        assert done.returncode != 0
+        assert not done.stdout.strip()
+
+    def test_deterministic_only_narrows_the_matrix(self):
+        assert 0 < len(self._discover("--deterministic-only")) < len(self._discover())
+
+    def test_every_deterministic_entry_has_a_model_free_test(self):
+        """A shard of purely model-backed tests is the failure case.
+
+        "not eval" still admits every llm_call test, and those answer to
+        whatever the shared cache holds — under read-only a request with no
+        recorded entry raises, so a sweep for broken tests reports cache gaps
+        instead. This selection has to leave only shards that can answer for
+        themselves.
+        """
+        mod = self._script_module()
+        root = self._root()
+        for entry in self._discover("--deterministic-only"):
+            members = []
+            for token in entry.split():
+                target = root / token
+                members.extend(
+                    target.glob("test_*.py") if target.is_dir() else [target],
+                )
+            assert any(
+                mod.marker_content(m).has_deterministic for m in members
+            ), f"discovery offered {entry!r}, which --deterministic-only empties"
+
+    def test_llm_call_alone_is_not_deterministic(self):
+        """An llm_call test without the eval marker still is not model-free."""
+        mod = self._script_module()
+        content = mod.marker_content(
+            self._root() / "tests/event_bus/test_spending.py",
+        )
+        assert content.has_non_eval, "no eval marker, so a 'not eval' run keeps it"
+        assert content.has_deterministic, "and it does hold model-free tests too"

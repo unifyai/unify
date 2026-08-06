@@ -363,14 +363,14 @@ async def test_in_process_proxy_read_only_empty_session(function_manager_factory
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# 5. Mixed Mode Workflow Tests
+# 5. Mixed Mode Sequence Tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
 @_handle_project
 @pytest.mark.asyncio
-async def test_in_process_proxy_mixed_mode_workflow(function_manager_factory):
-    """Complex workflow mixing stateful, stateless, and read_only modes."""
+async def test_in_process_proxy_mixed_mode_sequence(function_manager_factory):
+    """Complex sequence mixing stateful, stateless, and read_only modes."""
     fm = function_manager_factory()
     fm.add_functions(implementations=SET_VAR_FUNC)
     fm.add_functions(implementations=GET_VAR_FUNC)

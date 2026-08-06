@@ -7,13 +7,13 @@ contract lives in ``docs/writeups/custom-source-sync.md``; the short
 version:
 
 - A managed row carries ``custom_key`` (stable identity of the authored
-  source entry), ``custom_hash`` (content fingerprint), and ``source_id``
-  (which source authored it), set together, atomically with the row
+  source entry), ``custom_hash`` (content fingerprint), and ``managed_by``
+  (which source reconciles it), set together, atomically with the row
   itself.
 - The diff loop is implemented once, here. Managers supply a
   :class:`CustomSyncAdapter` with their storage mechanics and declared
   policy knobs, never a bespoke loop.
-- Every pass is scoped to one ``source_id``. Two sources syncing into the
+- Every pass is scoped to one ``managed_by``. Two sources syncing into the
   same context see disjoint row sets, so neither prunes the other's rows.
 - Two live managed rows of one source sharing one ``custom_key`` raise
   :class:`CustomSyncDuplicateKeyError` instead of silently picking a
@@ -33,16 +33,18 @@ from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-DEPLOYMENT_SOURCE_ID = "deployment"
-"""Source id for rows authored by the assistant's own deployment sources.
+MANAGED_BY_DEPLOYMENT = "deployment"
+"""The ``managed_by`` value for rows the deployment's own sources reconcile.
 
-Rows written before ``source_id`` existed carry no value for it. They are
-the deployment's, so the deployment's reconcile claims them and stamps
-them on its next pass; other sources never match them.
+Rows written before ``managed_by`` existed carry no value for it — including
+the short-lived ``source_id`` spelling, whose only writer was the deployment.
+Such a row is the deployment's, so the deployment's reconcile admits it via
+the null branch below and stamps it on the next content change; other
+sources never match it.
 """
 
 
-def managed_rows_filter(source_id: str) -> str:
+def managed_rows_filter(managed_by: str) -> str:
     """Filter selecting the managed rows one source owns.
 
     Every adapter's ``live_rows`` must use this rather than a bare
@@ -50,15 +52,15 @@ def managed_rows_filter(source_id: str) -> str:
     siblings' rows, and prune then deletes them.
     """
 
-    if source_id == DEPLOYMENT_SOURCE_ID:
+    if managed_by == MANAGED_BY_DEPLOYMENT:
         return (
             "custom_hash != None and "
-            f"(source_id == '{source_id}' or source_id == None)"
+            f"(managed_by == '{managed_by}' or managed_by == None)"
         )
-    return f"custom_hash != None and source_id == '{source_id}'"
+    return f"custom_hash != None and managed_by == '{managed_by}'"
 
 
-def stored_hash_field(base_field: str, source_id: str) -> str:
+def stored_hash_field(base_field: str, managed_by: str) -> str:
     """Meta field holding one source's aggregate hash.
 
     The deployment keeps the original unsuffixed field so existing
@@ -66,9 +68,9 @@ def stored_hash_field(base_field: str, source_id: str) -> str:
     own slot instead of fighting over that one.
     """
 
-    if source_id == DEPLOYMENT_SOURCE_ID:
+    if managed_by == MANAGED_BY_DEPLOYMENT:
         return base_field
-    return f"{base_field}__{source_id}"
+    return f"{base_field}__{managed_by}"
 
 
 class CustomSyncDuplicateKeyError(RuntimeError):
@@ -80,13 +82,13 @@ class CustomSyncDuplicateKeyError(RuntimeError):
     they are distinct rows and never collide.
     """
 
-    def __init__(self, kind: str, custom_key: str, source_id: str) -> None:
+    def __init__(self, kind: str, custom_key: str, managed_by: str) -> None:
         self.kind = kind
         self.custom_key = custom_key
-        self.source_id = source_id
+        self.managed_by = managed_by
         super().__init__(
             f"Custom {kind} sync found two live rows for source "
-            f"{source_id!r} with custom_key={custom_key!r}; refusing to "
+            f"{managed_by!r} with custom_key={custom_key!r}; refusing to "
             "pick a survivor.",
         )
 
@@ -162,11 +164,12 @@ class CustomSyncAdapter:
     ``insert``, ``update``, ``delete``) and declare policy deviations as
     the named knobs below — never by forking the diff loop.
 
-    Source scoping is not optional. ``live_rows`` and ``find_collision``
-    must both restrict to :attr:`source_id` — use :func:`managed_rows_filter`
-    — because the loop prunes every managed row whose key left the source.
+    Scoping by ``managed_by`` is not optional. ``live_rows`` and
+    ``find_collision`` must both restrict to :attr:`managed_by` — use
+    :func:`managed_rows_filter` — because the loop prunes every managed
+    row whose key left the source.
     An unscoped query therefore deletes whatever a sibling source planted
-    in the same context. ``insert`` need not write ``source_id`` itself:
+    in the same context. ``insert`` need not write ``managed_by`` itself:
     the loop stamps it into the fields after ``transform``, so a writer
     that persists its field dict wholesale gets it for free.
 
@@ -184,7 +187,7 @@ class CustomSyncAdapter:
     """
 
     kind: str = "rows"
-    source_id: str = DEPLOYMENT_SOURCE_ID
+    managed_by: str = MANAGED_BY_DEPLOYMENT
     prune: bool = True
     collision: Literal["replace", "yield"] = "replace"
     max_workers: int = 1
@@ -193,7 +196,7 @@ class CustomSyncAdapter:
         """Yield this source's managed rows, including their ``custom_key``
         and any fields ``update``/``delete`` need back.
 
-        Scope the query with ``managed_rows_filter(self.source_id)``.
+        Scope the query with ``managed_rows_filter(self.managed_by)``.
         """
         raise NotImplementedError
 
@@ -211,7 +214,7 @@ class CustomSyncAdapter:
         """Overwrite the row, reaching it by the storage handle carried on
         *live_row*.
 
-        Do not re-query by ``source_id``: a legacy row adopted by the
+        Do not re-query by ``managed_by``: a legacy row adopted by the
         deployment has not been stamped yet, and this write is what stamps
         it.
         """
@@ -275,7 +278,7 @@ class CustomSyncAdapter:
     ) -> Optional[Dict[str, Any]]:
         """Return an unmanaged row occupying this entry's natural slot.
 
-        Scope the probe to :attr:`source_id`. A sibling source's row is
+        Scope the probe to :attr:`managed_by`. A sibling source's row is
         not a collision — it is another source's property, and replacing
         it silently uninstalls part of that source.
         """
@@ -293,7 +296,7 @@ def _index_live_rows(adapter: CustomSyncAdapter) -> Dict[str, Dict[str, Any]]:
             continue
         key = str(key)
         if key in live:
-            raise CustomSyncDuplicateKeyError(adapter.kind, key, adapter.source_id)
+            raise CustomSyncDuplicateKeyError(adapter.kind, key, adapter.managed_by)
         live[key] = row
     return live
 
@@ -309,7 +312,7 @@ def _upsert_one(
     fields = adapter.transform(key, dict(fields))
     # Stamped after transform so transforms stay source-agnostic and the
     # collected content hash is identical whoever installs the bundle.
-    fields["source_id"] = adapter.source_id
+    fields["managed_by"] = adapter.managed_by
     if key in live:
         live_row = live[key]
         if live_row.get("custom_hash") == fields.get("custom_hash"):
@@ -365,7 +368,7 @@ def reconcile_custom_rows(
 ) -> CustomSyncResult:
     """Run one full diff of source entries against live managed rows.
 
-    Scoped to ``adapter.source_id`` throughout: the live index, the
+    Scoped to ``adapter.managed_by`` throughout: the live index, the
     collision probes, and the prune all see only that source's rows.
 
     Raises :class:`CustomSyncDuplicateKeyError` before touching anything

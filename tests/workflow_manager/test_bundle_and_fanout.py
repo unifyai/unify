@@ -2,7 +2,7 @@
 
 Symbolic tests over in-memory surfaces. No backend and no LLM: these pin
 the invariants that make a bundle installable — that it can only reach
-source-scoped surfaces, that its content hash does not move with the
+managed-scoped surfaces, that its content hash does not move with the
 settings someone installs it under, and that uninstall clears exactly the
 rows the bundle planted.
 """
@@ -16,28 +16,49 @@ from unify.workflow_manager.bundle import (
     UnscopedSurfaceError,
     WorkflowBundle,
 )
-from unify.workflow_manager.types.workflow import WorkflowMode
 from unify.workflow_manager.workflow_manager import WorkflowManager
 
 WORKFLOW = "draft_email_replies"
 
 
 class RecordingSurface:
-    """Stands in for a manager's ``sync_custom``."""
+    """Stands in for a manager's per-destination custom sync.
+
+    Shape-only: it pins what the fan-out sends, not what a real manager
+    does with it. Receiver semantics (an empty source genuinely pruning,
+    the destination genuinely landing content there) are covered by the
+    live install/uninstall tests, which drive the real ``sync_custom_*``
+    methods — a recording double is structurally blind to them.
+    """
 
     def __init__(self, fail: bool = False) -> None:
         self.calls: List[Dict[str, Any]] = []
         self.fail = fail
 
-    def __call__(self, *, source_id: str, **kwargs: Any) -> bool:
+    def __call__(
+        self,
+        *,
+        managed_by: str,
+        destination: str | None,
+        **kwargs: Any,
+    ) -> bool:
         if self.fail:
             raise RuntimeError("surface exploded")
         (source,) = kwargs.values()
-        self.calls.append({"source_id": source_id, "source": source})
+        self.calls.append(
+            {
+                "managed_by": managed_by,
+                "destination": destination,
+                "source": source,
+            },
+        )
         return bool(source)
 
 
-def _registry(**surfaces: RecordingSurface) -> SurfaceRegistry:
+def _registry(
+    shared: tuple[str, ...] = (),
+    **surfaces: RecordingSurface,
+) -> SurfaceRegistry:
     registry = SurfaceRegistry()
     for name, syncer in surfaces.items():
         registry.register(
@@ -45,6 +66,7 @@ def _registry(**surfaces: RecordingSurface) -> SurfaceRegistry:
             syncer,
             source_kwarg=f"source_{name}",
             source_scoped=True,
+            shared=name in shared,
         )
     return registry
 
@@ -79,7 +101,7 @@ def _bundle(**kwargs: Any) -> WorkflowBundle:
 # Registry                                                              #
 # --------------------------------------------------------------------- #
 def test_unscoped_surface_is_refused():
-    """An adapter that ignores source_id would prune its siblings' rows."""
+    """An adapter that ignores managed_by would prune its siblings' rows."""
     registry = SurfaceRegistry()
     with pytest.raises(UnscopedSurfaceError) as excinfo:
         registry.register(
@@ -92,7 +114,7 @@ def test_unscoped_surface_is_refused():
     assert "contacts" not in registry
 
 
-def test_bundle_cannot_claim_the_deployment_source_id():
+def test_bundle_cannot_claim_the_deployment_managed_by():
     with pytest.raises(ValueError, match="reserved"):
         WorkflowBundle(slug="deployment", name="Impostor")
 
@@ -138,14 +160,26 @@ def test_install_stamps_every_surface_with_the_slug():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle())
+    planted, failures = manager._plant(_bundle(), destination=None, installed=[])
 
     assert not failures
     assert planted["guidance"]["entries"] == 1
     assert planted["tasks"]["entries"] == 1
-    assert [c["source_id"] for c in guidance.calls] == [WORKFLOW]
-    assert [c["source_id"] for c in tasks.calls] == [WORKFLOW]
+    assert [c["managed_by"] for c in guidance.calls] == [WORKFLOW]
+    assert [c["managed_by"] for c in tasks.calls] == [WORKFLOW]
     assert "triage" in guidance.calls[0]["source"]
+
+
+def test_the_install_destination_reaches_every_surface():
+    """A team install plants team content: the installation's destination
+    is passed to each surface, never derived from per-entry fields."""
+    guidance, tasks = RecordingSurface(), RecordingSurface()
+    manager = _manager(_registry(guidance=guidance, tasks=tasks))
+
+    manager._plant(_bundle(), destination="team:7", installed=[])
+
+    assert [c["destination"] for c in guidance.calls] == ["team:7"]
+    assert [c["destination"] for c in tasks.calls] == ["team:7"]
 
 
 def test_uninstall_sends_an_empty_source_per_recorded_surface():
@@ -154,7 +188,12 @@ def test_uninstall_sends_an_empty_source_per_recorded_surface():
     guidance, tasks = RecordingSurface(), RecordingSurface()
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    removed, failures = manager._plant(_bundle(), empty=True)
+    removed, failures = manager._plant(
+        _bundle(),
+        destination=None,
+        installed=[],
+        empty=True,
+    )
 
     assert not failures
     assert guidance.calls[0]["source"] == {}
@@ -168,7 +207,13 @@ def test_uninstall_uses_recorded_surfaces_not_the_current_bundle():
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
     shrunk = _bundle(surfaces={"guidance": {}})
-    manager._plant(shrunk, surface_names=["guidance", "tasks"], empty=True)
+    manager._plant(
+        shrunk,
+        destination=None,
+        installed=[],
+        surface_names=["guidance", "tasks"],
+        empty=True,
+    )
 
     assert len(guidance.calls) == 1
     assert len(tasks.calls) == 1
@@ -179,7 +224,7 @@ def test_one_failing_surface_does_not_stop_the_others():
     tasks = RecordingSurface(fail=True)
     manager = _manager(_registry(guidance=guidance, tasks=tasks))
 
-    planted, failures = manager._plant(_bundle())
+    planted, failures = manager._plant(_bundle(), destination=None, installed=[])
 
     assert sorted(failures) == ["tasks"]
     assert guidance.calls, "a failing surface must not skip the rest"
@@ -203,43 +248,373 @@ def test_optional_params_are_not_required():
     assert WorkflowManager._validate_params(bundle, {}) == {}
 
 
-def test_mode_default_is_seed():
-    """Seed is the safe default: pinned silently reverts local edits."""
-    assert _bundle().mode is WorkflowMode.seed
-
-
 # --------------------------------------------------------------------- #
 # Surface wiring                                                        #
 # --------------------------------------------------------------------- #
-def test_registered_kwargs_match_the_real_sync_signatures():
-    """The fan-out calls sync_custom by keyword, so a wrong name is a
-    TypeError at install time rather than anything the type checker sees.
+def test_registered_specs_match_the_real_sync_signatures():
+    """The fan-out calls the per-destination syncs by keyword, so a wrong
+    name is a TypeError at install time rather than anything the type
+    checker sees.
 
-    KnowledgeManager takes ``source_claims`` while the others take
-    ``source_<surface>``; this pins that asymmetry so the mapping cannot
-    drift back to a guessed name.
+    Pins three things per surface: the method exists, it takes the
+    declared source kwarg (KnowledgeManager's ``source_claims`` is the
+    asymmetry that motivated this), and it takes ``managed_by`` and
+    ``destination`` — the two arguments that make an empty-source
+    uninstall prune the right rows in the right place.
+
+    The ``destination`` requirement is the load-bearing one: the
+    destination-grouping wrappers (guidance/knowledge/tasks
+    ``sync_custom``) have no such parameter because they derive
+    destinations from the entries, which is exactly why they discard an
+    empty source before the engine and must never be registered.
+    FunctionManager's ``sync_custom`` is destination-explicit and passes.
     """
     import inspect
 
+    from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
     from unify.task_scheduler.task_scheduler import TaskScheduler
-    from unify.workflow_manager.surfaces import SOURCE_SCOPED
+    from unify.workflow_manager.surfaces import SCOPED_SURFACES
 
     managers = {
         "guidance": GuidanceManager,
         "knowledge": KnowledgeManager,
         "tasks": TaskScheduler,
+        "functions": FunctionManager,
     }
-    for surface, kwarg in SOURCE_SCOPED.items():
-        params = inspect.signature(managers[surface].sync_custom).parameters
-        assert kwarg in params, f"{surface}: sync_custom has no {kwarg!r}"
-        assert "source_id" in params, f"{surface}: sync_custom is not source-scoped"
+    for surface, spec in SCOPED_SURFACES.items():
+        method = getattr(managers[surface], spec.method)
+        params = inspect.signature(method).parameters
+        kwarg = spec.source_kwarg
+        assert kwarg in params, f"{surface}: {spec.method} has no {kwarg!r}"
+        assert "managed_by" in params, f"{surface}: {spec.method} is not managed-scoped"
+        assert "destination" in params, (
+            f"{surface}: {spec.method} has no destination parameter — a "
+            "grouping wrapper that derives destinations from its entries "
+            "discards an empty source and must never be registered"
+        )
 
 
 def test_pending_surfaces_are_not_registered():
     """The unscoped managers must stay unreachable until their adapters
     are scoped; listing one in both places would be the bug."""
-    from unify.workflow_manager.surfaces import PENDING_SCOPING, SOURCE_SCOPED
+    from unify.workflow_manager.surfaces import PENDING_SCOPING, SCOPED_SURFACES
 
-    assert not set(PENDING_SCOPING) & set(SOURCE_SCOPED)
+    assert not set(PENDING_SCOPING) & set(SCOPED_SURFACES)
+
+
+# --------------------------------------------------------------------- #
+# Shared surfaces                                                       #
+# --------------------------------------------------------------------- #
+def _shared_bundle(slug: str, atoms: Dict[str, str]) -> WorkflowBundle:
+    """A bundle shipping only functions; *atoms* maps name -> content hash."""
+    return WorkflowBundle(
+        slug=slug,
+        name=slug,
+        surfaces={
+            "functions": {
+                name: {"custom_key": name, "name": name, "custom_hash": h}
+                for name, h in atoms.items()
+            },
+        },
+    )
+
+
+def test_shared_surface_syncs_the_union_under_the_library_source():
+    """Functions key on their name, so a shared atom must be one row: the
+    fan-out sends the union of installed bundles under WORKFLOW_LIBRARY,
+    never the bundle's own entries under its slug."""
+    from unify.workflow_manager.bundle import WORKFLOW_LIBRARY
+
+    functions = RecordingSurface()
+    manager = _manager(_registry(shared=("functions",), functions=functions))
+
+    installed = [_shared_bundle("wf_a", {"send_email": "h1", "only_a": "h2"})]
+    incoming = _shared_bundle("wf_b", {"send_email": "h1", "only_b": "h3"})
+
+    manager._plant(incoming, destination=None, installed=installed)
+
+    (call,) = functions.calls
+    assert call["managed_by"] == WORKFLOW_LIBRARY
+    union = call["source"]
+    assert set(union) == {"send_email", "only_a", "only_b"}
+    assert union["send_email"]["workflows"] == ["wf_a", "wf_b"]
+    assert union["only_a"]["workflows"] == ["wf_a"]
+    assert union["only_b"]["workflows"] == ["wf_b"]
+
+
+def test_uninstall_of_a_shared_surface_keeps_the_other_workflows_atoms():
+    """Uninstall re-syncs the union minus the leaving bundle: the shared
+    atom survives with the remaining membership, and only the atoms no
+    workflow references any more leave the source (the engine then prunes
+    exactly those rows)."""
+    functions = RecordingSurface()
+    manager = _manager(_registry(shared=("functions",), functions=functions))
+
+    leaving = _shared_bundle("wf_a", {"send_email": "h1", "only_a": "h2"})
+    staying = _shared_bundle("wf_b", {"send_email": "h1", "only_b": "h3"})
+    manager._catalogue = {"wf_a": leaving, "wf_b": staying}
+
+    manager._plant(
+        leaving,
+        destination=None,
+        installed=[leaving, staying],
+        empty=True,
+    )
+
+    (call,) = functions.calls
+    union = call["source"]
+    assert set(union) == {"send_email", "only_b"}
+    assert union["send_email"]["workflows"] == ["wf_b"]
+
+
+def test_conflicting_shared_content_refuses_before_anything_syncs():
+    """Two bundles shipping one name with different content is a curation
+    error: whichever copy won, the other workflow would run someone
+    else's code under its own name. The union raises before any surface
+    is reached, so nothing half-plants."""
+    from unify.common.tool_outcome import ToolErrorException
+
+    functions, guidance = RecordingSurface(), RecordingSurface()
+    manager = _manager(
+        _registry(shared=("functions",), functions=functions, guidance=guidance),
+    )
+
+    installed = [_shared_bundle("wf_a", {"send_email": "OLD"})]
+    incoming = WorkflowBundle(
+        slug="wf_b",
+        name="wf_b",
+        surfaces={
+            "guidance": {"g": {"custom_key": "g", "custom_hash": "hg"}},
+            "functions": {
+                "send_email": {
+                    "custom_key": "send_email",
+                    "name": "send_email",
+                    "custom_hash": "NEW",
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ToolErrorException) as excinfo:
+        manager._plant(incoming, destination=None, installed=installed)
+
+    assert excinfo.value.payload["error"] == "conflicting_content"
+    assert excinfo.value.payload["workflows"] == ["wf_a", "wf_b"]
+    assert not functions.calls, "nothing may sync after a conflict"
+    assert not guidance.calls, "no other surface may half-plant either"
+
+
+def test_bundle_cannot_claim_the_library_source():
+    with pytest.raises(ValueError, match="reserved"):
+        WorkflowBundle(slug="workflow_library", name="Impostor")
+
+
+# --------------------------------------------------------------------- #
+# Requirements                                                          #
+# --------------------------------------------------------------------- #
+def _resolver(**kwargs):
+    from unify.workflow_manager.requirements import RequirementResolver
+
+    kwargs.setdefault("keyset", set())
+    kwargs.setdefault("connected_apps", set())
+    kwargs.setdefault("native_manifests", {})
+    return RequirementResolver(**kwargs)
+
+
+def _requirement(slug: str, **kwargs):
+    from unify.workflow_manager.bundle import WorkflowRequirement
+
+    return WorkflowRequirement(slug=slug, **kwargs)
+
+
+def test_a_gallery_connection_settles_a_requirement():
+    """A third-party app connected through the gallery is connected, and
+    no secret is involved — its credentials live with the provider."""
+    resolver = _resolver(connected_apps={"notion"})
+
+    assert resolver.resolve(_requirement("notion")) == {
+        "slug": "notion",
+        "name": "notion",
+        "connected": True,
+        "via": "connection",
+    }
+
+
+def test_a_native_package_answers_for_its_own_secrets():
+    """A bundle naming a native app does not restate the package's
+    secrets: the package manifest is the authority, so the two cannot
+    drift."""
+    resolver = _resolver(
+        native_manifests={
+            "hubspot": {
+                "slug": "hubspot",
+                "required_secrets_json": '["HUBSPOT_TOKEN"]',
+            },
+        },
+    )
+
+    unmet = resolver.resolve(_requirement("hubspot"))
+    assert unmet["connected"] is False
+    assert unmet["via"] == "native_package"
+    assert unmet["missing_secrets"] == ["HUBSPOT_TOKEN"]
+
+    connected = _resolver(
+        keyset={"HUBSPOT_TOKEN"},
+        native_manifests={
+            "hubspot": {
+                "slug": "hubspot",
+                "required_secrets_json": '["HUBSPOT_TOKEN"]',
+            },
+        },
+    ).resolve(_requirement("hubspot"))
+    assert connected["connected"] is True
+
+
+def test_a_native_package_gating_on_optional_secrets_needs_any_one():
+    """Mirrors _package_is_enabled: with no required secrets, any one
+    optional secret makes the package usable."""
+    manifests = {
+        "github": {
+            "slug": "github",
+            "optional_secrets_json": '["GITHUB_TOKEN"]',
+        },
+    }
+    assert not _resolver(native_manifests=manifests).resolve(
+        _requirement("github"),
+    )["connected"]
+    assert _resolver(
+        keyset={"GITHUB_TOKEN"},
+        native_manifests=manifests,
+    ).resolve(
+        _requirement("github"),
+    )["connected"]
+
+
+def test_byod_oauth_falls_back_to_the_bundles_own_declaration():
+    """Workspace has no package and no gallery row, so the refresh-token
+    secret the bundle names is the only available signal."""
+    requirement = _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",))
+
+    unmet = _resolver().resolve(requirement)
+    assert unmet["connected"] is False
+    assert unmet["via"] == "secret"
+    assert unmet["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
+
+    met = _resolver(keyset={"GOOGLE_REFRESH_TOKEN"}).resolve(requirement)
+    assert met["connected"] is True
+
+
+def test_a_gallery_connection_outranks_a_missing_secret():
+    """An app reachable both ways needs only one route. Checking the
+    secret first would hold jobs on an app the user has genuinely
+    connected."""
+    resolver = _resolver(connected_apps={"gmail"})
+    resolved = resolver.resolve(
+        _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",)),
+    )
+    assert resolved["connected"] is True
+    assert resolved["via"] == "connection"
+
+
+def test_a_requirement_nothing_can_answer_for_reads_as_met():
+    """No package, no connection, no declared secret: there is nothing to
+    check, and a bundle must not hold its jobs hostage to an uncheckable
+    signal."""
+    resolved = _resolver().resolve(_requirement("web"))
+    assert resolved["connected"] is True
+    assert resolved["via"] == "undeclared"
+
+
+def test_slugs_resolve_case_and_separator_insensitively():
+    """Gallery slugs arrive in more than one shape; a bundle should not
+    have to guess which."""
+    resolver = _resolver(connected_apps={"google_calendar"})
+    assert resolver.resolve(_requirement("Google-Calendar"))["connected"]
+
+
+def test_unmet_requirements_reports_only_the_unconnected(monkeypatch):
+    from unify.workflow_manager import requirements as req_module
+
+    manager = _manager(_registry(guidance=RecordingSurface()))
+    bundle = _bundle(
+        requirements=(
+            _requirement("gmail", required_secrets=("GOOGLE_REFRESH_TOKEN",)),
+            _requirement("slack", required_secrets=("SLACK_TOKEN",)),
+        ),
+    )
+
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: frozenset({"SLACK_TOKEN"}),
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "connected_apps",
+        lambda self: frozenset(),
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "native_manifest",
+        lambda self, slug: None,
+    )
+
+    unmet = manager._unmet_requirements(bundle)
+    assert [r["slug"] for r in unmet] == ["gmail"]
+    assert unmet[0]["missing_secrets"] == ["GOOGLE_REFRESH_TOKEN"]
+
+    report = manager._requirements_report(bundle)
+    assert {r["slug"]: r["connected"] for r in report} == {
+        "gmail": False,
+        "slack": True,
+    }
+
+
+def test_derived_status_folds_requirements_at_read_time():
+    """needs_connection is never stored: connections change without the
+    installation row being touched. partial outranks it — something that
+    failed to plant must not be masked by a missing connection."""
+    derived = WorkflowManager._derived_status
+    unmet = [{"slug": "gmail"}]
+
+    assert derived("active", []) == "active"
+    assert derived("active", unmet) == "needs_connection"
+    assert derived("partial", unmet) == "partial"
+    assert derived(None, unmet) is None
+
+
+def test_arming_uses_the_tasks_surface_armer():
+    """Install arms through the registered armer with the slug and the
+    install destination — planted definitions are born disarmed, so a
+    missing arm call means nothing a workflow sets up ever fires."""
+    calls = []
+
+    def armer(*, managed_by, enabled, destination):
+        calls.append((managed_by, enabled, destination))
+        return [41, 42]
+
+    registry = SurfaceRegistry()
+    tasks = RecordingSurface()
+    registry.register(
+        "tasks",
+        tasks,
+        source_kwarg="source_tasks",
+        source_scoped=True,
+        armer=armer,
+    )
+    manager = _manager(registry)
+
+    armed = manager._arm_workflow_tasks(
+        _bundle(),
+        destination="team:7",
+        enabled=True,
+    )
+    assert armed == [41, 42]
+    assert calls == [(WORKFLOW, True, "team:7")]
+
+
+def test_arming_a_surface_without_an_armer_is_a_no_op():
+    manager = _manager(_registry(tasks=RecordingSurface()))
+    assert manager._arm_workflow_tasks(_bundle(), destination=None, enabled=True) == []

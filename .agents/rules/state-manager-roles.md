@@ -132,7 +132,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 
 ### WebSearcher
 - **Role**: Lightweight, text-based retrieval engine for quick one-off internet queries (headlines, weather, definitions, current events).
-- **Scope**: ask only (search, extract, crawl, map against the public web); returns live handle. No gated-site access, no browser automation, no credentials. For authenticated or complex web workflows, use Tavily + SecretManager + ComputerPrimitives directly via code-first plans.
+- **Scope**: ask only (search, extract, crawl, map against the public web); returns live handle. No gated-site access, no browser automation, no credentials. For authenticated or complex web procedures, use Tavily + SecretManager + ComputerPrimitives directly via code-first plans.
 - **Connections**:
   - **Steered by**: `Actor` (via `primitives.web.*`).
   - **Steers**: — (results may subsequently be persisted as typed claims via `KnowledgeManager_add_knowledge` when requested).
@@ -179,7 +179,7 @@ Use this to decide which manager to call, what each owns, and where its jurisdic
 - **Scope**: Managers publish structured events (notably `ManagerMethod` for incoming/outgoing `ask`/`update`/`execute`) via a thin logging wrapper; the bus supports `publish`, `search` (filterable queries), `join_published`/`join_callbacks` for deterministic flushing, per‑type window sizing, auto‑pinning, and callback registration.
 - **Connections**:
   - **Steered by**: All public manager methods (through the logging decorator) and other components that emit operational events.
-  - **Steers**: `MemoryManager` (registers callbacks to react to message and `ManagerMethod` events for maintenance workflows); tests and higher‑level orchestrators query the bus to observe recent activity.
+  - **Steers**: `MemoryManager` (registers callbacks to react to message and `ManagerMethod` events for maintenance passes); tests and higher‑level orchestrators query the bus to observe recent activity.
 
 ### Precedence and source of truth
 - **Code is canonical**: This guide is descriptive. If the implementation ever contradicts these descriptions or relationships, the current code takes precedence.

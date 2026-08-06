@@ -790,20 +790,26 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
         self,
         key: str,
         value: str,
-    ) -> int | None:
-        """Simulated metadata-keyed exchange lookup over the in-memory store."""
+    ) -> tuple[int, str | None] | None:
+        """Simulated metadata-keyed exchange lookup over the in-memory store.
+
+        The in-memory store is a single root, so the destination is always
+        personal.
+        """
         needle = str(value or "").strip()
         if not needle:
             return None
         for exchange_id, exchange in self._sim_exchanges.items():
             if str((exchange.metadata or {}).get(key, "")) == needle:
-                return int(exchange_id)
+                return int(exchange_id), None
         return None
 
     def update_exchange_metadata(
         self,
         exchange_id: int,
         metadata: Dict[str, Any],
+        *,
+        destination: str | None = None,
     ) -> Exchange:
         """
         Simulated merge of exchange metadata into the in-memory store.
@@ -818,19 +824,14 @@ class SimulatedTranscriptManager(BaseTranscriptManager):
         )
         cur = self._sim_exchanges.get(int(exchange_id))
         if cur is None:
-            cur = Exchange(
-                exchange_id=int(exchange_id),
-                metadata=dict(metadata or {}),
-                medium="",
-            )
-        else:
-            merged = dict(cur.metadata or {})
-            merged.update(dict(metadata or {}))
-            cur = Exchange(
-                exchange_id=cur.exchange_id,
-                metadata=merged,
-                medium=cur.medium,
-            )
+            raise ValueError(f"No exchange found for exchange_id={exchange_id}.")
+        merged = dict(cur.metadata or {})
+        merged.update(dict(metadata or {}))
+        cur = Exchange(
+            exchange_id=cur.exchange_id,
+            metadata=merged,
+            medium=cur.medium,
+        )
         self._sim_exchanges[int(exchange_id)] = cur
         if sched:
             label, cid, t0 = sched

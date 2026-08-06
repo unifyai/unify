@@ -164,7 +164,7 @@ async def test_triggerable_start_rearms_definition():
     result = ts._attach_entrypoint_to_definition(
         task_id=tid,
         function_id=654,
-        rationale="The triggered run revealed a stable reusable workflow.",
+        rationale="The triggered run revealed a stable reusable procedure.",
     )
     assert result["outcome"] == "candidate_recorded"
     assert ts._get_task_or_raise(tid).entrypoint == 654

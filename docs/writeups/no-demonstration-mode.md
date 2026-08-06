@@ -35,7 +35,7 @@ Here's the part I got wrong when I first sketched this post, and it turns out to
 
 When the conversation layer hands work to a task, it can [fork its conversation](parent-chat-context.md) into it. You might assume the screenshots ride along. They don't — image payloads are deliberately stripped out of that snapshot. What survives is the annotation the transcript already carries: `[Screenshots: …/frame.jpg]`, sitting next to the message it belongs to. The task gets paths, not pixels, and the conversation layer is told plainly in its prompt that filepaths are the only way the task can reach an image.
 
-The immediate reason is cost. A forked conversation with twenty frames of base64 in it is an enormous prompt to hand someone who might only need to grep a log file. But the better reason is that it's *lazy*, in the good sense. The task looks at what it decides is worth looking at, using the same tools it would use for any other image — attach the frame into its own context, or ask a focused question about it and get an answer back. Most tasks never look at all. The one that's learning your workflow looks at nearly all of them.
+The immediate reason is cost. A forked conversation with twenty frames of base64 in it is an enormous prompt to hand someone who might only need to grep a log file. But the better reason is that it's *lazy*, in the good sense. The task looks at what it decides is worth looking at, using the same tools it would use for any other image — attach the frame into its own context, or ask a focused question about it and get an answer back. Most tasks never look at all. The one that's learning your procedure looks at nearly all of them.
 
 And the mechanism that makes this work is embarrassingly boring: an image on disk is a file, and files were already the currency that every part of the system passes around. A screenshot ends up in the same world as a PDF someone emailed you. Guidance entries can point at images, so "the export button is the small one in the top right" can carry the frame that proves it. Nothing needed a new concept.
 
@@ -52,17 +52,17 @@ So you get on a call, share your screen, and say "right, this is how I do the we
 
 The conversation layer sees your words and the frames, decides this is a job rather than a chat, and dispatches a task — with the session kept alive, because you're obviously not finished talking. That decision is made by the same rule as always: could the boss plausibly send another instruction about this? For a walkthrough, obviously yes. The prompt guidance listing when to keep a session open mentions step-by-step walkthroughs and demonstrations as examples, which is the sum total of how much this system knows about the concept of a demo.
 
-The task pulls up the frames it cares about, watches what you did, and writes it down — as a function if the workflow is deterministic enough to be code, as prose guidance if it's a judgment call about tone or when to escalate, usually both, linked to each other and to whatever related entries already exist.
+The task pulls up the frames it cares about, watches what you did, and writes it down — as a function if the procedure is deterministic enough to be code, as prose guidance if it's a judgment call about tone or when to escalate, usually both, linked to each other and to whatever related entries already exist.
 
 Then you say "no, not that button, the one underneath". This is where a recording mode gets awkward, because a recording is finished when you stop it, and now you're editing an artefact. For us it's an interjection into a session that never ended — the machinery I wrote about in [an earlier post](nested-steering.md), built for interrupting long-running work, doing a job nobody had teaching in mind for. The task still has the whole context. It updates the function in place rather than writing a second one, and if you shared a new frame while correcting it, that frame is in the update it just received, as another path.
 
-Iterate as long as you like. Come back next week, reopen it, refine further. Teaching a person a workflow takes more than one pass and it's strange to build software that assumes otherwise.
+Iterate as long as you like. Come back next week, reopen it, refine further. Teaching a person a procedure takes more than one pass and it's strange to build software that assumes otherwise.
 
 ## The thing you're left with
 
 At the end there's a function in the library and some guidance next to it. They look exactly like a function and some guidance that got written during a completely ordinary task at 3am when nobody was watching. There is no flag saying this one was learned by demonstration, no separate shelf for demo-taught skills, no different execution path when it runs.
 
-That sounds like an implementation detail and it isn't. It means a demonstrated workflow can be called by another function, refined by a [later distillation pass](functions-and-guidance.md) that never saw your screen, shared with a teammate, or found by search when something adjacent comes up. A skill that arrives through a special pipeline tends to stay in the world that pipeline built for it. One that arrives through the front door is just part of the library.
+That sounds like an implementation detail and it isn't. It means a demonstrated procedure can be called by another function, refined by a [later distillation pass](functions-and-guidance.md) that never saw your screen, shared with a teammate, or found by search when something adjacent comes up. A skill that arrives through a special pipeline tends to stay in the world that pipeline built for it. One that arrives through the front door is just part of the library.
 
 ## Why I think this generalises
 

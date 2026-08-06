@@ -121,6 +121,44 @@ def test_transcript_writes_route_to_space_and_reads_fan_out():
 
 
 @_handle_project
+def test_metadata_lookup_reports_the_root_it_matched_in():
+    """A shared assistant's call artifacts have to round-trip through one root.
+
+    The call stores its identifiers on the exchange at hangup and the recording
+    URL arrives minutes later on a separate event, often in a fresh pod that has
+    to recover the exchange from the store. Since exchange ids are root-local,
+    the lookup has to hand back the destination it matched in, or the write goes
+    to the manager's home root -- which for a shared assistant holds no part of
+    the conversation.
+    """
+    team_id = _team_id()
+    SESSION_DETAILS.team_ids = [team_id]
+    tm = TranscriptManager()
+
+    room_name = f"unity_meet_{team_id}"
+    exchange_id, _ = tm.log_first_message_in_new_exchange(
+        _message_payload(f"shared call transcript {team_id}", medium="unify_meet"),
+        exchange_initial_metadata={"room_name": room_name},
+        destination=f"team:{team_id}",
+    )
+
+    located = tm.resolve_exchange_id_by_metadata("room_name", room_name)
+    assert located == (exchange_id, f"team:{team_id}")
+
+    recording_url = f"https://storage.googleapis.com/bucket/{room_name}.mp4"
+    tm.update_exchange_metadata(
+        located[0],
+        {"recording_url": recording_url},
+        destination=located[1],
+    )
+
+    [row] = _logs(f"Teams/{team_id}/Exchanges", f"exchange_id == {exchange_id}")
+    assert row.entries["metadata"]["recording_url"] == recording_url
+    # Nothing is stranded in the home root, where the id addresses no exchange.
+    assert not _logs(tm._exchanges_ctx, f"exchange_id == {exchange_id}")
+
+
+@_handle_project
 def test_transcript_move_helpers_relocate_rows_and_surface_destination_errors():
     team_id = _team_id()
     SESSION_DETAILS.team_ids = [team_id]
@@ -131,12 +169,17 @@ def test_transcript_move_helpers_relocate_rows_and_surface_destination_errors():
         exchange_initial_metadata={"owner": "personal"},
     )
 
-    update = tm.update_exchange_metadata(
-        exchange_id,
-        {"owner": "team"},
-        destination=f"team:{team_id}",
-    )
+    # The exchange still lives in the personal root, so that is the root the
+    # update has to address; naming the team root would be a misrouted write.
+    update = tm.update_exchange_metadata(exchange_id, {"owner": "still personal"})
     assert update.exchange_id == exchange_id
+    assert update.metadata["owner"] == "still personal"
+    with pytest.raises(ValueError):
+        tm.update_exchange_metadata(
+            exchange_id,
+            {"owner": "team"},
+            destination=f"team:{team_id}",
+        )
 
     message_move = tm.move_message(
         message_id,

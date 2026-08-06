@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # Module-level flag to prevent double-registration
 _HOOK_INSTALLED = False
 
+# The registered unillm listener, kept so its delivery health is inspectable.
+_LISTENER = None
+
 
 async def _update_cumulative_spend(cost: float) -> None:
     """Update cumulative monthly spend after each LLM call.
@@ -185,12 +188,14 @@ def install_llm_event_hook() -> None:
 
     Should be called during unify.init() after the EventBus is initialized.
 
-    Uses set_global_llm_event_hook() to ensure the hook is process-wide and
-    works across all threads. This is critical because unify.init() may be
-    called from a worker thread (via asyncio.to_thread in managers_utils.py)
-    while LLM calls happen from the main async context.
+    Registers a unillm listener, which is process-wide and works across all
+    threads. This is critical because unify.init() may be called from a worker
+    thread (via asyncio.to_thread in managers_utils.py) while LLM calls happen
+    from the main async context. Registration is additive, so other consumers
+    (metering, benchmark harnesses) can register alongside this one in any
+    order without either displacing the other.
     """
-    global _HOOK_INSTALLED
+    global _HOOK_INSTALLED, _LISTENER
 
     if _HOOK_INSTALLED:
         return
@@ -198,10 +203,10 @@ def install_llm_event_hook() -> None:
     try:
         import unillm
 
-        # Use global hook to ensure it works across all threads/contexts.
+        # Use a listener to ensure it works across all threads/contexts.
         # This is essential because unify.init() may run in a thread pool
         # worker while LLM calls happen from the main async context.
-        unillm.set_global_llm_event_hook(_llm_event_to_eventbus)
+        _LISTENER = unillm.add_llm_event_listener(_llm_event_to_eventbus)
         _HOOK_INSTALLED = True
     except ImportError:
         # unillm not available - skip hook installation

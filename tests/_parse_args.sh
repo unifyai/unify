@@ -11,6 +11,7 @@
 #
 # After calling parse_test_args, these variables are populated:
 #   SERIAL, TIMEOUT, SESSION_TIMEOUT, NAME_PATTERN, EVAL_ONLY, SYMBOLIC_ONLY,
+#   DETERMINISTIC_ONLY,
 #   REPEAT_COUNT, OVERWRITE_SCENARIOS, MAX_JOBS, ENV_OVERRIDES[],
 #   TAGS[], PYTEST_EXTRA_ARGS[], PYTEST_COLLECTION_ARGS[],
 #   POSITIONAL_ARGS[]
@@ -41,6 +42,7 @@ parse_test_args() {
   NAME_PATTERN=""
   EVAL_ONLY=0
   SYMBOLIC_ONLY=0
+  DETERMINISTIC_ONLY=0
   REPEAT_COUNT=1
   OVERWRITE_SCENARIOS=0
   MAX_JOBS=$_PARSE_ARGS_NUM_CORES
@@ -94,6 +96,10 @@ parse_test_args() {
         ;;
       --eval-only)
         EVAL_ONLY=1
+        shift
+        ;;
+      --deterministic-only)
+        DETERMINISTIC_ONLY=1
         shift
         ;;
       --symbolic-only)
@@ -198,8 +204,8 @@ parse_test_args() {
   done
 
   # Validate mutually exclusive flags
-  if (( EVAL_ONLY && SYMBOLIC_ONLY )); then
-    echo "Error: --eval-only and --symbolic-only are mutually exclusive." >&2
+  if (( EVAL_ONLY + SYMBOLIC_ONLY + DETERMINISTIC_ONLY > 1 )); then
+    echo "Error: --eval-only, --symbolic-only and --deterministic-only are mutually exclusive." >&2
     return 2
   fi
 
@@ -245,6 +251,7 @@ reconstruct_parallel_run_args() {
   [[ -n "$NAME_PATTERN" ]] && args="$args -m $(printf '%q' "$NAME_PATTERN")"
   (( EVAL_ONLY )) && args="$args --eval-only"
   (( SYMBOLIC_ONLY )) && args="$args --symbolic-only"
+  (( DETERMINISTIC_ONLY )) && args="$args --deterministic-only"
   (( REPEAT_COUNT > 1 )) && args="$args --repeat $REPEAT_COUNT"
   (( OVERWRITE_SCENARIOS )) && args="$args --overwrite-scenarios"
   # Note: MAX_JOBS is not passed to CI (CI has its own resource limits)
@@ -293,6 +300,7 @@ Options:
   -j, --jobs N         Max concurrent sessions (default: CPU cores, currently $DETECTED_CPU_CORES)
   --eval-only          Run only @pytest.mark.eval tests
   --symbolic-only      Run only non-eval tests
+  --deterministic-only Run only tests with no model in the loop
   --repeat N           Run each test N times
   --tags TAG           Tag runs for filtering (repeatable)
   --overwrite-scenarios  Delete and recreate test scenarios

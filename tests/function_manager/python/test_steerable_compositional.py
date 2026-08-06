@@ -100,12 +100,12 @@ async def test_compositional_function_can_return_steerable_handle():
     globals_dict["ImmediateHandle"] = _ImmediateHandle
 
     code = """
-async def my_steerable_workflow(goal: str):
+async def my_steerable_procedure(goal: str):
     return ImmediateHandle(f"handled: {goal}")
 """
     exec(code, globals_dict)
 
-    handle = await globals_dict["my_steerable_workflow"]("Say hello")
+    handle = await globals_dict["my_steerable_procedure"]("Say hello")
 
     assert isinstance(handle, SteerableToolHandle)
     assert handle.result() == "handled: Say hello"
@@ -161,12 +161,12 @@ def test_non_steerable_function_returns_plain_value():
     globals_dict = create_execution_globals()
 
     code = """
-async def plain_workflow(x: int, y: int) -> int:
+async def plain_procedure(x: int, y: int) -> int:
     return x + y
 """
     exec(code, globals_dict)
 
-    result = asyncio.run(globals_dict["plain_workflow"](2, 3))
+    result = asyncio.run(globals_dict["plain_procedure"](2, 3))
 
     assert not isinstance(result, SteerableToolHandle)
     assert result == 5
@@ -196,12 +196,12 @@ async def test_compositional_function_with_type_annotation():
     globals_dict["ImmediateHandle"] = _ImmediateHandle
 
     code = """
-async def typed_steerable_workflow(goal: str) -> SteerableToolHandle:
+async def typed_steerable_procedure(goal: str) -> SteerableToolHandle:
     return ImmediateHandle(goal)
 """
     exec(code, globals_dict)
 
-    handle = await globals_dict["typed_steerable_workflow"]("Hi")
+    handle = await globals_dict["typed_steerable_procedure"]("Hi")
     assert isinstance(handle, SteerableToolHandle)
     assert handle.result() == "Hi"
 
@@ -218,16 +218,16 @@ async def test_compositional_function_returns_codeact_actor_handle():
     A compositional function that wraps CodeActActor should be detected as steerable.
 
     This is a critical pattern: storing CodeActActor configurations as compositional
-    functions allows for reusable, customizable agent workflows. The returned handle
+    functions allows for reusable, customizable agent procedures. The returned handle
     must be detected as steerable so the execution layer can forward steering operations.
     """
     globals_dict = create_execution_globals()
 
     # Define a compositional function that creates and returns a CodeActActor handle
     code = """
-async def codeact_workflow(goal: str) -> SteerableToolHandle:
+async def codeact_procedure(goal: str) -> SteerableToolHandle:
     \"\"\"
-    A steerable workflow powered by CodeActActor.
+    A steerable procedure powered by CodeActActor.
 
     This pattern allows storing pre-configured CodeActActor setups as
     compositional functions that can be searched, retrieved, and executed
@@ -249,7 +249,7 @@ async def codeact_workflow(goal: str) -> SteerableToolHandle:
     exec(code, globals_dict)
 
     # Call the compositional function
-    handle = await globals_dict["codeact_workflow"]("Say hello briefly")
+    handle = await globals_dict["codeact_procedure"]("Say hello briefly")
 
     # Verify it's detected as steerable (the key assertion)
     assert isinstance(

@@ -140,12 +140,12 @@ def test_describe_returns_not_indexed_for_missing_file(file_manager):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Workflow integration tests
+# Composed-call integration tests
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def test_describe_then_filter_workflow(file_manager, tmp_path: Path):
-    """describe() → filter_files() workflow should work correctly."""
+def test_describe_then_filter_flow(file_manager, tmp_path: Path):
+    """describe() → filter_files() sequence should work correctly."""
     p = tmp_path / "workflow.csv"
     p.write_text("name,value\nalpha,10\nbeta,20\n")
     file_manager.ingest_files(str(p))
@@ -160,8 +160,8 @@ def test_describe_then_filter_workflow(file_manager, tmp_path: Path):
     assert isinstance(rows, list)
 
 
-def test_describe_then_search_workflow(file_manager, tmp_path: Path):
-    """describe() → search_files() workflow should work correctly."""
+def test_describe_then_search_flow(file_manager, tmp_path: Path):
+    """describe() → search_files() sequence should work correctly."""
     p = tmp_path / "workflow_search.txt"
     p.write_text("Machine learning and artificial intelligence concepts")
     file_manager.ingest_files(str(p))
@@ -181,8 +181,8 @@ def test_describe_then_search_workflow(file_manager, tmp_path: Path):
     assert isinstance(rows, list)
 
 
-def test_describe_then_reduce_workflow(file_manager, tmp_path: Path):
-    """describe() → reduce() workflow should work correctly."""
+def test_describe_then_reduce_flow(file_manager, tmp_path: Path):
+    """describe() → reduce() sequence should work correctly."""
     p = tmp_path / "workflow_reduce.csv"
     p.write_text("category,amount\nA,100\nB,200\nA,150\n")
     file_manager.ingest_files(str(p))

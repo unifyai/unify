@@ -492,10 +492,12 @@ class ConversationManager(metaclass=SingletonABCMeta):
         # Primary destination used when one id is needed for compatibility paths.
         self._local_message_destinations: dict[int, str | None] = {}
 
-        # mapping from conference_name/room_name to exchange_id, populated
-        # at call/meet end so the async RecordingReady handler can resolve
-        # the exchange without a database filter query.
-        self._recording_exchange_ids: dict[str, int] = {}
+        # mapping from conference_name/room_name to the exchange's
+        # (id, destination), populated at call/meet end so the async
+        # RecordingReady handler can resolve the exchange without a database
+        # filter query. The destination travels with the id because exchange
+        # ids are root-local.
+        self._recording_exchange_ids: dict[str, tuple[int, str | None]] = {}
 
         # Detached recording-start requests. Recording must never gate call
         # setup, so the call-started handler fires the request without awaiting

@@ -315,7 +315,7 @@ async def test_sync_custom_functions_continues_after_one_failure(
 
     # Aggregate hash is not stored on partial failure, so a retry re-attempts
     # the failed name once the underlying error is gone.
-    fm._custom_functions_synced = False
+    fm._custom_functions_synced_sources.clear()
     fm._insert_custom_function = real_insert
     assert fm.sync_custom_functions(source_functions=source_fns) is True
     assert "example_uppercase" in fm.list_functions()
@@ -333,7 +333,7 @@ async def test_sync_custom_functions_is_idempotent(
     result1 = fm.sync_custom_functions(source_functions=source_fns)
     assert result1 is True
 
-    fm._custom_functions_synced = False
+    fm._custom_functions_synced_sources.clear()
     result2 = fm.sync_custom_functions(source_functions=source_fns)
     assert result2 is False
 
@@ -351,7 +351,7 @@ async def test_sync_custom_functions_preserves_function_id(
     functions = fm.list_functions()
     original_id = functions["example_add"]["function_id"]
 
-    fm._custom_functions_synced = False
+    fm._custom_functions_synced_sources.clear()
     fm.sync_custom_functions(source_functions=source_fns)
     functions = fm.list_functions()
     assert functions["example_add"]["function_id"] == original_id
@@ -518,8 +518,8 @@ async def test_sync_custom_is_idempotent(
     result1 = fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
     assert result1 is True
 
-    fm._custom_venvs_synced = False
-    fm._custom_functions_synced = False
+    fm._custom_venvs_synced_sources.clear()
+    fm._custom_functions_synced_sources.clear()
 
     result2 = fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
     assert result2 is False

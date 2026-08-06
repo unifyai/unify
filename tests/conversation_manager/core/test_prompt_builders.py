@@ -671,14 +671,26 @@ class TestRoomChatEtiquette:
     """Team/group chat needs the opposite default to a 1:1 thread.
 
     The restraint section says never to leave a chat line unanswered, which is
-    right when I am the only possible answerer. A room delivers the same message
-    to every member assistant, so all of them following that rule turns one
-    human line into several replies — and each reply is itself a room message
-    the others are then under the same pressure to answer.
+    right when I am the only possible answerer. A room breaks that for two
+    separate reasons: it delivers the same message to every member assistant, so
+    all of them following that rule turns one human line into several replies;
+    and most traffic in a busy room is people talking to each other, which is
+    true even when I am the only assistant in it.
     """
 
     def test_the_room_etiquette_section_is_present(self):
-        assert "Rooms with other AI teammates" in _build()
+        assert "Rooms: team and group chats" in _build()
+
+    def test_it_covers_a_room_of_people_not_only_one_of_assistants(self):
+        """A lone assistant among several humans has the same problem.
+
+        Scoping this to multi-assistant rooms left the commonest group chat --
+        one assistant, several people -- back on the 1:1 rule, answering every
+        line two colleagues said to each other.
+        """
+        prompt = _build()
+        assert "Two members talking to each other" in prompt
+        assert "theirs to answer" in prompt
 
     def test_it_says_exactly_one_assistant_should_answer(self):
         prompt = _build()
@@ -712,6 +724,96 @@ class TestRoomChatEtiquette:
         prompt = _build()
         assert "Never `wait` while their chat line is still unanswered" in prompt
         assert "It does not apply to a room" in prompt
+
+
+class TestGroupCallEtiquette:
+    """A call carrying several people is a room, and needs the room's default.
+
+    Speech has no mention list: every utterance arrives as an ordinary user turn
+    with nothing marking who it was aimed at, so the restraint rule reads as owed
+    a reply on every line -- including the ones two other people are exchanging
+    with each other. The section only appears while such a call is live, because
+    on a 1:1 call every turn really is the assistant's to answer.
+    """
+
+    HEADING = "Group calls: deciding whether a turn is mine"
+
+    def test_it_is_absent_off_a_call(self):
+        assert self.HEADING not in _build(call_participant_names=["Ada", "Bo"])
+
+    def test_it_is_absent_on_a_one_to_one_call(self):
+        """The regression to avoid: telephony must keep answering everything."""
+        assert self.HEADING not in _build(
+            on_voice_call=True,
+            call_participant_names=["Ada"],
+        )
+
+    def test_it_is_absent_when_no_roster_is_known(self):
+        """Telephony reports nobody, which is an answer rather than a gap."""
+        assert self.HEADING not in _build(on_voice_call=True)
+
+    def test_it_appears_once_a_second_person_is_present(self):
+        assert self.HEADING in _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+
+    def test_blank_names_do_not_make_a_group(self):
+        """A roster padded with empty entries is still one person."""
+        assert self.HEADING not in _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "", "   "],
+        )
+
+    def test_it_names_who_is_on_the_call(self):
+        """Deciding who was addressed needs to know who could have been."""
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "On it right now: Ada, Bo." in prompt
+
+    def test_it_tells_me_to_stay_out_of_their_exchange(self):
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "Two participants talking between themselves" in prompt
+        assert "`wait`" in prompt
+
+    def test_absent_naming_is_not_evidence_the_turn_was_not_mine(self):
+        """Mirrors the chat block: a missing signal must not read as a negative.
+
+        People ask the assistant for things without saying its name, so keying
+        the decision on hearing the name would drop every one of those.
+        """
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "NOT evidence that a turn was not mine" in prompt
+
+    def test_it_says_silence_is_the_worse_failure_when_i_was_addressed(self):
+        """The balance the chat block had to be corrected to state.
+
+        Told only to stay quiet, the assistant stands down from questions put
+        straight to it -- a worse failure than the over-answering it fixes.
+        """
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "answering is not optional" in prompt
+        assert "staying quiet is the worse failure" in prompt
+
+    def test_it_carves_the_exception_out_of_the_restraint_rule(self):
+        """The wider rule ships in the same prompt, so this must name it."""
+        prompt = _build(
+            on_voice_call=True,
+            call_participant_names=["Ada", "Bo"],
+        )
+        assert "group-call exception to the restraint rule" in prompt
+        assert "does not change how I behave on a 1:1 call" in prompt
 
     def test_it_warns_off_replying_to_another_assistant(self):
         """The volley the fan-out brake bounds should be discouraged first."""

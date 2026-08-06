@@ -277,6 +277,11 @@ class Assistant(Agent):
         # Live peer-assistant names on this call (multi-assistant etiquette).
         # A closure over the meet roster so mid-call additions are seen.
         self._peer_assistants_provider: Callable[[], list[str]] | None = None
+        # Live names of everyone else on this call (group-call etiquette). Also a
+        # closure rather than a snapshot: a call that starts 1:1 and becomes a
+        # group when someone joins has to pick the etiquette up mid-call, and one
+        # that empties back out has to drop it again.
+        self._other_participants_provider: Callable[[], list[str]] | None = None
         self.normalize_elevenlabs_twin_pronunciation = (
             normalize_elevenlabs_twin_pronunciation
         )
@@ -560,6 +565,7 @@ class Assistant(Agent):
                 history_provider() if history_provider is not None else []
             )
             peers_provider = self._peer_assistants_provider
+            others_provider = self._other_participants_provider
             resolved = await select_fast_brain_turn(
                 user_text=user_text,
                 system_prompt=self._fast_brain_system_prompt,
@@ -574,6 +580,10 @@ class Assistant(Agent):
                 peer_assistants=(
                     peers_provider() if peers_provider is not None else ()
                 ),
+                other_participants=(
+                    others_provider() if others_provider is not None else ()
+                ),
+                own_name=SESSION_DETAILS.assistant.name or "Assistant",
             )
 
             if (
@@ -832,16 +842,6 @@ _CALL_BRIEFING_SYSTEM_NOTE = (
 # this window ("oh wait, one more thing") aborts the cut entirely — the
 # farewell becomes an ordinary turn and the conversation continues.
 HANG_UP_GRACE_S = 1.0
-
-# With the hang-up gate armed, this much sustained dead air (no speech either
-# way, nothing queued) is treated as the conversation having ended without a
-# classifiable goodbye — the agent speaks a brief courtesy close and hangs up.
-HANG_UP_SILENCE_CLOSE_S = 12.0
-
-# Deterministic courtesy line for the sanctioned-silence close (no LLM call —
-# by this point the substance of the call is over by the slow brain's own
-# judgement, and the line only needs to be polite).
-HANG_UP_SILENCE_FAREWELL = "Alright — I'll let you go. Bye for now!"
 
 
 # Ceiling on a fast-brain small-talk reply lives in fast_brain_turn.py.
@@ -2336,7 +2336,6 @@ async def entrypoint(ctx: agents.JobContext):
         )
 
     credit_gate_task: asyncio.Task | None = None
-    hang_up_gate_watcher_task: asyncio.Task | None = None
     explicit_stop_requested = False
     shutdown_completed = False
 
@@ -2359,8 +2358,6 @@ async def entrypoint(ctx: agents.JobContext):
                 )
         if credit_gate_task is not None:
             await utils.aio.cancel_and_wait(credit_gate_task)
-        if hang_up_gate_watcher_task is not None:
-            await utils.aio.cancel_and_wait(hang_up_gate_watcher_task)
         if _meet_screenshare_task is not None:
             await utils.aio.cancel_and_wait(_meet_screenshare_task)
         await screen_capture.close()
@@ -2855,6 +2852,31 @@ async def entrypoint(ctx: agents.JobContext):
         normalize_elevenlabs_twin_pronunciation=voice_provider == "elevenlabs",
         speaker_tracker=speaker_tracker,
     )
+
+    # --- Group-call etiquette (multi-party channels only) ---
+    # Telephony carries exactly one other person, so every turn there is
+    # necessarily addressed to the assistant and no provider is wired: the 1:1
+    # path keeps replying to everything, as it should.
+    if channel in MULTI_PARTY_CHANNELS:
+
+        def _other_participant_names() -> list[str]:
+            if channel == "unify_meet":
+                return [
+                    name
+                    for name in (
+                        (member.get("display_name") or "").strip()
+                        for member in unify_meet_roster
+                        if member.get("kind") == "human"
+                    )
+                    if name
+                ]
+            # Browser meets: the platform reports one roster and does not mark
+            # which entries are bots, so every other participant counts. A stray
+            # notetaker inflating the count is harmless — it only means the
+            # assistant reads the room before speaking.
+            return _get_meet_participant_names()
+
+        assistant._other_participants_provider = _other_participant_names
 
     # --- Multi-assistant speaking floor (org meets only) ---
     # Assistants in a shared org room coordinate playout over the data channel
@@ -3370,59 +3392,9 @@ async def entrypoint(ctx: agents.JobContext):
             ).to_json(),
         )
 
-    async def _hang_up_gate_silence_watcher() -> None:
-        """Close the call after sanctioned dead air (gate armed, line quiet).
-
-        Covers conversations that end without a classifiable goodbye — the
-        caller goes silent (or already left) after the substance is done. The
-        idle counter resets whenever the gate is disarmed or any speech
-        activity occurs, and never runs before the call is actually live: a
-        pre-armed gate must not "close" a call that is still ringing or whose
-        opener has not been delivered yet (the pipeline is quiescent in both
-        states).
-        """
-        idle_s = 0.0
-        while True:
-            await asyncio.sleep(1.0)
-            if assistant._hang_up_gate_reason is None:
-                idle_s = 0.0
-                continue
-            if not assistant.call_received or assistant._opening_pending:
-                idle_s = 0.0
-                continue
-            if not _is_pipeline_quiescent():
-                idle_s = 0.0
-                continue
-            idle_s += 1.0
-            if idle_s < HANG_UP_SILENCE_CLOSE_S:
-                continue
-            idle_s = 0.0
-            _log.info(
-                "Hang-up gate: line quiet for "
-                f"{HANG_UP_SILENCE_CLOSE_S:.0f}s — closing the call",
-            )
-            _say_meta_queue.append(
-                {
-                    "source": "gated_hang_up",
-                    "text": HANG_UP_SILENCE_FAREWELL,
-                    "llm_log_path": "",
-                },
-            )
-            handle = session.say(
-                HANG_UP_SILENCE_FAREWELL,
-                allow_interruptions=True,
-                add_to_chat_ctx=True,
-            )
-            await _finalize_gated_hang_up(
-                handle,
-                HANG_UP_SILENCE_FAREWELL,
-                trigger="silence",
-            )
-
-    hang_up_gate_watcher_task = asyncio.create_task(
-        _hang_up_gate_silence_watcher(),
-        name="fast_brain_hang_up_gate_watcher",
-    )
+    # NOTE: there is intentionally no silence-based auto-close for an armed
+    # hang-up gate. A call ends only explicitly: the caller hangs up, or the
+    # agent classifies a ``hang_up`` turn (whose farewell is finalized above).
 
     @session.on("speech_created")
     def _on_speech_created(ev) -> None:

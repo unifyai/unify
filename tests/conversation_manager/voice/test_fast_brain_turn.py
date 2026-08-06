@@ -145,6 +145,80 @@ def test_build_messages_includes_peer_assistant_etiquette():
     assert "Multi-assistant call" not in solo_text
 
 
+def _group_system_text(**overrides) -> str:
+    kwargs = {
+        "system_prompt": "PERSONA",
+        "history_messages": [],
+        "user_text": "so what do you reckon we do about the renewal?",
+        "pending_continuation": None,
+        "already_deferred": False,
+        "guidance": "",
+        "idle_status_smalltalk": False,
+        "recent_assistant_text": "",
+        "own_name": "Lila",
+        **overrides,
+    }
+    msgs = build_fast_brain_turn_messages(**kwargs)
+    return "\n".join(m["content"] for m in msgs if m["role"] == "system")
+
+
+def test_group_call_etiquette_needs_two_other_people():
+    """One other person means every turn is the assistant's, as on the phone.
+
+    Injecting the block at one participant would put a plain 1:1 call -- phone,
+    WhatsApp, or a meet the boss is alone in -- on the group rules and teach it
+    to sit out turns nobody else was there to take.
+    """
+    assert "Group call." not in _group_system_text(other_participants=[])
+    assert "Group call." not in _group_system_text(other_participants=["Ada"])
+    assert "Group call." in _group_system_text(other_participants=["Ada", "Bo"])
+
+
+def test_group_call_etiquette_ignores_blank_roster_entries():
+    """A roster padded with empties is still one person, not a group."""
+    assert "Group call." not in _group_system_text(
+        other_participants=["Ada", "", "  "],
+    )
+
+
+def test_group_call_block_names_the_room_and_the_assistant():
+    """Both halves of the decision: who was there, and which one is me.
+
+    The chat side learned this the hard way -- a bare list of names left the
+    assistant working out which entry was itself, and it guessed wrong.
+    """
+    text = _group_system_text(other_participants=["Ada", "Bo"])
+    assert "Ada, Bo" in text
+    assert "Lila" in text
+    # An unsubstituted placeholder would ship "{own_name}" to the model.
+    assert "{" not in text.split("Group call.")[1]
+
+
+def test_group_call_block_states_both_failure_directions():
+    """Silence for their exchanges, but answering when named is not optional."""
+    text = _group_system_text(other_participants=["Ada", "Bo"])
+    assert "classification silence" in text
+    assert "answering is not optional" in text
+    assert "NOT evidence the turn was not yours" in text
+
+
+def test_group_and_peer_blocks_coexist_on_an_org_meet():
+    """Several humans and another assistant is one call, not a choice of two."""
+    text = _group_system_text(
+        other_participants=["Ada", "Bo"],
+        peer_assistants=["A-DA"],
+    )
+    assert "Group call." in text
+    assert "Multi-assistant call" in text
+
+
+def test_peer_block_names_the_assistant_rather_than_a_placeholder():
+    """It used to ship the literal "{your name}" and ask it to self-recognise."""
+    text = _group_system_text(other_participants=[], peer_assistants=["A-DA"])
+    assert "You are Lila" in text
+    assert "your name}" not in text
+
+
 @pytest.mark.asyncio
 async def test_empty_input_returns_default_without_llm(monkeypatch):
     def _boom(*a, **kw):

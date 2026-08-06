@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from unify.function_manager.function_manager import FunctionManager
     from unify.guidance_manager.guidance_manager import GuidanceManager
     from unify.knowledge_manager.knowledge_manager import KnowledgeManager
+    from unify.workflow_manager.workflow_manager import WorkflowManager
 
 __all__ = [
     "BaseActor",
@@ -89,6 +90,7 @@ class BaseActor(ABC):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
+        workflow_manager: Optional["WorkflowManager"] = None,
     ) -> None:
         """
         Shared initialization for concrete actor implementations.
@@ -98,6 +100,7 @@ class BaseActor(ABC):
         - FunctionManager resolution (registry fallback)
         - GuidanceManager resolution (registry fallback)
         - KnowledgeManager resolution (registry fallback)
+        - WorkflowManager resolution (registry fallback, catalogue-gated)
         - Extraction of computer primitives for backward compatibility
         """
         self.environments: Dict[str, "BaseEnvironment"] = self._setup_environments(
@@ -115,6 +118,19 @@ class BaseActor(ABC):
         self.knowledge_manager = (
             knowledge_manager or ManagerRegistry.get_knowledge_manager()
         )
+        # The workflow catalogue is the feature gate: with no
+        # UNITY_WORKFLOWS_DIR configured there is nothing to install, no
+        # WorkflowManager_* tools enter the schema, and deployments
+        # without the shelf keep their existing tool set (and LLM caches)
+        # byte-identical.
+        from unify.settings import SETTINGS
+
+        if workflow_manager is not None:
+            self.workflow_manager = workflow_manager
+        elif (SETTINGS.UNITY_WORKFLOWS_DIR or "").strip():
+            self.workflow_manager = ManagerRegistry.get_workflow_manager()
+        else:
+            self.workflow_manager = None
 
         # Backward-compat: some call sites expect an actor-level computer primitives instance.
         self._computer_primitives = self._extract_computer_primitives()
@@ -261,6 +277,7 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
         function_manager: Optional["FunctionManager"] = None,
         guidance_manager: Optional["GuidanceManager"] = None,
         knowledge_manager: Optional["KnowledgeManager"] = None,
+        workflow_manager: Optional["WorkflowManager"] = None,
     ) -> None:
         BaseActor.__init__(
             self,
@@ -268,6 +285,7 @@ class BaseCodeActActor(BaseActor, BaseStateManager, ABC):
             function_manager=function_manager,
             guidance_manager=guidance_manager,
             knowledge_manager=knowledge_manager,
+            workflow_manager=workflow_manager,
         )
         BaseStateManager.__init__(self)
 
