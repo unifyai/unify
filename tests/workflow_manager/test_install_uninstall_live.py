@@ -227,7 +227,7 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
     held; a repeat install after the connection lands is the
     arm-on-connect path.
     """
-    from unify.workflow_manager import workflow_manager as wm_module
+    from unify.workflow_manager import requirements as req_module
     from unify.workflow_manager.bundle import WorkflowRequirement
 
     gm, ts, wm = live_managers
@@ -242,8 +242,26 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
     )
     wm.register_bundle(held_bundle)
 
+    # Isolate the secret keyset as the only authority: no gallery
+    # connection and no native package for this slug, so the bundle's own
+    # declared secret decides.
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "connected_apps",
+        lambda self: frozenset(),
+    )
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "native_manifest",
+        lambda self, slug: None,
+    )
+
     # No token yet: plants, holds, and says so.
-    monkeypatch.setattr(wm_module, "_read_local_secret_keyset", lambda: set())
+    monkeypatch.setattr(
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: frozenset(),
+    )
     result = wm.install_workflow(slug=SLUG)
 
     assert "tasks_armed" not in result
@@ -255,9 +273,9 @@ async def test_install_arms_tasks_and_holds_them_while_disconnected(
 
     # Token lands: the repeat install is the arm-on-connect path.
     monkeypatch.setattr(
-        wm_module,
-        "_read_local_secret_keyset",
-        lambda: {"GMAIL_TOKEN"},
+        req_module.RequirementResolver,
+        "keyset",
+        lambda self: frozenset({"GMAIL_TOKEN"}),
     )
     result = wm.install_workflow(slug=SLUG)
 

@@ -31,9 +31,9 @@ from ..common.log_utils import create_logs as unity_create_logs
 from ..common.model_to_fields import model_to_fields
 from ..common.sync_lease import exclusive_sync_lease
 from ..common.tool_outcome import ToolErrorException
-from ..integration_status import _read_local_secret_keyset
 from .base import BaseWorkflowManager
 from .bundle import WORKFLOW_LIBRARY, SurfaceRegistry, WorkflowBundle
+from .requirements import RequirementResolver
 from .types.meta import WorkflowMeta
 from .types.workflow import UNASSIGNED, WorkflowInstallation
 
@@ -350,34 +350,19 @@ class WorkflowManager(BaseWorkflowManager):
     def _unmet_requirements(self, bundle: WorkflowBundle) -> List[Dict[str, Any]]:
         """Declared integrations not currently connected, as report dicts.
 
-        Connection is read from the assistant's secret keyset: a
-        requirement is met when every secret it names is present. Values
-        never travel through here — only names and presence.
+        Resolution spans every kind of app the gallery offers — see
+        :mod:`unify.workflow_manager.requirements`. Secret *names* and
+        presence travel through here; values never do.
         """
         if not bundle.requirements:
             return []
-        keyset = frozenset(_read_local_secret_keyset())
-        return [
-            {
-                "slug": requirement.slug,
-                "name": requirement.name or requirement.slug,
-                "missing_secrets": requirement.missing_secrets(keyset),
-            }
-            for requirement in bundle.requirements
-            if not requirement.connected(keyset)
-        ]
+        return RequirementResolver().unmet(bundle.requirements)
 
     def _requirements_report(self, bundle: WorkflowBundle) -> List[Dict[str, Any]]:
         """Every declared requirement with its current connection state."""
-        keyset = frozenset(_read_local_secret_keyset())
-        return [
-            {
-                "slug": requirement.slug,
-                "name": requirement.name or requirement.slug,
-                "connected": requirement.connected(keyset),
-            }
-            for requirement in bundle.requirements
-        ]
+        if not bundle.requirements:
+            return []
+        return RequirementResolver().report(bundle.requirements)
 
     def _arm_workflow_tasks(
         self,

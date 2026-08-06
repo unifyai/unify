@@ -127,29 +127,39 @@ class WorkflowRequirement:
     """One integration a workflow needs connected before its jobs may run.
 
     Requirements are declared and checked, never carried: a bundle ships
-    no OAuth connection and no secret value, only the names of the
-    secrets whose presence means the integration is usable. An unmet
-    requirement does not refuse the install — content plants and the
-    workflow's tasks stay disarmed until the connection lands.
+    no OAuth connection and no secret value. An unmet requirement does
+    not refuse the install — content plants and the workflow's tasks stay
+    disarmed until the connection lands.
+
+    A requirement names the app and stops there. Whether that app is a
+    third-party provider-backed connection from the gallery's catalogue,
+    a native integration package declared in unify-deploy, or a BYOD
+    OAuth provider is not the bundle's business: it differs per app, it
+    can change without the workflow changing, and an app may offer more
+    than one route at once. Resolution is
+    :class:`unify.workflow_manager.requirements.RequirementResolver`.
     """
 
     slug: str
-    """Canonical integration slug, the same id space as the integrations
-    gallery (e.g. ``"gmail"``)."""
+    """Provider app slug — the id space shared by Console's integrations
+    gallery, ``app_slug`` in the integrations primitives, and native
+    package manifests (e.g. ``"gmail"``, ``"hubspot"``). Not the OAuth
+    provider alias space in ``runtime_oauth`` (where Gmail's connection is
+    ``"google"``), because that space is invisible to the gallery."""
 
     name: str = ""
     """Display name; falls back to the slug."""
 
     required_secrets: tuple[str, ...] = ()
-    """Secret names whose presence in the assistant's keyset marks this
-    requirement connected. Empty means nothing gates on it yet, so the
-    requirement reads as met."""
+    """Secret names whose presence marks this requirement connected, for
+    apps no other authority can answer for — a BYOD OAuth provider with
+    no package and no gallery connection row.
 
-    def connected(self, keyset: frozenset[str]) -> bool:
-        return all(secret in keyset for secret in self.required_secrets)
-
-    def missing_secrets(self, keyset: frozenset[str]) -> list[str]:
-        return [s for s in self.required_secrets if s not in keyset]
+    Leave empty for native packages and gallery apps: the package's own
+    manifest already declares its secrets, and restating them here means
+    two places to update when the package changes. Empty with no other
+    authority reads as met, so a bundle cannot hold its jobs hostage to a
+    signal nothing can check."""
 
 
 @dataclass
