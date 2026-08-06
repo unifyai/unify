@@ -1062,6 +1062,58 @@ class TestPhoneCallHandlers:
         )
 
     @pytest.mark.asyncio
+    async def test_whatsapp_permission_acceptance_unpacks_stashed_context(
+        self,
+        mock_cm,
+    ):
+        """The per-contact stash is a dict; its fields must be unpacked onto
+        the call manager, never assigned wholesale to ``pending_opener`` —
+        ``start_call`` strips the opener and crashes on a dict."""
+        mock_cm._pending_whatsapp_call_openers = {
+            2: {
+                "opener": "Call opener line.",
+                "briefing": "Full task design.",
+                "hang_up_gate": "End once the quiz answer is confirmed.",
+            },
+        }
+        mock_cm.assistant_whatsapp_number = "+15550000000"
+        event = WhatsAppCallPermissionResponse(
+            contact={
+                "contact_id": 2,
+                "first_name": "Alice",
+                "surname": "Smith",
+                "whatsapp_number": "+15555552222",
+            },
+            accepted=True,
+        )
+
+        with (
+            patch(
+                "unify.conversation_manager.domains.comms_utils.start_whatsapp_call",
+                new_callable=AsyncMock,
+                return_value={"success": True},
+            ),
+            patch(
+                "unify.conversation_manager.domains.comms_utils.clear_pending_whatsapp_call_intent",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "unify.conversation_manager.domains.event_handlers.SESSION_DETAILS",
+            ) as mock_session_details,
+        ):
+            mock_session_details.assistant.agent_id = 7
+            mock_session_details.assistant.name = "Test Assistant"
+
+            await EventHandler.handle_event(event, mock_cm)
+
+        assert mock_cm.call_manager.pending_opener == "Call opener line."
+        assert mock_cm.call_manager.pending_briefing == "Full task design."
+        assert (
+            mock_cm.call_manager.pending_hang_up_gate
+            == "End once the quiz answer is confirmed."
+        )
+
+    @pytest.mark.asyncio
     async def test_whatsapp_permission_acceptance_tags_onboarding_outbound(
         self,
         mock_cm,
